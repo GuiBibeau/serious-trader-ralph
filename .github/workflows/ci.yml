@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+      - name: Install deps
+        run: bun install
+      - name: Run unit tests
+        run: bun run test:unit
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+      - name: Install deps
+        run: bun install
+      - name: Run integration tests (skips if secrets missing)
+        env:
+          RUN_INTEGRATION_TESTS: ${{ secrets.RPC_ENDPOINT != '' && secrets.JUPITER_API_KEY != '' && '1' || '0' }}
+          RPC_ENDPOINT: ${{ secrets.RPC_ENDPOINT }}
+          JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
+          WALLET_PRIVATE_KEY: ${{ secrets.WALLET_PRIVATE_KEY }}
+          WALLET_KEYFILE: ${{ secrets.WALLET_KEYFILE }}
+          JUPITER_BASE_URL: ${{ secrets.JUPITER_BASE_URL }}
+        run: bun run test:integration

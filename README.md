@@ -91,6 +91,27 @@ bun run build
 bun run start
 ```
 
+## Integration tests (Surfpool/devnet friendly)
+
+These are **skipped by default**. They hit RPC and Jupiter, but do **not** send swaps unless you explicitly opt in.
+
+```bash
+export RUN_INTEGRATION_TESTS=1
+export RPC_ENDPOINT="http://127.0.0.1:8899"   # surfpool / local validator
+export JUPITER_API_KEY="..."
+export WALLET_PRIVATE_KEY="..."               # or WALLET_KEYFILE="/path/to/id.json"
+
+bun test
+```
+
+Optional swap simulation (build + sign + simulate only, no send):
+
+```bash
+export RUN_SWAP_SIM=1
+export AIRDROP=1   # request local airdrop for the wallet
+bun test
+```
+
 ## Security reminders
 
 - **Do not commit** `solmolt.config.yaml`. It’s in `.gitignore`.

@@ -4,3 +4,4 @@ dist/
 solmolt.config.yaml
 sessions/
 trades/
+.tmp/

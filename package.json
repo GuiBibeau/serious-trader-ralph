@@ -20,7 +20,10 @@
     "doctor": "bun run src/bin/solmolt.ts doctor",
     "update": "bun run src/bin/solmolt.ts update",
     "agent:message": "bun run src/bin/solmolt.ts agent:message",
-    "help": "bun run src/bin/solmolt.ts --help"
+    "help": "bun run src/bin/solmolt.ts --help",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
