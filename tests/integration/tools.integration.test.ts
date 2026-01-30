@@ -179,6 +179,9 @@ integrationTest("market.candles (integration)", async () => {
 });
 
 integrationTest("market.raydium_pool_stats (integration)", async () => {
+  if (!process.env.RAYDIUM_POOL_ID) {
+    return;
+  }
   const { registry, ctx } = setup();
   const poolId =
     process.env.RAYDIUM_POOL_ID ||
