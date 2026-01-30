@@ -119,6 +119,27 @@ integrationTest("market.jupiter_quote (integration)", async () => {
   expect(result.summary.outAmount).toBeTruthy();
 });
 
+integrationTest("market.jupiter_route_map (integration)", async () => {
+  const { registry, ctx } = setup();
+  const inputMint =
+    process.env.ROUTE_INPUT_MINT ||
+    "So11111111111111111111111111111111111111112";
+  const outputMint =
+    process.env.ROUTE_OUTPUT_MINT ||
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const amount = process.env.ROUTE_AMOUNT || "1000000";
+
+  const result = (await registry.invoke("market.jupiter_route_map", ctx, {
+    inputMint,
+    outputMint,
+    amount,
+  })) as { routes: Array<{ label: string; outAmount: string }> };
+
+  expect(result.routes.length).toBeGreaterThan(0);
+  expect(result.routes[0].label).toBeTruthy();
+  expect(result.routes[0].outAmount).toBeTruthy();
+});
+
 integrationTest("market.get_prices (integration)", async () => {
   const { registry, ctx } = setup();
   const priceMint =
