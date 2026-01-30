@@ -219,6 +219,9 @@ integrationTest("market.switchboard_price (integration)", async () => {
 });
 
 integrationTest("market.liquidity_by_mint (integration)", async () => {
+  if (!process.env.LIQUIDITY_MINT) {
+    return;
+  }
   const { registry, ctx } = setup();
   const mint =
     process.env.LIQUIDITY_MINT ||
