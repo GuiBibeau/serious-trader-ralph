@@ -189,6 +189,15 @@ test("risk.max_position_check enforces limits", async () => {
   })) as { allow: boolean; reasons: string[] };
   expect(deny.allow).toBe(false);
   expect(deny.reasons).toContain("max-position-exceeded");
+
+  const reduce = (await registry.invoke("risk.max_position_check", ctx, {
+    mint: "So11111111111111111111111111111111111111112",
+    currentBalance: "100",
+    proposedDelta: "-10",
+    maxPosition: "50",
+  })) as { allow: boolean; reasons: string[] };
+  expect(reduce.allow).toBe(true);
+  expect(reduce.reasons.length).toBe(0);
 });
 
 test("invalid market.token_metadata args are rejected before execution", async () => {

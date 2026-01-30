@@ -579,7 +579,7 @@ export function registerDefaultTools(
       if (next < 0n) {
         reasons.push("insufficient-balance");
       }
-      if (next > max) {
+      if (delta > 0n && next > max) {
         reasons.push("max-position-exceeded");
       }
       return {
