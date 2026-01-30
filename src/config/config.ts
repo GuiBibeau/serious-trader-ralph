@@ -29,7 +29,7 @@ const ConfigSchema = z.object({
     sdkMode: z.enum(['web3']).default('web3'),
   }),
   llm: z.object({
-    provider: z.enum(['openai_chat', 'openai_responses', 'anthropic_messages']).default('openai_responses'),
+    provider: z.enum(['openai_chat', 'openai_responses', 'anthropic_messages']).default('openai_chat'),
     baseUrl: z.string().min(1),
     apiKey: z.string().min(1),
     model: z.string().min(1),
@@ -37,12 +37,25 @@ const ConfigSchema = z.object({
   autopilot: z.object({
     enabled: z.boolean().default(false),
     intervalMs: z.number().int().default(15_000),
+    plan: z
+      .object({
+        inputMint: z.string().min(1),
+        outputMint: z.string().min(1),
+        amount: z.string().min(1),
+        slippageBps: z.number().int().default(50),
+      })
+      .optional(),
   }),
   gateway: z.object({
     bind: z.string().default('127.0.0.1'),
     port: z.number().int().default(8787),
     authToken: z.string().min(1),
   }),
+  tools: z
+    .object({
+      skillsDir: z.string().default('skills'),
+    })
+    .default({}),
   notify: z.object({
     webhookUrl: z.string().optional(),
   }).default({}),
@@ -125,6 +138,9 @@ export function loadConfig(configPath?: string): SolmoltConfig {
     },
     notify: {
       webhookUrl: process.env.NOTIFY_WEBHOOK_URL,
+    },
+    tools: {
+      skillsDir: process.env.SKILLS_DIR,
     },
   };
 

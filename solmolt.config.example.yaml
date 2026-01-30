@@ -17,10 +17,17 @@ llm:
 autopilot:
   enabled: false
   intervalMs: 15000
+  # plan:
+  #   inputMint: "So11111111111111111111111111111111111111112" # SOL
+  #   outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" # USDC
+  #   amount: "1000000" # 0.001 SOL in lamports
+  #   slippageBps: 50
 gateway:
   bind: "127.0.0.1"
   port: 8787
   authToken: "<REPLACE_ME>"
+tools:
+  skillsDir: "skills"
 notify:
   # webhookUrl: "https://example.com/webhook"
 policy:

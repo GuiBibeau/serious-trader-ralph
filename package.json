@@ -10,11 +10,16 @@
     "dev": "bun run src/bin/solmolt.ts",
     "build": "bun build src/bin/solmolt.ts --outdir dist/bin --target node --format esm",
     "start": "bun dist/bin/solmolt.js",
-    "gateway": "bun run src/bin/solmolt.ts gateway",
+    "gateway": "bun run src/bin/solmolt.ts gateway start",
+    "gateway:stop": "bun run src/bin/solmolt.ts gateway stop",
+    "gateway:restart": "bun run src/bin/solmolt.ts gateway restart",
     "status": "bun run src/bin/solmolt.ts status",
     "autopilot:start": "bun run src/bin/solmolt.ts autopilot start",
     "autopilot:stop": "bun run src/bin/solmolt.ts autopilot stop",
     "tool": "bun run src/bin/solmolt.ts tool",
+    "doctor": "bun run src/bin/solmolt.ts doctor",
+    "update": "bun run src/bin/solmolt.ts update",
+    "agent:message": "bun run src/bin/solmolt.ts agent:message",
     "help": "bun run src/bin/solmolt.ts --help"
   },
   "dependencies": {

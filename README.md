@@ -1,6 +1,8 @@
 # SolMolt Core (MVP)
 
-A minimal Moltbot‑style Solana trading core with a WebSocket gateway, CLI operator, tool registry, and hot‑wallet custody. This repo is **web3‑only** right now.
+A customizable, long‑running Solana trading bot you can deploy. It ships with a WebSocket gateway, CLI operator, tool registry, and hot‑wallet custody. This repo is **web3‑only** right now.
+
+Active development: expect rapid iteration, feature growth, and occasional breaking changes.
 
 ## Requirements
 
@@ -33,10 +35,15 @@ bun run status
 
 ```bash
 bun run gateway                  # start gateway (WS server)
+bun run gateway:stop             # stop gateway via WS
+bun run gateway:restart          # restart gateway (requests shutdown)
 bun run status                   # check gateway status
 bun run autopilot:start          # enable autopilot tick loop
 bun run autopilot:stop           # disable autopilot tick loop
 bun run tool wallet.get_balances # invoke a tool
+bun run agent:message -m "focus on SOL/USDC" -t  # send a message + trigger tick
+bun run doctor                   # config/RPC health checks
+bun run update                   # git pull + bun install
 ```
 
 ## Paths & entrypoints
@@ -45,6 +52,7 @@ bun run tool wallet.get_balances # invoke a tool
 - Gateway server: `src/gateway/server.ts`
 - Tools registry: `src/tools/registry.ts`
 - Tools list: `src/tools/tools.ts`
+- Skills folder (auto‑loaded): `skills/`
 - Web3 adapter: `src/solana/web3_adapter.ts`
 - Config file (default): `solmolt.config.yaml`
 
@@ -56,9 +64,25 @@ SOLMOLT_CONFIG=/path/to/solmolt.config.yaml bun run gateway
 
 ## Config notes
 
-- `llm.provider` currently supports OpenAI‑compatible **chat** or **responses** (we’re using `openai_chat` with DeepInfra).
+- `llm.provider` is **openai_chat** for now (OpenAI‑compatible chat; we’re using DeepInfra).
 - `jupiter.apiKey` is required for `https://api.jup.ag`.
 - `wallet.privateKey` accepts base58, `base64:...`, `hex:...`, or JSON array string.
+- `tools.skillsDir` points to the folder for auto‑loaded skill modules.
+
+### Autopilot plan (optional)
+
+The agent is LLM‑driven and will decide which tools to call. You can optionally give it a fixed plan as a hint:
+
+```yaml
+autopilot:
+  enabled: true
+  intervalMs: 15000
+  plan:
+    inputMint: "So11111111111111111111111111111111111111112" # SOL
+    outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" # USDC
+    amount: "1000000" # 0.001 SOL in lamports
+    slippageBps: 50
+```
 
 ## Build
 

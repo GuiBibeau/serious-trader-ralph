@@ -132,6 +132,18 @@ export class GatewayServer {
           response = { ok: true };
           break;
         }
+        case 'gateway.shutdown': {
+          response = { ok: true };
+          socket.send(JSON.stringify({ id: msg.id, result: response }));
+          setTimeout(() => process.exit(0), 50);
+          return;
+        }
+        case 'gateway.restart': {
+          response = { ok: true };
+          socket.send(JSON.stringify({ id: msg.id, result: response }));
+          setTimeout(() => process.exit(0), 50);
+          return;
+        }
         case 'tool.invoke': {
           const name = String(msg.params?.name ?? '');
           const input = (msg.params?.input ?? {}) as Record<string, unknown>;
@@ -163,6 +175,12 @@ export class GatewayServer {
   private startAutopilot(): void {
     if (this.autopilotTimer) return;
     this.autopilotTimer = setInterval(() => {
+      if (this.ctx.agent) {
+        this.ctx.agent
+          .tick('timer')
+          .catch((err) => warn('autopilot tick failed', { err: String(err) }));
+        return;
+      }
       this.registry
         .invoke('system.autopilot_tick', this.ctx, { reason: 'timer' })
         .catch((err) => warn('autopilot tick failed', { err: String(err) }));

@@ -1,0 +1,75 @@
+import { z } from 'zod';
+
+const QuoteSchema = z.object({
+  inputMint: z.string().min(1),
+  outputMint: z.string().min(1),
+  amount: z.string().regex(/^\d+$/),
+  slippageBps: z.number().int().nonnegative(),
+});
+
+const TradeSchema = z.object({
+  quoteResponse: z.record(z.unknown()),
+  txOptions: z
+    .object({
+      commitment: z.enum(['processed', 'confirmed', 'finalized']).optional(),
+    })
+    .optional(),
+});
+
+const BalancesSchema = z.object({
+  mints: z.array(z.string()).optional(),
+});
+
+const RiskSchema = z.object({
+  quoteSummary: z.object({
+    inAmount: z.string(),
+    outAmount: z.string(),
+    priceImpactPct: z.number(),
+    routeLabels: z.array(z.string()),
+  }),
+  balancesSnapshot: z.object({
+    solLamports: z.string(),
+    tokens: z.array(
+      z.object({
+        mint: z.string(),
+        amountRaw: z.string(),
+        decimals: z.number().int(),
+        uiAmount: z.number().nullable(),
+      })
+    ),
+  }),
+  policySnapshot: z.object({
+    killSwitch: z.boolean(),
+    allowedMints: z.array(z.string()),
+    maxTradeAmountLamports: z.string(),
+    maxSlippageBps: z.number().int(),
+    maxPriceImpactPct: z.number(),
+    cooldownSeconds: z.number().int(),
+    dailySpendCapLamports: z.string().optional().nullable(),
+  }),
+});
+
+const NotifySchema = z.object({
+  level: z.enum(['info', 'warn', 'error']),
+  message: z.string(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const TickSchema = z.object({
+  reason: z.enum(['timer', 'operator', 'recovery']),
+});
+
+const AgentMessageSchema = z.object({
+  content: z.string().min(1),
+  triggerTick: z.boolean().optional(),
+});
+
+export const TOOL_VALIDATORS: Record<string, z.ZodTypeAny> = {
+  'wallet.get_balances': BalancesSchema,
+  'market.jupiter_quote': QuoteSchema,
+  'risk.check_trade': RiskSchema,
+  'trade.jupiter_swap': TradeSchema,
+  'notify.emit': NotifySchema,
+  'system.autopilot_tick': TickSchema,
+  'agent.message': AgentMessageSchema,
+};

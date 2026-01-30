@@ -6,6 +6,8 @@ export type CliCommand =
   | { method: 'status' }
   | { method: 'autopilot.start' }
   | { method: 'autopilot.stop' }
+  | { method: 'gateway.shutdown' }
+  | { method: 'gateway.restart' }
   | { method: 'tool.invoke'; params: { name: string; input: Record<string, unknown> } };
 
 export async function runCliCommand(config: SolmoltConfig, command: CliCommand): Promise<void> {

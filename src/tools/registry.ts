@@ -1,13 +1,21 @@
 import type { SolmoltConfig } from '../config/config.js';
 import type { SolanaAdapter } from '../solana/adapter.js';
+import type { AgentHandle } from '../agent/types.js';
+import type { ToolSchema } from '../llm/types.js';
 import { SessionJournal, TradeJournal } from '../journal/journal.js';
 import { redact } from '../util/redaction.js';
+import { TOOL_VALIDATORS } from './validate.js';
+import { warn } from '../util/logger.js';
 
 export type ToolContext = {
   config: SolmoltConfig;
   solana: SolanaAdapter;
   sessionJournal: SessionJournal;
   tradeJournal: TradeJournal;
+  agent?: AgentHandle;
+  agentControl?: {
+    message: (content: string, triggerTick?: boolean) => Promise<unknown>;
+  };
 };
 
 export type ToolRequirement = {
@@ -18,6 +26,7 @@ export type ToolRequirement = {
 export type ToolDefinition<TInput = unknown, TOutput = unknown> = {
   name: string;
   description: string;
+  schema?: ToolSchema;
   requires?: ToolRequirement;
   execute: (ctx: ToolContext, input: TInput) => Promise<TOutput>;
 };
@@ -36,6 +45,12 @@ export class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
+  listSchemas(config: SolmoltConfig): ToolSchema[] {
+    return this.list()
+      .filter((tool) => tool.schema && this.isEligible(tool, config))
+      .map((tool) => tool.schema!) ;
+  }
+
   get(name: string): ToolDefinition | undefined {
     return this.tools.get(name);
   }
@@ -45,6 +60,14 @@ export class ToolRegistry {
     if (!tool) throw new Error(`Tool not found: ${name}`);
     if (!this.isEligible(tool, ctx.config)) {
       throw new Error(`Tool not eligible: ${name}`);
+    }
+    const validator = TOOL_VALIDATORS[name];
+    if (validator) {
+      const parsed = validator.safeParse(input ?? {});
+      if (!parsed.success) {
+        warn('tool.validation.failed', { tool: name, issues: parsed.error.flatten() });
+        throw new Error(`Tool validation failed: ${name}`);
+      }
     }
     const result = await tool.execute(ctx, input);
     await ctx.sessionJournal.append({
