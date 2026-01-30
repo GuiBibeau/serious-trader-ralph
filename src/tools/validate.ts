@@ -8,6 +8,13 @@ const QuoteSchema = z.object({
   slippageBps: z.number().int().nonnegative(),
 });
 
+const RouteMapSchema = z.object({
+  inputMint: z.string().min(1),
+  outputMint: z.string().min(1),
+  amount: z.string().regex(/^\d+$/),
+  slippageBps: z.number().int().nonnegative().optional(),
+});
+
 const TradeSchema = z.object({
   quoteResponse: JupiterQuoteResponseSchema,
   txOptions: z
@@ -77,6 +84,7 @@ const TokenMetadataSchema = z.object({
 export const TOOL_VALIDATORS: Record<string, z.ZodTypeAny> = {
   "wallet.get_balances": BalancesSchema,
   "market.jupiter_quote": QuoteSchema,
+  "market.jupiter_route_map": RouteMapSchema,
   "market.get_prices": PricesSchema,
   "market.token_metadata": TokenMetadataSchema,
   "risk.check_trade": RiskSchema,

@@ -284,6 +284,55 @@ export function registerDefaultTools(
   });
 
   registry.register({
+    name: "market.jupiter_route_map",
+    description: "List Jupiter route summaries for a given pair.",
+    schema: {
+      name: "market.jupiter_route_map",
+      description: "List Jupiter route summaries for a given pair.",
+      parameters: {
+        type: "object",
+        properties: {
+          inputMint: { type: "string" },
+          outputMint: { type: "string" },
+          amount: { type: "string" },
+          slippageBps: { type: "integer" },
+        },
+        required: ["inputMint", "outputMint", "amount"],
+        additionalProperties: false,
+      },
+    },
+    requires: { config: ["jupiter.apiKey"] },
+    execute: async (
+      _ctx: ToolContext,
+      input: {
+        inputMint: string;
+        outputMint: string;
+        amount: string;
+        slippageBps?: number;
+      },
+    ) => {
+      const quote = await jupiter.quote({
+        inputMint: input.inputMint,
+        outputMint: input.outputMint,
+        amount: input.amount,
+        slippageBps: input.slippageBps ?? defaultSlippageBps,
+      });
+      const labels = quote.quoteResponse.routePlan.map(
+        (step) => step.swapInfo.label ?? "route",
+      );
+      return {
+        routes: [
+          {
+            label: labels.join(" -> "),
+            outAmount: quote.quoteResponse.outAmount,
+            priceImpactPct: String(quote.quoteResponse.priceImpactPct ?? 0),
+          },
+        ],
+      };
+    },
+  });
+
+  registry.register({
     name: "market.get_prices",
     description:
       "Fetch spot prices for SOL/SPL pairs from a venue or best route.",

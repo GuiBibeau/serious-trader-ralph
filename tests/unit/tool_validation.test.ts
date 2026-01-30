@@ -68,6 +68,30 @@ test("invalid quote args are rejected before execution", async () => {
   ).rejects.toThrow(/validation/i);
 });
 
+test("invalid market.jupiter_route_map args are rejected before execution", async () => {
+  const registry = new ToolRegistry();
+  const jupiter = new JupiterClient(
+    stubConfig.jupiter.baseUrl,
+    stubConfig.jupiter.apiKey,
+  );
+  registerDefaultTools(registry, jupiter);
+
+  const ctx = {
+    config: stubConfig,
+    solana: stubSolana,
+    sessionJournal: new SessionJournal("test", ".tmp/sessions"),
+    tradeJournal: new TradeJournal(".tmp/trades"),
+  };
+
+  await expect(
+    registry.invoke("market.jupiter_route_map", ctx, {
+      inputMint: "",
+      outputMint: "",
+      amount: "abc",
+    }),
+  ).rejects.toThrow(/validation/i);
+});
+
 test("invalid market.get_prices args are rejected before execution", async () => {
   const registry = new ToolRegistry();
   const jupiter = new JupiterClient(
