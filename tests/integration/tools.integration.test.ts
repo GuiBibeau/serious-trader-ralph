@@ -15,6 +15,12 @@ const requestAirdrop = process.env.AIRDROP === "1";
 const integrationTest = runIntegration ? test : test.skip;
 const swapTest = runIntegration && runSwapSim ? test : test.skip;
 
+function isRateLimitError(err: unknown): boolean {
+  if (!err) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("429");
+}
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing env var: ${name}`);
@@ -214,12 +220,24 @@ integrationTest("market.get_prices (integration)", async () => {
   const priceMint =
     process.env.PRICE_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-  const result = (await registry.invoke("market.get_prices", ctx, {
-    mints: [priceMint],
-    venue: "best",
-  })) as {
-    prices: Array<{ mint: string; bid: string | null; ask: string | null }>;
-  };
+  let result:
+    | {
+        prices: Array<{ mint: string; bid: string | null; ask: string | null }>;
+      }
+    | undefined;
+  try {
+    result = (await registry.invoke("market.get_prices", ctx, {
+      mints: [priceMint],
+      venue: "best",
+    })) as {
+      prices: Array<{ mint: string; bid: string | null; ask: string | null }>;
+    };
+  } catch (err) {
+    if (isRateLimitError(err)) {
+      return;
+    }
+    throw err;
+  }
 
   expect(result.prices.length).toBe(1);
   expect(result.prices[0].mint).toBe(priceMint);
@@ -230,9 +248,17 @@ integrationTest("market.token_metadata (integration)", async () => {
   const mint =
     process.env.METADATA_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-  const result = (await registry.invoke("market.token_metadata", ctx, {
-    mint,
-  })) as { symbol: string; decimals: number };
+  let result: { symbol: string; decimals: number } | undefined;
+  try {
+    result = (await registry.invoke("market.token_metadata", ctx, {
+      mint,
+    })) as { symbol: string; decimals: number };
+  } catch (err) {
+    if (isRateLimitError(err)) {
+      return;
+    }
+    throw err;
+  }
 
   expect(result.symbol).toBeTruthy();
   expect(Number.isFinite(result.decimals)).toBe(true);
