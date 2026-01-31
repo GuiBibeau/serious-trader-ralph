@@ -4,6 +4,7 @@ import { AgentController, AgentOrchestrator } from "../agent/index.js";
 import { sendAgentMessage } from "../cli/agent.js";
 import { runCliCommand } from "../cli/client.js";
 import { runDoctor } from "../cli/doctor.js";
+import { installToolFromRegistry } from "../cli/tools.js";
 import { runUpdate } from "../cli/update.js";
 import { loadConfig } from "../config/index.js";
 import { GatewayServer } from "../gateway/server.js";
@@ -121,6 +122,33 @@ program
     const config = loadConfig(program.opts().config);
     await sendAgentMessage(config, options.message, options.trigger);
   });
+
+program
+  .command("tools:install <name>")
+  .description("Install a tool from the configured registry")
+  .option("--registry <url>", "Registry URL override")
+  .option(
+    "--target <target>",
+    "Install target (openclaw or skills)",
+    "openclaw",
+  )
+  .option("-f, --force", "Overwrite if already installed")
+  .action(
+    async (
+      name: string,
+      options: { registry?: string; target?: string; force?: boolean },
+    ) => {
+      const config = loadConfig(program.opts().config);
+      const target = options.target === "skills" ? "skills" : "openclaw";
+      const dest = await installToolFromRegistry(config, name, {
+        registryUrl: options.registry,
+        target,
+        force: options.force,
+      });
+      console.log(`Installed ${name} to ${dest}`);
+      console.log("Restart the gateway to load the new tool.");
+    },
+  );
 
 program
   .command("doctor")
