@@ -780,7 +780,9 @@ export function registerDefaultTools(
         .sort((a, b) => b.tvlValue - a.tvlValue);
 
       const topPools = pools.slice(0, 10).map(({ tvlValue, ...rest }) => rest);
-      const totalTvl = pools.reduce((sum, pool) => sum + pool.tvlValue, 0);
+      const totalTvl = pools
+        .slice(0, 10)
+        .reduce((sum, pool) => sum + pool.tvlValue, 0);
 
       return {
         totalTvlUsd: String(totalTvl),
