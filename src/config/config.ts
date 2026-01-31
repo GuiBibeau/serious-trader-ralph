@@ -59,6 +59,20 @@ const ConfigSchema = z.object({
       skillsDir: z.string().default("skills"),
     })
     .default({}),
+  openclaw: z
+    .object({
+      pluginsDir: z.string().optional(),
+      gateway: z
+        .object({
+          baseUrl: z.string().min(1),
+          token: z.string().min(1),
+          sessionKey: z.string().optional(),
+          messageChannel: z.string().optional(),
+          accountId: z.string().optional(),
+        })
+        .optional(),
+    })
+    .default({}),
   notify: z
     .object({
       webhookUrl: z.string().optional(),
