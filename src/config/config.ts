@@ -62,6 +62,7 @@ const ConfigSchema = z.object({
   openclaw: z
     .object({
       pluginsDir: z.string().optional(),
+      registryUrl: z.string().optional(),
       gateway: z
         .object({
           baseUrl: z.string().min(1),
