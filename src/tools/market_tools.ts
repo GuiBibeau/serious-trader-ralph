@@ -550,7 +550,7 @@ export function registerMarketTools(
         const oracleTwap = parseBigInt(
           (latest as { oraclePriceTwap?: string | number }).oraclePriceTwap,
         );
-        if (!fundingRateRaw || !oracleTwap) {
+        if (fundingRateRaw === null || oracleTwap === null) {
           throw new Error("drift-funding-rate-invalid");
         }
         const scale = 1_000_000_000n;
