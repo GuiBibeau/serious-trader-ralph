@@ -150,24 +150,25 @@ const tool: ToolDefinition<CodexExecInput, CodexExecOutput> = {
       stderrTruncated = result.truncated;
     });
 
-    const exit = await new Promise<{ code: number | null; signal: string | null }>(
-      (resolve) => {
-        const timer = setTimeout(() => {
-          timedOut = true;
-          child.kill("SIGKILL");
-        }, timeoutMs);
+    const exit = await new Promise<{
+      code: number | null;
+      signal: string | null;
+    }>((resolve) => {
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, timeoutMs);
 
-        child.on("close", (code, signal) => {
-          clearTimeout(timer);
-          resolve({ code, signal });
-        });
-        child.on("error", (err) => {
-          clearTimeout(timer);
-          stderr = stderr || String(err);
-          resolve({ code: 1, signal: null });
-        });
-      },
-    );
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        resolve({ code, signal });
+      });
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        stderr = stderr || String(err);
+        resolve({ code: 1, signal: null });
+      });
+    });
 
     let lastMessage: string | null | undefined;
     if (lastMessagePath) {

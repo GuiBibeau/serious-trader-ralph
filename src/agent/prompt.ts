@@ -92,9 +92,7 @@ export function buildToolingLines(tools: ToolSchema[]): string[] {
   const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
   const lines = ["TOOLING (name: purpose):"];
   for (const tool of sorted) {
-    const desc = (tool.description ?? "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const desc = (tool.description ?? "").replace(/\s+/g, " ").trim();
     lines.push(`- ${tool.name}: ${desc || "No description."}`);
   }
   return lines;

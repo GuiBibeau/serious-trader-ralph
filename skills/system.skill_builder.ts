@@ -1,6 +1,6 @@
-import path from "node:path";
 import fs from "node:fs/promises";
-import type { ToolDefinition, ToolContext } from "../src/tools/registry.js";
+import path from "node:path";
+import type { ToolContext, ToolDefinition } from "../src/tools/registry.js";
 import codexTool from "./system.codex_exec.ts";
 
 type SkillBuilderInput = {

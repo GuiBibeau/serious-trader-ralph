@@ -1,3 +1,4 @@
+import { buildAutonomousPrompt } from "../agent/prompt.js";
 import { SessionJournal } from "../journal/index.js";
 import { createLlmClient } from "../llm/index.js";
 import type {
@@ -23,7 +24,6 @@ import type {
   RunRecord,
   ToolPolicy,
 } from "./types.js";
-import { buildAutonomousPrompt } from "../agent/prompt.js";
 
 type Deferred<T> = {
   promise: Promise<T>;

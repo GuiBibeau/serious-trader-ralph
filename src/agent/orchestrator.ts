@@ -8,8 +8,8 @@ import type {
 import type { ToolContext, ToolRegistry } from "../tools/registry.js";
 import { info, warn } from "../util/logger.js";
 import { isRecord } from "../util/types.js";
-import type { AgentTickReason, AgentTickResult } from "./types.js";
 import { buildAutonomousPrompt } from "./prompt.js";
+import type { AgentTickReason, AgentTickResult } from "./types.js";
 
 export type AutopilotPlan = {
   inputMint: string;
@@ -158,7 +158,10 @@ export class AgentOrchestrator {
     }
   }
 
-  private ensureSystemPrompt(plan: AutopilotPlan | undefined, tools: ToolSchema[]): void {
+  private ensureSystemPrompt(
+    plan: AutopilotPlan | undefined,
+    tools: ToolSchema[],
+  ): void {
     if (this.state.messages.some((msg) => msg.role === "system")) {
       return;
     }
