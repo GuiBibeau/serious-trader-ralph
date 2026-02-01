@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { RalphConfig } from "../../src/config/config.js";
 import { installToolFromRegistry } from "../../src/cli/tools.js";
+import type { RalphConfig } from "../../src/config/config.js";
 
 const tmpRoot = path.resolve(".tmp/test-tools-install");
 const registryUrl = "https://registry.example.com/tools.json";
@@ -24,6 +24,15 @@ const baseConfig: RalphConfig = {
   tools: { skillsDir: "skills" },
   openclaw: {},
   notify: {},
+  runtime: {
+    sessionsDir: "sessions",
+    runsDir: "runs",
+    lanes: { main: 1, subagent: 4, autopilot: 1 },
+  },
+  agents: {
+    defaultAgentId: "main",
+    agents: {},
+  },
   policy: {
     killSwitch: false,
     allowedMints: [],
@@ -90,8 +99,9 @@ test("rejects registry entries with path traversal", async () => {
     [downloadUrl]: { body: "console.log('x')" },
   });
 
-  await expect(installToolFromRegistry(configWithRegistry(), "bad")).rejects
-    .toThrow(/unsafe filename/i);
+  await expect(
+    installToolFromRegistry(configWithRegistry(), "bad"),
+  ).rejects.toThrow(/unsafe filename/i);
 });
 
 test("rejects registry entries with absolute paths", async () => {
@@ -106,8 +116,9 @@ test("rejects registry entries with absolute paths", async () => {
     [downloadUrl]: { body: "console.log('x')" },
   });
 
-  await expect(installToolFromRegistry(configWithRegistry(), "bad")).rejects
-    .toThrow(/unsafe filename/i);
+  await expect(
+    installToolFromRegistry(configWithRegistry(), "bad"),
+  ).rejects.toThrow(/unsafe filename/i);
 });
 
 test("installs tool with a safe filename", async () => {
