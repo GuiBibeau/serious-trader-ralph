@@ -7,8 +7,10 @@ import {
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import type { ToolContext, ToolRegistry } from "./registry.js";
 import type {
+  KalshiMarketDetail,
   KalshiOrderbook,
   KalshiOrderbookLevel,
+  KalshiOrderbookResponse,
   SwitchboardResult,
   ToolDeps,
 } from "./tool_deps.js";
@@ -23,13 +25,16 @@ export function registerMarketTools(
     defaultSlippageBps,
     fetchCandles,
     fetchKalshiMarkets,
+    fetchKalshiMarket,
     fetchKalshiOrderbook,
     fetchRaydiumPairs,
     fetchOrcaWhirlpools,
+    fetchDriftFundingRates,
     fetchSwitchboardFeed,
     resolvePythFeedId,
     fetchPythPrice,
     formatExpo,
+    formatScaled,
     toIsoTimestamp,
     toNumber,
     getTokenInfoMap,
@@ -43,6 +48,93 @@ export function registerMarketTools(
 
   const toStringOrEmpty = (value: number | null | undefined): string =>
     value === null || value === undefined ? "" : String(value);
+
+  const pickBestPrice = (
+    ...candidates: Array<number | null | undefined>
+  ): number | null => {
+    let sawZero = false;
+    for (const value of candidates) {
+      if (value === null || value === undefined) continue;
+      if (!Number.isFinite(value)) continue;
+      if (value > 0) return value;
+      if (value === 0) sawZero = true;
+    }
+    return sawZero ? 0 : null;
+  };
+
+  const parseBigInt = (
+    value: string | number | null | undefined,
+  ): bigint | null => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return null;
+      return BigInt(Math.trunc(value));
+    }
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      return BigInt(trimmed);
+    } catch {
+      return null;
+    }
+  };
+
+  const toIsoMaybe = (value: string | number | null | undefined): string => {
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) {
+        return new Date(parsed).toISOString();
+      }
+    }
+    return toIsoTimestamp(value);
+  };
+
+  const normalizeDriftMarket = (market: string): string => {
+    const trimmed = market.trim();
+    if (!trimmed) return trimmed;
+    const upper = trimmed.toUpperCase();
+    return upper.endsWith("-PERP") ? upper : `${upper}-PERP`;
+  };
+
+  const pickLatestDriftFunding = (
+    entries: Array<{
+      ts?: string | number;
+      slot?: string | number;
+    }>,
+  ) => {
+    let latest = entries[0];
+    let latestKey = -1;
+    for (const entry of entries) {
+      const tsValue = entry.ts;
+      let key = -1;
+      if (typeof tsValue === "string") {
+        const parsed = Date.parse(tsValue);
+        if (!Number.isNaN(parsed)) {
+          key = parsed;
+        } else {
+          const numeric = Number(tsValue);
+          if (Number.isFinite(numeric)) {
+            key = numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+          }
+        }
+      } else if (typeof tsValue === "number") {
+        if (Number.isFinite(tsValue)) {
+          key = tsValue > 1_000_000_000_000 ? tsValue : tsValue * 1000;
+        }
+      }
+      if (key < 0) {
+        const slot = Number(entry.slot ?? 0);
+        if (Number.isFinite(slot)) {
+          key = slot;
+        }
+      }
+      if (key >= latestKey) {
+        latestKey = key;
+        latest = entry;
+      }
+    }
+    return latest;
+  };
 
   const fetchPhoenixTopOfBook = async (
     connection: Connection,
@@ -327,16 +419,47 @@ export function registerMarketTools(
       if (!ticker) {
         throw new Error("market-id-required");
       }
-      const payload = await fetchKalshiOrderbook(ticker, 1);
-      const orderbook: KalshiOrderbook = payload.orderbook ?? payload;
-      const yesLevels: KalshiOrderbookLevel[] = orderbook.yes ?? [];
-      const noLevels: KalshiOrderbookLevel[] = orderbook.no ?? [];
-      const yesPrice = yesLevels[0]?.[0];
-      const noPrice = noLevels[0]?.[0];
-      const liquidity = (yesLevels[0]?.[1] ?? 0) + (noLevels[0]?.[1] ?? 0);
+      let market: KalshiMarketDetail | null = null;
+      try {
+        market = await fetchKalshiMarket(ticker);
+      } catch {
+        market = null;
+      }
+      let payload: KalshiOrderbookResponse | null = null;
+      try {
+        payload = await fetchKalshiOrderbook(ticker, 1);
+      } catch {
+        payload = null;
+      }
+      if (!market && !payload) {
+        throw new Error("kalshi-market-unavailable");
+      }
+      const orderbook: KalshiOrderbook | null = payload
+        ? (payload.orderbook ?? payload)
+        : null;
+      const yesLevels: KalshiOrderbookLevel[] = Array.isArray(orderbook?.yes)
+        ? orderbook?.yes
+        : [];
+      const noLevels: KalshiOrderbookLevel[] = Array.isArray(orderbook?.no)
+        ? orderbook?.no
+        : [];
+      const yesPrice = pickBestPrice(
+        toNumber(market?.yes_bid),
+        toNumber(market?.yes_ask),
+        yesLevels[0]?.[0],
+      );
+      const noPrice = pickBestPrice(
+        toNumber(market?.no_bid),
+        toNumber(market?.no_ask),
+        noLevels[0]?.[0],
+      );
+      const liquidityMarket = toNumber(market?.liquidity);
+      const liquidityBook = (yesLevels[0]?.[1] ?? 0) + (noLevels[0]?.[1] ?? 0);
+      const liquidity =
+        liquidityMarket !== null ? liquidityMarket : liquidityBook;
       return {
-        yesPrice: yesPrice !== undefined ? String(yesPrice) : "",
-        noPrice: noPrice !== undefined ? String(noPrice) : "",
+        yesPrice: toStringOrEmpty(yesPrice),
+        noPrice: toStringOrEmpty(noPrice),
         liquidity: String(liquidity),
         ts: new Date().toISOString(),
       };
@@ -425,6 +548,76 @@ export function registerMarketTools(
         feeTierBps,
         ts: new Date().toISOString(),
       };
+    },
+  });
+
+  registry.register({
+    name: "market.perps_funding_rates",
+    description: "Fetch current perps funding rates for supported venues.",
+    schema: {
+      name: "market.perps_funding_rates",
+      description: "Fetch current perps funding rates for supported venues.",
+      parameters: {
+        type: "object",
+        properties: {
+          venue: { type: "string" },
+          market: { type: "string" },
+        },
+        required: ["venue", "market"],
+        additionalProperties: false,
+      },
+    },
+    execute: async (
+      _ctx: ToolContext,
+      input: { venue: string; market: string },
+    ) => {
+      const venue = input.venue.trim().toLowerCase();
+      const market = input.market.trim();
+      if (!venue) {
+        throw new Error("venue-required");
+      }
+      if (!market) {
+        throw new Error("market-required");
+      }
+
+      if (venue === "drift") {
+        const marketName = normalizeDriftMarket(market);
+        const rates = await fetchDriftFundingRates(marketName);
+        if (rates.length === 0) {
+          throw new Error("drift-funding-rate-not-found");
+        }
+        const latest = pickLatestDriftFunding(rates);
+        const fundingRateRaw =
+          parseBigInt(
+            (latest as { fundingRate?: string | number }).fundingRate,
+          ) ??
+          parseBigInt(
+            (latest as { fundingRateLong?: string | number }).fundingRateLong,
+          );
+        const oracleTwap = parseBigInt(
+          (latest as { oraclePriceTwap?: string | number }).oraclePriceTwap,
+        );
+        if (fundingRateRaw === null || oracleTwap === null) {
+          throw new Error("drift-funding-rate-invalid");
+        }
+        const scale = 1_000_000_000n;
+        const rateScaled = (fundingRateRaw * scale) / (oracleTwap * 1_000n);
+        return {
+          fundingRate: formatScaled(rateScaled, 9),
+          interval: "1h",
+          ts: toIsoMaybe((latest as { ts?: string | number }).ts ?? Date.now()),
+        };
+      }
+
+      if (venue === "jupiter" || venue === "jup") {
+        return {
+          fundingRate: "0",
+          interval: "none",
+          ts: new Date().toISOString(),
+        };
+      }
+
+      throw new Error("unsupported-venue");
     },
   });
 

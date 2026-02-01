@@ -54,6 +54,19 @@ export type OrcaWhirlpool = {
   lpFeeRate?: number | string;
 };
 
+export type DriftFundingRateEntry = {
+  fundingRate?: string | number;
+  fundingRateLong?: string | number;
+  oraclePriceTwap?: string | number;
+  ts?: string | number;
+  slot?: string | number;
+  marketName?: string;
+};
+
+export type DriftFundingRatesResponse = {
+  fundingRates?: DriftFundingRateEntry[];
+};
+
 export type KalshiMarket = {
   ticker?: string;
   id?: string;
@@ -74,14 +87,27 @@ export type KalshiMarketsResponse = {
 export type KalshiOrderbookLevel = [number, number];
 
 export type KalshiOrderbook = {
-  yes?: KalshiOrderbookLevel[];
-  no?: KalshiOrderbookLevel[];
+  yes?: KalshiOrderbookLevel[] | null;
+  no?: KalshiOrderbookLevel[] | null;
 };
 
 export type KalshiOrderbookResponse = {
   orderbook?: KalshiOrderbook;
-  yes?: KalshiOrderbookLevel[];
-  no?: KalshiOrderbookLevel[];
+  yes?: KalshiOrderbookLevel[] | null;
+  no?: KalshiOrderbookLevel[] | null;
+};
+
+export type KalshiMarketDetail = KalshiMarket & {
+  yes_bid?: number | string;
+  yes_ask?: number | string;
+  no_bid?: number | string;
+  no_ask?: number | string;
+  liquidity?: number | string;
+  volume?: number | string;
+};
+
+export type KalshiMarketResponse = {
+  market?: KalshiMarketDetail;
 };
 
 export type SwitchboardResult = {
@@ -147,11 +173,15 @@ export type ToolDeps = {
   >;
   fetchRaydiumPairs: () => Promise<RaydiumPair[]>;
   fetchOrcaWhirlpools: () => Promise<OrcaWhirlpool[]>;
+  fetchDriftFundingRates: (
+    marketName: string,
+  ) => Promise<DriftFundingRateEntry[]>;
   toNumber: (value: string | number | null | undefined) => number | null;
   toIsoTimestamp: (value: string | number | null | undefined) => string;
   fetchKalshiMarkets: (
     params: Record<string, string>,
   ) => Promise<KalshiMarketsResponse>;
+  fetchKalshiMarket: (ticker: string) => Promise<KalshiMarketDetail>;
   fetchKalshiOrderbook: (
     ticker: string,
     depth?: number,
@@ -190,6 +220,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
   const defaultSolNotional = 1_000_000_000n;
   const birdeyeBaseUrl = "https://public-api.birdeye.so";
   const kalshiBaseUrl = "https://api.elections.kalshi.com/trade-api/v2";
+  const driftBaseUrl = "https://data.api.drift.trade";
   const candleIntervals: Record<string, { type: string; seconds: number }> = {
     "1m": { type: "1m", seconds: 60 },
     "5m": { type: "5m", seconds: 300 },
@@ -202,6 +233,19 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
   const raydiumBaseUrl = "https://api.raydium.io";
   const orcaBaseUrl = "https://api.mainnet.orca.so";
   const switchboardBaseUrl = "https://ondemand.switchboard.xyz";
+  const readJson = async <T>(response: Response, label: string): Promise<T> => {
+    const text = await response.text();
+    if (!text) {
+      throw new Error(`${label} empty response (${response.status})`);
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch (_err) {
+      const snippet = text.slice(0, 200).replace(/\s+/g, " ").trim();
+      const detail = snippet ? `: ${snippet}` : "";
+      throw new Error(`${label} invalid json (${response.status})${detail}`);
+    }
+  };
   let raydiumPairsCache: {
     ts: number;
     data: RaydiumPair[];
@@ -210,6 +254,10 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     ts: number;
     data: OrcaWhirlpool[];
   } | null = null;
+  const driftFundingCache = new Map<
+    string,
+    { ts: number; data: DriftFundingRateEntry[] }
+  >();
 
   const getDexLabels = async (): Promise<string[]> => {
     if (dexLabelCache) return dexLabelCache;
@@ -378,7 +426,10 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
       throw new Error(`Birdeye ohlcv failed: ${response.status}`);
     }
 
-    const payload = (await response.json()) as BirdeyeOhlcvResponse;
+    const payload = await readJson<BirdeyeOhlcvResponse>(
+      response,
+      "Birdeye ohlcv",
+    );
     const rawItems = Array.isArray(payload.data)
       ? payload.data
       : (payload.data?.items ?? payload.items ?? []);
@@ -403,7 +454,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Raydium pairs failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Raydium pairs");
     if (!Array.isArray(payload)) {
       throw new Error("Raydium pairs invalid payload");
     }
@@ -422,7 +473,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Orca whirlpools failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Orca whirlpools");
     if (!payload || typeof payload !== "object") {
       throw new Error("Orca whirlpools invalid payload");
     }
@@ -431,6 +482,33 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
       throw new Error("Orca whirlpools invalid payload");
     }
     orcaWhirlpoolsCache = { ts: now, data };
+    return data;
+  };
+
+  const fetchDriftFundingRates = async (
+    marketName: string,
+  ): Promise<DriftFundingRateEntry[]> => {
+    const now = Date.now();
+    const cacheKey = marketName.toUpperCase();
+    const cached = driftFundingCache.get(cacheKey);
+    if (cached && now - cached.ts < 30_000) {
+      return cached.data;
+    }
+    const url = new URL("/fundingRates", driftBaseUrl);
+    url.searchParams.set("marketName", cacheKey);
+    const response = await fetch(url.toString(), { method: "GET" });
+    if (!response.ok) {
+      throw new Error(`Drift funding rates failed: ${response.status}`);
+    }
+    const payload = await readJson<DriftFundingRatesResponse>(
+      response,
+      "Drift funding rates",
+    );
+    const data = payload.fundingRates ?? [];
+    if (!Array.isArray(data)) {
+      throw new Error("Drift funding rates invalid payload");
+    }
+    driftFundingCache.set(cacheKey, { ts: now, data });
     return data;
   };
 
@@ -448,11 +526,24 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
   const toIsoTimestamp = (
     value: string | number | null | undefined,
   ): string => {
-    if (typeof value !== "number" && typeof value !== "string") return "";
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return "";
-    const ms = numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
-    return new Date(ms).toISOString();
+    if (value === null || value === undefined) return "";
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return "";
+      const numeric = Number(trimmed);
+      if (Number.isFinite(numeric)) {
+        const ms = numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+        return new Date(ms).toISOString();
+      }
+      const parsed = Date.parse(trimmed);
+      return Number.isFinite(parsed) ? new Date(parsed).toISOString() : "";
+    }
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return "";
+      const ms = value > 1_000_000_000_000 ? value : value * 1000;
+      return new Date(ms).toISOString();
+    }
+    return "";
   };
 
   const fetchKalshiMarkets = async (
@@ -466,11 +557,33 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Kalshi markets failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Kalshi markets");
     if (!payload || typeof payload !== "object") {
       throw new Error("Kalshi markets invalid payload");
     }
     return payload as KalshiMarketsResponse;
+  };
+
+  const fetchKalshiMarket = async (
+    ticker: string,
+  ): Promise<KalshiMarketDetail> => {
+    const url = new URL(
+      `markets/${encodeURIComponent(ticker)}`,
+      `${kalshiBaseUrl}/`,
+    );
+    const response = await fetch(url.toString(), { method: "GET" });
+    if (!response.ok) {
+      throw new Error(`Kalshi market failed: ${response.status}`);
+    }
+    const payload = await readJson<KalshiMarketResponse>(
+      response,
+      "Kalshi market",
+    );
+    const market = payload.market ?? payload;
+    if (!market || typeof market !== "object") {
+      throw new Error("Kalshi market invalid payload");
+    }
+    return market as KalshiMarketDetail;
   };
 
   const fetchKalshiOrderbook = async (
@@ -486,7 +599,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Kalshi orderbook failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Kalshi orderbook");
     if (!payload || typeof payload !== "object") {
       throw new Error("Kalshi orderbook invalid payload");
     }
@@ -501,7 +614,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Switchboard feed failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Switchboard feed");
     if (!payload || typeof payload !== "object") {
       throw new Error("Switchboard feed invalid payload");
     }
@@ -643,10 +756,12 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Pyth price_feeds failed: ${response.status}`);
     }
-    const feeds = (await response.json()) as Array<{
-      id: string;
-      attributes?: Record<string, string>;
-    }>;
+    const feeds = await readJson<
+      Array<{
+        id: string;
+        attributes?: Record<string, string>;
+      }>
+    >(response, "Pyth price_feeds");
     const normalized = symbol.trim().toUpperCase();
     const normalizedNoSlash = normalized.replace("/", "");
     for (const feed of feeds) {
@@ -682,7 +797,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Pyth price update failed: ${response.status}`);
     }
-    const payload = (await response.json()) as {
+    const payload = await readJson<{
       parsed?: Array<{
         id: string;
         price: {
@@ -692,7 +807,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
           publish_time: number;
         };
       }>;
-    };
+    }>(response, "Pyth price update");
     const parsed = payload.parsed?.[0];
     if (!parsed) {
       throw new Error("pyth-price-not-found");
@@ -716,9 +831,11 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     fetchCandles,
     fetchRaydiumPairs,
     fetchOrcaWhirlpools,
+    fetchDriftFundingRates,
     toNumber,
     toIsoTimestamp,
     fetchKalshiMarkets,
+    fetchKalshiMarket,
     fetchKalshiOrderbook,
     fetchSwitchboardFeed,
     computePriceSnapshot,

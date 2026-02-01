@@ -9,6 +9,8 @@ solana:
 jupiter:
   apiKey: "<REPLACE_ME>"
   baseUrl: "https://api.jup.ag"
+birdeye:
+  apiKey: "<REPLACE_ME>"
 llm:
   provider: "openai_chat"
   baseUrl: "https://api.deepinfra.com/v1/openai"
@@ -29,6 +31,8 @@ gateway:
   authToken: "<REPLACE_ME>"
 tools:
   skillsDir: "skills"
+  # allow: ["wallet.*", "market.jupiter_*"]
+  # deny: ["market.prediction_*", "market.switchboard_*"]
 openclaw:
   # pluginsDir: "openclaw-plugins"
   # registryUrl: "https://example.com/tools/registry.json"
