@@ -219,22 +219,17 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
   const raydiumBaseUrl = "https://api.raydium.io";
   const orcaBaseUrl = "https://api.mainnet.orca.so";
   const switchboardBaseUrl = "https://ondemand.switchboard.xyz";
-  const readJson = async <T>(
-    response: Response,
-    label: string,
-  ): Promise<T> => {
+  const readJson = async <T>(response: Response, label: string): Promise<T> => {
     const text = await response.text();
     if (!text) {
       throw new Error(`${label} empty response (${response.status})`);
     }
     try {
       return JSON.parse(text) as T;
-    } catch (err) {
+    } catch (_err) {
       const snippet = text.slice(0, 200).replace(/\s+/g, " ").trim();
       const detail = snippet ? `: ${snippet}` : "";
-      throw new Error(
-        `${label} invalid json (${response.status})${detail}`,
-      );
+      throw new Error(`${label} invalid json (${response.status})${detail}`);
     }
   };
   let raydiumPairsCache: {
