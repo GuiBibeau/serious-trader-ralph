@@ -219,6 +219,24 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
   const raydiumBaseUrl = "https://api.raydium.io";
   const orcaBaseUrl = "https://api.mainnet.orca.so";
   const switchboardBaseUrl = "https://ondemand.switchboard.xyz";
+  const readJson = async <T>(
+    response: Response,
+    label: string,
+  ): Promise<T> => {
+    const text = await response.text();
+    if (!text) {
+      throw new Error(`${label} empty response (${response.status})`);
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch (err) {
+      const snippet = text.slice(0, 200).replace(/\s+/g, " ").trim();
+      const detail = snippet ? `: ${snippet}` : "";
+      throw new Error(
+        `${label} invalid json (${response.status})${detail}`,
+      );
+    }
+  };
   let raydiumPairsCache: {
     ts: number;
     data: RaydiumPair[];
@@ -399,7 +417,10 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
       throw new Error(`Birdeye ohlcv failed: ${response.status}`);
     }
 
-    const payload = (await response.json()) as BirdeyeOhlcvResponse;
+    const payload = await readJson<BirdeyeOhlcvResponse>(
+      response,
+      "Birdeye ohlcv",
+    );
     const rawItems = Array.isArray(payload.data)
       ? payload.data
       : (payload.data?.items ?? payload.items ?? []);
@@ -424,7 +445,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Raydium pairs failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Raydium pairs");
     if (!Array.isArray(payload)) {
       throw new Error("Raydium pairs invalid payload");
     }
@@ -443,7 +464,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Orca whirlpools failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Orca whirlpools");
     if (!payload || typeof payload !== "object") {
       throw new Error("Orca whirlpools invalid payload");
     }
@@ -470,7 +491,10 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Drift funding rates failed: ${response.status}`);
     }
-    const payload = (await response.json()) as DriftFundingRatesResponse;
+    const payload = await readJson<DriftFundingRatesResponse>(
+      response,
+      "Drift funding rates",
+    );
     const data = payload.fundingRates ?? [];
     if (!Array.isArray(data)) {
       throw new Error("Drift funding rates invalid payload");
@@ -511,7 +535,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Kalshi markets failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Kalshi markets");
     if (!payload || typeof payload !== "object") {
       throw new Error("Kalshi markets invalid payload");
     }
@@ -531,7 +555,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Kalshi orderbook failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Kalshi orderbook");
     if (!payload || typeof payload !== "object") {
       throw new Error("Kalshi orderbook invalid payload");
     }
@@ -546,7 +570,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Switchboard feed failed: ${response.status}`);
     }
-    const payload = await response.json();
+    const payload = await readJson<unknown>(response, "Switchboard feed");
     if (!payload || typeof payload !== "object") {
       throw new Error("Switchboard feed invalid payload");
     }
@@ -688,10 +712,12 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Pyth price_feeds failed: ${response.status}`);
     }
-    const feeds = (await response.json()) as Array<{
-      id: string;
-      attributes?: Record<string, string>;
-    }>;
+    const feeds = await readJson<
+      Array<{
+        id: string;
+        attributes?: Record<string, string>;
+      }>
+    >(response, "Pyth price_feeds");
     const normalized = symbol.trim().toUpperCase();
     const normalizedNoSlash = normalized.replace("/", "");
     for (const feed of feeds) {
@@ -727,7 +753,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
     if (!response.ok) {
       throw new Error(`Pyth price update failed: ${response.status}`);
     }
-    const payload = (await response.json()) as {
+    const payload = await readJson<{
       parsed?: Array<{
         id: string;
         price: {
@@ -737,7 +763,7 @@ export function createToolDeps(jupiter: JupiterClient): ToolDeps {
           publish_time: number;
         };
       }>;
-    };
+    }>(response, "Pyth price update");
     const parsed = payload.parsed?.[0];
     if (!parsed) {
       throw new Error("pyth-price-not-found");
