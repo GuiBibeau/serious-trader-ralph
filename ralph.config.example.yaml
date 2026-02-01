@@ -9,6 +9,8 @@ solana:
 jupiter:
   apiKey: "<REPLACE_ME>"
   baseUrl: "https://api.jup.ag"
+birdeye:
+  apiKey: "<REPLACE_ME>"
 llm:
   provider: "openai_chat"
   baseUrl: "https://api.deepinfra.com/v1/openai"
