@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../util/suppress_bigint_warning.js";
 import { Command } from "commander";
 import { sendAgentMessage } from "../cli/agent.js";
 import { runCliCommand } from "../cli/client.js";
