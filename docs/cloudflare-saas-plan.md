@@ -16,9 +16,9 @@
 
 Support both:
 1) **Raw keys (current)** for local CLI and dev
-2) **Solana Keychain** for SaaS/hosted deployments
+2) **Solana Keychain (Privy)** for SaaS/hosted deployments
 
-Integrate via `@solana/keychain-*` (e.g., Turnkey, Vault, AWS KMS).
+Integrate via `@solana/keychain-privy`.
 
 ## Loop execution
 

@@ -6,6 +6,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
+  "dependencies": {
+    "@solana/keychain-privy": "^0.3.0"
+  },
   "devDependencies": {
     "wrangler": "^3.103.0"
   }

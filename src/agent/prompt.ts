@@ -24,22 +24,9 @@ export function buildAutonomousPrompt(input: {
   tools: ToolSchema[];
 }): string {
   const { instruction, policy, plan, tools } = input;
-  const hasCodex = tools.some((tool) => tool.name === "system.codex_exec");
   const slippageHint = plan
     ? `min(plan.slippageBps=${plan.slippageBps}, policy.maxSlippageBps=${policy.maxSlippageBps})`
     : `policy.maxSlippageBps=${policy.maxSlippageBps}`;
-  const hasSkillBuilder = tools.some(
-    (tool) => tool.name === "system.skill_builder",
-  );
-  const hasCodexJob = tools.some((tool) => tool.name === "system.codex_job");
-  const toolCreationHint = [
-    "TOOL CREATION:",
-    hasSkillBuilder
-      ? "- Use system.skill_builder to create or update skills with guardrails."
-      : "- You may create new tools if needed. Prefer creating skill modules in skills/ (see skills/README.md).",
-    "- Use system.codex_exec to scaffold/edit tools; ensure they export a ToolDefinition and have schema + description.",
-    "- After adding a skill, the gateway must be restarted to load it.",
-  ];
 
   const lines = [
     "IDENTITY:",
@@ -76,21 +63,10 @@ export function buildAutonomousPrompt(input: {
     "PAIR SELECTION:",
     "Scan beyond the current holdings: consider any liquid pair available via Jupiter.",
     "Prefer high-liquidity, low-slippage pairs, but opportunistically trade other pairs when signals are strong.",
-    "RESEARCH & PROTOTYPING:",
-    hasCodex
-      ? "- Use system.codex_exec for short research bursts; use system.codex_job for long-running background research."
-      : "- system.codex_exec not available; rely on market/wallet/risk tools only.",
-    hasCodex
-      ? "- For research, prefer read-only sandbox; for prototyping tools, use workspace-write and keep changes minimal."
-      : "- If missing research tools, skip speculative steps and act conservatively.",
-    hasCodexJob
-      ? "- When using system.codex_job, poll status periodically and incorporate results when completed."
-      : "- If no background job tool exists, keep research tasks short and synchronous.",
-    "ASSUMPTION TESTING:",
-    hasCodex
-      ? "- Run short, non-interactive experiments with system.codex_exec; timebox (<=180s) and ensure clean exit."
-      : "- system.codex_exec not available; rely on market/wallet/risk tools.",
-    ...toolCreationHint,
+    "RESEARCH:",
+    "- Use market/wallet/risk tools only; keep research short and actionable.",
+    "TOOLING & EXTENSIONS:",
+    "- Tool creation is not available at runtime. If a tool is missing, report the need and continue with available tools.",
     ...buildToolingLines(tools),
     "SAFETY:",
     "Do not attempt to bypass tool policy/sandbox; guardrails are advisory, enforcement is via policy/tool allowlists.",

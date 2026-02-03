@@ -13,6 +13,9 @@ wrangler kv:namespace create CONFIG_KV
 wrangler r2 bucket create ralph-logs
 wrangler d1 migrations apply ralph_waitlist
 wrangler secret put ADMIN_TOKEN
+wrangler secret put PRIVY_APP_ID
+wrangler secret put PRIVY_APP_SECRET
+wrangler secret put PRIVY_WALLET_ID
 wrangler dev
 ```
 
@@ -21,6 +24,7 @@ wrangler dev
 - The trading loop implementation is stubbed in `src/loop.ts` and is the entry
   point for porting the core bot logic to the Workers runtime.
 - Logs are written to R2 (`ralph-logs`) as JSONL.
+- Privy keychain credentials are read from secrets (see `PRIVY_*` above).
 
 ## API
 

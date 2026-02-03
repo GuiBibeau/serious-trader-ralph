@@ -1,13 +1,31 @@
-import type { Keypair } from "@solana/web3.js";
+import type { Env } from "./types";
 
-export type KeychainConfig = {
-  provider: "keychain" | "raw";
-  secretKey?: Uint8Array;
+export type PrivySignerConfig = {
+  appId: string;
+  appSecret: string;
+  walletId: string;
 };
 
-// Placeholder adapter. The Solana keychain SDK will be integrated here.
-export async function getKeychainSigner(
-  _config: KeychainConfig,
-): Promise<Keypair | null> {
-  return null;
+export async function getPrivySigner(env: Env) {
+  const appId = env.PRIVY_APP_ID;
+  const appSecret = env.PRIVY_APP_SECRET;
+  const walletId = env.PRIVY_WALLET_ID;
+
+  if (!appId || !appSecret || !walletId) {
+    throw new Error("privy-config-missing");
+  }
+
+  const mod: Record<string, unknown> = await import("@solana/keychain-privy");
+  const PrivySigner =
+    (mod.PrivySigner as unknown) ?? (mod.default as unknown) ?? mod;
+
+  if (typeof PrivySigner !== "function") {
+    throw new Error("privy-signer-not-found");
+  }
+
+  return new (PrivySigner as new (config: PrivySignerConfig) => unknown)({
+    appId,
+    appSecret,
+    walletId,
+  });
 }

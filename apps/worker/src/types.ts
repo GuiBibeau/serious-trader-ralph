@@ -9,6 +9,9 @@ export type Env = {
   CONFIG_KV: KVNamespace;
   LOGS_BUCKET: R2Bucket;
   ADMIN_TOKEN?: string;
+  PRIVY_APP_ID?: string;
+  PRIVY_APP_SECRET?: string;
+  PRIVY_WALLET_ID?: string;
   LOOP_ENABLED_DEFAULT?: string;
   ALLOWED_ORIGINS?: string;
 };
