@@ -20,6 +20,31 @@ export default function Home() {
                 Read the thesis
               </a>
             </div>
+            <form
+              className="waitlist-form"
+              method="post"
+              action="/api/waitlist"
+            >
+              <label htmlFor="waitlist-email" className="label">
+                Join the waitlist
+              </label>
+              <div className="waitlist-row">
+                <input
+                  id="waitlist-email"
+                  name="email"
+                  type="email"
+                  required
+                  placeholder="you@fund.com"
+                  className="waitlist-input"
+                />
+                <button className="button secondary" type="submit">
+                  Join
+                </button>
+              </div>
+              <span className="muted">
+                Early access to the agentic edge fund.
+              </span>
+            </form>
             <div className="badges">
               <span className="badge">Autonomous</span>
               <span className="badge">On-Chain</span>

@@ -146,6 +146,32 @@ p {
   margin-top: 2rem;
 }
 
+.waitlist-form {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+  max-width: 420px;
+}
+
+.waitlist-row {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: 1fr auto;
+}
+
+.waitlist-input {
+  border: var(--border);
+  padding: 0.85rem 1rem;
+  font-size: 0.95rem;
+  font-family: var(--font-mono);
+  background: white;
+}
+
+.waitlist-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .button {
   display: inline-flex;
   align-items: center;
@@ -291,5 +317,11 @@ p {
 @media (prefers-reduced-motion: reduce) {
   .fade-up {
     animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .waitlist-row {
+    grid-template-columns: 1fr;
   }
 }

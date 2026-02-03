@@ -26,8 +26,12 @@
       "**/*",
       "!!**/node_modules",
       "!!**/dist",
+      "!!**/.next",
+      "!!**/.wrangler",
+      "!!**/out",
       "!!**/runs",
       "!!**/sessions",
+      "!!**/tasks",
       "!!**/trades",
       "!!**/.tmp"
     ]
