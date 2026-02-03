@@ -29,14 +29,14 @@ export default function Home() {
           <div className="hero-card fade-up delay-2">
             <h3>Fund profile</h3>
             <p className="muted">
-              Ralph is designed as a compact hedge fund engine focused on Solana.
-              It prioritizes discipline, continuous attention, and fast on-chain
-              execution.
+              Ralph is designed as a compact hedge fund engine focused on
+              Solana. It prioritizes discipline, continuous attention, and fast
+              on-chain execution.
             </p>
             <div style={{ marginTop: "1.5rem" }} className="grid-3">
               <div>
                 <p className="label">Mandate</p>
-              <p>Agentic edge fund</p>
+                <p>Agentic edge fund</p>
               </div>
               <div>
                 <p className="label">Execution</p>
@@ -79,10 +79,10 @@ export default function Home() {
             <div className="card fade-up delay-3">
               <p className="label">Clarity</p>
               <h3>Simple thesis.</h3>
-                <p className="muted">
-                  No overfit complexity. Clear signals, clean execution, and a
-                  narrow focus on edge.
-                </p>
+              <p className="muted">
+                No overfit complexity. Clear signals, clean execution, and a
+                narrow focus on edge.
+              </p>
             </div>
           </div>
         </div>
@@ -95,8 +95,8 @@ export default function Home() {
               <p className="label">Agentic loop</p>
               <h3>Observe → Decide → Execute.</h3>
               <p className="muted">
-                Ralph follows a tight loop that mirrors a hedge fund desk—monitor,
-                propose, validate, and act.
+                Ralph follows a tight loop that mirrors a hedge fund
+                desk—monitor, propose, validate, and act.
               </p>
             </div>
             <div className="card">
@@ -152,8 +152,8 @@ export default function Home() {
               <div>
                 <h3>Signal discipline</h3>
                 <p className="muted">
-                  Trades happen only when the signal is clear and the risk budget
-                  allows it.
+                  Trades happen only when the signal is clear and the risk
+                  budget allows it.
                 </p>
               </div>
             </div>
