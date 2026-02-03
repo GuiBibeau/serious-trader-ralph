@@ -192,7 +192,11 @@ async function reQuote(
   jupiter: ToolDeps["jupiter"],
   quoteResponse: JupiterQuoteResponse,
 ): Promise<JupiterQuoteResponse> {
-  const swapMode = quoteResponse.swapMode ?? "ExactIn";
+  const swapModeRaw = quoteResponse.swapMode;
+  const swapMode =
+    swapModeRaw === "ExactIn" || swapModeRaw === "ExactOut"
+      ? swapModeRaw
+      : "ExactIn";
   const amount =
     swapMode === "ExactOut"
       ? (quoteResponse.outAmount ?? quoteResponse.inAmount)
