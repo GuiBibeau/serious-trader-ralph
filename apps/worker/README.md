@@ -10,6 +10,7 @@ Cloudflare Worker providing:
 ```bash
 wrangler d1 create ralph_waitlist
 wrangler kv:namespace create CONFIG_KV
+wrangler r2 bucket create ralph-logs
 wrangler d1 migrations apply ralph_waitlist
 wrangler secret put ADMIN_TOKEN
 wrangler dev
@@ -19,6 +20,7 @@ wrangler dev
 - Cron runs every minute by default. The loop only runs if enabled in KV.
 - The trading loop implementation is stubbed in `src/loop.ts` and is the entry
   point for porting the core bot logic to the Workers runtime.
+- Logs are written to R2 (`ralph-logs`) as JSONL.
 
 ## API
 

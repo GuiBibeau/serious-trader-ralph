@@ -115,13 +115,16 @@ wrangler d1 create ralph_waitlist
 # 2) create KV namespace for config
 wrangler kv:namespace create CONFIG_KV
 
-# 3) apply migrations
+# 3) create R2 bucket for logs
+wrangler r2 bucket create ralph-logs
+
+# 4) apply migrations
 wrangler d1 migrations apply ralph_waitlist
 
-# 4) set admin token (for loop control APIs)
+# 5) set admin token (for loop control APIs)
 wrangler secret put ADMIN_TOKEN
 
-# 5) dev
+# 6) dev
 wrangler dev
 ```
 

@@ -16,5 +16,13 @@ database_name = "ralph_waitlist"
 database_id = ""
 migrations_dir = "migrations"
 
+[[r2_buckets]]
+binding = "LOGS_BUCKET"
+bucket_name = "ralph-logs"
+
+[[r2_buckets]]
+binding = "LOGS_BUCKET"
+bucket_name = "ralph-logs"
+
 [triggers]
 crons = ["*/1 * * * *"]
