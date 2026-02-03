@@ -1,0 +1,20 @@
+name = "ralph-edge"
+main = "src/index.ts"
+compatibility_date = "2026-02-03"
+
+[vars]
+LOOP_ENABLED_DEFAULT = "false"
+ALLOWED_ORIGINS = "*"
+
+[[kv_namespaces]]
+binding = "CONFIG_KV"
+id = ""
+
+[[d1_databases]]
+binding = "WAITLIST_DB"
+database_name = "ralph_waitlist"
+database_id = ""
+migrations_dir = "migrations"
+
+[triggers]
+crons = ["*/1 * * * *"]

@@ -55,6 +55,8 @@ bun run update                   # git pull + bun install
 - Skills folder (auto‑loaded): `skills/`
 - Web3 adapter: `src/solana/web3_adapter.ts`
 - Config file (default): `ralph.config.yaml`
+- Landing page (Next.js): `apps/portal`
+- Cloudflare edge worker: `apps/worker`
 
 You can override the config path with:
 
@@ -89,6 +91,46 @@ autopilot:
 ```bash
 bun run build
 bun run start
+```
+
+## Monorepo layout
+
+- `apps/portal`: Next.js landing page (brutalist UI, waitlist form).
+- `apps/worker`: Cloudflare Worker for waitlist + loop control + cron tick.
+- Root (`src/`): local CLI + gateway for full-featured bot DX.
+
+## Cloudflare edge services (portal + worker)
+
+The edge worker provides the waitlist API and control endpoints (start/stop loop,
+config). The portal posts to `/api/waitlist`.
+
+### Worker setup (wrangler)
+
+```bash
+cd apps/worker
+
+# 1) create D1 database
+wrangler d1 create ralph_waitlist
+
+# 2) create KV namespace for config
+wrangler kv:namespace create CONFIG_KV
+
+# 3) apply migrations
+wrangler d1 migrations apply ralph_waitlist
+
+# 4) set admin token (for loop control APIs)
+wrangler secret put ADMIN_TOKEN
+
+# 5) dev
+wrangler dev
+```
+
+### Portal dev
+
+```bash
+cd apps/portal
+bun install
+bun dev
 ```
 
 ## Integration tests (Surfpool/devnet friendly)

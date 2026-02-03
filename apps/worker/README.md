@@ -1,0 +1,29 @@
+# Ralph Edge Worker
+
+Cloudflare Worker providing:
+- waitlist API (`POST /api/waitlist`)
+- loop control (`POST /api/loop/start`, `POST /api/loop/stop`)
+- cron-triggered loop ticks (stubbed for porting)
+
+## Setup
+
+```bash
+wrangler d1 create ralph_waitlist
+wrangler kv:namespace create CONFIG_KV
+wrangler d1 migrations apply ralph_waitlist
+wrangler secret put ADMIN_TOKEN
+wrangler dev
+```
+
+## Notes
+- Cron runs every minute by default. The loop only runs if enabled in KV.
+- The trading loop implementation is stubbed in `src/loop.ts` and is the entry
+  point for porting the core bot logic to the Workers runtime.
+
+## API
+
+- `POST /api/waitlist` (form or JSON) → `{ ok: true }`
+- `GET /api/loop/status`
+- `POST /api/loop/start` (requires `Authorization: Bearer <ADMIN_TOKEN>`)
+- `POST /api/loop/stop` (requires `Authorization: Bearer <ADMIN_TOKEN>`)
+- `POST /api/config` (requires admin; accepts `{ policy: {...} }`)
