@@ -119,6 +119,34 @@ export class SolanaRpc {
     ]);
   }
 
+  async simulateTransactionBase64(
+    signedBase64Tx: string,
+    opts?: {
+      commitment?: "processed" | "confirmed" | "finalized";
+      sigVerify?: boolean;
+    },
+  ): Promise<{
+    err?: unknown;
+    logs?: string[];
+    unitsConsumed?: number;
+    returnData?: unknown;
+  }> {
+    const config: Record<string, unknown> = { encoding: "base64" };
+    if (opts?.commitment) config.commitment = opts.commitment;
+    if (opts?.sigVerify !== undefined) config.sigVerify = opts.sigVerify;
+
+    const result = await this.request<{
+      value?: {
+        err?: unknown;
+        logs?: string[];
+        unitsConsumed?: number;
+        returnData?: unknown;
+      };
+    }>("simulateTransaction", [signedBase64Tx, config]);
+
+    return result.value ?? {};
+  }
+
   async getSignatureStatus(signature: string): Promise<{
     confirmationStatus?: string;
     err?: unknown;

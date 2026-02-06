@@ -7,6 +7,7 @@ export type NormalizedPolicy = {
   maxTradeAmountAtomic: string; // "0" means unlimited
   maxPriceImpactPct: number;
   slippageBps: number;
+  simulateOnly: boolean;
   dryRun: boolean;
   skipPreflight: boolean;
   commitment: "processed" | "confirmed" | "finalized";
@@ -50,6 +51,7 @@ export function normalizePolicy(
         : "0",
     maxPriceImpactPct,
     slippageBps,
+    simulateOnly: Boolean(policy?.simulateOnly),
     dryRun: Boolean(policy?.dryRun),
     skipPreflight: Boolean(policy?.skipPreflight),
     commitment,

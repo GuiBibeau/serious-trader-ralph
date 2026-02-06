@@ -12,6 +12,9 @@ export type LoopPolicy = {
   maxTradeAmountAtomic?: string;
   maxPriceImpactPct?: number;
   slippageBps?: number;
+  // If true, build + sign + simulate the swap on Solana RPC, but do not broadcast.
+  // This is the best "mainnet tool test" mode (hits Jupiter + Privy + RPC).
+  simulateOnly?: boolean;
   dryRun?: boolean;
   skipPreflight?: boolean;
   commitment?: "processed" | "confirmed" | "finalized";

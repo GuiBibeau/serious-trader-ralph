@@ -49,6 +49,8 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/loop/start") {
         requireAdmin(request, env);
         const config = await updateLoopConfig(env, { enabled: true });
+        // Start should behave like an orchestration "kick": enable, then tick ASAP.
+        ctx.waitUntil(runAutopilotTick(env, ctx, "manual"));
         return withCors(json({ ok: true, config }), env);
       }
 
@@ -69,10 +71,14 @@ export default {
           payload.strategy && typeof payload.strategy === "object"
             ? payload.strategy
             : undefined;
+        const runNow = Boolean(payload.runNow);
         const config = await updateLoopConfig(env, {
           policy: policy as unknown,
           strategy: strategy as unknown,
         });
+        if (runNow) {
+          ctx.waitUntil(runAutopilotTick(env, ctx, "manual"));
+        }
         return withCors(json({ ok: true, config }), env);
       }
 

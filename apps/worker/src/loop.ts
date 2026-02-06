@@ -277,6 +277,10 @@ async function runDca(input: {
     return;
   }
 
+  // Re-check config before building/signing/sending: allows "stop" / kill switch / policy edits
+  // to take effect quickly, even if a tick is already in-flight (openclaw-style control).
+  await assertLoopStillEnabled(env, log);
+
   const {
     swap,
     quoteResponse: usedQuote,
@@ -294,6 +298,42 @@ async function runDca(input: {
     env,
     swap.swapTransaction,
   );
+
+  if (policy.simulateOnly) {
+    const sim = await rpc.simulateTransactionBase64(signedBase64, {
+      commitment: policy.commitment,
+      sigVerify: true,
+    });
+
+    const ok = !sim.err;
+    log(ok ? "info" : "warn", "tx simulated", {
+      ok,
+      err: sim.err ?? null,
+      unitsConsumed: sim.unitsConsumed ?? null,
+    });
+
+    await insertTradeIndex(env, {
+      tenantId,
+      runId,
+      venue: "jupiter",
+      market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
+      side: "swap",
+      size: usedQuote.inAmount,
+      price: usedQuote.outAmount,
+      status: ok ? "simulated" : "simulate_error",
+      logKey,
+      signature: null,
+    });
+
+    await updateLoopState(env, tenantId, (current) => ({
+      ...current,
+      dca: { ...(current.dca ?? {}), lastAt: new Date().toISOString() },
+    }));
+    return;
+  }
+
+  await assertLoopStillEnabled(env, log);
+
   const signature = await rpc.sendTransactionBase64(signedBase64, {
     skipPreflight: policy.skipPreflight,
     preflightCommitment: policy.commitment,
@@ -488,6 +528,8 @@ async function runRebalance(input: {
       return;
     }
 
+    await assertLoopStillEnabled(env, log);
+
     const {
       swap,
       quoteResponse: usedQuote,
@@ -498,6 +540,35 @@ async function runRebalance(input: {
       env,
       swap.swapTransaction,
     );
+
+    if (policy.simulateOnly) {
+      const sim = await rpc.simulateTransactionBase64(signedBase64, {
+        commitment: policy.commitment,
+        sigVerify: true,
+      });
+      const ok = !sim.err;
+      log(ok ? "info" : "warn", "rebalance sell simulated", {
+        ok,
+        err: sim.err ?? null,
+        unitsConsumed: sim.unitsConsumed ?? null,
+      });
+      await insertTradeIndex(env, {
+        tenantId,
+        runId,
+        venue: "jupiter",
+        market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
+        side: "rebalance_sell",
+        size: usedQuote.inAmount,
+        price: usedQuote.outAmount,
+        status: ok ? "simulated" : "simulate_error",
+        logKey,
+        signature: null,
+      });
+      return;
+    }
+
+    await assertLoopStillEnabled(env, log);
+
     const signature = await rpc.sendTransactionBase64(signedBase64, {
       skipPreflight: policy.skipPreflight,
       preflightCommitment: policy.commitment,
@@ -583,6 +654,8 @@ async function runRebalance(input: {
     return;
   }
 
+  await assertLoopStillEnabled(env, log);
+
   const {
     swap,
     quoteResponse: usedQuote,
@@ -593,6 +666,35 @@ async function runRebalance(input: {
     env,
     swap.swapTransaction,
   );
+
+  if (policy.simulateOnly) {
+    const sim = await rpc.simulateTransactionBase64(signedBase64, {
+      commitment: policy.commitment,
+      sigVerify: true,
+    });
+    const ok = !sim.err;
+    log(ok ? "info" : "warn", "rebalance buy simulated", {
+      ok,
+      err: sim.err ?? null,
+      unitsConsumed: sim.unitsConsumed ?? null,
+    });
+    await insertTradeIndex(env, {
+      tenantId,
+      runId,
+      venue: "jupiter",
+      market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
+      side: "rebalance_buy",
+      size: usedQuote.inAmount,
+      price: usedQuote.outAmount,
+      status: ok ? "simulated" : "simulate_error",
+      logKey,
+      signature: null,
+    });
+    return;
+  }
+
+  await assertLoopStillEnabled(env, log);
+
   const signature = await rpc.sendTransactionBase64(signedBase64, {
     skipPreflight: policy.skipPreflight,
     preflightCommitment: policy.commitment,
@@ -620,4 +722,24 @@ async function runRebalance(input: {
     logKey,
     signature,
   });
+}
+
+async function assertLoopStillEnabled(
+  env: Env,
+  log: (
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    meta?: Record<string, unknown>,
+  ) => void,
+): Promise<void> {
+  const config = await getLoopConfig(env);
+  if (!config.enabled) {
+    log("warn", "loop disabled during tick, aborting before execution");
+    throw new Error("loop-disabled");
+  }
+  const policy = normalizePolicy(config.policy);
+  if (policy.killSwitch) {
+    log("warn", "kill switch enabled during tick, aborting before execution");
+    throw new Error("kill-switch-enabled");
+  }
 }

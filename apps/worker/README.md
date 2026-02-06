@@ -113,3 +113,20 @@ Note: Wrangler local mode uses the preview KV namespace by default, so the
   }
 }
 ```
+
+### Mainnet Tool Testing Mode (Simulate Only)
+
+If you want to validate the full pipeline (Jupiter quote + Jupiter swap tx build + Privy signing + Solana RPC),
+but do not want to broadcast trades yet, set:
+
+```json
+{
+  "policy": {
+    "dryRun": false,
+    "simulateOnly": true
+  }
+}
+```
+
+This will call `simulateTransaction` on the signed swap transaction and store a `simulated` (or `simulate_error`)
+row in the trade index.
