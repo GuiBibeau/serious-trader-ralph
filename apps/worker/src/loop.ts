@@ -153,6 +153,171 @@ export async function runAutopilotTick(
   }
 }
 
+export type TenantTickInput = {
+  tenantId: string;
+  walletAddress: string;
+  // Required for live trading / simulation. Not required for dry-runs.
+  privyWalletId?: string;
+};
+
+export async function runAutopilotTickForTenant(
+  env: Env,
+  ctx: ExecutionContext,
+  input: TenantTickInput,
+  reason: "cron" | "manual" = "cron",
+): Promise<{
+  ok: boolean;
+  error: string | null;
+  runId: string;
+  logKey: string;
+}> {
+  const runId = crypto.randomUUID();
+  const tenantId = input.tenantId;
+  const logKey = makeLogKey(tenantId, runId);
+  const lines: string[] = [];
+  let ok = true;
+  let errorMessage: string | null = null;
+
+  const log = (
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    meta?: Record<string, unknown>,
+  ) => {
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      level,
+      message,
+      tenantId,
+      runId,
+      reason,
+      ...(meta ?? {}),
+    });
+    lines.push(line);
+    console.log(line);
+  };
+
+  const flush = async () => {
+    try {
+      await writeJsonl(env, logKey, lines);
+    } catch (err) {
+      // Logging should never take the worker down.
+      console.log(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          level: "warn",
+          message: "failed to flush R2 logs",
+          tenantId,
+          runId,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  };
+
+  const locked = await acquireLoopLock(env, tenantId, runId);
+  if (!locked) {
+    log("warn", "tick skipped (lock held)");
+    await flush();
+    return { ok: true, error: null, runId, logKey };
+  }
+
+  try {
+    const config = await getLoopConfig(env, tenantId);
+    if (!config.enabled) {
+      log("info", "loop disabled");
+      return { ok: true, error: null, runId, logKey };
+    }
+
+    const policy = normalizePolicy(config.policy);
+    if (policy.killSwitch) {
+      log("warn", "kill switch enabled");
+      return { ok: true, error: null, runId, logKey };
+    }
+
+    const strategy = normalizeStrategy(config.strategy);
+    if (!strategy || strategy.type === "noop") {
+      log("info", "no strategy configured");
+      return { ok: true, error: null, runId, logKey };
+    }
+
+    const rpc = SolanaRpc.fromEnv(env);
+    const jupiter = new JupiterClient(
+      env.JUPITER_BASE_URL ?? "https://lite-api.jup.ag",
+      env.JUPITER_API_KEY,
+    );
+
+    const wallet = input.walletAddress;
+    if (!policy.dryRun && !input.privyWalletId) {
+      ok = false;
+      errorMessage = "missing-privy-wallet-id";
+      log("error", "missing privyWalletId for live tick");
+      return { ok, error: errorMessage, runId, logKey };
+    }
+
+    const tickEnv: Env = input.privyWalletId
+      ? { ...env, PRIVY_WALLET_ID: input.privyWalletId }
+      : env;
+
+    log("info", "tick start", {
+      strategy: strategy.type,
+      dryRun: policy.dryRun,
+      simulateOnly: policy.simulateOnly,
+    });
+
+    if (strategy.type === "dca") {
+      await runDca({
+        env: tickEnv,
+        ctx,
+        tenantId,
+        configTenantId: tenantId,
+        runId,
+        logKey,
+        log,
+        rpc,
+        jupiter,
+        wallet,
+        policy,
+        strategy,
+      });
+      return { ok, error: errorMessage, runId, logKey };
+    }
+
+    if (strategy.type === "rebalance") {
+      await runRebalance({
+        env: tickEnv,
+        ctx,
+        tenantId,
+        configTenantId: tenantId,
+        runId,
+        logKey,
+        log,
+        rpc,
+        jupiter,
+        wallet,
+        policy,
+        strategy,
+      });
+      return { ok, error: errorMessage, runId, logKey };
+    }
+
+    log("warn", "unsupported strategy type", {
+      type: (strategy as StrategyConfig).type,
+    });
+  } catch (err) {
+    ok = false;
+    errorMessage = err instanceof Error ? err.message : String(err);
+    log("error", "tick failed", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    await releaseLoopLock(env, tenantId, runId);
+    await flush();
+    ctx.waitUntil(Promise.resolve());
+  }
+
+  return { ok, error: errorMessage, runId, logKey };
+}
+
 function normalizeStrategy(strategy: unknown): StrategyConfig | null {
   if (!strategy || typeof strategy !== "object") return null;
   const type = (strategy as { type?: unknown }).type;
@@ -181,6 +346,7 @@ async function runDca(input: {
   env: Env;
   ctx: ExecutionContext;
   tenantId: string;
+  configTenantId?: string;
   runId: string;
   logKey: string;
   log: (
@@ -197,6 +363,7 @@ async function runDca(input: {
   const {
     env,
     tenantId,
+    configTenantId,
     runId,
     logKey,
     log,
@@ -279,7 +446,7 @@ async function runDca(input: {
 
   // Re-check config before building/signing/sending: allows "stop" / kill switch / policy edits
   // to take effect quickly, even if a tick is already in-flight (openclaw-style control).
-  await assertLoopStillEnabled(env, log);
+  await assertLoopStillEnabled(env, log, configTenantId);
 
   const {
     swap,
@@ -332,7 +499,7 @@ async function runDca(input: {
     return;
   }
 
-  await assertLoopStillEnabled(env, log);
+  await assertLoopStillEnabled(env, log, configTenantId);
 
   const signature = await rpc.sendTransactionBase64(signedBase64, {
     skipPreflight: policy.skipPreflight,
@@ -379,6 +546,7 @@ async function runRebalance(input: {
   env: Env;
   ctx: ExecutionContext;
   tenantId: string;
+  configTenantId?: string;
   runId: string;
   logKey: string;
   log: (
@@ -395,6 +563,7 @@ async function runRebalance(input: {
   const {
     env,
     tenantId,
+    configTenantId,
     runId,
     logKey,
     log,
@@ -528,7 +697,7 @@ async function runRebalance(input: {
       return;
     }
 
-    await assertLoopStillEnabled(env, log);
+    await assertLoopStillEnabled(env, log, configTenantId);
 
     const {
       swap,
@@ -567,7 +736,7 @@ async function runRebalance(input: {
       return;
     }
 
-    await assertLoopStillEnabled(env, log);
+    await assertLoopStillEnabled(env, log, configTenantId);
 
     const signature = await rpc.sendTransactionBase64(signedBase64, {
       skipPreflight: policy.skipPreflight,
@@ -654,7 +823,7 @@ async function runRebalance(input: {
     return;
   }
 
-  await assertLoopStillEnabled(env, log);
+  await assertLoopStillEnabled(env, log, configTenantId);
 
   const {
     swap,
@@ -693,7 +862,7 @@ async function runRebalance(input: {
     return;
   }
 
-  await assertLoopStillEnabled(env, log);
+  await assertLoopStillEnabled(env, log, configTenantId);
 
   const signature = await rpc.sendTransactionBase64(signedBase64, {
     skipPreflight: policy.skipPreflight,
@@ -731,8 +900,9 @@ async function assertLoopStillEnabled(
     message: string,
     meta?: Record<string, unknown>,
   ) => void,
+  tenantId?: string,
 ): Promise<void> {
-  const config = await getLoopConfig(env);
+  const config = await getLoopConfig(env, tenantId);
   if (!config.enabled) {
     log("warn", "loop disabled during tick, aborting before execution");
     throw new Error("loop-disabled");

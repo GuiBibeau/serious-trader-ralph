@@ -1,9 +1,17 @@
 import type { Env, LoopConfig } from "./types";
 
-const CONFIG_KEY = "loop:config";
+const LEGACY_CONFIG_KEY = "loop:config";
 
-export async function getLoopConfig(env: Env): Promise<LoopConfig> {
-  const stored = await env.CONFIG_KV.get(CONFIG_KEY, "json");
+function configKey(tenantId: string): string {
+  return `loop:config:${tenantId}`;
+}
+
+export async function getLoopConfig(
+  env: Env,
+  tenantId?: string,
+): Promise<LoopConfig> {
+  const key = tenantId ? configKey(tenantId) : LEGACY_CONFIG_KEY;
+  const stored = await env.CONFIG_KV.get(key, "json");
   if (stored && typeof stored === "object") {
     return stored as LoopConfig;
   }
@@ -14,14 +22,16 @@ export async function getLoopConfig(env: Env): Promise<LoopConfig> {
 export async function updateLoopConfig(
   env: Env,
   update: Partial<LoopConfig>,
+  tenantId?: string,
 ): Promise<LoopConfig> {
-  const current = await getLoopConfig(env);
+  const key = tenantId ? configKey(tenantId) : LEGACY_CONFIG_KEY;
+  const current = await getLoopConfig(env, tenantId);
   const next: LoopConfig = {
     ...current,
     ...update,
     updatedAt: new Date().toISOString(),
   };
-  await env.CONFIG_KV.put(CONFIG_KEY, JSON.stringify(next));
+  await env.CONFIG_KV.put(key, JSON.stringify(next));
   return next;
 }
 

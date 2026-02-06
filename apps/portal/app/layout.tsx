@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import { Providers } from "./providers";
 
 const display = Space_Grotesk({
   subsets: ["latin"],
@@ -16,8 +17,7 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: "Serious Trader Ralph",
-  description:
-    "An agentic Solana hedge fund system for autonomous on-chain execution.",
+  description: "An agentic edge fund system for autonomous on-chain execution.",
 };
 
 export default function RootLayout({
@@ -27,7 +27,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${display.variable} ${mono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

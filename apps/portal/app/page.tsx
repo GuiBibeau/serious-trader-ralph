@@ -55,8 +55,8 @@ export default function Home() {
             <h3>Fund profile</h3>
             <p className="muted">
               Ralph is designed as a compact hedge fund engine focused on
-              Solana. It prioritizes discipline, continuous attention, and fast
-              on-chain execution.
+              on-chain markets. It prioritizes discipline, continuous attention,
+              and fast execution.
             </p>
             <div style={{ marginTop: "1.5rem" }} className="grid-3">
               <div>
