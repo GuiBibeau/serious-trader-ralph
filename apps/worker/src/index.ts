@@ -10,10 +10,7 @@ import {
 } from "./bots_db";
 import { getLoopConfig, requireAdmin, updateLoopConfig } from "./config";
 import { runAutopilotTick, runAutopilotTickForTenant } from "./loop";
-import {
-  createPrivySolanaWallet,
-  importPrivySolanaWalletFromPrivateKey,
-} from "./privy";
+import { createPrivySolanaWallet } from "./privy";
 import { json, okCors, withCors } from "./response";
 import { listTrades } from "./trade_index";
 import type { Env } from "./types";
@@ -82,14 +79,7 @@ export default {
           );
         }
 
-        const walletMode = String(payload.walletMode ?? "create").trim();
-        let wallet: { walletId: string; address: string };
-        if (walletMode === "import") {
-          const privateKey = String(payload.privateKey ?? "");
-          wallet = await importPrivySolanaWalletFromPrivateKey(env, privateKey);
-        } else {
-          wallet = await createPrivySolanaWallet(env);
-        }
+        const wallet = await createPrivySolanaWallet(env);
 
         const bot = await createBotRow(env, {
           userId: user.id,

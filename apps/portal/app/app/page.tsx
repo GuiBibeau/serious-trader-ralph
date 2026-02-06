@@ -171,8 +171,6 @@ function ControlRoom() {
   }, [selectedBotId, refreshTrades]);
 
   const [newBotName, setNewBotName] = useState("Ralph #1");
-  const [walletMode, setWalletMode] = useState<"create" | "import">("create");
-  const [privateKey, setPrivateKey] = useState("");
 
   async function createBot(): Promise<void> {
     setLoading(true);
@@ -184,8 +182,6 @@ function ControlRoom() {
         method: "POST",
         body: JSON.stringify({
           name: newBotName,
-          walletMode,
-          privateKey: walletMode === "import" ? privateKey : undefined,
         }),
       });
       const botRaw = isRecord(payload) ? payload.bot : null;
@@ -194,7 +190,6 @@ function ControlRoom() {
       if (!botId) throw new Error("bot-create-failed");
       await refresh();
       setSelectedBotId(botId);
-      setPrivateKey("");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -245,6 +240,15 @@ function ControlRoom() {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function copyWallet(address: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(address);
+      setMessage("Copied wallet address.");
+    } catch {
+      setMessage("Copy failed.");
     }
   }
 
@@ -316,6 +320,11 @@ function ControlRoom() {
                     <h2 style={{ marginTop: "0.6rem" }}>
                       Create your first Ralph bot
                     </h2>
+                    <p className="muted" style={{ marginTop: "0.9rem" }}>
+                      We create a dedicated trading wallet for this bot. Fund it
+                      to start trading. Your login wallet is only used for
+                      authentication.
+                    </p>
                     <div className="form" style={{ marginTop: "1.2rem" }}>
                       <label className="label" htmlFor="bot-name">
                         Bot name
@@ -327,40 +336,6 @@ function ControlRoom() {
                         onChange={(e) => setNewBotName(e.target.value)}
                         placeholder="Ralph #1"
                       />
-
-                      <label className="label" htmlFor="wallet-mode">
-                        Wallet mode
-                      </label>
-                      <select
-                        id="wallet-mode"
-                        className="input"
-                        value={walletMode}
-                        onChange={(e) =>
-                          setWalletMode(
-                            e.target.value === "import" ? "import" : "create",
-                          )
-                        }
-                      >
-                        <option value="create">Create new wallet</option>
-                        <option value="import">
-                          Import existing private key
-                        </option>
-                      </select>
-
-                      {walletMode === "import" ? (
-                        <>
-                          <label className="label" htmlFor="private-key">
-                            Solana private key (base58)
-                          </label>
-                          <textarea
-                            id="private-key"
-                            className="textarea"
-                            value={privateKey}
-                            onChange={(e) => setPrivateKey(e.target.value)}
-                            placeholder="Paste a base58 private key. We import it into Privy (encrypted) and do not store it."
-                          />
-                        </>
-                      ) : null}
 
                       <div className="row">
                         <button
@@ -433,40 +408,6 @@ function ControlRoom() {
                         placeholder="Ralph #2"
                       />
 
-                      <label className="label" htmlFor="wallet-mode-2">
-                        Wallet mode
-                      </label>
-                      <select
-                        id="wallet-mode-2"
-                        className="input"
-                        value={walletMode}
-                        onChange={(e) =>
-                          setWalletMode(
-                            e.target.value === "import" ? "import" : "create",
-                          )
-                        }
-                      >
-                        <option value="create">Create new wallet</option>
-                        <option value="import">
-                          Import existing private key
-                        </option>
-                      </select>
-
-                      {walletMode === "import" ? (
-                        <>
-                          <label className="label" htmlFor="private-key-2">
-                            Solana private key (base58)
-                          </label>
-                          <textarea
-                            id="private-key-2"
-                            className="textarea"
-                            value={privateKey}
-                            onChange={(e) => setPrivateKey(e.target.value)}
-                            placeholder="Paste a base58 private key. We import it into Privy (encrypted) and do not store it."
-                          />
-                        </>
-                      ) : null}
-
                       <div className="row">
                         <button
                           className="button primary"
@@ -487,8 +428,23 @@ function ControlRoom() {
                 {selectedBot ? (
                   <>
                     <h2 style={{ marginTop: "0.6rem" }}>{selectedBot.name}</h2>
+                    <div className="row" style={{ marginTop: "0.75rem" }}>
+                      <span className="muted">Bot wallet</span>
+                      <code>{selectedBot.walletAddress}</code>
+                      <button
+                        className="button secondary"
+                        onClick={() =>
+                          void copyWallet(selectedBot.walletAddress)
+                        }
+                        disabled={loading}
+                        type="button"
+                      >
+                        Copy
+                      </button>
+                    </div>
                     <p className="muted" style={{ marginTop: "0.75rem" }}>
-                      Wallet: <code>{selectedBot.walletAddress}</code>
+                      Fund this wallet to enable trading. The loop trades only
+                      from this wallet.
                     </p>
 
                     {selectedBot.lastError ? (
