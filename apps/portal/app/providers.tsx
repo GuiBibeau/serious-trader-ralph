@@ -11,7 +11,15 @@ export function Providers({ children }: { children: ReactNode }) {
     <PrivyProvider
       appId={appId}
       config={{
-        loginMethods: ["wallet"],
+        loginMethods: [
+          "email",
+          "google",
+          "apple",
+          "twitter",
+          "discord",
+          "github",
+          "wallet",
+        ],
         wallets: {
           walletChainType: "solana-only",
           showWalletLoginFirst: true,

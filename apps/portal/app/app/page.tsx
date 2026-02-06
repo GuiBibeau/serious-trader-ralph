@@ -322,7 +322,7 @@ function ControlRoom() {
                     </h2>
                     <p className="muted" style={{ marginTop: "0.9rem" }}>
                       We create a dedicated trading wallet for this bot. Fund it
-                      to start trading. Your login wallet is only used for
+                      to start trading. Your sign-in is only used for
                       authentication.
                     </p>
                     <div className="form" style={{ marginTop: "1.2rem" }}>
