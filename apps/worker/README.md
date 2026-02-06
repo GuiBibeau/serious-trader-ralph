@@ -48,8 +48,12 @@ cd apps/worker
 npm run loop:tick:local
 ```
 
-Or open `http://127.0.0.1:8787/__scheduled` in a browser to trigger the
+Or open `http://127.0.0.1:8888/__scheduled` in a browser to trigger the
 scheduled event handler.
+By default this local dev script binds to port `8888` to avoid clashing with
+the local Ralph gateway (which commonly uses `8787`).
+Note: Wrangler local mode uses the preview KV namespace by default, so the
+`loop:*:local` scripts write to the preview namespace to match.
 
 ## Notes
 - Cron runs every minute by default. The loop only runs if enabled in KV.
