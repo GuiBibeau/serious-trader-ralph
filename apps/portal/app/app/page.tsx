@@ -55,8 +55,8 @@ async function apiFetchJson(
   const json = (await response.json().catch(() => null)) as unknown;
   if (!response.ok) {
     const msg =
-      json && typeof json === "object" && typeof json.error === "string"
-        ? json.error
+      isRecord(json) && typeof json.error === "string"
+        ? String(json.error)
         : `http-${response.status}`;
     throw new Error(msg);
   }
