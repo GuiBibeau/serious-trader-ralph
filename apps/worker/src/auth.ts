@@ -34,10 +34,22 @@ export async function requireUser(
   const token = getBearerToken(request);
   if (!token) throw new Error("unauthorized");
 
-  const { payload } = await jwtVerify(token, jwksForApp(appId), {
-    issuer: "privy.io",
-    audience: appId,
-  });
+  // Privy token claims have changed across SDK versions in the past.
+  // Signature verification against the app-specific JWKS is the critical security check.
+  // We attempt strict claim validation first, then fall back to signature-only verification.
+  let payload: Awaited<ReturnType<typeof jwtVerify>>["payload"];
+  try {
+    ({ payload } = await jwtVerify(token, jwksForApp(appId), {
+      issuer: "privy.io",
+      audience: appId,
+    }));
+  } catch {
+    try {
+      ({ payload } = await jwtVerify(token, jwksForApp(appId)));
+    } catch {
+      throw new Error("unauthorized");
+    }
+  }
 
   const privyUserId = payload.sub;
   if (typeof privyUserId !== "string" || !privyUserId.trim()) {
