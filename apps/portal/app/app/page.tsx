@@ -99,7 +99,7 @@ export default function AppPage() {
 }
 
 function ControlRoom() {
-  const { ready, authenticated, user, login, logout, getCustomerAccessToken } =
+  const { ready, authenticated, user, login, logout, getAccessToken } =
     usePrivy();
   const [bots, setBots] = useState<Bot[]>([]);
   const [selectedBotId, setSelectedBotId] = useState<string | null>(null);
@@ -117,7 +117,7 @@ function ControlRoom() {
     setLoading(true);
     setMessage(null);
     try {
-      const token = await getCustomerAccessToken();
+      const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
       const payload = await apiFetchJson("/api/me", token, { method: "GET" });
       const nextBotsRaw = isRecord(payload) ? payload.bots : null;
@@ -131,7 +131,7 @@ function ControlRoom() {
     } finally {
       setLoading(false);
     }
-  }, [authenticated, getCustomerAccessToken, selectedBotId]);
+  }, [authenticated, getAccessToken, selectedBotId]);
 
   const refreshTrades = useCallback(
     async (botId: string): Promise<void> => {
@@ -139,7 +139,7 @@ function ControlRoom() {
       setLoading(true);
       setMessage(null);
       try {
-        const token = await getCustomerAccessToken();
+        const token = await getAccessToken();
         if (!token) throw new Error("missing-access-token");
         const payload = await apiFetchJson(
           `/api/bots/${botId}/trades?limit=25`,
@@ -157,7 +157,7 @@ function ControlRoom() {
         setLoading(false);
       }
     },
-    [authenticated, getCustomerAccessToken],
+    [authenticated, getAccessToken],
   );
 
   useEffect(() => {
@@ -176,7 +176,7 @@ function ControlRoom() {
     setLoading(true);
     setMessage(null);
     try {
-      const token = await getCustomerAccessToken();
+      const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
       const payload = await apiFetchJson("/api/bots", token, {
         method: "POST",
@@ -201,7 +201,7 @@ function ControlRoom() {
     setLoading(true);
     setMessage(null);
     try {
-      const token = await getCustomerAccessToken();
+      const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
       await apiFetchJson(`/api/bots/${botId}/start`, token, { method: "POST" });
       await refresh();
@@ -216,7 +216,7 @@ function ControlRoom() {
     setLoading(true);
     setMessage(null);
     try {
-      const token = await getCustomerAccessToken();
+      const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
       await apiFetchJson(`/api/bots/${botId}/stop`, token, { method: "POST" });
       await refresh();
@@ -231,7 +231,7 @@ function ControlRoom() {
     setLoading(true);
     setMessage(null);
     try {
-      const token = await getCustomerAccessToken();
+      const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
       await apiFetchJson(`/api/bots/${botId}/tick`, token, { method: "POST" });
       await refresh();
