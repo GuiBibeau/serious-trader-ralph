@@ -11,8 +11,9 @@ export function Providers({ children }: { children: ReactNode }) {
     <PrivyProvider
       appId={appId}
       config={{
-        // Let the Privy dashboard decide which social/email providers are enabled.
-        // Passing disallowed providers here causes 403s (e.g. "Login with Google not allowed").
+        // Keep this explicit to avoid showing providers we don't want yet.
+        // Note: the Privy dashboard still needs Email enabled for this to work.
+        loginMethods: ["email", "wallet"],
         wallets: {
           walletChainType: "solana-only",
           showWalletLoginFirst: true,
