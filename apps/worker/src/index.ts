@@ -310,7 +310,14 @@ export default {
         env,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown-error";
+      const rawMessage =
+        error instanceof Error ? error.message : "unknown-error";
+      const message = /JWS Protected Header is invalid/i.test(rawMessage)
+        ? "unauthorized"
+        : /no such table/i.test(rawMessage) ||
+            /no such column/i.test(rawMessage)
+          ? "d1-migrations-not-applied"
+          : rawMessage;
       const status =
         message === "unauthorized"
           ? 401
@@ -319,6 +326,15 @@ export default {
             : message.startsWith("invalid-") || message.startsWith("missing-")
               ? 400
               : 500;
+      if (status >= 500) {
+        // Avoid leaking request headers or secrets; log only safe metadata.
+        console.error("api.error", {
+          method: request.method,
+          path: url.pathname,
+          message: rawMessage,
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
       return withCors(json({ ok: false, error: message }, { status }), env);
     }
   },

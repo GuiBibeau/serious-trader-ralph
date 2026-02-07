@@ -1,6 +1,7 @@
 "use client";
 
 import { usePrivy } from "@privy-io/react-auth";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Bot = {
@@ -43,13 +44,20 @@ async function apiFetchJson(
   const base = apiBase();
   if (!base) throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
 
+  const headers = new Headers(init?.headers);
+  const token = accessToken.trim();
+  headers.set(
+    "authorization",
+    /^bearer\\s+/i.test(token) ? token : `Bearer ${token}`,
+  );
+  // Only set content-type when we actually send a body (avoids unnecessary CORS preflights).
+  if (init?.body != null && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
   const response = await fetch(`${base}${path}`, {
     ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      authorization: `Bearer ${accessToken}`,
-      "content-type": "application/json",
-    },
+    headers,
   });
 
   const json = (await response.json().catch(() => null)) as unknown;
@@ -101,6 +109,7 @@ export default function AppPage() {
 function ControlRoom() {
   const { ready, authenticated, user, login, logout, getAccessToken } =
     usePrivy();
+  const router = useRouter();
   const [bots, setBots] = useState<Bot[]>([]);
   const [selectedBotId, setSelectedBotId] = useState<string | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -189,7 +198,7 @@ function ControlRoom() {
         isRecord(botRaw) && typeof botRaw.id === "string" ? botRaw.id : null;
       if (!botId) throw new Error("bot-create-failed");
       await refresh();
-      setSelectedBotId(botId);
+      router.push(`/app/bots/${botId}`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -377,7 +386,10 @@ function ControlRoom() {
                           className={`list-item ${
                             bot.id === selectedBotId ? "active" : ""
                           }`}
-                          onClick={() => setSelectedBotId(bot.id)}
+                          onClick={() => {
+                            setSelectedBotId(bot.id);
+                            router.push(`/app/bots/${bot.id}`);
+                          }}
                           type="button"
                         >
                           <div className="list-item-title">
@@ -454,6 +466,17 @@ function ControlRoom() {
                     ) : null}
 
                     <div className="row" style={{ marginTop: "1.25rem" }}>
+                      <button
+                        className="button secondary"
+                        onClick={() =>
+                          router.push(`/app/bots/${selectedBot.id}`)
+                        }
+                        disabled={loading}
+                        type="button"
+                      >
+                        Open workspace
+                      </button>
+
                       {selectedBot.enabled ? (
                         <button
                           className="button secondary"
