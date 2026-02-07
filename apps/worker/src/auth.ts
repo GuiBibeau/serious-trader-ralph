@@ -11,7 +11,7 @@ let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
 function getBearerToken(request: Request): string {
   const auth = request.headers.get("authorization") ?? "";
-  return auth.replace(/^Bearer\\s+/i, "").trim();
+  return auth.replace(/^Bearer\s+/i, "").trim();
 }
 
 function jwksForApp(appId: string): ReturnType<typeof createRemoteJWKSet> {
