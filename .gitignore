@@ -6,6 +6,7 @@ dist/
 .next/
 .wrangler/
 package-lock.json
+*.tsbuildinfo
 sessions/
 runs/
 trades/

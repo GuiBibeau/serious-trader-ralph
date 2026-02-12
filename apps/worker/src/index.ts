@@ -1,19 +1,25 @@
 import { requireUser } from "./auth";
+
+export { BotLoop } from "./bot_loop_do";
+
 import {
   createBotRow,
   getBotForUser,
   listBotsForUser,
-  listEnabledBots,
-  recordBotTickResult,
   setBotEnabledForUser,
+  setUserProfile,
   upsertUser,
 } from "./bots_db";
 import { getLoopConfig, requireAdmin, updateLoopConfig } from "./config";
-import { runAutopilotTick, runAutopilotTickForTenant } from "./loop";
+import { defaultAgentStrategy, SOL_MINT, USDC_MINT } from "./defaults";
+import { runAutopilotTick } from "./loop";
+import { getAgentMemory, saveAgentMemory } from "./memory";
 import { createPrivySolanaWallet } from "./privy";
 import { json, okCors, withCors } from "./response";
+import { SolanaRpc } from "./solana_rpc";
 import { listTrades } from "./trade_index";
 import type { Env } from "./types";
+import { validatePolicy, validateStrategy } from "./validation";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -59,6 +65,21 @@ export default {
         return withCors(json({ ok: true, user, bots }), env);
       }
 
+      if (request.method === "PATCH" && url.pathname === "/api/me/profile") {
+        const auth = await requireUser(request, env);
+        const user = await upsertUser(env, auth.privyUserId);
+        const payload = await readPayload(request);
+        const profile = payload.profile;
+        if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+          return withCors(
+            json({ ok: false, error: "invalid-profile" }, { status: 400 }),
+            env,
+          );
+        }
+        await setUserProfile(env, user.id, profile as Record<string, unknown>);
+        return withCors(json({ ok: true }), env);
+      }
+
       if (url.pathname === "/api/bots" && request.method === "GET") {
         const auth = await requireUser(request, env);
         const user = await upsertUser(env, auth.privyUserId);
@@ -94,8 +115,16 @@ export default {
           env,
           {
             enabled: false,
-            policy: { dryRun: false, simulateOnly: true },
-            strategy: { type: "noop" },
+            policy: {
+              dryRun: false,
+              simulateOnly: true,
+              allowedMints: [SOL_MINT, USDC_MINT],
+              slippageBps: 50,
+              maxPriceImpactPct: 0.05,
+              maxTradeAmountAtomic: "0",
+              minSolReserveLamports: "50000000",
+            },
+            strategy: defaultAgentStrategy(),
           },
           bot.id,
         );
@@ -131,34 +160,35 @@ export default {
 
         if (request.method === "POST" && action === "start") {
           const nextBot = await setBotEnabledForUser(env, user.id, botId, true);
-          const config = await updateLoopConfig(env, { enabled: true }, botId);
-
-          // Behaves like an orchestration "kick": enable, then tick ASAP.
-          ctx.waitUntil(
-            runAutopilotTickForTenant(
+          try {
+            const payload = (await botLoopFetchJson(env, botId, "/start", {
+              method: "POST",
+            })) as { config?: unknown };
+            return withCors(
+              json({ ok: true, bot: nextBot, config: payload.config }),
               env,
-              ctx,
-              {
-                tenantId: nextBot.id,
-                walletAddress: nextBot.walletAddress,
-                privyWalletId: nextBot.privyWalletId,
-              },
-              "manual",
-            ).then((result) =>
-              recordBotTickResult(env, {
-                botId: nextBot.id,
-                ok: result.ok,
-                error: result.error,
-              }),
-            ),
-          );
-
-          return withCors(json({ ok: true, bot: nextBot, config }), env);
+            );
+          } catch (err) {
+            // Rollback the enabled flag if the DO refused to start.
+            await setBotEnabledForUser(env, user.id, botId, false).catch(
+              () => {},
+            );
+            throw err;
+          }
         }
 
         if (request.method === "POST" && action === "stop") {
-          // Stop should take effect as fast as possible; update KV first.
-          const config = await updateLoopConfig(env, { enabled: false }, botId);
+          // Stop should take effect as fast as possible; disable config first.
+          let config: unknown = null;
+          try {
+            const payload = (await botLoopFetchJson(env, botId, "/stop", {
+              method: "POST",
+            })) as { config?: unknown };
+            config = payload.config ?? null;
+          } catch {
+            // Safety fallback: disable config even if DO isn't reachable.
+            config = await updateLoopConfig(env, { enabled: false }, botId);
+          }
           const nextBot = await setBotEnabledForUser(
             env,
             user.id,
@@ -169,67 +199,29 @@ export default {
         }
 
         if (request.method === "POST" && action === "tick") {
-          const result = await runAutopilotTickForTenant(
-            env,
-            ctx,
-            {
-              tenantId: bot.id,
-              walletAddress: bot.walletAddress,
-              privyWalletId: bot.privyWalletId,
-            },
-            "manual",
-          );
-          await recordBotTickResult(env, {
-            botId: bot.id,
-            ok: result.ok,
-            error: result.error,
-          });
-          return withCors(json({ ok: true, result }), env);
+          await botLoopFetchJson(env, botId, "/tick", { method: "POST" });
+          return withCors(json({ ok: true, submitted: true }), env);
         }
 
         if (action === "config") {
           if (request.method === "GET") {
             const config = await getLoopConfig(env, botId);
+            if (bot.enabled && config.enabled) {
+              ctx.waitUntil(
+                botLoopFetchJson(env, botId, "/ensure", {
+                  method: "POST",
+                }).catch(() => {}),
+              );
+            }
             return withCors(json({ ok: true, config }), env);
           }
           if (request.method === "PATCH") {
             const payload = await readPayload(request);
-            const policy =
-              payload.policy && typeof payload.policy === "object"
-                ? payload.policy
-                : undefined;
-            const strategy =
-              payload.strategy && typeof payload.strategy === "object"
-                ? payload.strategy
-                : undefined;
-            const runNow = Boolean(payload.runNow);
-
-            const config = await updateLoopConfig(
-              env,
-              { policy: policy as unknown, strategy: strategy as unknown },
-              botId,
-            );
-            if (runNow) {
-              ctx.waitUntil(
-                runAutopilotTickForTenant(
-                  env,
-                  ctx,
-                  {
-                    tenantId: bot.id,
-                    walletAddress: bot.walletAddress,
-                    privyWalletId: bot.privyWalletId,
-                  },
-                  "manual",
-                ).then((result) =>
-                  recordBotTickResult(env, {
-                    botId: bot.id,
-                    ok: result.ok,
-                    error: result.error,
-                  }),
-                ),
-              );
-            }
-            return withCors(json({ ok: true, config }), env);
+            const doPayload = (await botLoopFetchJson(env, botId, "/config", {
+              method: "PATCH",
+              body: JSON.stringify(payload),
+            })) as { config?: unknown };
+            return withCors(json({ ok: true, config: doPayload.config }), env);
           }
         }
 
@@ -242,6 +234,70 @@ export default {
             Number.isFinite(limit) ? limit : 50,
           );
           return withCors(json({ ok: true, trades }), env);
+        }
+
+        if (request.method === "GET" && action === "balance") {
+          const rpc = SolanaRpc.fromEnv(env);
+          const [lamports, usdcAtomic] = await Promise.all([
+            rpc.getBalanceLamports(bot.walletAddress),
+            rpc.getTokenBalanceAtomic(bot.walletAddress, USDC_MINT),
+          ]);
+          return withCors(
+            json({
+              ok: true,
+              balances: {
+                sol: {
+                  lamports: lamports.toString(),
+                  display: (Number(lamports) / 1e9)
+                    .toFixed(9)
+                    .replace(/0+$/, "")
+                    .replace(/\.$/, ".0"),
+                },
+                usdc: {
+                  atomic: usdcAtomic.toString(),
+                  display: (Number(usdcAtomic) / 1e6)
+                    .toFixed(6)
+                    .replace(/0+$/, "")
+                    .replace(/\.$/, ".0"),
+                },
+              },
+            }),
+            env,
+          );
+        }
+
+        if (action === "agent" && parts[4] === "memory") {
+          if (request.method === "GET") {
+            const memory = await getAgentMemory(env, bot.id);
+            return withCors(json({ ok: true, memory }), env);
+          }
+          if (request.method === "PATCH") {
+            const payload = await readPayload(request);
+            const memory = await getAgentMemory(env, bot.id);
+            if (typeof payload.thesis === "string") {
+              memory.thesis = payload.thesis;
+            }
+            if (typeof payload.mandate === "string") {
+              // Mandate is stored in the strategy config, not memory.
+              // We update it via the loop config.
+              const config = await getLoopConfig(env, bot.id);
+              const strat = config.strategy;
+              if (
+                strat &&
+                typeof strat === "object" &&
+                (strat as Record<string, unknown>).type === "agent"
+              ) {
+                (strat as Record<string, unknown>).mandate = payload.mandate;
+                await updateLoopConfig(
+                  env,
+                  { strategy: strat as import("./types").StrategyConfig },
+                  bot.id,
+                );
+              }
+            }
+            await saveAgentMemory(env, bot.id, memory);
+            return withCors(json({ ok: true, memory }), env);
+          }
         }
       }
 
@@ -267,19 +323,18 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/config") {
         requireAdmin(request, env);
         const payload = await readPayload(request);
-        const policy =
-          payload.policy && typeof payload.policy === "object"
-            ? payload.policy
-            : undefined;
-        const strategy =
-          payload.strategy && typeof payload.strategy === "object"
-            ? payload.strategy
-            : undefined;
         const runNow = Boolean(payload.runNow);
-        const config = await updateLoopConfig(env, {
-          policy: policy as unknown,
-          strategy: strategy as unknown,
-        });
+        const adminUpdate: Partial<import("./types").LoopConfig> = {};
+        if (payload.policy !== undefined) {
+          validatePolicy(payload.policy);
+          adminUpdate.policy = payload.policy as import("./types").LoopPolicy;
+        }
+        if (payload.strategy && typeof payload.strategy === "object") {
+          validateStrategy(payload.strategy);
+          adminUpdate.strategy =
+            payload.strategy as import("./types").StrategyConfig;
+        }
+        const config = await updateLoopConfig(env, adminUpdate);
         if (runNow) {
           ctx.waitUntil(runAutopilotTick(env, ctx, "manual"));
         }
@@ -340,30 +395,8 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const enabledBots = await listEnabledBots(env, 5);
-    if (enabledBots.length > 0) {
-      // Keep concurrency low by default to reduce API/rpc rate limits.
-      for (const bot of enabledBots) {
-        const result = await runAutopilotTickForTenant(
-          env,
-          ctx,
-          {
-            tenantId: bot.id,
-            walletAddress: bot.walletAddress,
-            privyWalletId: bot.privyWalletId,
-          },
-          "cron",
-        );
-        await recordBotTickResult(env, {
-          botId: bot.id,
-          ok: result.ok,
-          error: result.error,
-        });
-      }
-      return;
-    }
-
-    // Legacy single-tenant mode (kept for local dev + backwards compatibility).
+    // Bot loops are scheduled via Durable Object alarms.
+    // Keep the legacy single-tenant cron for local dev + backwards compatibility.
     await runAutopilotTick(env, ctx);
   },
 };
@@ -378,4 +411,38 @@ async function readPayload(request: Request): Promise<Record<string, unknown>> {
     return Object.fromEntries(form.entries());
   }
   return {};
+}
+
+async function botLoopFetchJson(
+  env: Env,
+  botId: string,
+  path: string,
+  init: RequestInit,
+): Promise<unknown> {
+  const id = env.BOT_LOOP.idFromName(botId);
+  const stub = env.BOT_LOOP.get(id);
+
+  const headers = new Headers(init.headers);
+  headers.set("x-ralph-bot-id", botId);
+  if (init.body != null && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
+  const response = await stub.fetch(`https://bot-loop${path}`, {
+    ...init,
+    headers,
+  });
+
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    const msg =
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      typeof (payload as Record<string, unknown>).error === "string"
+        ? String((payload as Record<string, unknown>).error)
+        : `bot-loop-http-${response.status}`;
+    throw new Error(msg);
+  }
+  return payload;
 }

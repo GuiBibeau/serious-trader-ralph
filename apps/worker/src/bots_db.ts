@@ -3,6 +3,7 @@ import type { Env } from "./types";
 export type UserRow = {
   id: string;
   privyUserId: string;
+  profile: Record<string, unknown> | null;
   createdAt: string;
 };
 
@@ -36,12 +37,24 @@ function mapBotRow(row: Record<string, unknown>): BotRow {
   };
 }
 
+function parseProfile(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+      return parsed as Record<string, unknown>;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertUser(
   env: Env,
   privyUserId: string,
 ): Promise<UserRow> {
   const existing = (await env.WAITLIST_DB.prepare(
-    "SELECT id, privy_user_id as privyUserId, created_at as createdAt FROM users WHERE privy_user_id = ?1",
+    "SELECT id, privy_user_id as privyUserId, profile, created_at as createdAt FROM users WHERE privy_user_id = ?1",
   )
     .bind(privyUserId)
     .first()) as unknown;
@@ -51,6 +64,7 @@ export async function upsertUser(
     return {
       id: String(row.id),
       privyUserId: String(row.privyUserId),
+      profile: parseProfile(row.profile),
       createdAt: String(row.createdAt),
     };
   }
@@ -65,8 +79,19 @@ export async function upsertUser(
   return {
     id,
     privyUserId,
+    profile: null,
     createdAt: new Date().toISOString(),
   };
+}
+
+export async function setUserProfile(
+  env: Env,
+  userId: string,
+  profile: Record<string, unknown>,
+): Promise<void> {
+  await env.WAITLIST_DB.prepare("UPDATE users SET profile = ?1 WHERE id = ?2")
+    .bind(JSON.stringify(profile), userId)
+    .run();
 }
 
 export async function listBotsForUser(

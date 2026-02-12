@@ -2,20 +2,18 @@
 
 import { usePrivy } from "@privy-io/react-auth";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
-
-type Bot = {
-  id: string;
-  name: string;
-  enabled: boolean;
-  signerType: string;
-  privyWalletId: string;
-  walletAddress: string;
-  lastTickAt: string | null;
-  lastError: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
+import { useCallback, useEffect, useState } from "react";
+import { cn } from "../cn";
+import { FundingModal } from "../funding-modal";
+import {
+  apiFetchJson,
+  type Bot,
+  BTN_PRIMARY,
+  BTN_SECONDARY,
+  formatTick,
+  isRecord,
+} from "../lib";
+import { FadeUp, PillPop, PresenceCard, Skeleton } from "../motion";
 
 type Trade = {
   id: number;
@@ -32,67 +30,132 @@ type Trade = {
   createdAt: string;
 };
 
-function apiBase(): string {
-  return (process.env.NEXT_PUBLIC_EDGE_API_BASE ?? "").replace(/\/+$/, "");
-}
+type FinancialProfile = {
+  annualIncome: string;
+  liquidNetWorth: string;
+  investmentExperience: string;
+  riskTolerance: string;
+  investmentGoal: string;
+  cryptoExperience: string;
+  timeHorizon: string;
+};
 
-async function apiFetchJson(
-  path: string,
-  accessToken: string,
-  init?: RequestInit,
-): Promise<unknown> {
-  const base = apiBase();
-  if (!base) throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
+const PROFILE_KEY = "str-financial-profile";
+const ONBOARDING_KEY = "str-onboarding-complete";
 
-  const headers = new Headers(init?.headers);
-  const token = accessToken.trim();
-  headers.set(
-    "authorization",
-    /^bearer\\s+/i.test(token) ? token : `Bearer ${token}`,
-  );
-  // Only set content-type when we actually send a body (avoids unnecessary CORS preflights).
-  if (init?.body != null && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
+const PROFILE_FIELDS: {
+  key: keyof FinancialProfile;
+  label: string;
+  options: string[];
+}[] = [
+  {
+    key: "annualIncome",
+    label: "Annual income",
+    options: [
+      "Less than $25,000",
+      "$25,000 – $50,000",
+      "$50,000 – $100,000",
+      "$100,000 – $250,000",
+      "More than $250,000",
+    ],
+  },
+  {
+    key: "liquidNetWorth",
+    label: "Liquid net worth",
+    options: [
+      "Less than $10,000",
+      "$10,000 – $50,000",
+      "$50,000 – $100,000",
+      "$100,000 – $500,000",
+      "More than $500,000",
+    ],
+  },
+  {
+    key: "investmentExperience",
+    label: "Investment experience",
+    options: ["None", "Beginner", "Intermediate", "Advanced", "Professional"],
+  },
+  {
+    key: "riskTolerance",
+    label: "Risk tolerance",
+    options: [
+      "Conservative",
+      "Moderately conservative",
+      "Moderate",
+      "Aggressive",
+      "Very aggressive",
+    ],
+  },
+  {
+    key: "investmentGoal",
+    label: "Investment goal",
+    options: [
+      "Capital preservation",
+      "Income generation",
+      "Growth",
+      "Speculation",
+      "Learning / experimentation",
+    ],
+  },
+  {
+    key: "cryptoExperience",
+    label: "Crypto experience",
+    options: ["None", "Beginner", "Intermediate", "Advanced"],
+  },
+  {
+    key: "timeHorizon",
+    label: "Time horizon",
+    options: [
+      "Less than 1 month",
+      "1 – 6 months",
+      "6 – 12 months",
+      "1 – 3 years",
+      "No specific timeline",
+    ],
+  },
+];
+
+const emptyProfile: FinancialProfile = {
+  annualIncome: "",
+  liquidNetWorth: "",
+  investmentExperience: "",
+  riskTolerance: "",
+  investmentGoal: "",
+  cryptoExperience: "",
+  timeHorizon: "",
+};
+
+function loadProfile(): FinancialProfile {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (!raw) return { ...emptyProfile };
+    return {
+      ...emptyProfile,
+      ...(JSON.parse(raw) as Partial<FinancialProfile>),
+    };
+  } catch {
+    return { ...emptyProfile };
   }
-
-  const response = await fetch(`${base}${path}`, {
-    ...init,
-    headers,
-  });
-
-  const json = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) {
-    const msg =
-      isRecord(json) && typeof json.error === "string"
-        ? String(json.error)
-        : `http-${response.status}`;
-    throw new Error(msg);
-  }
-  return json;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export default function AppPage() {
   if (!process.env.NEXT_PUBLIC_PRIVY_APP_ID) {
     return (
       <main>
-        <div className="topbar">
-          <div className="container topbar-row">
-            <a href="/" className="kicker">
+        <div className="sticky top-0 z-10 bg-paper border-b border-border py-4">
+          <div className="w-[min(1120px,92vw)] mx-auto flex items-center justify-between gap-4">
+            <a href="/" className="text-sm font-semibold tracking-tight">
               Serious Trader Ralph
             </a>
           </div>
         </div>
-        <section className="section">
-          <div className="container">
-            <h1 className="fade-up">Control room</h1>
-            <div className="card" style={{ marginTop: "2rem" }}>
+        <section className="py-[clamp(3rem,6vw,6rem)] border-t border-border">
+          <div className="w-[min(1120px,92vw)] mx-auto">
+            <h1>Control room</h1>
+            <div className="card card-flat p-6 mt-8">
               <p className="label">Config</p>
-              <h2 style={{ marginTop: "0.6rem" }}>Missing Privy app id</h2>
-              <p className="muted" style={{ marginTop: "0.9rem" }}>
+              <h2 className="mt-2.5">Missing Privy app id</h2>
+              <p className="text-muted mt-3.5">
                 Set <code>NEXT_PUBLIC_PRIVY_APP_ID</code> in{" "}
                 <code>apps/portal/.env.local</code>.
               </p>
@@ -106,20 +169,61 @@ export default function AppPage() {
   return <ControlRoom />;
 }
 
+const STEP_LABELS = ["Profile", "Agent", "Fund"];
+
+function WizardProgress({ step }: { step: number }) {
+  return (
+    <div className="flex items-center mb-10">
+      {STEP_LABELS.map((label, i) => {
+        const num = i + 1;
+        return (
+          <div key={label} className="contents">
+            <div className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "w-8 h-8 rounded-full border border-border flex items-center justify-center text-xs font-semibold shrink-0",
+                  num < step && "bg-ink text-surface border-ink",
+                  num === step && "bg-accent-soft border-accent text-ink",
+                  num > step && "bg-surface text-muted",
+                )}
+              >
+                {num}
+              </div>
+              <span className="text-xs text-muted font-medium whitespace-nowrap">
+                {label}
+              </span>
+            </div>
+            {i < STEP_LABELS.length - 1 && (
+              <div className="flex-1 h-px bg-border-strong mx-3 min-w-6" />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ControlRoom() {
-  const { ready, authenticated, user, login, logout, getAccessToken } =
-    usePrivy();
+  const { ready, authenticated, logout, getAccessToken } = usePrivy();
   const router = useRouter();
+
   const [bots, setBots] = useState<Bot[]>([]);
-  const [selectedBotId, setSelectedBotId] = useState<string | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [botsLoaded, setBotsLoaded] = useState(false);
 
-  const selectedBot = useMemo(
-    () => bots.find((b) => b.id === selectedBotId) ?? null,
-    [bots, selectedBotId],
-  );
+  // Funding modal
+  const [fundOpen, setFundOpen] = useState(false);
+
+  // Wizard state
+  const [wizardStep, setWizardStep] = useState(1);
+  const [profile, setProfile] = useState<FinancialProfile>(loadProfile);
+  const [createdBot, setCreatedBot] = useState<Bot | null>(null);
+
+  const bot = bots[0] ?? null;
+
+  const profileComplete = PROFILE_FIELDS.every((f) => profile[f.key] !== "");
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!authenticated) return;
@@ -132,21 +236,30 @@ function ControlRoom() {
       const nextBotsRaw = isRecord(payload) ? payload.bots : null;
       const nextBots = Array.isArray(nextBotsRaw) ? (nextBotsRaw as Bot[]) : [];
       setBots(nextBots);
-      if (!selectedBotId && nextBots.length > 0) {
-        setSelectedBotId(nextBots[0]?.id ?? null);
+      setBotsLoaded(true);
+
+      // Hydrate profile from API if available
+      const userRaw = isRecord(payload) ? payload.user : null;
+      const apiProfile =
+        isRecord(userRaw) && isRecord(userRaw.profile)
+          ? (userRaw.profile as Partial<FinancialProfile>)
+          : null;
+      if (apiProfile) {
+        const merged = { ...emptyProfile, ...apiProfile };
+        setProfile(merged);
+        localStorage.setItem(PROFILE_KEY, JSON.stringify(merged));
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
+      setBotsLoaded(true);
     } finally {
       setLoading(false);
     }
-  }, [authenticated, getAccessToken, selectedBotId]);
+  }, [authenticated, getAccessToken]);
 
   const refreshTrades = useCallback(
     async (botId: string): Promise<void> => {
       if (!authenticated) return;
-      setLoading(true);
-      setMessage(null);
       try {
         const token = await getAccessToken();
         if (!token) throw new Error("missing-access-token");
@@ -162,8 +275,6 @@ function ControlRoom() {
         setTrades(nextTrades);
       } catch (err) {
         setMessage(err instanceof Error ? err.message : String(err));
-      } finally {
-        setLoading(false);
       }
     },
     [authenticated, getAccessToken],
@@ -175,35 +286,65 @@ function ControlRoom() {
   }, [ready, authenticated, refresh]);
 
   useEffect(() => {
-    if (!selectedBotId) return;
-    void refreshTrades(selectedBotId);
-  }, [selectedBotId, refreshTrades]);
+    if (!bot) return;
+    void refreshTrades(bot.id);
+  }, [bot, refreshTrades]);
 
-  const [newBotName, setNewBotName] = useState("Ralph #1");
+  // Step 2: auto-create bot on mount
+  const [creating, setCreating] = useState(false);
+  useEffect(() => {
+    if (wizardStep !== 2 || creating || createdBot) return;
+    setCreating(true);
+    (async () => {
+      setMessage(null);
+      try {
+        const token = await getAccessToken();
+        if (!token) throw new Error("missing-access-token");
+        const payload = await apiFetchJson("/api/bots", token, {
+          method: "POST",
+          body: JSON.stringify({ name: "Ralph" }),
+        });
+        const botRaw = isRecord(payload) ? payload.bot : null;
+        if (!isRecord(botRaw) || typeof botRaw.id !== "string")
+          throw new Error("bot-create-failed");
+        setCreatedBot(botRaw as unknown as Bot);
+        await refresh();
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : String(err));
+      }
+    })();
+  }, [wizardStep, creating, createdBot, getAccessToken, refresh]);
 
-  async function createBot(): Promise<void> {
+  function handleProfileChange(key: keyof FinancialProfile, value: string) {
+    setProfile((prev) => {
+      const next = { ...prev, [key]: value };
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function saveProfileAndContinue(): Promise<void> {
     setLoading(true);
     setMessage(null);
     try {
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
-      const payload = await apiFetchJson("/api/bots", token, {
-        method: "POST",
-        body: JSON.stringify({
-          name: newBotName,
-        }),
+      await apiFetchJson("/api/me/profile", token, {
+        method: "PATCH",
+        body: JSON.stringify({ profile }),
       });
-      const botRaw = isRecord(payload) ? payload.bot : null;
-      const botId =
-        isRecord(botRaw) && typeof botRaw.id === "string" ? botRaw.id : null;
-      if (!botId) throw new Error("bot-create-failed");
-      await refresh();
-      router.push(`/app/bots/${botId}`);
+      setWizardStep(2);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
+  }
+
+  function finishOnboarding() {
+    localStorage.setItem(ONBOARDING_KEY, "true");
+    // Force re-render into dashboard by refreshing bots
+    void refresh();
   }
 
   async function startBot(botId: string): Promise<void> {
@@ -243,8 +384,7 @@ function ControlRoom() {
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
       await apiFetchJson(`/api/bots/${botId}/tick`, token, { method: "POST" });
-      await refresh();
-      await refreshTrades(botId);
+      await Promise.all([refresh(), refreshTrades(botId)]);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -252,332 +392,365 @@ function ControlRoom() {
     }
   }
 
-  async function copyWallet(address: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(address);
-      setMessage("Copied wallet address.");
-    } catch {
-      setMessage("Copy failed.");
-    }
-  }
+  const showWizard = botsLoaded && bots.length === 0;
+  const showDashboard = botsLoaded && bots.length > 0;
 
   return (
     <main>
-      <div className="topbar">
-        <div className="container topbar-row">
-          <a href="/" className="kicker">
+      <div className="sticky top-0 z-10 bg-paper border-b border-border py-4">
+        <div className="w-[min(1120px,92vw)] mx-auto flex items-center justify-between gap-4">
+          <a href="/" className="text-sm font-semibold tracking-tight">
             Serious Trader Ralph
           </a>
-          <div className="topbar-actions">
-            {ready && authenticated ? (
+          <div className="flex items-center justify-end gap-3 flex-wrap">
+            {ready && (
               <>
-                <span className="muted small">
-                  {user?.id ? `User ${user.id.slice(0, 10)}…` : "Signed in"}
-                </span>
+                {bot && (
+                  <button
+                    className={BTN_PRIMARY}
+                    onClick={() => setFundOpen(true)}
+                    type="button"
+                  >
+                    Fund
+                  </button>
+                )}
                 <button
-                  className="button secondary"
+                  className={BTN_SECONDARY}
                   onClick={logout}
                   type="button"
                 >
                   Log out
                 </button>
               </>
-            ) : (
-              <button
-                className="button primary"
-                onClick={() => void login()}
-                disabled={!ready}
-                type="button"
-              >
-                Sign in
-              </button>
             )}
           </div>
         </div>
       </div>
 
-      <section className="section">
-        <div className="container">
-          <h1 className="fade-up">Control room</h1>
-          <p className="muted" style={{ marginTop: "1rem", maxWidth: 760 }}>
-            Create bots, toggle execution, and watch the loop. Defaults are set
-            to simulate swaps on mainnet until you choose to go live.
-          </p>
+      {(bot || createdBot) && (
+        <FundingModal
+          key={String(fundOpen)}
+          walletAddress={bot?.walletAddress ?? createdBot?.walletAddress ?? ""}
+          open={fundOpen}
+          onClose={() => setFundOpen(false)}
+        />
+      )}
 
-          {!process.env.NEXT_PUBLIC_EDGE_API_BASE ? (
-            <div className="card" style={{ marginTop: "1.5rem" }}>
-              <p className="label">Config</p>
-              <p className="muted">
-                Missing <code>NEXT_PUBLIC_EDGE_API_BASE</code>.
-              </p>
-            </div>
-          ) : null}
-
-          {message ? (
-            <div className="card" style={{ marginTop: "1.5rem" }}>
+      <section className="py-[clamp(3rem,6vw,6rem)] border-t border-border">
+        <div className="w-[min(1120px,92vw)] mx-auto">
+          <PresenceCard show={!!message}>
+            <div className="card card-flat p-5 mb-5">
               <p className="label">Notice</p>
-              <p className="muted">{message}</p>
+              <p className="text-muted">{message}</p>
+            </div>
+          </PresenceCard>
+
+          {!ready || !botsLoaded ? (
+            <div>
+              <h1>Loading…</h1>
+            </div>
+          ) : showWizard ? (
+            <div>
+              <FadeUp>
+                <h1>Set up Ralph</h1>
+              </FadeUp>
+              <p className="text-muted mt-4 max-w-[600px]">
+                Answer a few questions, then we&apos;ll create your trading
+                agent and generate a dedicated wallet.
+              </p>
+
+              <div className="mt-8">
+                <WizardProgress step={wizardStep} />
+
+                {/* Step 1: Financial Profile */}
+                <PresenceCard show={wizardStep === 1}>
+                  <div className="card card-flat p-6">
+                    <p className="label">Financial profile</p>
+                    <p className="text-muted mt-2 mb-5">
+                      Standard investment suitability questions. All fields
+                      required.
+                    </p>
+                    <div className="grid gap-3">
+                      {PROFILE_FIELDS.map((field) => (
+                        <div key={field.key}>
+                          <label
+                            className="label mb-1 block"
+                            htmlFor={`profile-${field.key}`}
+                          >
+                            {field.label}
+                          </label>
+                          <select
+                            id={`profile-${field.key}`}
+                            className="input"
+                            value={profile[field.key]}
+                            onChange={(e) =>
+                              handleProfileChange(field.key, e.target.value)
+                            }
+                          >
+                            <option value="" disabled>
+                              Select…
+                            </option>
+                            {field.options.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                      <div className="flex flex-wrap items-center gap-3 mt-2">
+                        <button
+                          className={BTN_PRIMARY}
+                          disabled={!profileComplete || loading}
+                          onClick={() => void saveProfileAndContinue()}
+                          type="button"
+                        >
+                          Continue
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </PresenceCard>
+
+                {/* Step 2: Create Agent */}
+                <PresenceCard show={wizardStep === 2}>
+                  <div className="card card-flat p-6">
+                    <p className="label">Create agent</p>
+                    {!createdBot ? (
+                      <div className="mt-4 grid gap-3">
+                        <Skeleton height="1.2rem" width="70%" />
+                        <Skeleton height="1rem" width="50%" />
+                        <Skeleton
+                          height="2.5rem"
+                          width="40%"
+                          style={{ marginTop: "0.5rem" }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="mt-4">
+                        <h2 className="mt-1.5">Ralph is ready</h2>
+                        <div className="grid gap-2.5 mt-4">
+                          <div className="grid gap-1">
+                            <span className="text-muted text-[0.85rem]">
+                              Wallet address
+                            </span>
+                            <code>{createdBot.walletAddress}</code>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 mt-5">
+                          <button
+                            className={BTN_PRIMARY}
+                            onClick={() => setWizardStep(3)}
+                            type="button"
+                          >
+                            Continue
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </PresenceCard>
+
+                {/* Step 3: Fund Wallet */}
+                <PresenceCard show={wizardStep === 3}>
+                  <div className="card card-flat p-6">
+                    <p className="label">Fund wallet</p>
+                    <h2 className="mt-2.5">Send SOL or USDC to your agent</h2>
+                    <p className="text-muted mt-3 max-w-[520px]">
+                      Fund your agent with SOL (for fees) and USDC (for
+                      trading). You can always fund later from the dashboard.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3 mt-5">
+                      <button
+                        className={BTN_PRIMARY}
+                        onClick={() => setFundOpen(true)}
+                        type="button"
+                      >
+                        Fund your bot
+                      </button>
+                      <button
+                        className={BTN_SECONDARY}
+                        onClick={finishOnboarding}
+                        type="button"
+                      >
+                        Skip to dashboard
+                      </button>
+                    </div>
+                    <p className="text-muted text-[0.85rem] mt-3">
+                      You can fund later — this step is not blocking.
+                    </p>
+                  </div>
+                </PresenceCard>
+              </div>
+            </div>
+          ) : showDashboard && bot ? (
+            <div>
+              {/* Agent status card */}
+              <FadeUp delay={0.1}>
+                <div className="card p-6 mt-8">
+                  <div className="flex flex-wrap items-center gap-3 justify-between">
+                    <p className="label">Agent</p>
+                    <PillPop
+                      className={cn(
+                        "inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-medium",
+                        bot.enabled
+                          ? "border-accent bg-accent-soft text-ink"
+                          : "border-border bg-surface text-muted",
+                      )}
+                    >
+                      {bot.enabled ? "On" : "Off"}
+                    </PillPop>
+                  </div>
+                  <h2 className="mt-1.5">{bot.name}</h2>
+                  <div className="grid gap-2.5 mt-4">
+                    <div className="grid gap-1">
+                      <span className="text-muted text-[0.85rem]">Wallet</span>
+                      <code>{bot.walletAddress}</code>
+                    </div>
+                    <div className="grid gap-1">
+                      <span className="text-muted text-[0.85rem]">
+                        Last tick
+                      </span>
+                      <code>{formatTick(bot.lastTickAt)}</code>
+                    </div>
+                    <div className="grid gap-1">
+                      <span className="text-muted text-[0.85rem]">Trades</span>
+                      <code>{trades.length}</code>
+                    </div>
+                    {bot.lastError ? (
+                      <div className="grid gap-1">
+                        <span className="text-muted text-[0.85rem]">
+                          Last error
+                        </span>
+                        <code>{bot.lastError}</code>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3 mt-6">
+                    {bot.enabled ? (
+                      <button
+                        className={BTN_SECONDARY}
+                        onClick={() => void stopBot(bot.id)}
+                        disabled={loading}
+                        type="button"
+                      >
+                        Stop
+                      </button>
+                    ) : (
+                      <button
+                        className={BTN_PRIMARY}
+                        onClick={() => void startBot(bot.id)}
+                        disabled={loading}
+                        type="button"
+                      >
+                        Start
+                      </button>
+                    )}
+                    <button
+                      className={BTN_SECONDARY}
+                      onClick={() => void tickBot(bot.id)}
+                      disabled={loading}
+                      type="button"
+                    >
+                      Tick now
+                    </button>
+                    <button
+                      className={BTN_SECONDARY}
+                      onClick={() => router.push(`/app/bots/${bot.id}`)}
+                      disabled={loading}
+                      type="button"
+                    >
+                      Open workspace
+                    </button>
+                  </div>
+                </div>
+              </FadeUp>
+
+              {/* Funding reminder when no trades */}
+              <PresenceCard show={trades.length === 0}>
+                <div className="card card-flat p-6 mt-6 border border-accent/30">
+                  <p className="label">Funding</p>
+                  <p className="text-muted mt-1.5">
+                    Your agent hasn&apos;t made any trades yet. Make sure the
+                    wallet is funded with SOL or USDC, then start the agent.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3 mt-3">
+                    <button
+                      className={BTN_PRIMARY}
+                      onClick={() => setFundOpen(true)}
+                      type="button"
+                    >
+                      Fund your bot
+                    </button>
+                  </div>
+                </div>
+              </PresenceCard>
+
+              {/* Recent trades */}
+              <FadeUp delay={0.2}>
+                <div className="card card-flat p-6 mt-6">
+                  <div className="flex flex-wrap items-center gap-3 justify-between">
+                    <p className="label">Recent trades</p>
+                    <button
+                      className={cn(BTN_SECONDARY, "!px-3 !py-1.5 !text-xs")}
+                      onClick={() => void refreshTrades(bot.id)}
+                      disabled={loading}
+                      type="button"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  <div className="mt-4">
+                    {trades.length === 0 ? (
+                      <p className="text-muted">
+                        No trades yet. Start the agent after funding.
+                      </p>
+                    ) : (
+                      <table className="w-full border-collapse">
+                        <thead>
+                          <tr>
+                            <th className="border border-border px-3 py-2.5 text-left text-xs font-semibold text-muted bg-surface">
+                              Time
+                            </th>
+                            <th className="border border-border px-3 py-2.5 text-left text-xs font-semibold text-muted bg-surface">
+                              Market
+                            </th>
+                            <th className="border border-border px-3 py-2.5 text-left text-xs font-semibold text-muted bg-surface">
+                              Side
+                            </th>
+                            <th className="border border-border px-3 py-2.5 text-left text-xs font-semibold text-muted bg-surface">
+                              Status
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {trades.map((t) => (
+                            <tr key={t.id}>
+                              <td className="border border-border px-3 py-2.5 text-muted text-[0.85rem] align-top">
+                                {t.createdAt}
+                              </td>
+                              <td className="border border-border px-3 py-2.5 text-[0.85rem] align-top">
+                                {t.market ?? "—"}
+                              </td>
+                              <td className="border border-border px-3 py-2.5 text-[0.85rem] align-top">
+                                {t.side ?? "—"}
+                              </td>
+                              <td className="border border-border px-3 py-2.5 text-[0.85rem] align-top">
+                                <span className="inline-flex items-center px-2 py-1 rounded-full border border-border text-xs font-medium text-muted bg-surface">
+                                  {t.status ?? "—"}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              </FadeUp>
             </div>
           ) : null}
-
-          {ready && authenticated ? (
-            <div className="grid-2" style={{ marginTop: "2rem" }}>
-              <div className="card">
-                <p className="label">Bots</p>
-                {bots.length === 0 ? (
-                  <>
-                    <h2 style={{ marginTop: "0.6rem" }}>
-                      Create your first Ralph bot
-                    </h2>
-                    <p className="muted" style={{ marginTop: "0.9rem" }}>
-                      We create a dedicated trading wallet for this bot. Fund it
-                      to start trading. Your sign-in is only used for
-                      authentication.
-                    </p>
-                    <div className="form" style={{ marginTop: "1.2rem" }}>
-                      <label className="label" htmlFor="bot-name">
-                        Bot name
-                      </label>
-                      <input
-                        id="bot-name"
-                        className="input"
-                        value={newBotName}
-                        onChange={(e) => setNewBotName(e.target.value)}
-                        placeholder="Ralph #1"
-                      />
-
-                      <div className="row">
-                        <button
-                          className="button primary"
-                          onClick={() => void createBot()}
-                          disabled={loading}
-                          type="button"
-                        >
-                          Create bot
-                        </button>
-                        <button
-                          className="button secondary"
-                          onClick={() => void refresh()}
-                          disabled={loading}
-                          type="button"
-                        >
-                          Refresh
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="row" style={{ marginTop: "0.8rem" }}>
-                      <button
-                        className="button secondary"
-                        onClick={() => void refresh()}
-                        disabled={loading}
-                        type="button"
-                      >
-                        Refresh
-                      </button>
-                    </div>
-
-                    <div className="list" style={{ marginTop: "1rem" }}>
-                      {bots.map((bot) => (
-                        <button
-                          key={bot.id}
-                          className={`list-item ${
-                            bot.id === selectedBotId ? "active" : ""
-                          }`}
-                          onClick={() => {
-                            setSelectedBotId(bot.id);
-                            router.push(`/app/bots/${bot.id}`);
-                          }}
-                          type="button"
-                        >
-                          <div className="list-item-title">
-                            <span>{bot.name}</span>
-                            <span className={bot.enabled ? "pill on" : "pill"}>
-                              {bot.enabled ? "On" : "Off"}
-                            </span>
-                          </div>
-                          <span className="muted small">
-                            {bot.walletAddress.slice(0, 10)}…
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="divider" />
-
-                    <h3 style={{ marginTop: "1rem" }}>Add another bot</h3>
-                    <div className="form" style={{ marginTop: "0.9rem" }}>
-                      <label className="label" htmlFor="bot-name-2">
-                        Bot name
-                      </label>
-                      <input
-                        id="bot-name-2"
-                        className="input"
-                        value={newBotName}
-                        onChange={(e) => setNewBotName(e.target.value)}
-                        placeholder="Ralph #2"
-                      />
-
-                      <div className="row">
-                        <button
-                          className="button primary"
-                          onClick={() => void createBot()}
-                          disabled={loading}
-                          type="button"
-                        >
-                          Create bot
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="card">
-                <p className="label">Selected bot</p>
-                {selectedBot ? (
-                  <>
-                    <h2 style={{ marginTop: "0.6rem" }}>{selectedBot.name}</h2>
-                    <div className="row" style={{ marginTop: "0.75rem" }}>
-                      <span className="muted">Bot wallet</span>
-                      <code>{selectedBot.walletAddress}</code>
-                      <button
-                        className="button secondary"
-                        onClick={() =>
-                          void copyWallet(selectedBot.walletAddress)
-                        }
-                        disabled={loading}
-                        type="button"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                    <p className="muted" style={{ marginTop: "0.75rem" }}>
-                      Fund this wallet to enable trading. The loop trades only
-                      from this wallet.
-                    </p>
-
-                    {selectedBot.lastError ? (
-                      <p className="muted" style={{ marginTop: "0.75rem" }}>
-                        Last error: <code>{selectedBot.lastError}</code>
-                      </p>
-                    ) : null}
-
-                    <div className="row" style={{ marginTop: "1.25rem" }}>
-                      <button
-                        className="button secondary"
-                        onClick={() =>
-                          router.push(`/app/bots/${selectedBot.id}`)
-                        }
-                        disabled={loading}
-                        type="button"
-                      >
-                        Open workspace
-                      </button>
-
-                      {selectedBot.enabled ? (
-                        <button
-                          className="button secondary"
-                          onClick={() => void stopBot(selectedBot.id)}
-                          disabled={loading}
-                          type="button"
-                        >
-                          Stop
-                        </button>
-                      ) : (
-                        <button
-                          className="button primary"
-                          onClick={() => void startBot(selectedBot.id)}
-                          disabled={loading}
-                          type="button"
-                        >
-                          Start
-                        </button>
-                      )}
-
-                      <button
-                        className="button secondary"
-                        onClick={() => void tickBot(selectedBot.id)}
-                        disabled={loading}
-                        type="button"
-                      >
-                        Tick now
-                      </button>
-
-                      <button
-                        className="button secondary"
-                        onClick={() => void refreshTrades(selectedBot.id)}
-                        disabled={loading}
-                        type="button"
-                      >
-                        Refresh trades
-                      </button>
-                    </div>
-
-                    <div className="divider" />
-
-                    <h3 style={{ marginTop: "1rem" }}>Recent trades</h3>
-                    <div className="table" style={{ marginTop: "1rem" }}>
-                      {trades.length === 0 ? (
-                        <p className="muted">
-                          No trades yet. Configure a strategy, then start the
-                          bot (defaults simulate-only).
-                        </p>
-                      ) : (
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Time</th>
-                              <th>Market</th>
-                              <th>Status</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {trades.map((t) => (
-                              <tr key={t.id}>
-                                <td className="muted small">{t.createdAt}</td>
-                                <td className="small">{t.market ?? "-"}</td>
-                                <td className="small">
-                                  <span className="pill">
-                                    {t.status ?? "-"}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <p className="muted" style={{ marginTop: "0.8rem" }}>
-                    Create or select a bot.
-                  </p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="card" style={{ marginTop: "2rem" }}>
-              <p className="label">Auth</p>
-              <h2 style={{ marginTop: "0.6rem" }}>Sign in to continue</h2>
-              <p className="muted" style={{ marginTop: "0.9rem" }}>
-                Privy drives authentication. After signing in, you will create
-                your first bot and register it in the edge worker.
-              </p>
-              <div className="row" style={{ marginTop: "1.2rem" }}>
-                <button
-                  className="button primary"
-                  onClick={() => void login()}
-                  disabled={!ready}
-                  type="button"
-                >
-                  Sign in
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </section>
     </main>

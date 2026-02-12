@@ -1,9 +1,10 @@
+import { runAgentTick } from "./agent";
 import { getLoopConfig } from "./config";
 import { JupiterClient } from "./jupiter";
 import { acquireLoopLock, releaseLoopLock } from "./lock";
 import { makeLogKey, writeJsonl } from "./logs";
 import { enforcePolicy, normalizePolicy } from "./policy";
-import { getPrivyWalletAddress, signTransactionWithPrivy } from "./privy";
+import { getPrivyWalletAddress, signTransactionWithPrivyById } from "./privy";
 import { SolanaRpc } from "./solana_rpc";
 import { getLoopState, updateLoopState } from "./state";
 import { swapWithRetry } from "./swap";
@@ -99,6 +100,9 @@ export async function runAutopilotTick(
       env.JUPITER_API_KEY,
     );
     const wallet = await resolveWalletAddress(env, policy);
+    const privyWalletId = policy.dryRun
+      ? undefined
+      : (env.PRIVY_WALLET_ID ?? undefined);
 
     log("info", "tick start", {
       strategy: strategy.type,
@@ -118,6 +122,7 @@ export async function runAutopilotTick(
         wallet,
         policy,
         strategy,
+        privyWalletId,
       });
       return;
     }
@@ -135,6 +140,25 @@ export async function runAutopilotTick(
         wallet,
         policy,
         strategy,
+        privyWalletId,
+      });
+      return;
+    }
+
+    if (strategy.type === "agent") {
+      await runAgentTick({
+        env,
+        ctx,
+        tenantId,
+        runId,
+        logKey,
+        log,
+        rpc,
+        jupiter,
+        wallet,
+        policy,
+        strategy,
+        privyWalletId,
       });
       return;
     }
@@ -165,6 +189,7 @@ export async function runAutopilotTickForTenant(
   ctx: ExecutionContext,
   input: TenantTickInput,
   reason: "cron" | "manual" = "cron",
+  opts?: { skipLock?: boolean },
 ): Promise<{
   ok: boolean;
   error: string | null;
@@ -214,11 +239,14 @@ export async function runAutopilotTickForTenant(
     }
   };
 
-  const locked = await acquireLoopLock(env, tenantId, runId);
-  if (!locked) {
-    log("warn", "tick skipped (lock held)");
-    await flush();
-    return { ok: true, error: null, runId, logKey };
+  const shouldLock = !opts?.skipLock;
+  if (shouldLock) {
+    const locked = await acquireLoopLock(env, tenantId, runId);
+    if (!locked) {
+      log("warn", "tick skipped (lock held)");
+      await flush();
+      return { ok: true, error: null, runId, logKey };
+    }
   }
 
   try {
@@ -254,10 +282,6 @@ export async function runAutopilotTickForTenant(
       return { ok, error: errorMessage, runId, logKey };
     }
 
-    const tickEnv: Env = input.privyWalletId
-      ? { ...env, PRIVY_WALLET_ID: input.privyWalletId }
-      : env;
-
     log("info", "tick start", {
       strategy: strategy.type,
       dryRun: policy.dryRun,
@@ -266,7 +290,7 @@ export async function runAutopilotTickForTenant(
 
     if (strategy.type === "dca") {
       await runDca({
-        env: tickEnv,
+        env,
         ctx,
         tenantId,
         configTenantId: tenantId,
@@ -278,13 +302,14 @@ export async function runAutopilotTickForTenant(
         wallet,
         policy,
         strategy,
+        privyWalletId: input.privyWalletId,
       });
       return { ok, error: errorMessage, runId, logKey };
     }
 
     if (strategy.type === "rebalance") {
       await runRebalance({
-        env: tickEnv,
+        env,
         ctx,
         tenantId,
         configTenantId: tenantId,
@@ -296,6 +321,26 @@ export async function runAutopilotTickForTenant(
         wallet,
         policy,
         strategy,
+        privyWalletId: input.privyWalletId,
+      });
+      return { ok, error: errorMessage, runId, logKey };
+    }
+
+    if (strategy.type === "agent") {
+      await runAgentTick({
+        env,
+        ctx,
+        tenantId,
+        configTenantId: tenantId,
+        runId,
+        logKey,
+        log,
+        rpc,
+        jupiter,
+        wallet,
+        policy,
+        strategy,
+        privyWalletId: input.privyWalletId,
       });
       return { ok, error: errorMessage, runId, logKey };
     }
@@ -310,7 +355,9 @@ export async function runAutopilotTickForTenant(
       err: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    await releaseLoopLock(env, tenantId, runId);
+    if (shouldLock) {
+      await releaseLoopLock(env, tenantId, runId);
+    }
     await flush();
     ctx.waitUntil(Promise.resolve());
   }
@@ -321,7 +368,12 @@ export async function runAutopilotTickForTenant(
 function normalizeStrategy(strategy: unknown): StrategyConfig | null {
   if (!strategy || typeof strategy !== "object") return null;
   const type = (strategy as { type?: unknown }).type;
-  if (type === "dca" || type === "rebalance" || type === "noop") {
+  if (
+    type === "dca" ||
+    type === "rebalance" ||
+    type === "noop" ||
+    type === "agent"
+  ) {
     return strategy as StrategyConfig;
   }
   return null;
@@ -359,6 +411,7 @@ async function runDca(input: {
   wallet: string;
   policy: ReturnType<typeof normalizePolicy>;
   strategy: DcaStrategy;
+  privyWalletId?: string;
 }) {
   const {
     env,
@@ -372,6 +425,7 @@ async function runDca(input: {
     wallet,
     policy,
     strategy,
+    privyWalletId,
   } = input;
   const everyMinutes = Math.max(1, Math.floor(strategy.everyMinutes ?? 60));
 
@@ -461,10 +515,14 @@ async function runDca(input: {
     });
   }
 
-  const signedBase64 = await signTransactionWithPrivy(
+  if (!privyWalletId) throw new Error("missing-privy-wallet-id");
+  log("info", "signing transaction", { walletId: privyWalletId });
+  const signedBase64 = await signTransactionWithPrivyById(
     env,
+    privyWalletId,
     swap.swapTransaction,
   );
+  log("info", "transaction signed");
 
   if (policy.simulateOnly) {
     const sim = await rpc.simulateTransactionBase64(signedBase64, {
@@ -501,6 +559,14 @@ async function runDca(input: {
 
   await assertLoopStillEnabled(env, log, configTenantId);
 
+  // Write lastAt BEFORE sending to guarantee at-most-once execution.
+  // If the send fails, we skip one DCA interval (safe) rather than
+  // risk double-executing on crash (unsafe with real funds).
+  await updateLoopState(env, tenantId, (current) => ({
+    ...current,
+    dca: { ...(current.dca ?? {}), lastAt: new Date().toISOString() },
+  }));
+
   const signature = await rpc.sendTransactionBase64(signedBase64, {
     skipPreflight: policy.skipPreflight,
     preflightCommitment: policy.commitment,
@@ -535,11 +601,6 @@ async function runDca(input: {
     logKey,
     signature,
   });
-
-  await updateLoopState(env, tenantId, (current) => ({
-    ...current,
-    dca: { ...(current.dca ?? {}), lastAt: new Date().toISOString() },
-  }));
 }
 
 async function runRebalance(input: {
@@ -559,6 +620,7 @@ async function runRebalance(input: {
   wallet: string;
   policy: ReturnType<typeof normalizePolicy>;
   strategy: RebalanceStrategy;
+  privyWalletId?: string;
 }) {
   const {
     env,
@@ -572,6 +634,7 @@ async function runRebalance(input: {
     wallet,
     policy,
     strategy,
+    privyWalletId,
   } = input;
 
   if (strategy.baseMint !== SOL_MINT) {
@@ -705,10 +768,14 @@ async function runRebalance(input: {
       refreshed,
     } = await swapWithRetry(jupiter, quote, wallet, policy);
     if (refreshed) log("warn", "rebalance: quote refreshed due to swap 422");
-    const signedBase64 = await signTransactionWithPrivy(
+    if (!privyWalletId) throw new Error("missing-privy-wallet-id");
+    log("info", "signing transaction", { walletId: privyWalletId });
+    const signedBase64 = await signTransactionWithPrivyById(
       env,
+      privyWalletId,
       swap.swapTransaction,
     );
+    log("info", "transaction signed");
 
     if (policy.simulateOnly) {
       const sim = await rpc.simulateTransactionBase64(signedBase64, {
@@ -765,7 +832,7 @@ async function runRebalance(input: {
       logKey,
       signature,
     });
-    return;
+    return; // rebalance sell complete
   }
 
   // Buy SOL using quoteMint.
@@ -831,10 +898,14 @@ async function runRebalance(input: {
     refreshed,
   } = await swapWithRetry(jupiter, quote, wallet, policy);
   if (refreshed) log("warn", "rebalance: quote refreshed due to swap 422");
-  const signedBase64 = await signTransactionWithPrivy(
+  if (!privyWalletId) throw new Error("missing-privy-wallet-id");
+  log("info", "signing transaction", { walletId: privyWalletId });
+  const signedBase64 = await signTransactionWithPrivyById(
     env,
+    privyWalletId,
     swap.swapTransaction,
   );
+  log("info", "transaction signed");
 
   if (policy.simulateOnly) {
     const sim = await rpc.simulateTransactionBase64(signedBase64, {

@@ -57,11 +57,47 @@ function requirePrivyWalletId(env: Env): string {
   return walletId;
 }
 
+const PRIVY_TIMEOUT_MS = 10_000;
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503]);
+const RETRY_DELAY_MS = 500;
+
+async function privyFetch(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PRIVY_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return response;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(
+        `privy-timeout: ${PRIVY_TIMEOUT_MS}ms exceeded for ${url}`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function privyFetchWithRetry(
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  const first = await privyFetch(url, init);
+  if (first.ok || !RETRYABLE_STATUS_CODES.has(first.status)) {
+    return first;
+  }
+  // Consume body to free resources before retrying.
+  await first.text().catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+  return privyFetch(url, init);
+}
+
 export async function createPrivySolanaWallet(
   env: Env,
 ): Promise<{ walletId: string; address: string }> {
   const { baseUrl, headers } = privyHeaders(env);
-  const response = await fetch(`${baseUrl}/wallets`, {
+  const response = await privyFetch(`${baseUrl}/wallets`, {
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
     body: JSON.stringify({ chain_type: "solana" }),
@@ -94,7 +130,7 @@ export async function getPrivyWalletAddressById(
 
   const { baseUrl, headers } = privyHeaders(env);
   const url = `${baseUrl}/wallets/${walletId}`;
-  const response = await fetch(url, { method: "GET", headers });
+  const response = await privyFetch(url, { method: "GET", headers });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new Error(`privy-wallet-fetch-failed: ${response.status} ${text}`);
@@ -123,7 +159,7 @@ export async function signTransactionWithPrivyById(
   const { baseUrl, headers } = privyHeaders(env);
 
   const url = `${baseUrl}/wallets/${walletId}/rpc`;
-  const response = await fetch(url, {
+  const response = await privyFetchWithRetry(url, {
     method: "POST",
     headers: {
       ...headers,
@@ -151,15 +187,4 @@ export async function signTransactionWithPrivyById(
     throw new Error("privy-sign-missing-signed-transaction");
   }
   return signed;
-}
-
-export async function signTransactionWithPrivy(
-  env: Env,
-  base64WireTransaction: string,
-): Promise<string> {
-  return await signTransactionWithPrivyById(
-    env,
-    requirePrivyWalletId(env),
-    base64WireTransaction,
-  );
 }

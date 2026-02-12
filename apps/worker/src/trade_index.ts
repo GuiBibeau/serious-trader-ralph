@@ -11,6 +11,7 @@ export type TradeIndexRow = {
   status: string;
   logKey?: string | null;
   signature?: string | null;
+  reasoning?: string | null;
 };
 
 export type TradeIndexResult = {
@@ -25,6 +26,7 @@ export type TradeIndexResult = {
   status: string | null;
   logKey: string | null;
   signature: string | null;
+  reasoning: string | null;
   createdAt: string;
 };
 
@@ -32,9 +34,8 @@ export async function insertTradeIndex(
   env: Env,
   row: TradeIndexRow,
 ): Promise<void> {
-  // signature column exists starting from migration 0003_trade_signature.sql
   await env.WAITLIST_DB.prepare(
-    "INSERT INTO trade_index (tenant_id, run_id, venue, market, side, size, price, status, log_key, signature) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    "INSERT INTO trade_index (tenant_id, run_id, venue, market, side, size, price, status, log_key, signature, reasoning) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
   )
     .bind(
       row.tenantId,
@@ -47,6 +48,7 @@ export async function insertTradeIndex(
       row.status,
       row.logKey ?? null,
       row.signature ?? null,
+      row.reasoning ?? null,
     )
     .run();
 }
@@ -58,7 +60,7 @@ export async function listTrades(
 ): Promise<TradeIndexResult[]> {
   const capped = Math.max(1, Math.min(200, Math.floor(limit)));
   const result = await env.WAITLIST_DB.prepare(
-    "SELECT id, tenant_id, run_id, venue, market, side, size, price, status, log_key, signature, created_at FROM trade_index WHERE tenant_id = ?1 ORDER BY id DESC LIMIT ?2",
+    "SELECT id, tenant_id, run_id, venue, market, side, size, price, status, log_key, signature, reasoning, created_at FROM trade_index WHERE tenant_id = ?1 ORDER BY id DESC LIMIT ?2",
   )
     .bind(tenantId, capped)
     .all();
@@ -77,6 +79,7 @@ export async function listTrades(
       status: r.status ? String(r.status) : null,
       logKey: r.log_key ? String(r.log_key) : null,
       signature: r.signature ? String(r.signature) : null,
+      reasoning: r.reasoning ? String(r.reasoning) : null,
       createdAt: String(r.created_at),
     };
   });
