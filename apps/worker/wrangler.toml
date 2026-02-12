@@ -6,6 +6,8 @@ account_id = "4e3939d5df701303b59ffbe4472184de"
 [vars]
 LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
+ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
+ZAI_MODEL = "glm-4.7"
 
 [[kv_namespaces]]
 binding = "CONFIG_KV"
@@ -23,6 +25,13 @@ migrations_dir = "migrations"
 binding = "LOGS_BUCKET"
 bucket_name = "ralph-logs-dev"
 
+[durable_objects]
+bindings = [{ name = "BOT_LOOP", class_name = "BotLoop" }]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["BotLoop"]
+
 [triggers]
 crons = ["*/1 * * * *"]
 
@@ -32,6 +41,8 @@ name = "ralph-edge-staging"
 [env.staging.vars]
 LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
+ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
+ZAI_MODEL = "glm-4.7"
 
 [[env.staging.kv_namespaces]]
 binding = "CONFIG_KV"
@@ -58,6 +69,8 @@ name = "ralph-edge"
 [env.production.vars]
 LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
+ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
+ZAI_MODEL = "glm-4.7"
 
 [[env.production.kv_namespaces]]
 binding = "CONFIG_KV"

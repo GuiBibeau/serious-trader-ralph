@@ -3,17 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "printf 'y\\n' | wrangler d1 migrations apply WAITLIST_DB --local --persist-to .wrangler/state && wrangler dev --local --persist-to .wrangler/state --test-scheduled --port 8888",
+    "dev:remote": "wrangler dev",
     "dev:local": "wrangler dev --local --persist-to .wrangler/state --test-scheduled --port 8888",
-    "db:migrate:local": "wrangler d1 migrations apply WAITLIST_DB --local --persist-to .wrangler/state",
+    "db:migrate:local": "printf 'y\\n' | wrangler d1 migrations apply WAITLIST_DB --local --persist-to .wrangler/state",
     "loop:enable:local": "wrangler kv key put loop:config '{\"enabled\":true}' --binding CONFIG_KV --preview --local --persist-to .wrangler/state",
     "loop:disable:local": "wrangler kv key put loop:config '{\"enabled\":false}' --binding CONFIG_KV --preview --local --persist-to .wrangler/state",
+    "loop:config:dca:local": "wrangler kv key put loop:config --path ./examples/loop-config.dca.dry-run.json --binding CONFIG_KV --preview --local --persist-to .wrangler/state",
+    "loop:config:dca:simulate:local": "wrangler kv key put loop:config --path ./examples/loop-config.dca.simulate.json --binding CONFIG_KV --preview --local --persist-to .wrangler/state",
+    "loop:config:agent:simulate:local": "wrangler kv key put loop:config --path ./examples/loop-config.agent.simulate.json --binding CONFIG_KV --preview --local --persist-to .wrangler/state",
+    "loop:config:rebalance:local": "wrangler kv key put loop:config --path ./examples/loop-config.rebalance.dry-run.json --binding CONFIG_KV --preview --local --persist-to .wrangler/state",
     "loop:status:local": "curl -sS http://127.0.0.1:8888/api/loop/status | cat",
     "loop:tick:local": "curl -sS http://127.0.0.1:8888/__scheduled | cat",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@solana/keychain-privy": "^0.3.0"
+    "jose": "^6.1.0"
   },
   "devDependencies": {
     "wrangler": "^3.103.0"

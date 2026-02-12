@@ -1,11 +1,15 @@
 node_modules/
 dist/
 .env
+.dev.vars
+.env.*
 .next/
 .wrangler/
 package-lock.json
+*.tsbuildinfo
 sessions/
 runs/
 trades/
 tasks/
 .tmp/
+.turbo/
