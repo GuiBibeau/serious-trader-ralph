@@ -1,6 +1,7 @@
 import { type ChatMessage, type ChatToolCall, callLlm } from "./agent_llm";
 import { buildAgentSystemPrompt } from "./agent_prompt";
 import { type AgentToolRuntime, buildAgentToolset } from "./agent_tools";
+import type { ExecutionConfig } from "./types";
 import type { JupiterClient } from "./jupiter";
 import {
   getAgentMemory,
@@ -65,6 +66,7 @@ export async function runAgentTick(input: {
   jupiter: JupiterClient;
   wallet: string;
   policy: NormalizedPolicy;
+  execution?: ExecutionConfig;
   strategy: AgentStrategy;
   privyWalletId?: string;
 }): Promise<void> {
@@ -79,6 +81,7 @@ export async function runAgentTick(input: {
     jupiter,
     wallet,
     policy,
+    execution,
     strategy,
     privyWalletId,
   } = input;
@@ -121,6 +124,7 @@ export async function runAgentTick(input: {
     jupiter,
     wallet,
     policy,
+    execution,
     strategy,
     privyWalletId,
     memory,

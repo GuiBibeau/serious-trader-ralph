@@ -114,7 +114,7 @@ export async function listBotsForUser(
       updated_at as updatedAt
     FROM bots
     WHERE user_id = ?1
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
     `,
   )
     .bind(userId)
@@ -218,6 +218,51 @@ export async function setBotEnabledForUser(
   const bot = await getBotForUser(env, userId, botId);
   if (!bot) throw new Error("not-found");
   return bot;
+}
+
+export async function setBotEnabledById(
+  env: Env,
+  botId: string,
+  enabled: boolean,
+): Promise<void> {
+  await env.WAITLIST_DB.prepare(
+    `
+    UPDATE bots
+    SET enabled = ?1, updated_at = datetime('now')
+    WHERE id = ?2
+    `,
+  )
+    .bind(enabled ? 1 : 0, botId)
+    .run();
+}
+
+export async function getBotById(
+  env: Env,
+  botId: string,
+): Promise<BotRow | null> {
+  const row = (await env.WAITLIST_DB.prepare(
+    `
+    SELECT
+      id,
+      user_id as userId,
+      name,
+      enabled,
+      signer_type as signerType,
+      privy_wallet_id as privyWalletId,
+      wallet_address as walletAddress,
+      last_tick_at as lastTickAt,
+      last_error as lastError,
+      created_at as createdAt,
+      updated_at as updatedAt
+    FROM bots
+    WHERE id = ?1
+    `,
+  )
+    .bind(botId)
+    .first()) as unknown;
+
+  if (!row || typeof row !== "object") return null;
+  return mapBotRow(row as Record<string, unknown>);
 }
 
 export async function listEnabledBots(env: Env, limit = 10): Promise<BotRow[]> {

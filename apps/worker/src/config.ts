@@ -1,4 +1,13 @@
-import type { Env, LoopConfig, LoopPolicy, StrategyConfig } from "./types";
+import type {
+  DataSourcesConfig,
+  Env,
+  ExecutionConfig,
+  LoopAutotuneConfig,
+  LoopConfig,
+  LoopPolicy,
+  LoopValidationConfig,
+  StrategyConfig,
+} from "./types";
 
 const LEGACY_CONFIG_KEY = "loop:config";
 
@@ -129,6 +138,52 @@ export async function updateLoopConfig(
     } else {
       next.strategy = incoming;
     }
+  }
+
+  if (update.validation !== undefined) {
+    next.validation = {
+      ...(current.validation ?? {}),
+      ...(update.validation as LoopValidationConfig),
+    };
+  }
+
+  if (update.autotune !== undefined) {
+    const incoming = update.autotune as LoopAutotuneConfig;
+    next.autotune = {
+      ...(current.autotune ?? {}),
+      ...incoming,
+      rails: {
+        ...(current.autotune?.rails ?? {}),
+        ...(incoming.rails ?? {}),
+        dca: {
+          ...(current.autotune?.rails?.dca ?? {}),
+          ...(incoming.rails?.dca ?? {}),
+        },
+        rebalance: {
+          ...(current.autotune?.rails?.rebalance ?? {}),
+          ...(incoming.rails?.rebalance ?? {}),
+        },
+      },
+    };
+  }
+
+  if (update.execution !== undefined) {
+    const incoming = update.execution as ExecutionConfig;
+    next.execution = {
+      ...(current.execution ?? {}),
+      ...incoming,
+      params: {
+        ...(current.execution?.params ?? {}),
+        ...(incoming.params ?? {}),
+      },
+    };
+  }
+
+  if (update.dataSources !== undefined) {
+    next.dataSources = {
+      ...(current.dataSources ?? {}),
+      ...(update.dataSources as DataSourcesConfig),
+    };
   }
 
   if (tenantId) {

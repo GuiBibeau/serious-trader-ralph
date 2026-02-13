@@ -15,12 +15,15 @@
     "loop:config:rebalance:local": "wrangler kv key put loop:config --path ./examples/loop-config.rebalance.dry-run.json --binding CONFIG_KV --preview --local --persist-to .wrangler/state",
     "loop:status:local": "curl -sS http://127.0.0.1:8888/api/loop/status | cat",
     "loop:tick:local": "curl -sS http://127.0.0.1:8888/__scheduled | cat",
+    "validate:manual:local": "bun run scripts/manual-validation-run.ts",
+    "billing:mark-paid": "./scripts/mark-paid.sh",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "jose": "^6.1.0"
+    "bs58": "^6.0.0",
+    "jose": "^6.1.3"
   },
   "devDependencies": {
-    "wrangler": "^3.103.0"
+    "wrangler": "^4.65.0"
   }
 }

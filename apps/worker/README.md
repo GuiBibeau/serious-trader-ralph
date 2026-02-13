@@ -17,7 +17,19 @@ wrangler secret put ADMIN_TOKEN
 wrangler secret put RPC_ENDPOINT
 wrangler secret put JUPITER_BASE_URL
 wrangler secret put JUPITER_API_KEY
+wrangler secret put DUNE_API_KEY
+wrangler secret put DUNE_API_URL
 wrangler secret put ZAI_API_KEY
+wrangler secret put BILLING_MERCHANT_WALLET
+
+# Optional (defaults to Solana USDC mint):
+wrangler secret put BILLING_STABLE_MINT
+
+# Optional (billing verification RPC; defaults to devnet in wrangler.toml):
+# wrangler secret put BILLING_RPC_ENDPOINT
+
+# Optional (bot wallet balance RPC; defaults to mainnet in wrangler.toml):
+# wrangler secret put BALANCE_RPC_ENDPOINT
 
 # Only required for live trading (non-dry-run):
 wrangler secret put PRIVY_APP_ID
@@ -51,6 +63,9 @@ npm install
 # For heavier production use, set JUPITER_BASE_URL to the pro host and provide JUPITER_API_KEY.
 # JUPITER_BASE_URL=https://lite-api.jup.ag
 # JUPITER_API_KEY=...
+# Optional: Dune for alternate market data feeds.
+# DUNE_API_KEY=...
+# DUNE_API_URL=https://api.dune.com
 #
 # LLM API key (OpenAI-compatible chat completions).
 # ZAI_API_KEY=...
@@ -90,12 +105,38 @@ Note: Wrangler local mode uses the preview KV namespace by default, so the
 ## API
 
 - `POST /api/waitlist` (form or JSON) → `{ ok: true }`
+- `GET /api/billing/plans` (requires auth)
+- `POST /api/billing/checkout` (requires auth; body `{ planId, paymentAsset }`, where `paymentAsset` is `USDC` or `SOL`)
+- `GET /api/billing/checkout/:intentId` (requires auth; verifies on-chain payment status)
 - `GET /api/loop/status`
 - `POST /api/loop/start` (requires `Authorization: Bearer <ADMIN_TOKEN>`)
 - `POST /api/loop/stop` (requires `Authorization: Bearer <ADMIN_TOKEN>`)
 - `POST /api/loop/tick` (requires admin; triggers a tick immediately)
 - `GET /api/trades?limit=50` (requires admin; last executed trades)
 - `POST /api/config` (requires admin; accepts `{ policy: {...}, strategy: {...} }`)
+
+## Billing Admin Helper
+
+Mark a user as paid in a specific environment:
+
+```bash
+cd apps/worker
+
+# By Privy user id (recommended)
+npm run billing:mark-paid -- --env staging --privy-user-id did:privy:abc --plan hobbyist_annual
+
+# Or by internal user id
+npm run billing:mark-paid -- --env production --user-id <users.id>
+
+# Optional best-effort by email (matches users.profile.email)
+npm run billing:mark-paid -- --env dev --email user@example.com
+```
+
+Options:
+- `--env dev|staging|production` (required)
+- `--plan byok_annual|hobbyist_annual` (default: `byok_annual`)
+- `--years <n>` (default: `1`)
+- `--source <text>` (default: `manual_override`)
 
 ### Example Strategy Config (DCA)
 

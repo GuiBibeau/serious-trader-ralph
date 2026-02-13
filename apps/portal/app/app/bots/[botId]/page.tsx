@@ -2,8 +2,8 @@
 
 import { usePrivy } from "@privy-io/react-auth";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { cn } from "../../../cn";
 import { FundingModal } from "../../../funding-modal";
 import {
@@ -21,7 +21,7 @@ const WELL_KNOWN_MINTS: Record<string, string> = {
   USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
 };
 
-type StrategyType = "noop" | "dca" | "rebalance" | "agent";
+type StrategyType = "noop" | "dca" | "rebalance" | "agent" | "prediction_market";
 
 type DcaFields = {
   inputMint: string;
@@ -69,6 +69,149 @@ type Balances = {
   usdc: { atomic: string; display: string };
 };
 
+type BotEvent = {
+  ts: string;
+  level: string;
+  message: string;
+  runId: string | null;
+  reason: string | null;
+  details: Record<string, unknown>;
+};
+
+type ChatSource = {
+  type:
+    | "validation"
+    | "strategy-event"
+    | "trade"
+    | "log"
+    | "runtime"
+    | "config"
+    | "error";
+  id?: string;
+  label: string;
+  hint?: string;
+};
+
+type ChatMessage = {
+  id: number;
+  tenantId: string;
+  role: "user" | "assistant";
+  actor: "user" | "admin";
+  question: string | null;
+  answer: string | null;
+  model: string | null;
+  sources: ChatSource[];
+  createdAt: string;
+  error: string | null;
+};
+
+type BotTelemetry = {
+  tenantId: string;
+  strategyDescriptor: {
+    headline: string;
+    bullets: string[];
+  };
+  config: {
+    strategy?: unknown;
+    policy?: {
+      simulateOnly?: boolean;
+      dryRun?: boolean;
+    };
+    validation?: unknown;
+    autotune?: unknown;
+    execution?: unknown;
+    dataSources?: unknown;
+  };
+  runtimeState: {
+    lifecycleState: string | null;
+    activeStrategyHash: string | null;
+    lastValidationId: number | null;
+    lastTunedAt: string | null;
+    nextRevalidateAt: string | null;
+    consecutiveFailures: number;
+  } | null;
+  latestValidation:
+    | ({
+        id: number;
+        status: "running" | "passed" | "failed";
+        metrics: ValidationMetrics | null;
+        profile: string;
+        lookbackDays: number;
+        summary: string | null;
+      } & Record<string, unknown>)
+    | null;
+  validationRuns: ValidationRun[];
+  botEvents: BotEvent[];
+  strategyEvents: StrategyAuditEvent[];
+  trades: Array<{
+    id: number;
+    tenantId: string;
+    runId: string | null;
+    venue: string | null;
+    market: string | null;
+    side: string | null;
+    status: string | null;
+    signature: string | null;
+    reasoning: string | null;
+    createdAt: string;
+  }>;
+  startGate: {
+    ok: boolean;
+    reason?: "strategy-not-validated" | "strategy-validation-stale";
+    strategyHash?: string;
+    overrideAllowed?: boolean;
+  };
+};
+
+type ValidationMetrics = {
+  netReturnPct: number;
+  maxDrawdownPct: number;
+  profitFactor: number;
+  winRate: number;
+  tradeCount: number;
+};
+
+type ValidationRun = {
+  id: number;
+  status: "running" | "passed" | "failed";
+  strategyType: string;
+  lookbackDays: number;
+  profile: string;
+  summary: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  metrics: ValidationMetrics | null;
+};
+
+type ChatEntry = {
+  id: number;
+  role: "user" | "assistant";
+  actor: "user" | "admin";
+  question: string | null;
+  answer: string | null;
+  sources: ChatSource[];
+  createdAt: string;
+};
+
+type StrategyAuditEvent = {
+  id: number;
+  eventType: string;
+  actor: string;
+  reason: string | null;
+  createdAt: string;
+  validationId: number | null;
+};
+
+type Subscription = {
+  status: "active" | "inactive";
+  active: boolean;
+  planId: string | null;
+  planName: string | null;
+  startsAt: string | null;
+  expiresAt: string | null;
+  sourceSignature: string | null;
+};
+
 const INPUT = "input";
 
 export default function BotPage() {
@@ -107,18 +250,23 @@ export default function BotPage() {
 
 function BotShell({ botId }: { botId: string }) {
   const { ready, authenticated, logout, getAccessToken } = usePrivy();
+  const router = useRouter();
 
   const [bots, setBots] = useState<Bot[]>([]);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fundOpen, setFundOpen] = useState(false);
 
   const bot = bots.find((b) => b.id === botId) ?? null;
 
-  const refreshMe = useCallback(async (): Promise<void> => {
+  const refreshMe = useCallback(async (opts?: { silent?: boolean }): Promise<void> => {
     if (!authenticated) return;
-    setLoading(true);
-    setMessage(null);
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setMessage(null);
+    }
     try {
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
@@ -126,10 +274,24 @@ function BotShell({ botId }: { botId: string }) {
       const nextBotsRaw = isRecord(payload) ? payload.bots : null;
       const nextBots = Array.isArray(nextBotsRaw) ? (nextBotsRaw as Bot[]) : [];
       setBots(nextBots);
+
+      const subRaw = isRecord(payload) ? payload.subscription : null;
+      if (
+        isRecord(subRaw) &&
+        (subRaw.status === "active" || subRaw.status === "inactive")
+      ) {
+        setSubscription(subRaw as unknown as Subscription);
+      } else {
+        setSubscription(null);
+      }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
+      if (!silent) {
+        setMessage(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [authenticated, getAccessToken]);
 
@@ -137,6 +299,21 @@ function BotShell({ botId }: { botId: string }) {
     if (!ready || !authenticated) return;
     void refreshMe();
   }, [ready, authenticated, refreshMe]);
+
+  useEffect(() => {
+    if (!ready || !authenticated) return;
+    const timer = window.setInterval(() => {
+      void refreshMe({ silent: true });
+    }, 8000);
+    return () => window.clearInterval(timer);
+  }, [ready, authenticated, refreshMe]);
+
+  useEffect(() => {
+    if (!ready || !authenticated) return;
+    if (!subscription) return;
+    if (subscription.active) return;
+    router.replace("/checkout?plan=byok_annual&asset=USDC&pay=1");
+  }, [ready, authenticated, subscription, router]);
 
   async function startBot(): Promise<void> {
     if (!bot) return;
@@ -233,7 +410,7 @@ function BotShell({ botId }: { botId: string }) {
           </div>
 
           <div className="flex items-center justify-end gap-3 flex-wrap">
-            {ready && (
+            {ready && authenticated && (
               <>
                 {bot ? (
                   <>
@@ -308,6 +485,21 @@ function BotShell({ botId }: { botId: string }) {
             <div>
               <h1>Loading…</h1>
             </div>
+          ) : subscription && !subscription.active ? (
+            <FadeUp>
+              <div className="card card-flat p-6">
+                <p className="label">Subscription</p>
+                <h2 className="mt-2.5">Redirecting to billing…</h2>
+                <p className="text-muted mt-3.5">
+                  This workspace requires an active annual license.
+                </p>
+                <div className="flex flex-wrap items-center gap-3 mt-5">
+                  <Link className={BTN_SECONDARY} href="/app">
+                    Go to billing
+                  </Link>
+                </div>
+              </div>
+            </FadeUp>
           ) : bot ? (
             <FadeUp>
               <BotWorkspace
@@ -384,6 +576,10 @@ function BotWorkspace({
     model: "",
   });
   const [agentMemory, setAgentMemory] = useState<AgentMemoryState | null>(null);
+  const [events, setEvents] = useState<BotEvent[]>([]);
+  const [validation, setValidation] = useState<ValidationRun | null>(null);
+  const [validationRuns, setValidationRuns] = useState<ValidationRun[]>([]);
+  const [strategyEvents, setStrategyEvents] = useState<StrategyAuditEvent[]>([]);
   const [policy, setPolicy] = useState<PolicyFields>({
     simulateOnly: true,
     dryRun: false,
@@ -392,39 +588,110 @@ function BotWorkspace({
     maxPriceImpactPct: "5",
   });
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [configMsg, setConfigMsg] = useState<string | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
+  const [liveLoaded, setLiveLoaded] = useState(false);
+  const [telemetry, setTelemetry] = useState<BotTelemetry | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatEntry[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatPollIntervalMs, setChatPollIntervalMs] = useState(10000);
 
-  // Fetch balance + config in parallel on mount
+  const refreshLiveData = useCallback(async (): Promise<void> => {
+    const token = await getAccessToken();
+    if (!token) return;
+
+    const [balRes, telemetryRes, chatRes] = await Promise.all([
+      apiFetchJson(`/api/bots/${bot.id}/balance`, token, {
+        method: "GET",
+      }).catch(() => null),
+      apiFetchJson(`/api/bots/${bot.id}/telemetry?limit=30`, token, {
+        method: "GET",
+      }).catch(() => null),
+      apiFetchJson(`/api/bots/${bot.id}/chat?limit=30`, token, {
+        method: "GET",
+      }).catch(() => null),
+    ]);
+
+    if (
+      isRecord(balRes) &&
+      isRecord((balRes as Record<string, unknown>).balances)
+    ) {
+      setBalances(
+        (balRes as Record<string, unknown>).balances as unknown as Balances,
+      );
+    }
+
+    const telemetryPayload = isRecord(telemetryRes)
+      ? telemetryRes.telemetry
+      : null;
+    if (isRecord(telemetryPayload)) {
+      const nextTelemetry = telemetryPayload as unknown as BotTelemetry;
+      setTelemetry(nextTelemetry);
+
+      const lifecycleState = nextTelemetry.runtimeState?.lifecycleState ?? "";
+      const runningLike =
+        lifecycleState === "active" ||
+        lifecycleState === "validating" ||
+        lifecycleState === "watch" ||
+        bot.enabled;
+      setChatPollIntervalMs(runningLike ? 4000 : 10000);
+
+      const nextEvents = Array.isArray(nextTelemetry.botEvents)
+        ? (nextTelemetry.botEvents.filter((item) => isRecord(item)) as BotEvent[])
+        : [];
+      setEvents(nextEvents);
+
+      const latestValidation = isRecord(nextTelemetry.latestValidation)
+        ? (nextTelemetry.latestValidation as unknown as ValidationRun)
+        : null;
+      setValidation(latestValidation);
+
+      const nextRuns = Array.isArray(nextTelemetry.validationRuns)
+        ? (nextTelemetry.validationRuns.filter(
+            (item) => isRecord(item),
+          ) as ValidationRun[])
+        : [];
+      setValidationRuns(nextRuns);
+
+      const nextStrategyEvents = Array.isArray(nextTelemetry.strategyEvents)
+        ? (nextTelemetry.strategyEvents.filter(
+            (item) => isRecord(item),
+          ) as StrategyAuditEvent[])
+        : [];
+      setStrategyEvents(nextStrategyEvents);
+    } else {
+      setTelemetry(null);
+      setEvents([]);
+      setValidation(null);
+      setValidationRuns([]);
+      setStrategyEvents([]);
+    }
+
+    const historyRaw = isRecord(chatRes) ? chatRes.messages : null;
+    const nextChat = Array.isArray(historyRaw)
+      ? (historyRaw.filter((item) => isRecord(item)) as ChatEntry[])
+      : [];
+    setChatMessages(nextChat);
+    setLiveLoaded(true);
+  }, [bot.id, getAccessToken]);
+
+  // Fetch config on mount
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const token = await getAccessToken();
       if (!token || cancelled) return;
 
-      const [balRes, cfgRes] = await Promise.all([
-        apiFetchJson(`/api/bots/${bot.id}/balance`, token, {
+      const cfgRes = await apiFetchJson(`/api/bots/${bot.id}/config`, token, {
           method: "GET",
-        }).catch(() => null),
-        apiFetchJson(`/api/bots/${bot.id}/config`, token, {
-          method: "GET",
-        }).catch(() => null),
-      ]);
+        }).catch(() => null);
       if (cancelled) return;
-
-      // Apply balance
-      if (
-        isRecord(balRes) &&
-        isRecord((balRes as Record<string, unknown>).balances)
-      ) {
-        setBalances(
-          (balRes as Record<string, unknown>).balances as unknown as Balances,
-        );
-      }
 
       // Apply config
       if (!isRecord(cfgRes)) {
-        if (!balRes) setConfigMsg("Failed to load config");
+        setConfigMsg("Failed to load config");
         return;
       }
       const config = (cfgRes as Record<string, unknown>).config;
@@ -434,7 +701,13 @@ function BotWorkspace({
       const strat = config.strategy;
       if (isRecord(strat)) {
         const t = strat.type as string;
-        if (t === "dca" || t === "rebalance" || t === "noop" || t === "agent") {
+        if (
+          t === "dca" ||
+          t === "rebalance" ||
+          t === "noop" ||
+          t === "agent" ||
+          t === "prediction_market"
+        ) {
           setStrategyType(t as StrategyType);
         }
         if (t === "dca") {
@@ -465,23 +738,6 @@ function BotWorkspace({
             maxTradesPerDay: String(strat.maxTradesPerDay ?? "5"),
             model: String(strat.model ?? ""),
           });
-          // Fetch agent memory
-          apiFetchJson(`/api/bots/${bot.id}/agent/memory`, token, {
-            method: "GET",
-          })
-            .then((memRes) => {
-              if (cancelled) return;
-              if (
-                isRecord(memRes) &&
-                isRecord((memRes as Record<string, unknown>).memory)
-              ) {
-                setAgentMemory(
-                  (memRes as Record<string, unknown>)
-                    .memory as unknown as AgentMemoryState,
-                );
-              }
-            })
-            .catch(() => {});
         }
       }
 
@@ -502,11 +758,44 @@ function BotWorkspace({
         });
       }
       setConfigLoaded(true);
+
+      const memRes = await apiFetchJson(`/api/bots/${bot.id}/agent/memory`, token, {
+        method: "GET",
+      }).catch(() => null);
+      if (
+        !cancelled &&
+        isRecord(memRes) &&
+        isRecord((memRes as Record<string, unknown>).memory)
+      ) {
+        setAgentMemory(
+          (memRes as Record<string, unknown>).memory as unknown as AgentMemoryState,
+        );
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [bot.id, getAccessToken]);
+
+  // Polling for telemetry + events + conversation history
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await refreshLiveData();
+      } catch {
+        // best effort for live panel
+      }
+    })();
+    const timer = window.setInterval(() => {
+      if (cancelled) return;
+      void refreshLiveData().catch(() => {});
+    }, Math.max(3000, Math.min(12000, chatPollIntervalMs)));
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshLiveData, chatPollIntervalMs]);
 
   async function saveConfig(): Promise<void> {
     setSaving(true);
@@ -569,6 +858,61 @@ function BotWorkspace({
     }
   }
 
+  async function validateNow(): Promise<void> {
+    setValidating(true);
+    setConfigMsg(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("missing-access-token");
+      const payload = await apiFetchJson(`/api/bots/${bot.id}/validate`, token, {
+        method: "POST",
+      });
+      if (isRecord(payload) && isRecord(payload.validation)) {
+        setValidation(payload.validation as unknown as ValidationRun);
+      }
+      await refreshLiveData();
+      setConfigMsg("Validation run submitted.");
+    } catch (err) {
+      setConfigMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setValidating(false);
+    }
+  }
+
+  async function sendChat(message: string): Promise<void> {
+    const trimmed = message.trim();
+    if (!trimmed) return;
+    const token = await getAccessToken();
+    if (!token) return;
+
+    setChatBusy(true);
+    setConfigMsg(null);
+    try {
+      const payload = await apiFetchJson(`/api/bots/${bot.id}/chat`, token, {
+        method: "POST",
+        body: JSON.stringify({ message: trimmed, explain: false }),
+      });
+
+      if (isRecord(payload)) {
+        const snapshot = (payload as Record<string, unknown>).telemetrySnapshot;
+        if (isRecord(snapshot)) {
+          setTelemetry(snapshot as BotTelemetry);
+        }
+      }
+      await refreshLiveData();
+    } catch (err) {
+      setConfigMsg(err instanceof Error ? err.message : String(err));
+      return;
+    } finally {
+      setChatBusy(false);
+      setChatInput("");
+    }
+  }
+
+  function submitChatShortcut(message: string): void {
+    void sendChat(message);
+  }
+
   const mintLabel = (addr: string): string => {
     for (const [k, v] of Object.entries(WELL_KNOWN_MINTS)) {
       if (v === addr) return k;
@@ -576,67 +920,73 @@ function BotWorkspace({
     return `${addr.slice(0, 8)}…`;
   };
 
+  const lastEvent = events[0] ?? null;
+  const lastEventMs = lastEvent ? Date.parse(lastEvent.ts) : NaN;
+  const isLoopLive =
+    Number.isFinite(lastEventMs) && Date.now() - lastEventMs < 20_000;
+
+  const fmtEventTime = (iso: string): string => {
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return iso;
+    return new Date(ms).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  };
+
+  const eventMeta = (event: BotEvent): string | null => {
+    const summary = event.details.summary;
+    if (typeof summary === "string" && summary.trim()) return summary;
+    const name = event.details.name;
+    if (typeof name === "string" && name.trim()) return `tool: ${name}`;
+    const toolCalls = event.details.toolCalls;
+    if (
+      Array.isArray(toolCalls) &&
+      toolCalls.length > 0 &&
+      toolCalls.every((x) => typeof x === "string")
+    ) {
+      return `calls: ${(toolCalls as string[]).join(", ")}`;
+    }
+    return null;
+  };
+
+  const executionMode = policy.dryRun
+    ? "Dry run"
+    : policy.simulateOnly
+      ? "Simulate only"
+      : "Live";
+
+  const chatList = [...chatMessages]
+    .filter((entry) => entry.question || entry.answer)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+
+  const chatText = (entry: ChatEntry): string => {
+    if (entry.role === "user") return entry.question ?? "";
+    return entry.answer ?? "";
+  };
+
+  const sourceChipClass = "inline-flex items-center rounded-full border border-border px-2 py-1 text-xs text-muted";
+  const renderChatSources = (sources: ChatSource[]): ReactNode[] =>
+    sources.map((source) => (
+      <code className={sourceChipClass} key={`${source.type}:${source.id ?? "n"}`}>
+        {source.label}
+      </code>
+    ));
+
   return (
-    <div className="grid gap-5">
-      {/* Bot info */}
-      <div className="card card-flat p-6">
-        <p className="label">Bot</p>
-        <div className="grid gap-2.5 mt-3">
-          <div className="grid gap-1">
-            <span className="text-muted text-[0.85rem]">Wallet</span>
-            <code>{bot.walletAddress}</code>
-          </div>
-          <div className="grid gap-1">
-            <span className="text-muted text-[0.85rem]">Signer</span>
-            <code>{bot.signerType}</code>
-          </div>
-          <div className="grid gap-1">
-            <span className="text-muted text-[0.85rem]">Last tick</span>
-            <code>{formatTick(bot.lastTickAt)}</code>
-          </div>
-          {bot.lastError ? (
-            <div className="grid gap-1">
-              <span className="text-muted text-[0.85rem]">Last error</span>
-              <code>{bot.lastError}</code>
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      {/* Wallet balance */}
-      <div className="card card-flat p-6">
-        <p className="label">Wallet balance</p>
-        {balances ? (
-          <div className="flex gap-8 mt-3">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-2xl font-mono font-bold">
-                {balances.sol.display}
-              </span>
-              <span className="label">SOL</span>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-2xl font-mono font-bold">
-                {balances.usdc.display}
-              </span>
-              <span className="label">USDC</span>
-            </div>
-          </div>
-        ) : (
-          <p className="text-muted mt-2">Loading…</p>
-        )}
-      </div>
-
-      {/* Strategy config */}
-      {configLoaded ? (
-        <>
-          <div className="card card-flat p-6">
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-5 min-w-0">
+        {configLoaded ? (
+          <>
+            <div className="card card-flat p-6">
             <p className="label">Strategy</p>
             <div className="grid gap-4 mt-4">
               <div className="grid gap-1">
                 <span className="label">Type</span>
                 <div className="radio-group">
                   {(
-                    ["noop", "dca", "rebalance", "agent"] as StrategyType[]
+                    ["noop", "dca", "rebalance", "agent", "prediction_market"] as StrategyType[]
                   ).map((t) => (
                     <label key={t}>
                       <input
@@ -653,7 +1003,9 @@ function BotWorkspace({
                             ? "DCA"
                             : t === "rebalance"
                               ? "Rebalance"
-                              : "Agent"}
+                              : t === "agent"
+                                ? "Agent"
+                                : "Prediction"}
                       </span>
                     </label>
                   ))}
@@ -865,164 +1217,464 @@ function BotWorkspace({
                 </>
               ) : null}
             </div>
-          </div>
-
-          {/* Agent thinking feed */}
-          {strategyType === "agent" && agentMemory ? (
-            <div className="card card-flat p-6">
-              <p className="label">Ralph&apos;s Thinking</p>
-              <div className="grid gap-4 mt-3">
-                <div className="grid gap-1">
-                  <span className="label">Thesis</span>
-                  <p className="font-mono text-[0.9rem] whitespace-pre-wrap">
-                    {agentMemory.thesis || "(no thesis yet)"}
-                  </p>
-                </div>
-                <div className="grid gap-1">
-                  <span className="label">Trades today</span>
-                  <p className="font-mono">{agentMemory.tradesProposedToday}</p>
-                </div>
-                {agentMemory.observations.length > 0 ? (
-                  <div className="grid gap-1">
-                    <span className="label">
-                      Recent observations ({agentMemory.observations.length})
-                    </span>
-                    <div className="grid gap-1.5 max-h-48 overflow-y-auto">
-                      {agentMemory.observations
-                        .slice(-10)
-                        .reverse()
-                        .map((o) => (
-                          <div
-                            key={o.ts}
-                            className="text-[0.85rem] font-mono border-l border-border pl-3"
-                          >
-                            <span className="text-muted text-[0.75rem]">
-                              [{o.category}]
-                            </span>{" "}
-                            {o.content}
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                ) : null}
-                {agentMemory.reflections.length > 0 ? (
-                  <div className="grid gap-1">
-                    <span className="label">
-                      Learnings ({agentMemory.reflections.length})
-                    </span>
-                    <div className="grid gap-1 max-h-32 overflow-y-auto">
-                      {agentMemory.reflections
-                        .slice(-5)
-                        .reverse()
-                        .map((r) => (
-                          <p key={r} className="text-[0.85rem] font-mono">
-                            {r}
-                          </p>
-                        ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
             </div>
-          ) : null}
 
-          {/* Policy */}
-          <div className="card card-flat p-6">
-            <p className="label">Policy</p>
-            <div className="grid gap-4 mt-4">
-              <div className="flex items-center justify-between py-2">
-                <span>Simulate only</span>
-                <label className="toggle-switch">
+            <div className="card card-flat p-6">
+              <p className="label">Risk policy</p>
+              <div className="grid gap-4 mt-4">
+                <div className="flex items-center justify-between py-2">
+                  <span>Simulate only</span>
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={policy.simulateOnly}
+                      onChange={(e) =>
+                        setPolicy((p) => ({
+                          ...p,
+                          simulateOnly: e.target.checked,
+                        }))
+                      }
+                    />
+                    <div className="toggle-track" />
+                    <div className="toggle-thumb" />
+                  </label>
+                </div>
+                <div className="flex items-center justify-between py-2">
+                  <span>Dry run</span>
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={policy.dryRun}
+                      onChange={(e) =>
+                        setPolicy((p) => ({ ...p, dryRun: e.target.checked }))
+                      }
+                    />
+                    <div className="toggle-track" />
+                    <div className="toggle-thumb" />
+                  </label>
+                </div>
+                <div className="grid gap-1">
+                  <span className="label">Slippage (bps)</span>
                   <input
-                    type="checkbox"
-                    checked={policy.simulateOnly}
+                    className={INPUT}
+                    type="text"
+                    inputMode="numeric"
+                    value={policy.slippageBps}
+                    onChange={(e) =>
+                      setPolicy((p) => ({ ...p, slippageBps: e.target.value }))
+                    }
+                    placeholder="50"
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <span className="label">Max price impact (%)</span>
+                  <input
+                    className={INPUT}
+                    type="text"
+                    inputMode="numeric"
+                    value={policy.maxPriceImpactPct}
                     onChange={(e) =>
                       setPolicy((p) => ({
                         ...p,
-                        simulateOnly: e.target.checked,
+                        maxPriceImpactPct: e.target.value,
                       }))
                     }
+                    placeholder="1"
                   />
-                  <div className="toggle-track" />
-                  <div className="toggle-thumb" />
-                </label>
+                </div>
               </div>
-              <div className="flex items-center justify-between py-2">
-                <span>Dry run</span>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={policy.dryRun}
-                    onChange={(e) =>
-                      setPolicy((p) => ({ ...p, dryRun: e.target.checked }))
-                    }
-                  />
-                  <div className="toggle-track" />
-                  <div className="toggle-thumb" />
-                </label>
+            </div>
+
+            <div className="card card-flat p-5">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  className={BTN_PRIMARY}
+                  onClick={() => void saveConfig()}
+                  disabled={saving || parentLoading}
+                  type="button"
+                >
+                  {saving ? "Saving…" : "Save config"}
+                </button>
+                <button
+                  className={BTN_SECONDARY}
+                  onClick={() => void onTick()}
+                  disabled={saving || parentLoading}
+                  type="button"
+                >
+                  Run now
+                </button>
+                <button
+                  className={BTN_SECONDARY}
+                  onClick={() => void validateNow()}
+                  disabled={saving || parentLoading || validating}
+                  type="button"
+                >
+                  {validating ? "Validating…" : "Validate now"}
+                </button>
+                <span className="text-muted text-[0.85rem]">
+                  Live panel updates every 5s
+                </span>
               </div>
-              <div className="grid gap-1">
-                <span className="label">Slippage (bps)</span>
-                <input
-                  className={INPUT}
-                  type="text"
-                  inputMode="numeric"
-                  value={policy.slippageBps}
-                  onChange={(e) =>
-                    setPolicy((p) => ({ ...p, slippageBps: e.target.value }))
-                  }
-                  placeholder="50"
+            </div>
+
+            <PresenceCard show={!!configMsg}>
+              <p className="text-muted">{configMsg}</p>
+            </PresenceCard>
+          </>
+        ) : (
+          <div className="card card-flat p-6">
+            <p className="label">Config</p>
+            <p className="text-muted mt-2">Loading…</p>
+          </div>
+        )}
+      </div>
+
+      <aside className="grid gap-5 lg:sticky lg:top-24 self-start">
+        <div className="card card-flat p-6">
+          <p className="label">Loop status</p>
+          <div className="mt-3 grid gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-muted text-[0.85rem]">Heartbeat</span>
+              <span
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium",
+                  isLoopLive
+                    ? "border-accent bg-accent-soft text-ink"
+                    : "border-border bg-surface text-muted",
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-2 w-2 rounded-full",
+                    isLoopLive ? "bg-accent animate-pulse" : "bg-muted",
+                  )}
                 />
+                {isLoopLive ? "Live" : "Idle"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted text-[0.85rem]">Execution</span>
+              <code>{executionMode}</code>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted text-[0.85rem]">Last tick</span>
+              <code>{formatTick(bot.lastTickAt)}</code>
+            </div>
+            {lastEvent ? (
+              <div className="flex items-center justify-between">
+                <span className="text-muted text-[0.85rem]">Last event</span>
+                <code>{fmtEventTime(lastEvent.ts)}</code>
               </div>
+            ) : null}
+            <div className="grid gap-1 pt-1">
+              <span className="text-muted text-[0.85rem]">Wallet</span>
+              <code>{bot.walletAddress}</code>
+            </div>
+            {bot.lastError ? (
+              <div className="grid gap-1 pt-1">
+                <span className="text-muted text-[0.85rem]">Last error</span>
+                <code>{bot.lastError}</code>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="card card-flat p-6">
+          <p className="label">Strategy validation</p>
+          {telemetry?.startGate && !telemetry.startGate.ok ? (
+            <div className="mt-2 rounded-md border border-border px-3 py-2 text-sm">
+              <div className="text-[0.75rem] text-muted">Start gate</div>
+              <div className="font-medium">
+                {telemetry.startGate.reason === "strategy-not-validated"
+                  ? "No recent passing validation for this strategy"
+                  : telemetry.startGate.reason === "strategy-validation-stale"
+                    ? "Latest validation is stale"
+                    : "Validation gate blocked"}
+              </div>
+            </div>
+          ) : null}
+          {validation ? (
+            <div className="grid gap-2.5 mt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-muted text-[0.85rem]">Latest</span>
+                <span
+                  className={cn(
+                    "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium",
+                    validation.status === "passed"
+                      ? "border-accent bg-accent-soft text-ink"
+                      : validation.status === "failed"
+                        ? "border-border bg-surface text-muted"
+                        : "border-border bg-paper text-muted",
+                  )}
+                >
+                  {validation.status}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted text-[0.85rem]">Window</span>
+                <code>{validation.lookbackDays}d</code>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted text-[0.85rem]">Profile</span>
+                <code>{validation.profile}</code>
+              </div>
+              {validation.metrics ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted text-[0.85rem]">Net return</span>
+                    <code>{validation.metrics.netReturnPct.toFixed(2)}%</code>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted text-[0.85rem]">Max DD</span>
+                    <code>{validation.metrics.maxDrawdownPct.toFixed(2)}%</code>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted text-[0.85rem]">Profit factor</span>
+                    <code>{validation.metrics.profitFactor.toFixed(2)}</code>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted text-[0.85rem]">Trades</span>
+                    <code>{validation.metrics.tradeCount}</code>
+                  </div>
+                </>
+              ) : null}
+              {telemetry?.runtimeState ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted text-[0.85rem]">Runtime state</span>
+                  <code>{telemetry.runtimeState.lifecycleState}</code>
+                </div>
+              ) : null}
+              {telemetry?.runtimeState?.nextRevalidateAt ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted text-[0.85rem]">
+                    Next revalidate
+                  </span>
+                  <code>{fmtEventTime(telemetry.runtimeState.nextRevalidateAt)}</code>
+                </div>
+              ) : null}
+              {validation.summary ? (
+                <p className="text-[0.78rem] text-muted line-clamp-3">
+                  {validation.summary}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-muted mt-2">No validation runs yet.</p>
+          )}
+          {validationRuns.length > 0 ? (
+            <p className="text-[0.75rem] text-muted mt-3">
+              history: {validationRuns.length} runs
+            </p>
+          ) : null}
+        </div>
+
+        <div className="card card-flat p-6">
+          <p className="label">Wallet balance</p>
+          {balances ? (
+            <div className="grid grid-cols-2 gap-4 mt-3">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-2xl font-mono font-bold">
+                  {balances.sol.display}
+                </span>
+                <span className="label">SOL</span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-2xl font-mono font-bold">
+                  {balances.usdc.display}
+                </span>
+                <span className="label">USDC</span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-muted mt-2">Loading…</p>
+          )}
+        </div>
+
+        {strategyType === "agent" && agentMemory ? (
+          <div className="card card-flat p-6">
+            <p className="label">Agent state</p>
+            <div className="grid gap-3 mt-3">
               <div className="grid gap-1">
-                <span className="label">Max price impact (%)</span>
-                <input
-                  className={INPUT}
-                  type="text"
-                  inputMode="numeric"
-                  value={policy.maxPriceImpactPct}
-                  onChange={(e) =>
-                    setPolicy((p) => ({
-                      ...p,
-                      maxPriceImpactPct: e.target.value,
-                    }))
-                  }
-                  placeholder="1"
-                />
+                <span className="text-muted text-[0.85rem]">Thesis</span>
+                <p className="font-mono text-[0.82rem] leading-relaxed max-h-28 overflow-y-auto">
+                  {agentMemory.thesis || "(no thesis yet)"}
+                </p>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted text-[0.85rem]">Trades today</span>
+                <code>{agentMemory.tradesProposedToday}</code>
               </div>
             </div>
           </div>
+        ) : null}
 
-          {/* Actions */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            <button
-              className={BTN_PRIMARY}
-              onClick={() => void saveConfig()}
-              disabled={saving || parentLoading}
-              type="button"
-            >
-              {saving ? "Saving…" : "Save config"}
-            </button>
-            <button
-              className={BTN_SECONDARY}
-              onClick={() => void onTick()}
-              disabled={saving || parentLoading}
-              type="button"
-            >
-              Test tick
-            </button>
-          </div>
-
-          <PresenceCard show={!!configMsg}>
-            <p className="text-muted">{configMsg}</p>
-          </PresenceCard>
-        </>
-      ) : (
         <div className="card card-flat p-6">
-          <p className="label">Config</p>
-          <p className="text-muted mt-2">Loading…</p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="label">Loop activity</p>
+            <span className="text-muted text-[0.75rem]">latest {events.length}</span>
+          </div>
+          {!liveLoaded ? (
+            <p className="text-muted mt-3">Loading live events…</p>
+          ) : events.length === 0 ? (
+            <p className="text-muted mt-3">No activity yet.</p>
+          ) : (
+            <div className="grid gap-2.5 mt-3 max-h-[26rem] overflow-y-auto pr-1">
+              {events.slice(0, 24).map((event) => (
+                <div
+                  key={`${event.ts}:${event.message}:${event.runId ?? "none"}`}
+                  className="rounded-md border border-border bg-paper px-3 py-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[0.75rem] text-muted">
+                      {fmtEventTime(event.ts)}
+                    </span>
+                    <span className="text-[0.72rem] uppercase tracking-wide text-muted">
+                      {event.level}
+                    </span>
+                  </div>
+                  <p className="text-[0.84rem] mt-1 font-medium">{event.message}</p>
+                  {eventMeta(event) ? (
+                    <p className="text-[0.78rem] mt-1 text-muted line-clamp-3">
+                      {eventMeta(event)}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+
+        <div className="card card-flat p-6">
+          <div className="flex items-center justify-between gap-3">
+            <p className="label">Strategy events</p>
+            <span className="text-muted text-[0.75rem]">
+              latest {strategyEvents.length}
+            </span>
+          </div>
+          {strategyEvents.length === 0 ? (
+            <p className="text-muted mt-3">No strategy events yet.</p>
+          ) : (
+            <div className="grid gap-2.5 mt-3 max-h-[16rem] overflow-y-auto pr-1">
+              {strategyEvents.slice(0, 16).map((event) => (
+                <div
+                  key={`${event.id}:${event.createdAt}`}
+                  className="rounded-md border border-border bg-paper px-3 py-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[0.75rem] text-muted">
+                      {fmtEventTime(event.createdAt)}
+                    </span>
+                    <code>{event.eventType}</code>
+                  </div>
+                  <p className="text-[0.78rem] mt-1 text-muted">
+                    actor: {event.actor}
+                    {event.reason ? ` • ${event.reason}` : ""}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card card-flat p-6">
+          <div className="flex items-center justify-between gap-3">
+            <p className="label">Bot conversation</p>
+            <span className="text-muted text-[0.75rem]">
+              {chatList.length} messages
+            </span>
+          </div>
+          {!telemetry?.startGate.ok ? (
+            <p className="text-sm text-amber-500 mt-2">
+              Start is blocked: {telemetry?.startGate.reason ?? "unknown"}.
+            </p>
+          ) : null}
+          {!liveLoaded ? (
+            <p className="text-muted mt-3">Loading conversation…</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-2 mt-3">
+                {[
+                  "What just happened?",
+                  "Why did I get blocked?",
+                  "How's validation?",
+                ].map((shortcut) => (
+                  <button
+                    className={BTN_SECONDARY}
+                    key={shortcut}
+                    onClick={() => submitChatShortcut(shortcut)}
+                    disabled={chatBusy}
+                    type="button"
+                  >
+                    {shortcut}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-3 grid gap-2.5 max-h-[24rem] overflow-y-auto pr-1">
+                {chatList.length === 0 ? (
+                  <p className="text-muted">
+                    Ask a question to get a live read of what the bot is doing.
+                  </p>
+                ) : (
+                  chatList.map((entry) => (
+                    <div
+                      key={`${entry.id}-${entry.role}`}
+                      className={cn(
+                        "rounded-md border px-3 py-2.5",
+                        entry.role === "user"
+                          ? "border-border bg-surface"
+                          : "border-accent/50 bg-accent-soft",
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-xs text-muted">
+                        <span className="font-medium text-ink">
+                          {entry.role === "user" ? "You" : "Bot"}
+                        </span>
+                        <span>{fmtEventTime(entry.createdAt)}</span>
+                      </div>
+                      <p className="mt-1 text-sm">{chatText(entry)}</p>
+                      {entry.role === "assistant" && entry.sources.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {renderChatSources(entry.sources)}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void sendChat(chatInput);
+                }}
+                className="mt-3"
+              >
+                <label className="grid gap-1">
+                  <span className="text-muted text-[0.8rem]">
+                    Ask the bot
+                  </span>
+                  <textarea
+                    className={cn(INPUT, "min-h-[4.5rem] resize-y")}
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    placeholder="Ask anything about validation, recent trades, or why it is blocked..."
+                  />
+                </label>
+                <div className="flex items-center justify-end gap-2 mt-2.5">
+                  <button
+                    className={BTN_PRIMARY}
+                    type="submit"
+                    disabled={chatBusy || chatInput.trim().length === 0}
+                  >
+                    {chatBusy ? "Asking…" : "Send"}
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }

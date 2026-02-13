@@ -24,13 +24,13 @@ export function Providers({ children }: { children: ReactNode }) {
       config={{
         // Keep this explicit to avoid showing providers we don't want yet.
         // Note: the Privy dashboard still needs Email enabled for this to work.
-        loginMethods: ["email", "wallet"],
+        loginMethods: ["email"],
         appearance: {
           theme: privyTheme,
           accentColor: "#ff4fa3",
           logo: undefined,
           walletChainType: "solana-only",
-          showWalletLoginFirst: true,
+          showWalletLoginFirst: false,
         },
         embeddedWallets: {
           ethereum: { createOnLogin: "off" },

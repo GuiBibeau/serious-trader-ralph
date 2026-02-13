@@ -1,10 +1,19 @@
+import { getUserSubscription, isSubscriptionActive } from "./billing";
 import { recordBotTickResult } from "./bots_db";
 import { getLoopConfig, updateLoopConfig } from "./config";
 import { defaultAgentStrategy, SOL_MINT, USDC_MINT } from "./defaults";
 import { runAutopilotTickForTenant } from "./loop";
 import { json } from "./response";
+import { checkStrategyStartGate } from "./strategy_validation/engine";
 import type { Env } from "./types";
-import { validatePolicy, validateStrategy } from "./validation";
+import {
+  validateAutotuneConfig,
+  validateDataSourcesConfig,
+  validateExecutionConfig,
+  validatePolicy,
+  validateStrategy,
+  validateValidationConfig,
+} from "./validation";
 
 type TickReason = "cron" | "manual";
 
@@ -14,6 +23,7 @@ const MAX_TICK_RUNTIME_MS = 120_000;
 
 type BotMeta = {
   enabled: boolean;
+  userId: string;
   walletAddress: string;
   privyWalletId: string;
 };
@@ -91,6 +101,26 @@ export class BotLoop {
             update.strategy =
               payload.strategy as import("./types").StrategyConfig;
           }
+          if (payload.validation !== undefined) {
+            validateValidationConfig(payload.validation);
+            update.validation =
+              payload.validation as import("./types").LoopValidationConfig;
+          }
+          if (payload.autotune !== undefined) {
+            validateAutotuneConfig(payload.autotune);
+            update.autotune =
+              payload.autotune as import("./types").LoopAutotuneConfig;
+          }
+          if (payload.execution !== undefined) {
+            validateExecutionConfig(payload.execution);
+            update.execution =
+              payload.execution as import("./types").ExecutionConfig;
+          }
+          if (payload.dataSources !== undefined) {
+            validateDataSourcesConfig(payload.dataSources);
+            update.dataSources =
+              payload.dataSources as import("./types").DataSourcesConfig;
+          }
 
           const config = await updateLoopConfig(this.env, update, storedBotId);
           if (config.enabled) {
@@ -105,6 +135,12 @@ export class BotLoop {
 
       if (request.method === "POST" && path === "/start") {
         const current = await getLoopConfig(this.env, storedBotId);
+        const allowOverride =
+          request.headers.get("x-validation-override") === "1";
+        const gate = await checkStrategyStartGate(this.env, storedBotId, current);
+        if (!gate.ok && !allowOverride) {
+          throw new Error(gate.reason ?? "strategy-not-validated");
+        }
         const strat = current.strategy as { type?: unknown } | undefined;
         const policyAllowed = current.policy?.allowedMints;
         const update: Partial<import("./types").LoopConfig> = { enabled: true };
@@ -150,6 +186,12 @@ export class BotLoop {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const status =
+        message === "strategy-not-validated" ||
+        message === "strategy-validation-stale"
+          ? 409
+          : message === "unauthorized"
+            ? 401
+            :
         message.startsWith("invalid-") || message.startsWith("missing-")
           ? 400
           : 500;
@@ -192,6 +234,21 @@ export class BotLoop {
 
     const meta = await this.getBotMeta(botId);
     if (!meta || !meta.enabled) {
+      await this.disableAlarm();
+      return;
+    }
+
+    const subscription = await getUserSubscription(this.env, meta.userId);
+    if (!isSubscriptionActive(subscription)) {
+      await updateLoopConfig(this.env, { enabled: false }, botId).catch(
+        () => {},
+      );
+      await this.env.WAITLIST_DB.prepare(
+        "UPDATE bots SET enabled = 0, last_error = ?1, updated_at = datetime('now') WHERE id = ?2",
+      )
+        .bind("subscription-required", botId)
+        .run()
+        .catch(() => {});
       await this.disableAlarm();
       return;
     }
@@ -251,18 +308,20 @@ export class BotLoop {
 
   private async getBotMeta(botId: string): Promise<BotMeta | null> {
     const row = (await this.env.WAITLIST_DB.prepare(
-      "SELECT enabled, wallet_address as walletAddress, privy_wallet_id as privyWalletId FROM bots WHERE id = ?1",
+      "SELECT enabled, user_id as userId, wallet_address as walletAddress, privy_wallet_id as privyWalletId FROM bots WHERE id = ?1",
     )
       .bind(botId)
       .first()) as unknown;
 
     if (!row || typeof row !== "object") return null;
     const r = row as Record<string, unknown>;
+    const userId = String(r.userId ?? "").trim();
     const walletAddress = String(r.walletAddress ?? "").trim();
     const privyWalletId = String(r.privyWalletId ?? "").trim();
-    if (!walletAddress || !privyWalletId) return null;
+    if (!userId || !walletAddress || !privyWalletId) return null;
     return {
       enabled: Number(r.enabled) === 1,
+      userId,
       walletAddress,
       privyWalletId,
     };

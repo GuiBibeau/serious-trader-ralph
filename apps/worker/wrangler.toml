@@ -8,6 +8,9 @@ LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
 ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 ZAI_MODEL = "glm-4.7"
+BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
+BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
+BALANCE_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com"
 
 [[kv_namespaces]]
 binding = "CONFIG_KV"
@@ -43,6 +46,9 @@ LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
 ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 ZAI_MODEL = "glm-4.7"
+BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
+BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
+BALANCE_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com"
 
 [[env.staging.kv_namespaces]]
 binding = "CONFIG_KV"
@@ -71,6 +77,9 @@ LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
 ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 ZAI_MODEL = "glm-4.7"
+BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
+BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
+BALANCE_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com"
 
 [[env.production.kv_namespaces]]
 binding = "CONFIG_KV"

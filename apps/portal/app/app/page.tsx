@@ -1,7 +1,13 @@
 "use client";
 
 import { usePrivy } from "@privy-io/react-auth";
+import {
+  createRecipient,
+  createSPLToken,
+  encodeURL,
+} from "@solana-commerce/kit";
 import { useRouter } from "next/navigation";
+import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "../cn";
 import { FundingModal } from "../funding-modal";
@@ -38,6 +44,52 @@ type FinancialProfile = {
   investmentGoal: string;
   cryptoExperience: string;
   timeHorizon: string;
+};
+
+type Subscription = {
+  status: "active" | "inactive";
+  active: boolean;
+  planId: string | null;
+  planName: string | null;
+  startsAt: string | null;
+  expiresAt: string | null;
+  sourceSignature: string | null;
+};
+
+type BillingPlan = {
+  id: string;
+  name: string;
+  description: string;
+  amountUsd: number;
+  amountDecimal: string;
+  amountAtomic: string;
+  currency: string;
+  mint: string;
+  interval: string;
+  features: string[];
+};
+
+type CheckoutIntent = {
+  id: string;
+  planId: string;
+  status: "pending" | "verified" | "expired";
+  expiresAt: string;
+  payment: {
+    recipient: string;
+    amountDecimal: string;
+    amountAtomic: string;
+    currency: "USDC" | "SOL";
+    splToken: string | null;
+    reference: string;
+    label: string;
+    message: string;
+    memo: string;
+  };
+};
+
+type Balances = {
+  sol: { lamports: string; display: string };
+  usdc: { atomic: string; display: string };
 };
 
 const PROFILE_KEY = "str-financial-profile";
@@ -169,7 +221,7 @@ export default function AppPage() {
   return <ControlRoom />;
 }
 
-const STEP_LABELS = ["Profile", "Agent", "Fund"];
+const STEP_LABELS = ["Profile", "Billing", "Agent", "Fund"];
 
 function WizardProgress({ step }: { step: number }) {
   return (
@@ -212,6 +264,18 @@ function ControlRoom() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [botsLoaded, setBotsLoaded] = useState(false);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [billingPlans, setBillingPlans] = useState<BillingPlan[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState("byok_annual");
+  const [selectedPaymentAsset, setSelectedPaymentAsset] = useState<
+    "USDC" | "SOL"
+  >("USDC");
+  const [checkoutIntent, setCheckoutIntent] = useState<CheckoutIntent | null>(
+    null,
+  );
+  const [checkoutUrl, setCheckoutUrl] = useState("");
+  const [checkingPayment, setCheckingPayment] = useState(false);
+  const [walletBalances, setWalletBalances] = useState<Balances | null>(null);
 
   // Funding modal
   const [fundOpen, setFundOpen] = useState(false);
@@ -232,11 +296,35 @@ function ControlRoom() {
     try {
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
-      const payload = await apiFetchJson("/api/me", token, { method: "GET" });
+      const [payload, plansPayload] = await Promise.all([
+        apiFetchJson("/api/me", token, { method: "GET" }),
+        apiFetchJson("/api/billing/plans", token, { method: "GET" }),
+      ]);
+
       const nextBotsRaw = isRecord(payload) ? payload.bots : null;
       const nextBots = Array.isArray(nextBotsRaw) ? (nextBotsRaw as Bot[]) : [];
       setBots(nextBots);
       setBotsLoaded(true);
+
+      const subscriptionRaw = isRecord(payload) ? payload.subscription : null;
+      if (
+        isRecord(subscriptionRaw) &&
+        (subscriptionRaw.status === "active" ||
+          subscriptionRaw.status === "inactive")
+      ) {
+        setSubscription(subscriptionRaw as unknown as Subscription);
+      } else {
+        setSubscription(null);
+      }
+
+      const plansRaw = isRecord(plansPayload) ? plansPayload.plans : null;
+      const plans = Array.isArray(plansRaw)
+        ? (plansRaw.filter((p) => isRecord(p)) as BillingPlan[])
+        : [];
+      setBillingPlans(plans);
+      if (!plans.some((p) => p.id === selectedPlanId) && plans.length > 0) {
+        setSelectedPlanId(plans[0].id);
+      }
 
       // Hydrate profile from API if available
       const userRaw = isRecord(payload) ? payload.user : null;
@@ -255,7 +343,7 @@ function ControlRoom() {
     } finally {
       setLoading(false);
     }
-  }, [authenticated, getAccessToken]);
+  }, [authenticated, getAccessToken, selectedPlanId]);
 
   const refreshTrades = useCallback(
     async (botId: string): Promise<void> => {
@@ -280,20 +368,72 @@ function ControlRoom() {
     [authenticated, getAccessToken],
   );
 
+  const refreshWalletBalances = useCallback(
+    async (botId: string): Promise<void> => {
+      if (!authenticated) return;
+      try {
+        const token = await getAccessToken();
+        if (!token) return;
+        const payload = await apiFetchJson(`/api/bots/${botId}/balance`, token, {
+          method: "GET",
+        });
+        const balancesRaw = isRecord(payload) ? payload.balances : null;
+        if (
+          isRecord(balancesRaw) &&
+          isRecord(balancesRaw.sol) &&
+          isRecord(balancesRaw.usdc)
+        ) {
+          setWalletBalances(balancesRaw as unknown as Balances);
+        }
+      } catch {
+        // Keep the latest known balance in the navbar on transient failures.
+      }
+    },
+    [authenticated, getAccessToken],
+  );
+
   useEffect(() => {
     if (!ready || !authenticated) return;
     void refresh();
   }, [ready, authenticated, refresh]);
 
   useEffect(() => {
+    if (!ready || authenticated) return;
+    router.replace("/");
+  }, [ready, authenticated, router]);
+
+  useEffect(() => {
     if (!bot) return;
     void refreshTrades(bot.id);
   }, [bot, refreshTrades]);
 
-  // Step 2: auto-create bot on mount
+  useEffect(() => {
+    if (!bot) {
+      setWalletBalances(null);
+      return;
+    }
+    void refreshWalletBalances(bot.id);
+    const timer = window.setInterval(() => {
+      void refreshWalletBalances(bot.id);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [bot, refreshWalletBalances]);
+
+  useEffect(() => {
+    if (wizardStep === 1 && profileComplete) {
+      setWizardStep(subscription?.active ? 3 : 2);
+      return;
+    }
+    if (wizardStep === 2 && subscription?.active) {
+      setWizardStep(3);
+    }
+  }, [wizardStep, profileComplete, subscription?.active]);
+
+  // Step 3: auto-create bot on mount
   const [creating, setCreating] = useState(false);
   useEffect(() => {
-    if (wizardStep !== 2 || creating || createdBot) return;
+    if (!botsLoaded || bots.length > 0) return;
+    if (wizardStep !== 3 || creating || createdBot) return;
     setCreating(true);
     (async () => {
       setMessage(null);
@@ -311,9 +451,19 @@ function ControlRoom() {
         await refresh();
       } catch (err) {
         setMessage(err instanceof Error ? err.message : String(err));
+      } finally {
+        setCreating(false);
       }
     })();
-  }, [wizardStep, creating, createdBot, getAccessToken, refresh]);
+  }, [
+    botsLoaded,
+    bots.length,
+    wizardStep,
+    creating,
+    createdBot,
+    getAccessToken,
+    refresh,
+  ]);
 
   function handleProfileChange(key: keyof FinancialProfile, value: string) {
     setProfile((prev) => {
@@ -333,7 +483,7 @@ function ControlRoom() {
         method: "PATCH",
         body: JSON.stringify({ profile }),
       });
-      setWizardStep(2);
+      setWizardStep(subscription?.active ? 3 : 2);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -346,6 +496,117 @@ function ControlRoom() {
     // Force re-render into dashboard by refreshing bots
     void refresh();
   }
+
+  const buildSolanaPayUrl = useCallback((intent: CheckoutIntent): string => {
+    const fields: {
+      recipient: ReturnType<typeof createRecipient>;
+      amount: bigint;
+      reference: ReturnType<typeof createRecipient>;
+      label: string;
+      message: string;
+      memo: string;
+      splToken?: ReturnType<typeof createSPLToken>;
+    } = {
+      recipient: createRecipient(intent.payment.recipient),
+      amount: BigInt(intent.payment.amountAtomic),
+      reference: createRecipient(intent.payment.reference),
+      label: intent.payment.label,
+      message: intent.payment.message,
+      memo: intent.payment.memo,
+    };
+    if (intent.payment.splToken) {
+      fields.splToken = createSPLToken(intent.payment.splToken);
+    }
+    const url = encodeURL(fields);
+    url.searchParams.set("cluster", "devnet");
+    return url.toString();
+  }, []);
+
+  async function beginCheckout(): Promise<void> {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("missing-access-token");
+      const payload = await apiFetchJson("/api/billing/checkout", token, {
+        method: "POST",
+        body: JSON.stringify({
+          planId: selectedPlanId,
+          paymentAsset: selectedPaymentAsset,
+        }),
+      });
+      const intentRaw = isRecord(payload) ? payload.intent : null;
+      if (
+        !isRecord(intentRaw) ||
+        typeof intentRaw.id !== "string" ||
+        !isRecord(intentRaw.payment)
+      ) {
+        throw new Error("billing-intent-create-failed");
+      }
+      const intent = intentRaw as unknown as CheckoutIntent;
+      setCheckoutIntent(intent);
+      setCheckoutUrl(buildSolanaPayUrl(intent));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const checkCheckoutStatus = useCallback(
+    async (intentId?: string): Promise<void> => {
+      const id = intentId ?? checkoutIntent?.id;
+      if (!id) return;
+      setCheckingPayment(true);
+      try {
+        const token = await getAccessToken();
+        if (!token) throw new Error("missing-access-token");
+        const payload = await apiFetchJson(
+          `/api/billing/checkout/${id}`,
+          token,
+          {
+            method: "GET",
+          },
+        );
+        const intentRaw = isRecord(payload) ? payload.intent : null;
+        if (
+          isRecord(intentRaw) &&
+          typeof intentRaw.id === "string" &&
+          isRecord(intentRaw.payment)
+        ) {
+          const intent = intentRaw as unknown as CheckoutIntent;
+          setCheckoutIntent(intent);
+          setCheckoutUrl(buildSolanaPayUrl(intent));
+        }
+
+        const subRaw = isRecord(payload) ? payload.subscription : null;
+        if (
+          isRecord(subRaw) &&
+          (subRaw.status === "active" || subRaw.status === "inactive")
+        ) {
+          const sub = subRaw as unknown as Subscription;
+          setSubscription(sub);
+          if (sub.active) {
+            setMessage("Payment verified. Subscription is active.");
+            setWizardStep(3);
+          }
+        }
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : String(err));
+      } finally {
+        setCheckingPayment(false);
+      }
+    },
+    [checkoutIntent?.id, getAccessToken, buildSolanaPayUrl],
+  );
+
+  useEffect(() => {
+    if (!checkoutIntent || checkoutIntent.status !== "pending") return;
+    const timer = window.setInterval(() => {
+      void checkCheckoutStatus(checkoutIntent.id);
+    }, 8000);
+    return () => window.clearInterval(timer);
+  }, [checkoutIntent, checkCheckoutStatus]);
 
   async function startBot(botId: string): Promise<void> {
     setLoading(true);
@@ -394,6 +655,22 @@ function ControlRoom() {
 
   const showWizard = botsLoaded && bots.length === 0;
   const showDashboard = botsLoaded && bots.length > 0;
+  const selectedPlan =
+    billingPlans.find((p) => p.id === selectedPlanId) ?? null;
+  const shouldRedirectToCheckout =
+    ready &&
+    authenticated &&
+    showDashboard &&
+    bot &&
+    subscription != null &&
+    !subscription.active;
+
+  useEffect(() => {
+    if (!shouldRedirectToCheckout) return;
+    router.replace(
+      `/checkout?plan=${selectedPlanId}&asset=${selectedPaymentAsset}&pay=1`,
+    );
+  }, [shouldRedirectToCheckout, router, selectedPlanId, selectedPaymentAsset]);
 
   return (
     <main>
@@ -403,8 +680,15 @@ function ControlRoom() {
             Serious Trader Ralph
           </a>
           <div className="flex items-center justify-end gap-3 flex-wrap">
-            {ready && (
+            {ready && authenticated && (
               <>
+                {bot && (
+                  <span className="inline-flex items-center rounded-full border border-border bg-surface px-2.5 py-1 text-[0.8rem] text-muted whitespace-nowrap">
+                    {walletBalances
+                      ? `${walletBalances.sol.display} SOL · ${walletBalances.usdc.display} USDC`
+                      : "Balance —"}
+                  </span>
+                )}
                 {bot && (
                   <button
                     className={BTN_PRIMARY}
@@ -448,6 +732,10 @@ function ControlRoom() {
           {!ready || !botsLoaded ? (
             <div>
               <h1>Loading…</h1>
+            </div>
+          ) : shouldRedirectToCheckout ? (
+            <div>
+              <h1>Redirecting to checkout…</h1>
             </div>
           ) : showWizard ? (
             <div>
@@ -512,8 +800,164 @@ function ControlRoom() {
                   </div>
                 </PresenceCard>
 
-                {/* Step 2: Create Agent */}
+                {/* Step 2: Billing */}
                 <PresenceCard show={wizardStep === 2}>
+                  <div className="card card-flat p-6">
+                    <p className="label">Annual license</p>
+                    <h2 className="mt-2.5">Pay in USDC or SOL on Solana</h2>
+                    <p className="text-muted mt-3 max-w-[560px]">
+                      Choose BYOK or Hobbyist. We generate a Solana Pay request
+                      and verify your on-chain transfer automatically.
+                    </p>
+                    <div className="grid gap-3 mt-5">
+                      {billingPlans.length === 0 ? (
+                        <div className="mt-2 grid gap-3">
+                          <Skeleton height="1.2rem" width="70%" />
+                          <Skeleton height="1.2rem" width="55%" />
+                        </div>
+                      ) : (
+                        billingPlans.map((plan) => (
+                          <button
+                            key={plan.id}
+                            type="button"
+                            onClick={() => {
+                              if (selectedPlanId !== plan.id) {
+                                setCheckoutIntent(null);
+                                setCheckoutUrl("");
+                              }
+                              setSelectedPlanId(plan.id);
+                            }}
+                            className={cn(
+                              "text-left rounded-md border p-4 transition-colors",
+                              selectedPlanId === plan.id
+                                ? "border-accent bg-accent-soft"
+                                : "border-border bg-surface hover:bg-paper",
+                            )}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <strong>{plan.name}</strong>
+                              <span className="text-sm font-semibold">
+                                ${plan.amountUsd}/year
+                              </span>
+                            </div>
+                            <p className="text-muted text-sm mt-1">
+                              {plan.description}
+                            </p>
+                            <p className="text-muted text-xs mt-2">
+                              {plan.amountDecimal} {plan.currency} • SPL mint{" "}
+                              {plan.mint}
+                            </p>
+                          </button>
+                        ))
+                      )}
+                    </div>
+
+                    <div className="mt-5">
+                      <p className="label">Pay with</p>
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
+                        {(["USDC", "SOL"] as const).map((asset) => (
+                          <button
+                            key={asset}
+                            type="button"
+                            className={cn(
+                              BTN_SECONDARY,
+                              selectedPaymentAsset === asset &&
+                                "!border-accent !bg-accent-soft",
+                            )}
+                            onClick={() => {
+                              if (selectedPaymentAsset !== asset) {
+                                setCheckoutIntent(null);
+                                setCheckoutUrl("");
+                              }
+                              setSelectedPaymentAsset(asset);
+                            }}
+                          >
+                            {asset}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 mt-5">
+                      <button
+                        className={BTN_PRIMARY}
+                        onClick={() => void beginCheckout()}
+                        disabled={
+                          loading ||
+                          subscription?.active === true ||
+                          !selectedPlan
+                        }
+                        type="button"
+                      >
+                        {loading ? "Preparing…" : "Generate payment request"}
+                      </button>
+                      {checkoutIntent && !subscription?.active && (
+                        <button
+                          className={BTN_SECONDARY}
+                          onClick={() => void checkCheckoutStatus()}
+                          disabled={checkingPayment}
+                          type="button"
+                        >
+                          {checkingPayment ? "Checking…" : "I paid, check now"}
+                        </button>
+                      )}
+                      {subscription?.active && (
+                        <button
+                          className={BTN_PRIMARY}
+                          onClick={() => setWizardStep(3)}
+                          type="button"
+                        >
+                          Continue
+                        </button>
+                      )}
+                    </div>
+
+                    {checkoutIntent && checkoutUrl && !subscription?.active && (
+                      <div className="mt-6 rounded-md border border-border bg-paper p-4">
+                        <p className="label">Checkout request</p>
+                        <p className="text-muted text-sm mt-1">
+                          Send exactly {checkoutIntent.payment.amountDecimal}{" "}
+                          {checkoutIntent.payment.currency} before{" "}
+                          {checkoutIntent.expiresAt}.
+                        </p>
+                        <div className="flex justify-center mt-4">
+                          <QRCodeSVG
+                            value={checkoutUrl}
+                            size={180}
+                            level="M"
+                            bgColor="transparent"
+                            fgColor="var(--color-ink)"
+                          />
+                        </div>
+                        <div className="grid gap-1 mt-4">
+                          <span className="text-muted text-[0.85rem]">
+                            Recipient
+                          </span>
+                          <code>{checkoutIntent.payment.recipient}</code>
+                        </div>
+                        <div className="grid gap-1 mt-3">
+                          <span className="text-muted text-[0.85rem]">
+                            Solana Pay URL
+                          </span>
+                          <code className="break-all">{checkoutUrl}</code>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 mt-4">
+                          <a
+                            className={BTN_SECONDARY}
+                            href={checkoutUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open in wallet
+                          </a>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </PresenceCard>
+
+                {/* Step 3: Create Agent */}
+                <PresenceCard show={wizardStep === 3}>
                   <div className="card card-flat p-6">
                     <p className="label">Create agent</p>
                     {!createdBot ? (
@@ -540,7 +984,7 @@ function ControlRoom() {
                         <div className="flex flex-wrap items-center gap-3 mt-5">
                           <button
                             className={BTN_PRIMARY}
-                            onClick={() => setWizardStep(3)}
+                            onClick={() => setWizardStep(4)}
                             type="button"
                           >
                             Continue
@@ -551,8 +995,8 @@ function ControlRoom() {
                   </div>
                 </PresenceCard>
 
-                {/* Step 3: Fund Wallet */}
-                <PresenceCard show={wizardStep === 3}>
+                {/* Step 4: Fund Wallet */}
+                <PresenceCard show={wizardStep === 4}>
                   <div className="card card-flat p-6">
                     <p className="label">Fund wallet</p>
                     <h2 className="mt-2.5">Send SOL or USDC to your agent</h2>
@@ -604,6 +1048,16 @@ function ControlRoom() {
                   <h2 className="mt-1.5">{bot.name}</h2>
                   <div className="grid gap-2.5 mt-4">
                     <div className="grid gap-1">
+                      <span className="text-muted text-[0.85rem]">
+                        Subscription
+                      </span>
+                      <code>
+                        {subscription?.active
+                          ? (subscription.planName ?? "Active")
+                          : "Inactive"}
+                      </code>
+                    </div>
+                    <div className="grid gap-1">
                       <span className="text-muted text-[0.85rem]">Wallet</span>
                       <code>{bot.walletAddress}</code>
                     </div>
@@ -632,7 +1086,7 @@ function ControlRoom() {
                       <button
                         className={BTN_SECONDARY}
                         onClick={() => void stopBot(bot.id)}
-                        disabled={loading}
+                        disabled={loading || !subscription?.active}
                         type="button"
                       >
                         Stop
@@ -641,7 +1095,7 @@ function ControlRoom() {
                       <button
                         className={BTN_PRIMARY}
                         onClick={() => void startBot(bot.id)}
-                        disabled={loading}
+                        disabled={loading || !subscription?.active}
                         type="button"
                       >
                         Start
@@ -650,7 +1104,7 @@ function ControlRoom() {
                     <button
                       className={BTN_SECONDARY}
                       onClick={() => void tickBot(bot.id)}
-                      disabled={loading}
+                      disabled={loading || !subscription?.active}
                       type="button"
                     >
                       Tick now

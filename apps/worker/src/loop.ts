@@ -1,13 +1,14 @@
 import { runAgentTick } from "./agent";
 import { getLoopConfig } from "./config";
+import { executeSwapViaRouter } from "./execution/router";
 import { JupiterClient } from "./jupiter";
 import { acquireLoopLock, releaseLoopLock } from "./lock";
 import { makeLogKey, writeJsonl } from "./logs";
 import { enforcePolicy, normalizePolicy } from "./policy";
-import { getPrivyWalletAddress, signTransactionWithPrivyById } from "./privy";
+import { getPrivyWalletAddress } from "./privy";
 import { SolanaRpc } from "./solana_rpc";
 import { getLoopState, updateLoopState } from "./state";
-import { swapWithRetry } from "./swap";
+import { maybeRevalidateAndTuneForTenant } from "./strategy_validation/engine";
 import { insertTradeIndex } from "./trade_index";
 import type {
   DcaStrategy,
@@ -121,6 +122,7 @@ export async function runAutopilotTick(
         jupiter,
         wallet,
         policy,
+        execution: config.execution,
         strategy,
         privyWalletId,
       });
@@ -139,6 +141,7 @@ export async function runAutopilotTick(
         jupiter,
         wallet,
         policy,
+        execution: config.execution,
         strategy,
         privyWalletId,
       });
@@ -157,6 +160,7 @@ export async function runAutopilotTick(
         jupiter,
         wallet,
         policy,
+        execution: config.execution,
         strategy,
         privyWalletId,
       });
@@ -250,9 +254,21 @@ export async function runAutopilotTickForTenant(
   }
 
   try {
-    const config = await getLoopConfig(env, tenantId);
+    let config = await getLoopConfig(env, tenantId);
     if (!config.enabled) {
       log("info", "loop disabled");
+      return { ok: true, error: null, runId, logKey };
+    }
+
+    await maybeRevalidateAndTuneForTenant(env, tenantId, log).catch((err) => {
+      log("warn", "revalidation/tuning hook failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    config = await getLoopConfig(env, tenantId);
+    if (!config.enabled) {
+      log("warn", "loop disabled by validation lifecycle");
       return { ok: true, error: null, runId, logKey };
     }
 
@@ -301,6 +317,7 @@ export async function runAutopilotTickForTenant(
         jupiter,
         wallet,
         policy,
+        execution: config.execution,
         strategy,
         privyWalletId: input.privyWalletId,
       });
@@ -320,6 +337,7 @@ export async function runAutopilotTickForTenant(
         jupiter,
         wallet,
         policy,
+        execution: config.execution,
         strategy,
         privyWalletId: input.privyWalletId,
       });
@@ -339,6 +357,7 @@ export async function runAutopilotTickForTenant(
         jupiter,
         wallet,
         policy,
+        execution: config.execution,
         strategy,
         privyWalletId: input.privyWalletId,
       });
@@ -372,7 +391,8 @@ function normalizeStrategy(strategy: unknown): StrategyConfig | null {
     type === "dca" ||
     type === "rebalance" ||
     type === "noop" ||
-    type === "agent"
+    type === "agent" ||
+    type === "prediction_market"
   ) {
     return strategy as StrategyConfig;
   }
@@ -410,6 +430,7 @@ async function runDca(input: {
   jupiter: JupiterClient;
   wallet: string;
   policy: ReturnType<typeof normalizePolicy>;
+  execution?: import("./types").ExecutionConfig;
   strategy: DcaStrategy;
   privyWalletId?: string;
 }) {
@@ -424,6 +445,7 @@ async function runDca(input: {
     jupiter,
     wallet,
     policy,
+    execution,
     strategy,
     privyWalletId,
   } = input;
@@ -498,109 +520,58 @@ async function runDca(input: {
     return;
   }
 
-  // Re-check config before building/signing/sending: allows "stop" / kill switch / policy edits
-  // to take effect quickly, even if a tick is already in-flight (openclaw-style control).
-  await assertLoopStillEnabled(env, log, configTenantId);
-
-  const {
-    swap,
-    quoteResponse: usedQuote,
-    refreshed,
-  } = await swapWithRetry(jupiter, quote, wallet, policy);
-  if (refreshed) {
-    log("warn", "quote refreshed due to swap 422", {
-      inAmount: usedQuote.inAmount,
-      outAmount: usedQuote.outAmount,
-      priceImpactPct: usedQuote.priceImpactPct ?? 0,
-    });
-  }
-
-  if (!privyWalletId) throw new Error("missing-privy-wallet-id");
-  log("info", "signing transaction", { walletId: privyWalletId });
-  const signedBase64 = await signTransactionWithPrivyById(
-    env,
-    privyWalletId,
-    swap.swapTransaction,
-  );
-  log("info", "transaction signed");
-
-  if (policy.simulateOnly) {
-    const sim = await rpc.simulateTransactionBase64(signedBase64, {
-      commitment: policy.commitment,
-      sigVerify: true,
-    });
-
-    const ok = !sim.err;
-    log(ok ? "info" : "warn", "tx simulated", {
-      ok,
-      err: sim.err ?? null,
-      unitsConsumed: sim.unitsConsumed ?? null,
-    });
-
-    await insertTradeIndex(env, {
-      tenantId,
-      runId,
-      venue: "jupiter",
-      market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
-      side: "swap",
-      size: usedQuote.inAmount,
-      price: usedQuote.outAmount,
-      status: ok ? "simulated" : "simulate_error",
-      logKey,
-      signature: null,
-    });
-
+  // Write lastAt BEFORE sending to guarantee at-most-once execution.
+  // If send fails, we skip one interval (safe) rather than double execute.
+  if (!policy.simulateOnly) {
+    await assertLoopStillEnabled(env, log, configTenantId);
     await updateLoopState(env, tenantId, (current) => ({
       ...current,
       dca: { ...(current.dca ?? {}), lastAt: new Date().toISOString() },
     }));
-    return;
   }
 
-  await assertLoopStillEnabled(env, log, configTenantId);
-
-  // Write lastAt BEFORE sending to guarantee at-most-once execution.
-  // If the send fails, we skip one DCA interval (safe) rather than
-  // risk double-executing on crash (unsafe with real funds).
-  await updateLoopState(env, tenantId, (current) => ({
-    ...current,
-    dca: { ...(current.dca ?? {}), lastAt: new Date().toISOString() },
-  }));
-
-  const signature = await rpc.sendTransactionBase64(signedBase64, {
-    skipPreflight: policy.skipPreflight,
-    preflightCommitment: policy.commitment,
+  const executionResult = await executeSwapViaRouter({
+    env,
+    execution,
+    policy,
+    rpc,
+    jupiter,
+    quoteResponse: quote,
+    userPublicKey: wallet,
+    privyWalletId,
+    log,
+    guardEnabled: async () => {
+      await assertLoopStillEnabled(env, log, configTenantId);
+    },
   });
 
-  log("info", "tx submitted", {
-    signature,
-    lastValidBlockHeight: swap.lastValidBlockHeight,
-  });
-
-  const confirmation = await rpc.confirmSignature(signature, {
-    commitment: policy.commitment,
-  });
-  const status = confirmation.ok
-    ? (confirmation.status ?? "confirmed")
-    : "error";
-  log(confirmation.ok ? "info" : "warn", "tx confirmation", {
-    signature,
-    status,
-    err: confirmation.err ?? null,
-  });
+  if (executionResult.refreshed) {
+    log("warn", "quote refreshed due to swap 422", {
+      inAmount: executionResult.usedQuote.inAmount,
+      outAmount: executionResult.usedQuote.outAmount,
+      priceImpactPct: executionResult.usedQuote.priceImpactPct ?? 0,
+    });
+  }
 
   await insertTradeIndex(env, {
     tenantId,
     runId,
     venue: "jupiter",
-    market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
+    market: `${executionResult.usedQuote.inputMint}->${executionResult.usedQuote.outputMint}`,
     side: "swap",
-    size: usedQuote.inAmount,
-    price: usedQuote.outAmount,
-    status,
+    size: executionResult.usedQuote.inAmount,
+    price: executionResult.usedQuote.outAmount,
+    status: executionResult.status,
     logKey,
-    signature,
+    signature: executionResult.signature,
   });
+
+  if (policy.simulateOnly) {
+    await updateLoopState(env, tenantId, (current) => ({
+      ...current,
+      dca: { ...(current.dca ?? {}), lastAt: new Date().toISOString() },
+    }));
+  }
 }
 
 async function runRebalance(input: {
@@ -619,6 +590,7 @@ async function runRebalance(input: {
   jupiter: JupiterClient;
   wallet: string;
   policy: ReturnType<typeof normalizePolicy>;
+  execution?: import("./types").ExecutionConfig;
   strategy: RebalanceStrategy;
   privyWalletId?: string;
 }) {
@@ -633,6 +605,7 @@ async function runRebalance(input: {
     jupiter,
     wallet,
     policy,
+    execution,
     strategy,
     privyWalletId,
   } = input;
@@ -760,77 +733,34 @@ async function runRebalance(input: {
       return;
     }
 
-    await assertLoopStillEnabled(env, log, configTenantId);
-
-    const {
-      swap,
-      quoteResponse: usedQuote,
-      refreshed,
-    } = await swapWithRetry(jupiter, quote, wallet, policy);
-    if (refreshed) log("warn", "rebalance: quote refreshed due to swap 422");
-    if (!privyWalletId) throw new Error("missing-privy-wallet-id");
-    log("info", "signing transaction", { walletId: privyWalletId });
-    const signedBase64 = await signTransactionWithPrivyById(
+    const executionResult = await executeSwapViaRouter({
       env,
+      execution,
+      policy,
+      rpc,
+      jupiter,
+      quoteResponse: quote,
+      userPublicKey: wallet,
       privyWalletId,
-      swap.swapTransaction,
-    );
-    log("info", "transaction signed");
-
-    if (policy.simulateOnly) {
-      const sim = await rpc.simulateTransactionBase64(signedBase64, {
-        commitment: policy.commitment,
-        sigVerify: true,
-      });
-      const ok = !sim.err;
-      log(ok ? "info" : "warn", "rebalance sell simulated", {
-        ok,
-        err: sim.err ?? null,
-        unitsConsumed: sim.unitsConsumed ?? null,
-      });
-      await insertTradeIndex(env, {
-        tenantId,
-        runId,
-        venue: "jupiter",
-        market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
-        side: "rebalance_sell",
-        size: usedQuote.inAmount,
-        price: usedQuote.outAmount,
-        status: ok ? "simulated" : "simulate_error",
-        logKey,
-        signature: null,
-      });
-      return;
+      log,
+      guardEnabled: async () => {
+        await assertLoopStillEnabled(env, log, configTenantId);
+      },
+    });
+    if (executionResult.refreshed) {
+      log("warn", "rebalance: quote refreshed due to swap 422");
     }
-
-    await assertLoopStillEnabled(env, log, configTenantId);
-
-    const signature = await rpc.sendTransactionBase64(signedBase64, {
-      skipPreflight: policy.skipPreflight,
-      preflightCommitment: policy.commitment,
-    });
-    const confirmation = await rpc.confirmSignature(signature, {
-      commitment: policy.commitment,
-    });
-    const status = confirmation.ok
-      ? (confirmation.status ?? "confirmed")
-      : "error";
-    log(confirmation.ok ? "info" : "warn", "rebalance sell confirmation", {
-      signature,
-      status,
-      err: confirmation.err ?? null,
-    });
     await insertTradeIndex(env, {
       tenantId,
       runId,
       venue: "jupiter",
-      market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
+      market: `${executionResult.usedQuote.inputMint}->${executionResult.usedQuote.outputMint}`,
       side: "rebalance_sell",
-      size: usedQuote.inAmount,
-      price: usedQuote.outAmount,
-      status,
+      size: executionResult.usedQuote.inAmount,
+      price: executionResult.usedQuote.outAmount,
+      status: executionResult.status,
       logKey,
-      signature,
+      signature: executionResult.signature,
     });
     return; // rebalance sell complete
   }
@@ -890,77 +820,34 @@ async function runRebalance(input: {
     return;
   }
 
-  await assertLoopStillEnabled(env, log, configTenantId);
-
-  const {
-    swap,
-    quoteResponse: usedQuote,
-    refreshed,
-  } = await swapWithRetry(jupiter, quote, wallet, policy);
-  if (refreshed) log("warn", "rebalance: quote refreshed due to swap 422");
-  if (!privyWalletId) throw new Error("missing-privy-wallet-id");
-  log("info", "signing transaction", { walletId: privyWalletId });
-  const signedBase64 = await signTransactionWithPrivyById(
+  const executionResult = await executeSwapViaRouter({
     env,
+    execution,
+    policy,
+    rpc,
+    jupiter,
+    quoteResponse: quote,
+    userPublicKey: wallet,
     privyWalletId,
-    swap.swapTransaction,
-  );
-  log("info", "transaction signed");
-
-  if (policy.simulateOnly) {
-    const sim = await rpc.simulateTransactionBase64(signedBase64, {
-      commitment: policy.commitment,
-      sigVerify: true,
-    });
-    const ok = !sim.err;
-    log(ok ? "info" : "warn", "rebalance buy simulated", {
-      ok,
-      err: sim.err ?? null,
-      unitsConsumed: sim.unitsConsumed ?? null,
-    });
-    await insertTradeIndex(env, {
-      tenantId,
-      runId,
-      venue: "jupiter",
-      market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
-      side: "rebalance_buy",
-      size: usedQuote.inAmount,
-      price: usedQuote.outAmount,
-      status: ok ? "simulated" : "simulate_error",
-      logKey,
-      signature: null,
-    });
-    return;
+    log,
+    guardEnabled: async () => {
+      await assertLoopStillEnabled(env, log, configTenantId);
+    },
+  });
+  if (executionResult.refreshed) {
+    log("warn", "rebalance: quote refreshed due to swap 422");
   }
-
-  await assertLoopStillEnabled(env, log, configTenantId);
-
-  const signature = await rpc.sendTransactionBase64(signedBase64, {
-    skipPreflight: policy.skipPreflight,
-    preflightCommitment: policy.commitment,
-  });
-  const confirmation = await rpc.confirmSignature(signature, {
-    commitment: policy.commitment,
-  });
-  const status = confirmation.ok
-    ? (confirmation.status ?? "confirmed")
-    : "error";
-  log(confirmation.ok ? "info" : "warn", "rebalance buy confirmation", {
-    signature,
-    status,
-    err: confirmation.err ?? null,
-  });
   await insertTradeIndex(env, {
     tenantId,
     runId,
     venue: "jupiter",
-    market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
+    market: `${executionResult.usedQuote.inputMint}->${executionResult.usedQuote.outputMint}`,
     side: "rebalance_buy",
-    size: usedQuote.inAmount,
-    price: usedQuote.outAmount,
-    status,
+    size: executionResult.usedQuote.inAmount,
+    price: executionResult.usedQuote.outAmount,
+    status: executionResult.status,
     logKey,
-    signature,
+    signature: executionResult.signature,
   });
 }
 

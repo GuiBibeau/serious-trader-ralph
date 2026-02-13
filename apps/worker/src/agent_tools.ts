@@ -1,13 +1,12 @@
 import type { ChatTool, ChatToolCall } from "./agent_llm";
 import { getLoopConfig } from "./config";
+import { executeSwapViaRouter } from "./execution/router";
 import type { JupiterClient } from "./jupiter";
 import { addReflection, appendObservation, updateThesis } from "./memory";
 import type { NormalizedPolicy } from "./policy";
 import { enforcePolicy, normalizePolicy } from "./policy";
-import { signTransactionWithPrivyById } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import type { SolanaRpc } from "./solana_rpc";
-import { swapWithRetry } from "./swap";
 import type { TradeIndexResult } from "./trade_index";
 import { insertTradeIndex, listTrades } from "./trade_index";
 import type { AgentMemory, AgentStrategy, Env, MarketSnapshot } from "./types";
@@ -31,6 +30,7 @@ export type AgentToolRuntime = {
   jupiter: JupiterClient;
   wallet: string;
   policy: NormalizedPolicy;
+  execution?: import("./types").ExecutionConfig;
   strategy: AgentStrategy;
   privyWalletId?: string;
   memory: AgentMemory;
@@ -524,103 +524,47 @@ const TOOLS: ToolDef[] = [
         };
       }
 
-      await assertLoopStillEnabled(rt.env, rt.log, rt.configTenantId);
+      const executionResult = await executeSwapViaRouter({
+        env: rt.env,
+        execution: rt.execution,
+        policy: rt.policy,
+        rpc: rt.rpc,
+        jupiter: rt.jupiter,
+        quoteResponse: quote,
+        userPublicKey: rt.wallet,
+        privyWalletId: rt.privyWalletId,
+        log: rt.log,
+        guardEnabled: async () => {
+          await assertLoopStillEnabled(rt.env, rt.log, rt.configTenantId);
+        },
+      });
 
-      const {
-        swap,
-        quoteResponse: usedQuote,
-        refreshed,
-      } = await swapWithRetry(rt.jupiter, quote, rt.wallet, rt.policy);
-      if (refreshed) {
+      if (executionResult.refreshed) {
         rt.log("warn", "agent: quote refreshed due to swap 422", {
-          inAmount: usedQuote.inAmount,
-          outAmount: usedQuote.outAmount,
+          inAmount: executionResult.usedQuote.inAmount,
+          outAmount: executionResult.usedQuote.outAmount,
         });
       }
-
-      if (!rt.privyWalletId) throw new Error("missing-privy-wallet-id");
-      rt.log("info", "signing transaction", { walletId: rt.privyWalletId });
-      const signedBase64 = await signTransactionWithPrivyById(
-        rt.env,
-        rt.privyWalletId,
-        swap.swapTransaction,
-      );
-      rt.log("info", "transaction signed");
-
-      if (rt.policy.simulateOnly) {
-        const sim = await rt.rpc.simulateTransactionBase64(signedBase64, {
-          commitment: rt.policy.commitment,
-          sigVerify: true,
-        });
-        const ok = !sim.err;
-        rt.log(ok ? "info" : "warn", "agent trade simulated", {
-          ok,
-          err: sim.err ?? null,
-          unitsConsumed: sim.unitsConsumed ?? null,
-        });
-        await insertTradeIndex(rt.env, {
-          tenantId: rt.tenantId,
-          runId: rt.runId,
-          venue: "jupiter",
-          market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
-          side: "agent_swap",
-          size: usedQuote.inAmount,
-          price: usedQuote.outAmount,
-          status: ok ? "simulated" : "simulate_error",
-          logKey: rt.logKey,
-          signature: null,
-          reasoning,
-        });
-        return {
-          ok: true,
-          status: ok ? "simulated" : "simulate_error",
-          err: sim.err ?? null,
-        };
-      }
-
-      await assertLoopStillEnabled(rt.env, rt.log, rt.configTenantId);
-
-      const signature = await rt.rpc.sendTransactionBase64(signedBase64, {
-        skipPreflight: rt.policy.skipPreflight,
-        preflightCommitment: rt.policy.commitment,
-      });
-
-      rt.log("info", "agent tx submitted", {
-        signature,
-        lastValidBlockHeight: swap.lastValidBlockHeight,
-      });
-
-      const confirmation = await rt.rpc.confirmSignature(signature, {
-        commitment: rt.policy.commitment,
-      });
-      const status = confirmation.ok
-        ? (confirmation.status ?? "confirmed")
-        : "error";
-      rt.log(confirmation.ok ? "info" : "warn", "agent tx confirmation", {
-        signature,
-        status,
-        err: confirmation.err ?? null,
-      });
 
       await insertTradeIndex(rt.env, {
         tenantId: rt.tenantId,
         runId: rt.runId,
         venue: "jupiter",
-        market: `${usedQuote.inputMint}->${usedQuote.outputMint}`,
+        market: `${executionResult.usedQuote.inputMint}->${executionResult.usedQuote.outputMint}`,
         side: "agent_swap",
-        size: usedQuote.inAmount,
-        price: usedQuote.outAmount,
-        status,
+        size: executionResult.usedQuote.inAmount,
+        price: executionResult.usedQuote.outAmount,
+        status: executionResult.status,
         logKey: rt.logKey,
-        signature,
+        signature: executionResult.signature,
         reasoning,
       });
 
       return {
-        ok: confirmation.ok,
-        signature,
-        status,
-        err: confirmation.err ?? null,
+        ok: executionResult.status !== "error",
+        signature: executionResult.signature,
+        status: executionResult.status,
+        err: executionResult.err ?? null,
       };
     },
   },

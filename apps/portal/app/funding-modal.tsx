@@ -1,6 +1,5 @@
 "use client";
 
-import { useFundWallet } from "@privy-io/react-auth/solana";
 import { AnimatePresence, motion } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -17,10 +16,7 @@ export function FundingModal({
   open,
   onClose,
 }: FundingModalProps) {
-  const { fundWallet } = useFundWallet();
   const [copied, setCopied] = useState(false);
-  const [fundFailed, setFundFailed] = useState(false);
-  const [funding, setFunding] = useState(false);
 
   // Stable ref for onClose — avoids listener churn in the keydown effect (Rule 5.6)
   const onCloseRef = useRef(onClose);
@@ -45,19 +41,6 @@ export function FundingModal({
       // Clipboard API not available
     }
   }, [walletAddress]);
-
-  async function handleBuyWithCard() {
-    setFunding(true);
-    try {
-      await fundWallet({ address: walletAddress });
-    } catch {
-      // If Privy rejects the address (e.g. non-embedded wallet),
-      // hide the button permanently for this session.
-      setFundFailed(true);
-    } finally {
-      setFunding(false);
-    }
-  }
 
   return (
     <AnimatePresence>
@@ -91,19 +74,16 @@ export function FundingModal({
             </div>
 
             <div className="p-6">
-              {!fundFailed && (
-                <button
-                  className={`${BTN_PRIMARY} w-full`}
-                  onClick={() => void handleBuyWithCard()}
-                  disabled={funding}
-                  type="button"
-                >
-                  {funding ? "Loading…" : "Buy with card"}
-                </button>
-              )}
+              <button
+                className={`${BTN_PRIMARY} w-full opacity-60 cursor-not-allowed`}
+                disabled
+                type="button"
+              >
+                Buy with card
+              </button>
 
               <p className="text-muted text-[0.85rem] text-center mt-5 mb-1.5">
-                {fundFailed ? "Send directly" : "— or send directly —"}
+                Send directly
               </p>
 
               <div className="flex items-center gap-2.5 px-4 py-3 rounded-md border border-border bg-paper">
@@ -111,7 +91,7 @@ export function FundingModal({
                   {walletAddress}
                 </code>
                 <button
-                  className={`${BTN_SECONDARY} !px-4 !py-2 whitespace-nowrap`}
+                  className={`${BTN_SECONDARY} !px-4 !py-2 whitespace-nowrap w-[6.5rem] justify-center`}
                   onClick={() => void handleCopy()}
                   type="button"
                 >

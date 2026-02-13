@@ -2,6 +2,10 @@ export type LoopConfig = {
   enabled: boolean;
   policy?: LoopPolicy;
   strategy?: StrategyConfig;
+  validation?: LoopValidationConfig;
+  autotune?: LoopAutotuneConfig;
+  execution?: ExecutionConfig;
+  dataSources?: DataSourcesConfig;
   updatedAt?: string;
 };
 
@@ -20,6 +24,52 @@ export type LoopPolicy = {
   commitment?: "processed" | "confirmed" | "finalized";
   // Keep some SOL to pay fees / rent; expressed in lamports.
   minSolReserveLamports?: string;
+};
+
+export type ValidationProfile = "balanced" | "strict" | "loose";
+export type ValidationGateMode = "hard" | "soft";
+
+export type LoopValidationConfig = {
+  enabled?: boolean;
+  lookbackDays?: number;
+  profile?: ValidationProfile;
+  gateMode?: ValidationGateMode;
+  minTrades?: number;
+  autoEnableOnPass?: boolean;
+  overrideAllowed?: boolean;
+};
+
+export type LoopAutotuneConfig = {
+  enabled?: boolean;
+  mode?: "conservative" | "off";
+  cooldownHours?: number;
+  maxChangePctPerTune?: number;
+  rails?: {
+    dca?: {
+      amountMin?: string;
+      amountMax?: string;
+      everyMinutesMin?: number;
+      everyMinutesMax?: number;
+    };
+    rebalance?: {
+      thresholdPctMin?: number;
+      thresholdPctMax?: number;
+    };
+  };
+};
+
+export type ExecutionConfig = {
+  // Built-ins: "jupiter", "jito_bundle". Custom adapters can be registered
+  // at runtime for new venues / trade types.
+  adapter?: string;
+  params?: Record<string, unknown>;
+};
+
+export type DataSourcesConfig = {
+  priority?: string[];
+  cacheTtlMinutes?: number;
+  fixturePattern?: "uptrend" | "downtrend" | "whipsaw";
+  providers?: Record<string, unknown>;
 };
 
 export type DcaStrategy = {
@@ -72,11 +122,20 @@ export type AgentStrategy = {
   quoteDecimals?: number;
 };
 
+export type PredictionMarketStrategy = {
+  type: "prediction_market";
+  venue: string;
+  marketId: string;
+  side?: "yes" | "no";
+  maxStakeAtomic?: string;
+};
+
 export type StrategyConfig =
   | { type: "noop" }
   | DcaStrategy
   | RebalanceStrategy
-  | AgentStrategy;
+  | AgentStrategy
+  | PredictionMarketStrategy;
 
 export type LoopState = {
   dca?: {
@@ -138,6 +197,25 @@ export type MarketSnapshot = {
   baseAllocationPct: number;
 };
 
+export type StrategyLifecycleState =
+  | "candidate"
+  | "validating"
+  | "validated"
+  | "active"
+  | "watch"
+  | "suspended";
+
+export type StrategyRuntimeStateRow = {
+  tenantId: string;
+  lifecycleState: StrategyLifecycleState;
+  activeStrategyHash: string | null;
+  lastValidationId: number | null;
+  consecutiveFailures: number;
+  lastTunedAt: string | null;
+  nextRevalidateAt: string | null;
+  updatedAt: string;
+};
+
 export type Env = {
   WAITLIST_DB: D1Database;
   CONFIG_KV: KVNamespace;
@@ -160,4 +238,12 @@ export type Env = {
   ZAI_API_KEY?: string;
   ZAI_BASE_URL?: string;
   ZAI_MODEL?: string;
+  BILLING_MERCHANT_WALLET?: string;
+  BILLING_STABLE_MINT?: string;
+  BILLING_RPC_ENDPOINT?: string;
+  BALANCE_RPC_ENDPOINT?: string;
+  BIRDEYE_API_KEY?: string;
+  DUNE_API_KEY?: string;
+  DUNE_QUERY_ID?: string;
+  DUNE_API_URL?: string;
 };
