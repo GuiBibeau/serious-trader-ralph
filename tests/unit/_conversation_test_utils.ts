@@ -1,4 +1,8 @@
-import type { Env, LoopConfig, StrategyRuntimeStateRow } from "../../apps/worker/src/types";
+import type {
+  Env,
+  LoopConfig,
+  StrategyRuntimeStateRow,
+} from "../../apps/worker/src/types";
 
 type ConversationRow = {
   id: number;
@@ -40,7 +44,9 @@ type CreateEnvOptions = {
   trades?: unknown[];
 };
 
-function cloneValidationRow(row: ValidationRow | null | undefined): ValidationRow | null {
+function cloneValidationRow(
+  row: ValidationRow | null | undefined,
+): ValidationRow | null {
   if (!row) return null;
   return {
     ...row,
@@ -63,8 +69,12 @@ export function createConversationTestEnv({
   const now = new Date().toISOString();
 
   const latestValidationRow = cloneValidationRow(latestValidation);
-  const latestValidationForHashRow = cloneValidationRow(latestValidationForHash);
-  const validationRunsRows = validationRuns.map((row) => cloneValidationRow(row)).filter(Boolean) as ValidationRow[];
+  const latestValidationForHashRow = cloneValidationRow(
+    latestValidationForHash,
+  );
+  const validationRunsRows = validationRuns
+    .map((row) => cloneValidationRow(row))
+    .filter(Boolean) as ValidationRow[];
   const strategyEventsRows = strategyEvents.slice();
   const tradeRows = trades.slice();
 
@@ -83,13 +93,19 @@ export function createConversationTestEnv({
               return runtimeState;
             }
 
-            if (sql.includes("FROM strategy_validations") && sql.includes("strategy_hash")) {
+            if (
+              sql.includes("FROM strategy_validations") &&
+              sql.includes("strategy_hash")
+            ) {
               return latestValidationForHashRow;
             }
             if (sql.includes("FROM strategy_validations")) {
               if (sql.includes("LIMIT ?2")) {
                 const limit = Number(args[1] ?? 0);
-                return (validationRunsRows.slice(0, limit > 0 ? limit : validationRunsRows.length) as unknown);
+                return validationRunsRows.slice(
+                  0,
+                  limit > 0 ? limit : validationRunsRows.length,
+                ) as unknown;
               }
               return latestValidationRow;
             }
@@ -98,6 +114,15 @@ export function createConversationTestEnv({
             }
             if (sql.includes("FROM trade_index")) {
               return null;
+            }
+            if (sql.includes("FROM bot_run_state")) {
+              return null;
+            }
+            if (
+              sql.includes("FROM bot_steering_messages") &&
+              sql.includes("COUNT(*)")
+            ) {
+              return { pendingCount: 0 };
             }
             if (sql.includes("FROM bot_conversations")) {
               return {
@@ -117,16 +142,25 @@ export function createConversationTestEnv({
           };
 
           const all = async () => {
-            if (sql.includes("FROM strategy_validations") && sql.includes("LIMIT ?2")) {
+            if (
+              sql.includes("FROM strategy_validations") &&
+              sql.includes("LIMIT ?2")
+            ) {
               const limit = Math.max(1, Math.min(200, Number(args[1] ?? 0)));
               return {
-                results: validationRunsRows.slice(0, limit) as Record<string, unknown>[],
+                results: validationRunsRows.slice(0, limit) as Record<
+                  string,
+                  unknown
+                >[],
               };
             }
             if (sql.includes("FROM strategy_events")) {
               const limit = Math.max(1, Math.min(200, Number(args[1] ?? 200)));
               return {
-                results: strategyEventsRows.slice(0, limit) as Record<string, unknown>[],
+                results: strategyEventsRows.slice(0, limit) as Record<
+                  string,
+                  unknown
+                >[],
               };
             }
             if (sql.includes("FROM trade_index")) {
@@ -167,8 +201,7 @@ export function createConversationTestEnv({
                 tenantId: tenant,
                 role: String(args[1] ?? "user") as ConversationRow["role"],
                 actor: String(args[2] ?? "user") as ConversationRow["actor"],
-                question:
-                  typeof args[3] === "string" ? args[3] : null,
+                question: typeof args[3] === "string" ? args[3] : null,
                 answer: typeof args[4] === "string" ? args[4] : null,
                 model: typeof args[5] === "string" ? args[5] : null,
                 sourcesJson: typeof args[6] === "string" ? args[6] : null,
@@ -178,7 +211,10 @@ export function createConversationTestEnv({
               conversationRows.push(row);
               return { meta: { last_row_id: row.id } };
             }
-            if (sql.includes("INSERT INTO loop_configs") || sql.includes("INSERT INTO strategy_runtime_state")) {
+            if (
+              sql.includes("INSERT INTO loop_configs") ||
+              sql.includes("INSERT INTO strategy_runtime_state")
+            ) {
               return {};
             }
             if (sql.includes("INSERT INTO strategy_events")) {
@@ -195,10 +231,9 @@ export function createConversationTestEnv({
         all: async () => {
           const fallback = [String(sql), "without bind call"];
           return {
-            results:
-              fallback[0].includes("FROM strategy_validations")
-                ? validationRunsRows.slice(0, 200)
-                : [],
+            results: fallback[0].includes("FROM strategy_validations")
+              ? validationRunsRows.slice(0, 200)
+              : [],
           };
         },
         first: async () => {
@@ -217,6 +252,8 @@ export function createConversationTestEnv({
       put: async () => {},
     } as never,
     BOT_LOOP: {} as never,
+    TRADING_ORCHESTRATOR: {} as never,
+    BACKTEST_QUEUE: {} as never,
     ...(latestValidationRow ? {} : {}),
   } as Env;
 }

@@ -74,7 +74,13 @@ export async function listFeaturePoints(
         )
         .all()
     : await env.WAITLIST_DB.prepare(sql)
-        .bind(input.instrument, input.feature, input.startTs, input.endTs, limit)
+        .bind(
+          input.instrument,
+          input.feature,
+          input.startTs,
+          input.endTs,
+          limit,
+        )
         .all();
 
   return (result.results ?? []).map((row) => {

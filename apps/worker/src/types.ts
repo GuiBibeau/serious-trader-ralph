@@ -96,14 +96,12 @@ export type RebalanceStrategy = {
 
 export type AgentStrategy = {
   type: "agent";
-  /** LLM model override — falls back to ZAI_MODEL env var */
+  /** Optional model override for the bot's configured inference provider */
   model?: string;
   /** User-provided mandate — high-level instructions the agent must follow */
   mandate?: string;
   /** Minimum confidence required to execute a trade */
   minConfidence?: "low" | "medium" | "high";
-  /** Max trades per day (safety cap) */
-  maxTradesPerDay?: number;
   /** Allowed actions: which tools the agent can use */
   allowedActions?: ("trade" | "update_thesis" | "log_observation" | "skip")[];
   /** Tool loop: max number of LLM/tool steps per tick */
@@ -143,6 +141,16 @@ export type LoopState = {
   };
   agent?: {
     lastTickAt?: string;
+    inferenceBlockedAt?: string;
+    inferenceBlockedReason?: string;
+    providerModel?: string;
+    providerBaseUrlHash?: string;
+    providerPingAgeMs?: number;
+    providerResolutionSource?: "bot_config";
+    compactedAt?: string;
+    compactedCount?: number;
+    messageWindowCount?: number;
+    steeringLastAppliedId?: number;
   };
 };
 
@@ -153,12 +161,31 @@ export type AgentMemory = {
   tradesProposedToday: number;
   lastTradeDate: string;
   updatedAt: string;
+  compaction?: AgentMemoryCompaction;
 };
 
 export type AgentObservation = {
   ts: string;
   category: "market" | "pattern" | "risk" | "opportunity";
   content: string;
+};
+
+export type AgentMemoryCompaction = {
+  updatedAt: string;
+  compactedCount: number;
+  messageWindowCount: number;
+  summaries: AgentCompactionSummary[];
+};
+
+export type AgentCompactionSummary = {
+  generatedAt: string;
+  source: "deterministic";
+  compactedMessages: number;
+  facts: string[];
+  decisions: string[];
+  openThreads: string[];
+  riskFlags: string[];
+  pendingSteering: string[];
 };
 
 export type AgentDecision =
@@ -220,6 +247,8 @@ export type Env = {
   WAITLIST_DB: D1Database;
   CONFIG_KV: KVNamespace;
   BOT_LOOP: DurableObjectNamespace;
+  TRADING_ORCHESTRATOR?: DurableObjectNamespace;
+  BACKTEST_QUEUE: DurableObjectNamespace;
   // Optional while R2 is not enabled on the account; logs will fall back to console only.
   LOGS_BUCKET?: R2Bucket;
   ADMIN_TOKEN?: string;
@@ -246,4 +275,23 @@ export type Env = {
   DUNE_API_KEY?: string;
   DUNE_QUERY_ID?: string;
   DUNE_API_URL?: string;
+  FRED_API_KEY?: string;
+  EIA_API_KEY?: string;
+  INFERENCE_ENCRYPTION_KEY_B64?: string;
+  X402_NETWORK?: string;
+  X402_PAY_TO?: string;
+  X402_ASSET_MINT?: string;
+  X402_MAX_TIMEOUT_SECONDS?: string;
+  X402_MARKET_SNAPSHOT_PRICE_USD?: string;
+  X402_MARKET_SNAPSHOT_V2_PRICE_USD?: string;
+  X402_MARKET_TOKEN_BALANCE_PRICE_USD?: string;
+  X402_MARKET_JUPITER_QUOTE_PRICE_USD?: string;
+  X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD?: string;
+  X402_MARKET_OHLCV_PRICE_USD?: string;
+  X402_MARKET_INDICATORS_PRICE_USD?: string;
+  X402_MACRO_SIGNALS_PRICE_USD?: string;
+  X402_MACRO_FRED_INDICATORS_PRICE_USD?: string;
+  X402_MACRO_ETF_FLOWS_PRICE_USD?: string;
+  X402_MACRO_STABLECOIN_HEALTH_PRICE_USD?: string;
+  X402_MACRO_OIL_ANALYTICS_PRICE_USD?: string;
 };

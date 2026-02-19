@@ -4,8 +4,15 @@ import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
 
 function normalizeConfirmationStatus(
   status: string | undefined,
-): Extract<ExecuteSwapResult["status"], "processed" | "confirmed" | "finalized" | "error"> {
-  if (status === "processed" || status === "confirmed" || status === "finalized") {
+): Extract<
+  ExecuteSwapResult["status"],
+  "processed" | "confirmed" | "finalized" | "error"
+> {
+  if (
+    status === "processed" ||
+    status === "confirmed" ||
+    status === "finalized"
+  ) {
     return status;
   }
   return "error";
@@ -38,12 +45,11 @@ export async function executeJupiterSwap(
 
   if (guardEnabled) await guardEnabled();
 
-  const { swap, quoteResponse: usedQuote, refreshed } = await swapWithRetry(
-    jupiter,
-    quoteResponse,
-    userPublicKey,
-    policy,
-  );
+  const {
+    swap,
+    quoteResponse: usedQuote,
+    refreshed,
+  } = await swapWithRetry(jupiter, quoteResponse, userPublicKey, policy);
 
   if (!privyWalletId) {
     throw new Error("missing-privy-wallet-id");

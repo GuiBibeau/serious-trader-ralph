@@ -1,4 +1,8 @@
-import type { HistoricalBarsRequest, MarketDataAdapter, PriceBar } from "./types";
+import type {
+  HistoricalBarsRequest,
+  MarketDataAdapter,
+  PriceBar,
+} from "./types";
 import { instrumentKey } from "./types";
 
 function clampPattern(pattern: unknown): "uptrend" | "downtrend" | "whipsaw" {
@@ -7,7 +11,11 @@ function clampPattern(pattern: unknown): "uptrend" | "downtrend" | "whipsaw" {
   return "uptrend";
 }
 
-function syntheticClose(i: number, total: number, pattern: "uptrend" | "downtrend" | "whipsaw"): number {
+function syntheticClose(
+  i: number,
+  total: number,
+  pattern: "uptrend" | "downtrend" | "whipsaw",
+): number {
   const x = i / Math.max(1, total - 1);
   if (pattern === "uptrend") {
     return 100 * (1 + 0.25 * x + 0.01 * Math.sin(i / 14));

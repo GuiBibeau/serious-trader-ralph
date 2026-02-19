@@ -10,7 +10,9 @@
 
 type JsonRecord = Record<string, unknown>;
 
-const EDGE_API_BASE = (process.env.EDGE_API_BASE || "http://127.0.0.1:8888").replace(/\/+$/, "");
+const EDGE_API_BASE = (
+  process.env.EDGE_API_BASE || "http://127.0.0.1:8888"
+).replace(/\/+$/, "");
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const BOT_ID = process.env.BOT_ID || "";
 
@@ -21,7 +23,10 @@ if (!BOT_ID) {
   throw new Error("Missing BOT_ID");
 }
 
-async function adminPost(path: string, body: JsonRecord = {}): Promise<JsonRecord> {
+async function adminPost(
+  path: string,
+  body: JsonRecord = {},
+): Promise<JsonRecord> {
   const response = await fetch(`${EDGE_API_BASE}${path}`, {
     method: "POST",
     headers: {
@@ -32,7 +37,10 @@ async function adminPost(path: string, body: JsonRecord = {}): Promise<JsonRecor
   });
   const payload = (await response.json().catch(() => ({}))) as JsonRecord;
   if (!response.ok) {
-    const message = typeof payload.error === "string" ? payload.error : `http-${response.status}`;
+    const message =
+      typeof payload.error === "string"
+        ? payload.error
+        : `http-${response.status}`;
     throw new Error(message);
   }
   return payload;

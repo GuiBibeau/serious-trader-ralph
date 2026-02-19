@@ -12,7 +12,6 @@
     "type": "agent",
     "mandate": "Trade SOL vs USDC cautiously. Prefer no trade over a bad trade. Keep a clear thesis and log observations.",
     "minConfidence": "medium",
-    "maxTradesPerDay": 2,
     "maxStepsPerTick": 4,
     "maxToolCallsPerStep": 4,
     "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",

@@ -1,25 +1,38 @@
-import { describeStrategyState } from "../strategy_validation/descriptors";
+import { countBacktestRunsByStatus, listBacktestRuns } from "../backtests/repo";
 import {
-  getRuntimeState,
-  getLatestValidation,
-  getLatestValidationForHash,
-  listValidationRuns,
-  listStrategyEvents,
-  type StrategyValidationRun,
-} from "../strategy_validation/repo";
+  countPendingSteeringMessages,
+  getBotRunState,
+} from "../agents_runtime/runtime_repo";
+import type { BotLogEvent } from "../bot_events";
+import { listRecentBotEvents } from "../bot_events";
 import { getLoopConfig } from "../config";
 import { normalizePolicy } from "../policy";
-import { listRecentBotEvents } from "../bot_events";
-import { listTrades } from "../trade_index";
-import { evaluateStartGate, normalizeValidationConfig } from "../strategy_validation/engine";
+import { describeStrategyState } from "../strategy_validation/descriptors";
+import {
+  evaluateStartGate,
+  normalizeValidationConfig,
+} from "../strategy_validation/engine";
 import { computeStrategyHash } from "../strategy_validation/hash";
-import type { Env, StrategyRuntimeStateRow } from "../types";
-import type { BotLogEvent } from "../bot_events";
 import type { StrategyEventRow } from "../strategy_validation/repo";
-import type { TelemetrySnapshot } from "./types";
+import {
+  getLatestValidation,
+  getLatestValidationForHash,
+  getRuntimeState,
+  listStrategyEvents,
+  listValidationRuns,
+  type StrategyValidationRun,
+} from "../strategy_validation/repo";
 import type { TradeIndexResult } from "../trade_index";
+import { listTrades } from "../trade_index";
+import type { Env, StrategyRuntimeStateRow } from "../types";
+import type { TelemetrySnapshot } from "./types";
 
-function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+function clampInt(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(n)));
@@ -31,7 +44,9 @@ function clampLimit(rawLimit: unknown, fallback: number, max: number): number {
 }
 
 function clampIncludeSource(value: string | undefined): string {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
   const allowed = new Set([
     "bot-events",
     "strategy-events",
@@ -64,13 +79,23 @@ export async function buildConversationContext(
   options: ContextQueryOptions = {},
 ): Promise<ConversationContext> {
   const config = await getLoopConfig(env, tenantId);
-  const runtimeState: StrategyRuntimeStateRow = await getRuntimeState(env, tenantId);
+  const runtimeState: StrategyRuntimeStateRow = await getRuntimeState(
+    env,
+    tenantId,
+  );
   const latestValidation = await getLatestValidation(env, tenantId);
 
   const rawIncludeSources =
     options.includeSources && options.includeSources.length > 0
       ? options.includeSources
-      : ["bot-events", "strategy-events", "validation-runs", "trades", "runtime", "config"];
+      : [
+          "bot-events",
+          "strategy-events",
+          "validation-runs",
+          "trades",
+          "runtime",
+          "config",
+        ];
   const includeSources = new Set(
     rawIncludeSources
       .map((source) => clampIncludeSource(source))
@@ -80,7 +105,8 @@ export async function buildConversationContext(
   const includeBotEvents = includeSources.has("bot-events");
   const includeStrategyEvents = includeSources.has("strategy-events");
   const includeTrades = includeSources.has("trades");
-  const includeValidation = includeSources.has("validation-runs") || includeSources.has("runtime");
+  const includeValidation =
+    includeSources.has("validation-runs") || includeSources.has("runtime");
 
   const botEventsLimit = clampLimit(
     options.limit?.botEvents,
@@ -106,9 +132,10 @@ export async function buildConversationContext(
   const botEventsPromise: Promise<BotLogEvent[]> = includeBotEvents
     ? listRecentBotEvents(env, { tenantId, limit: botEventsLimit })
     : Promise.resolve([]);
-  const strategyEventsPromise: Promise<StrategyEventRow[]> = includeStrategyEvents
-    ? listStrategyEvents(env, tenantId, strategyEventsLimit)
-    : Promise.resolve([]);
+  const strategyEventsPromise: Promise<StrategyEventRow[]> =
+    includeStrategyEvents
+      ? listStrategyEvents(env, tenantId, strategyEventsLimit)
+      : Promise.resolve([]);
   const tradePromise: Promise<TradeIndexResult[]> = includeTrades
     ? listTrades(env, tenantId, tradesLimit)
     : Promise.resolve([]);
@@ -116,17 +143,26 @@ export async function buildConversationContext(
     ? listValidationRuns(env, tenantId, validationLimit)
     : Promise.resolve([]);
 
-  const [botEvents, strategyEvents, trades, validationRuns] = await Promise.all([
-    botEventsPromise,
-    strategyEventsPromise,
-    tradePromise,
-    validationPromise,
+  const [botEvents, strategyEvents, trades, validationRuns] = await Promise.all(
+    [botEventsPromise, strategyEventsPromise, tradePromise, validationPromise],
+  );
+
+  const [runningBacktests, latestBacktests, runState, steeringPendingCount] =
+    await Promise.all([
+    countBacktestRunsByStatus(env, tenantId, ["queued", "running"]).catch(
+      () => 0,
+    ),
+    listBacktestRuns(env, tenantId, { limit: 20 }).catch(() => []),
+    getBotRunState(env, tenantId).catch(() => null),
+    countPendingSteeringMessages(env, tenantId).catch(() => 0),
   ]);
 
   const normalizedPolicy = normalizePolicy(config.policy);
   const strategyType = config.strategy?.type;
   const strategy =
-    strategyType && typeof config.strategy === "object" && !Array.isArray(config.strategy)
+    strategyType &&
+    typeof config.strategy === "object" &&
+    !Array.isArray(config.strategy)
       ? config.strategy
       : { type: "noop" as const };
   const strategyDescriptor = describeStrategyState({
@@ -139,11 +175,19 @@ export async function buildConversationContext(
   const validationCfg = normalizeValidationConfig(config.validation);
   const startGateInput = await (() => {
     if (strategyType === "noop") {
-      return Promise.resolve({ ok: true, overrideAllowed: false, strategyHash: undefined });
+      return Promise.resolve({
+        ok: true,
+        overrideAllowed: false,
+        strategyHash: undefined,
+      });
     }
 
     if (!strategyType || strategyType === "noop") {
-      return Promise.resolve({ ok: true, overrideAllowed: false, strategyHash: undefined });
+      return Promise.resolve({
+        ok: true,
+        overrideAllowed: false,
+        strategyHash: undefined,
+      });
     }
 
     return (async () => {
@@ -193,6 +237,32 @@ export async function buildConversationContext(
       strategyHash: (gate as { strategyHash?: string }).strategyHash,
       overrideAllowed: gate.overrideAllowed,
     },
+    backtests: {
+      runningCount: runningBacktests,
+      latestRuns: latestBacktests,
+    },
+    agentRun: {
+      state: runState?.state ?? "idle",
+      blockedReason: runState?.blockedReason ?? null,
+      currentRunId: runState?.currentRunId ?? null,
+      lastTickAt: runState?.lastTickAt ?? null,
+      nextTickAt: runState?.nextTickAt ?? null,
+      provider: {
+        baseUrlHash: runState?.providerBaseUrlHash ?? null,
+        model: runState?.providerModel ?? null,
+        pingAgeMs: runState?.providerPingAgeMs ?? null,
+        resolutionSource: runState?.resolutionSource ?? null,
+      },
+      steering: {
+        pendingCount: steeringPendingCount,
+        lastAppliedId: runState?.steeringLastAppliedId ?? null,
+      },
+      context: {
+        compactedAt: runState?.compactedAt ?? null,
+        compactedCount: runState?.compactedCount ?? 0,
+        messageWindowCount: runState?.messageWindowCount ?? 0,
+      },
+    },
   };
 
   return { telemetry, includeSources };
@@ -207,7 +277,9 @@ export function summarizeLatestValidation(
   return `${validation.status.toUpperCase()} status=${validation.status} (${validation.profile}, ${validation.lookbackDays}d); trades=${metrics.tradeCount}, net=${metrics.netReturnPct.toFixed(2)}%, DD=${metrics.maxDrawdownPct.toFixed(2)}%, PF=${metrics.profitFactor.toFixed(2)}`;
 }
 
-export function maskSensitiveSources(context: TelemetrySnapshot): TelemetrySnapshot {
+export function maskSensitiveSources(
+  context: TelemetrySnapshot,
+): TelemetrySnapshot {
   return {
     ...context,
     config: {
@@ -215,7 +287,9 @@ export function maskSensitiveSources(context: TelemetrySnapshot): TelemetrySnaps
       execution: context.config.execution
         ? {
             ...context.config.execution,
-            params: context.config.execution.params ? { ...context.config.execution.params } : undefined,
+            params: context.config.execution.params
+              ? { ...context.config.execution.params }
+              : undefined,
           }
         : context.config.execution,
     },

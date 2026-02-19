@@ -1,11 +1,11 @@
 import type {
+  AgentStrategy,
+  DcaStrategy,
   LoopConfig,
+  PredictionMarketStrategy,
   RebalanceStrategy,
   StrategyConfig,
   StrategyRuntimeStateRow,
-  DcaStrategy,
-  AgentStrategy,
-  PredictionMarketStrategy,
 } from "../types";
 import type { StrategyValidationRun } from "./repo";
 
@@ -52,7 +52,7 @@ function registerBuiltInDescriptors() {
       ];
       if (latestValidation?.metrics) {
         bullets.push(
-          `latest validation: ${validationStatus} (${safeNumber(latestValidation.metrics.netReturnPct, 0).toFixed(2)}% net)` ,
+          `latest validation: ${validationStatus} (${safeNumber(latestValidation.metrics.netReturnPct, 0).toFixed(2)}% net)`,
         );
       }
       if (status !== "candidate") {
@@ -69,7 +69,8 @@ function registerBuiltInDescriptors() {
     describe({ strategy, runtimeState, latestValidation }) {
       const rebalance = strategy as RebalanceStrategy;
       const targetBasePct = safeNumber(rebalance.targetBasePct, 0.5) * 100;
-      const thresholdPct = safeNumber(rebalance.thresholdPct ?? 0.01, 0.01) * 100;
+      const thresholdPct =
+        safeNumber(rebalance.thresholdPct ?? 0.01, 0.01) * 100;
       const status = runtimeState?.lifecycleState ?? "candidate";
       const validationStatus = latestValidation?.status ?? "pending";
       const bullets = [
@@ -104,7 +105,6 @@ function registerBuiltInDescriptors() {
         headline: "Agent strategy",
         bullets: [
           `mandate: ${mandate}`,
-          `max trades/day: ${safeNumber(agent.maxTradesPerDay, 5)}`,
           `lifecycle: ${status}`,
         ],
       };

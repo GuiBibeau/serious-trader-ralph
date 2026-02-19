@@ -1,6 +1,7 @@
 import { runAgentTick } from "./agent";
 import { getLoopConfig } from "./config";
 import { executeSwapViaRouter } from "./execution/router";
+import type { ProviderSnapshot } from "./inference_provider";
 import { JupiterClient } from "./jupiter";
 import { acquireLoopLock, releaseLoopLock } from "./lock";
 import { makeLogKey, writeJsonl } from "./logs";
@@ -193,7 +194,21 @@ export async function runAutopilotTickForTenant(
   ctx: ExecutionContext,
   input: TenantTickInput,
   reason: "cron" | "manual" = "cron",
-  opts?: { skipLock?: boolean },
+  opts?: {
+    skipLock?: boolean;
+    providerSnapshot?: ProviderSnapshot;
+    steering?: {
+      pullCheckpointMessages?: () => Promise<
+        Array<{ id: number; message: string }>
+      >;
+      markApplied?: (ids: number[], runId: string) => Promise<void>;
+    };
+    onContextCompaction?: (input: {
+      compactedAt: string | null;
+      compactedCount: number;
+      messageWindowCount: number;
+    }) => Promise<void> | void;
+  },
 ): Promise<{
   ok: boolean;
   error: string | null;
@@ -360,6 +375,9 @@ export async function runAutopilotTickForTenant(
         execution: config.execution,
         strategy,
         privyWalletId: input.privyWalletId,
+        providerSnapshot: opts?.providerSnapshot,
+        steering: opts?.steering,
+        onContextCompaction: opts?.onContextCompaction,
       });
       return { ok, error: errorMessage, runId, logKey };
     }

@@ -3,12 +3,79 @@
 // Hoisted regex — avoids re-creating RegExp per apiFetchJson call (Rule 7.9)
 const BEARER_RE = /^bearer\s+/i;
 
+const SOL_DECIMALS = 9;
+const USDC_DECIMALS = 6;
+const DISPLAY_DECIMALS = 2;
+
+export type BalanceResponse = {
+  sol: { lamports: string; display?: string };
+  usdc: { atomic: string; display?: string };
+};
+
+function zeroDisplay(): string {
+  return `0.${"0".repeat(DISPLAY_DECIMALS)}`;
+}
+
+function formatAtomicFixed(raw: unknown, decimals: number): string {
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return zeroDisplay();
+  }
+  try {
+    let value = BigInt(raw);
+    const negative = value < BigInt(0);
+    if (negative) value = -value;
+
+    const scale = BigInt(10) ** BigInt(decimals);
+    const displayScale = BigInt(10) ** BigInt(DISPLAY_DECIMALS);
+
+    // Round to DISPLAY_DECIMALS without converting through floating point.
+    const scaled = (value * displayScale + scale / BigInt(2)) / scale;
+    const whole = scaled / displayScale;
+    const frac = (scaled % displayScale)
+      .toString()
+      .padStart(DISPLAY_DECIMALS, "0");
+
+    return `${negative ? "-" : ""}${whole.toString()}.${frac}`;
+  } catch {
+    return zeroDisplay();
+  }
+}
+
+export function formatSolBalanceDisplay(lamportsRaw: unknown): string {
+  return formatAtomicFixed(lamportsRaw, SOL_DECIMALS);
+}
+
+export function formatUsdcBalanceDisplay(atomicRaw: unknown): string {
+  return formatAtomicFixed(atomicRaw, USDC_DECIMALS);
+}
+
+export function formatBalanceSummary(
+  lamportsRaw: unknown,
+  usdcAtomicRaw: unknown,
+): string {
+  const sol = formatSolBalanceDisplay(lamportsRaw);
+  const usdc = formatUsdcBalanceDisplay(usdcAtomicRaw);
+  return `${sol} SOL · ${usdc} USDC`;
+}
+
 export function apiBase(): string {
   return (process.env.NEXT_PUBLIC_EDGE_API_BASE ?? "").replace(/\/+$/, "");
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly data: unknown;
+
+  constructor(message: string, status: number, data: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
 }
 
 export async function apiFetchJson(
@@ -40,7 +107,7 @@ export async function apiFetchJson(
       isRecord(json) && typeof json.error === "string"
         ? String(json.error)
         : `http-${response.status}`;
-    throw new Error(msg);
+    throw new ApiError(msg, response.status, json);
   }
   return json;
 }

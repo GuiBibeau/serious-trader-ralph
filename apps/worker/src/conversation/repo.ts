@@ -1,5 +1,5 @@
 import type { Env } from "../types";
-import type { ConversationSource, ConversationMessage } from "./types";
+import type { ConversationMessage, ConversationSource } from "./types";
 
 function parseSources(value: unknown): ConversationSource[] {
   if (!Array.isArray(value)) return [];
@@ -91,8 +91,10 @@ export async function listConversationMessages(
   limit = 50,
 ): Promise<ConversationMessage[]> {
   const capped = Math.max(1, Math.min(100, Math.floor(limit)));
-  const rows = (await env.WAITLIST_DB.prepare(
-    `
+  const rows =
+    (
+      await env.WAITLIST_DB.prepare(
+        `
     SELECT
       id,
       tenant_id as tenantId,
@@ -109,9 +111,10 @@ export async function listConversationMessages(
     ORDER BY id DESC
     LIMIT ?2
     `,
-  )
-    .bind(tenantId, capped)
-    .all()).results ?? [];
+      )
+        .bind(tenantId, capped)
+        .all()
+    ).results ?? [];
 
   return rows.map((row) => mapConversationRow(toRecord(row)));
 }

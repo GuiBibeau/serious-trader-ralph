@@ -4,7 +4,7 @@ export const config = {
   matcher: ["/app/:path*"],
 };
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   // Let OAuth callbacks through (Privy redirects back with this param)
   if (req.nextUrl.searchParams.has("privy_oauth_code"))
     return NextResponse.next();

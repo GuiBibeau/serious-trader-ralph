@@ -1,6 +1,7 @@
 name = "ralph-edge-dev"
 main = "src/index.ts"
 compatibility_date = "2026-02-03"
+compatibility_flags = ["nodejs_compat"]
 account_id = "4e3939d5df701303b59ffbe4472184de"
 
 [vars]
@@ -10,7 +11,23 @@ ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 ZAI_MODEL = "glm-4.7"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
-BALANCE_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com"
+
+X402_NETWORK = "solana-devnet"
+X402_PAY_TO = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
+X402_ASSET_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+X402_MAX_TIMEOUT_SECONDS = "60"
+X402_MARKET_SNAPSHOT_PRICE_USD = "0.01"
+X402_MARKET_SNAPSHOT_V2_PRICE_USD = "0.01"
+X402_MARKET_TOKEN_BALANCE_PRICE_USD = "0.01"
+X402_MARKET_JUPITER_QUOTE_PRICE_USD = "0.01"
+X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD = "0.01"
+X402_MARKET_OHLCV_PRICE_USD = "0.01"
+X402_MARKET_INDICATORS_PRICE_USD = "0.01"
+X402_MACRO_SIGNALS_PRICE_USD = "0.01"
+X402_MACRO_FRED_INDICATORS_PRICE_USD = "0.01"
+X402_MACRO_ETF_FLOWS_PRICE_USD = "0.01"
+X402_MACRO_STABLECOIN_HEALTH_PRICE_USD = "0.01"
+X402_MACRO_OIL_ANALYTICS_PRICE_USD = "0.01"
 
 [[kv_namespaces]]
 binding = "CONFIG_KV"
@@ -29,11 +46,23 @@ binding = "LOGS_BUCKET"
 bucket_name = "ralph-logs-dev"
 
 [durable_objects]
-bindings = [{ name = "BOT_LOOP", class_name = "BotLoop" }]
+bindings = [
+  { name = "BOT_LOOP", class_name = "BotLoop" },
+  { name = "TRADING_ORCHESTRATOR", class_name = "TradingOrchestratorAgent" },
+  { name = "BACKTEST_QUEUE", class_name = "BacktestQueue" }
+]
 
 [[migrations]]
 tag = "v1"
 new_classes = ["BotLoop"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["BacktestQueue"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["TradingOrchestratorAgent"]
 
 [triggers]
 crons = ["*/1 * * * *"]
@@ -48,7 +77,23 @@ ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 ZAI_MODEL = "glm-4.7"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
-BALANCE_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com"
+
+X402_NETWORK = "solana-devnet"
+X402_PAY_TO = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
+X402_ASSET_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+X402_MAX_TIMEOUT_SECONDS = "60"
+X402_MARKET_SNAPSHOT_PRICE_USD = "0.01"
+X402_MARKET_SNAPSHOT_V2_PRICE_USD = "0.01"
+X402_MARKET_TOKEN_BALANCE_PRICE_USD = "0.01"
+X402_MARKET_JUPITER_QUOTE_PRICE_USD = "0.01"
+X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD = "0.01"
+X402_MARKET_OHLCV_PRICE_USD = "0.01"
+X402_MARKET_INDICATORS_PRICE_USD = "0.01"
+X402_MACRO_SIGNALS_PRICE_USD = "0.01"
+X402_MACRO_FRED_INDICATORS_PRICE_USD = "0.01"
+X402_MACRO_ETF_FLOWS_PRICE_USD = "0.01"
+X402_MACRO_STABLECOIN_HEALTH_PRICE_USD = "0.01"
+X402_MACRO_OIL_ANALYTICS_PRICE_USD = "0.01"
 
 [[env.staging.kv_namespaces]]
 binding = "CONFIG_KV"
@@ -79,7 +124,23 @@ ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 ZAI_MODEL = "glm-4.7"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
-BALANCE_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com"
+
+X402_NETWORK = "solana-devnet"
+X402_PAY_TO = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
+X402_ASSET_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+X402_MAX_TIMEOUT_SECONDS = "60"
+X402_MARKET_SNAPSHOT_PRICE_USD = "0.01"
+X402_MARKET_SNAPSHOT_V2_PRICE_USD = "0.01"
+X402_MARKET_TOKEN_BALANCE_PRICE_USD = "0.01"
+X402_MARKET_JUPITER_QUOTE_PRICE_USD = "0.01"
+X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD = "0.01"
+X402_MARKET_OHLCV_PRICE_USD = "0.01"
+X402_MARKET_INDICATORS_PRICE_USD = "0.01"
+X402_MACRO_SIGNALS_PRICE_USD = "0.01"
+X402_MACRO_FRED_INDICATORS_PRICE_USD = "0.01"
+X402_MACRO_ETF_FLOWS_PRICE_USD = "0.01"
+X402_MACRO_STABLECOIN_HEALTH_PRICE_USD = "0.01"
+X402_MACRO_OIL_ANALYTICS_PRICE_USD = "0.01"
 
 [[env.production.kv_namespaces]]
 binding = "CONFIG_KV"

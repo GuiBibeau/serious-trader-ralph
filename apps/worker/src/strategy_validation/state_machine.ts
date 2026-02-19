@@ -1,7 +1,4 @@
-import type {
-  StrategyLifecycleState,
-  StrategyRuntimeStateRow,
-} from "../types";
+import type { StrategyLifecycleState, StrategyRuntimeStateRow } from "../types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

@@ -1,5 +1,10 @@
 import type { Env } from "../types";
-import type { DataSourcesConfig, HistoricalBarsRequest, MarketDataAdapter, PriceBar } from "./types";
+import type {
+  DataSourcesConfig,
+  HistoricalBarsRequest,
+  MarketDataAdapter,
+  PriceBar,
+} from "./types";
 import { instrumentKey } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
@@ -70,7 +75,10 @@ function extractRows(payload: unknown): UnknownRecord[] {
     if (!current || visited.has(current) || !isObject(current)) continue;
     visited.add(current);
     const record = current as UnknownRecord;
-    if (Array.isArray(record.rows) && record.rows.every((item) => isObject(item))) {
+    if (
+      Array.isArray(record.rows) &&
+      record.rows.every((item) => isObject(item))
+    ) {
       return record.rows as UnknownRecord[];
     }
     for (const value of Object.values(record)) {
@@ -93,12 +101,20 @@ function parseBar(
   const high = toNumberOrNull(row[columns.high] ?? row.h ?? row.High);
   const low = toNumberOrNull(row[columns.low] ?? row.l ?? row.Low);
   const close = toNumberOrNull(row[columns.close] ?? row.c ?? row.Close);
-  if (ts === null || open === null || high === null || low === null || close === null) {
+  if (
+    ts === null ||
+    open === null ||
+    high === null ||
+    low === null ||
+    close === null
+  ) {
     return null;
   }
 
   const volumeRaw =
-    columns.volume === null ? null : row[columns.volume] ?? row.v ?? row.Volume;
+    columns.volume === null
+      ? null
+      : (row[columns.volume] ?? row.v ?? row.Volume);
   const volume = toNumberOrNull(volumeRaw);
 
   return {
@@ -137,41 +153,51 @@ function resolveDuneConfig(
   }
 
   const apiUrl = normalizeText(
-    providers.apiUrl ?? providers.baseUrl ?? env.DUNE_API_URL ?? "https://api.dune.com",
+    providers.apiUrl ??
+      providers.baseUrl ??
+      env.DUNE_API_URL ??
+      "https://api.dune.com",
   );
   const maxRows = Math.min(
     10_000,
     Math.max(1, Number(providers.maxRows ?? 3_000)),
   );
-  const params = isObject(providers.params) ? (providers.params as UnknownRecord) : undefined;
+  const params = isObject(providers.params)
+    ? (providers.params as UnknownRecord)
+    : undefined;
   const parameterWhitelist = Array.isArray(providers.parameterWhitelist)
     ? providers.parameterWhitelist.filter((value) => typeof value === "string")
     : [];
   const columns = {
-    ts: normalizeText(
-      (providers.columns as UnknownRecord)?.ts ??
-        (providers.columns as UnknownRecord)?.time,
-    ) ?? "ts",
-    open: normalizeText(
-      (providers.columns as UnknownRecord)?.open ??
-        (providers.columns as UnknownRecord)?.openPrice ??
-        (providers.columns as UnknownRecord)?.o,
-    ) ?? "open",
-    high: normalizeText(
-      (providers.columns as UnknownRecord)?.high ??
-        (providers.columns as UnknownRecord)?.highPrice ??
-        (providers.columns as UnknownRecord)?.h,
-    ) ?? "high",
-    low: normalizeText(
-      (providers.columns as UnknownRecord)?.low ??
-        (providers.columns as UnknownRecord)?.lowPrice ??
-        (providers.columns as UnknownRecord)?.l,
-    ) ?? "low",
-    close: normalizeText(
-      (providers.columns as UnknownRecord)?.close ??
-        (providers.columns as UnknownRecord)?.closePrice ??
-        (providers.columns as UnknownRecord)?.c,
-    ) ?? "close",
+    ts:
+      normalizeText(
+        (providers.columns as UnknownRecord)?.ts ??
+          (providers.columns as UnknownRecord)?.time,
+      ) ?? "ts",
+    open:
+      normalizeText(
+        (providers.columns as UnknownRecord)?.open ??
+          (providers.columns as UnknownRecord)?.openPrice ??
+          (providers.columns as UnknownRecord)?.o,
+      ) ?? "open",
+    high:
+      normalizeText(
+        (providers.columns as UnknownRecord)?.high ??
+          (providers.columns as UnknownRecord)?.highPrice ??
+          (providers.columns as UnknownRecord)?.h,
+      ) ?? "high",
+    low:
+      normalizeText(
+        (providers.columns as UnknownRecord)?.low ??
+          (providers.columns as UnknownRecord)?.lowPrice ??
+          (providers.columns as UnknownRecord)?.l,
+      ) ?? "low",
+    close:
+      normalizeText(
+        (providers.columns as UnknownRecord)?.close ??
+          (providers.columns as UnknownRecord)?.closePrice ??
+          (providers.columns as UnknownRecord)?.c,
+      ) ?? "close",
     volume: normalizeText(
       (providers.columns as UnknownRecord)?.volume ??
         (providers.columns as UnknownRecord)?.v,
@@ -202,8 +228,8 @@ export class DuneDataAdapter implements MarketDataAdapter {
   private readonly config: DuneAdapterConfig;
 
   constructor(
-    private readonly env: Env,
-    private readonly dataSourceConfig?: DataSourcesConfig,
+    readonly env: Env,
+    readonly dataSourceConfig?: DataSourcesConfig,
   ) {
     this.config = resolveDuneConfig(env, dataSourceConfig);
   }

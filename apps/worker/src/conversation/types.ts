@@ -1,9 +1,13 @@
-import type { StrategyRuntimeStateRow, LoopConfig } from "../types";
-import type { StrategyValidationRun } from "../strategy_validation/repo";
+import type { BacktestListItem } from "../backtests/types";
 import type { BotLogEvent } from "../bot_events";
-import type { StrategyEventRow } from "../strategy_validation/repo";
-import type { TradeIndexResult } from "../trade_index";
+import type { BotRunLifecycleState } from "../agents_runtime/runtime_repo";
 import type { StrategyConversationDescriptor } from "../strategy_validation/descriptors";
+import type {
+  StrategyEventRow,
+  StrategyValidationRun,
+} from "../strategy_validation/repo";
+import type { TradeIndexResult } from "../trade_index";
+import type { LoopConfig, StrategyRuntimeStateRow } from "../types";
 
 export type ConversationActor = "user" | "admin";
 export type ConversationRole = "user" | "assistant";
@@ -50,6 +54,32 @@ export type TelemetrySnapshot = {
     reason?: "strategy-not-validated" | "strategy-validation-stale";
     strategyHash?: string;
     overrideAllowed?: boolean;
+  };
+  backtests: {
+    runningCount: number;
+    latestRuns: BacktestListItem[];
+  };
+  agentRun: {
+    state: BotRunLifecycleState;
+    blockedReason: string | null;
+    currentRunId: string | null;
+    lastTickAt: string | null;
+    nextTickAt: string | null;
+    provider: {
+      baseUrlHash: string | null;
+      model: string | null;
+      pingAgeMs: number | null;
+      resolutionSource: "bot_config" | null;
+    };
+    steering: {
+      pendingCount: number;
+      lastAppliedId: number | null;
+    };
+    context: {
+      compactedAt: string | null;
+      compactedCount: number;
+      messageWindowCount: number;
+    };
   };
 };
 

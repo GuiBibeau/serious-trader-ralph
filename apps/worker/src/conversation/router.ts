@@ -1,11 +1,9 @@
+import { resolveBotProviderSnapshot } from "../inference_provider";
 import type { Env } from "../types";
-import { buildConversationContext } from "./context";
 import { answerQuestion, type ConversationAnswer } from "./answerer";
-import {
-  createConversationMessage,
-  listConversationMessages,
-} from "./repo";
-import type { ConversationRequest, ConversationMessage } from "./types";
+import { buildConversationContext } from "./context";
+import { createConversationMessage, listConversationMessages } from "./repo";
+import type { ConversationMessage, ConversationRequest } from "./types";
 
 const MAX_MESSAGE_CHARS = 500;
 const MAX_HISTORY_LIMIT = 100;
@@ -14,7 +12,11 @@ const DEFAULT_HISTORY_LIMIT = 40;
 function parseIncludeSources(raw: unknown): string[] {
   if (Array.isArray(raw)) {
     return raw
-      .map((item) => String(item ?? "").toLowerCase().trim())
+      .map((item) =>
+        String(item ?? "")
+          .toLowerCase()
+          .trim(),
+      )
       .filter((value) => value.length > 0);
   }
   if (typeof raw === "string") {
@@ -36,7 +38,9 @@ function parseLimit(raw: unknown, fallback: number): number {
 function normalizeQuestion(value: unknown): string {
   const message = String(value ?? "").trim();
   if (!message) return "";
-  return message.length > MAX_MESSAGE_CHARS ? message.slice(0, MAX_MESSAGE_CHARS) : message;
+  return message.length > MAX_MESSAGE_CHARS
+    ? message.slice(0, MAX_MESSAGE_CHARS)
+    : message;
 }
 
 export async function handleChatRequest(
@@ -68,7 +72,22 @@ export async function handleChatRequest(
     },
   });
 
-  const answer = await answerQuestion(env, context.telemetry, message, explain);
+  const providerSnapshot = await resolveBotProviderSnapshot(env, tenantId, {
+    verify: true,
+  }).catch(() => null);
+  const answer = await answerQuestion(
+    env,
+    context.telemetry,
+    message,
+    explain,
+    providerSnapshot
+      ? {
+          baseUrl: providerSnapshot.baseUrl,
+          apiKey: providerSnapshot.apiKey,
+          model: providerSnapshot.model,
+        }
+      : undefined,
+  );
   const userMessageId = await createConversationMessage(env, {
     tenantId,
     role: "user",
@@ -107,7 +126,10 @@ export async function handleChatHistory(
   request: Request,
 ): Promise<{ ok: true; messages: ConversationMessage[] }> {
   const url = new URL(request.url);
-  const limit = parseLimit(url.searchParams.get("limit"), DEFAULT_HISTORY_LIMIT);
+  const limit = parseLimit(
+    url.searchParams.get("limit"),
+    DEFAULT_HISTORY_LIMIT,
+  );
   const messages = await listConversationMessages(
     env,
     tenantId,
@@ -122,7 +144,9 @@ export async function handleTelemetry(
   request: Request,
 ): Promise<{ ok: true; telemetry: unknown }> {
   const url = new URL(request.url);
-  const includeSources = parseIncludeSources(url.searchParams.get("includeSources"));
+  const includeSources = parseIncludeSources(
+    url.searchParams.get("includeSources"),
+  );
   const includeLimit = parseLimit(url.searchParams.get("limit"), 100);
   const context = await buildConversationContext(env, tenantId, {
     includeSources,

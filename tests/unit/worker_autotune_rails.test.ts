@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { getValidationThresholds } from "../../apps/worker/src/strategy_validation/profiles";
 import {
   applyConservativeTuneForValidation,
   type NormalizedAutotuneConfig,
   normalizeAutotuneConfig,
 } from "../../apps/worker/src/strategy_validation/engine";
+import { getValidationThresholds } from "../../apps/worker/src/strategy_validation/profiles";
 import type {
   DcaStrategy,
   RebalanceStrategy,
@@ -12,7 +12,9 @@ import type {
 
 const thresholds = getValidationThresholds("balanced", 8);
 
-function parseNormalized(input: Partial<NormalizedAutotuneConfig>): NormalizedAutotuneConfig {
+function parseNormalized(
+  input: Partial<NormalizedAutotuneConfig>,
+): NormalizedAutotuneConfig {
   return {
     ...normalizeAutotuneConfig({}),
     ...input,

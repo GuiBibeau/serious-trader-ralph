@@ -1,50 +1,36 @@
 "use client";
 
 import { usePrivy } from "@privy-io/react-auth";
-import {
-  createRecipient,
-  createSPLToken,
-  encodeURL,
-} from "@solana-commerce/kit";
 import { useRouter } from "next/navigation";
-import { QRCodeSVG } from "qrcode.react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "../cn";
 import { FundingModal } from "../funding-modal";
 import {
+  ApiError,
   apiFetchJson,
+  type BalanceResponse,
   type Bot,
   BTN_PRIMARY,
   BTN_SECONDARY,
-  formatTick,
+  formatSolBalanceDisplay,
+  formatUsdcBalanceDisplay,
   isRecord,
 } from "../lib";
-import { FadeUp, PillPop, PresenceCard, Skeleton } from "../motion";
-
-type Trade = {
-  id: number;
-  tenantId: string;
-  runId: string | null;
-  venue: string | null;
-  market: string | null;
-  side: string | null;
-  size: string | null;
-  price: string | null;
-  status: string | null;
-  logKey: string | null;
-  signature: string | null;
-  createdAt: string;
-};
-
-type FinancialProfile = {
-  annualIncome: string;
-  liquidNetWorth: string;
-  investmentExperience: string;
-  riskTolerance: string;
-  investmentGoal: string;
-  cryptoExperience: string;
-  timeHorizon: string;
-};
+import { PresenceCard } from "../motion";
+import { AgentStats } from "./components/agent-stats";
+import {
+  clearDashboardGridLayouts,
+  DashboardGrid,
+  hasCustomDashboardGridLayouts,
+} from "./components/dashboard-grid";
+import { MarketChart } from "./components/market-chart";
+import { MacroEtfWidget } from "./components/macro-etf-widget";
+import { MacroFredWidget } from "./components/macro-fred-widget";
+import { MacroOilWidget } from "./components/macro-oil-widget";
+import { MacroRadarWidget } from "./components/macro-radar-widget";
+import { MacroStablecoinWidget } from "./components/macro-stablecoin-widget";
+import { formatPrice, useSolMarketFeed } from "./components/sol-market-feed";
+import { useDashboard } from "./context";
 
 type Subscription = {
   status: "active" | "inactive";
@@ -56,138 +42,110 @@ type Subscription = {
   sourceSignature: string | null;
 };
 
-type BillingPlan = {
-  id: string;
+type OnboardingStatus = "being_onboarded" | "active";
+
+type BotCreationLimits = {
+  maxFreeBots: number;
+  requiredUsdForExtraBots: string;
+  currentUsd: string;
+  canCreateExtraBot: boolean;
+  assetBasis: string;
+  valuationState: "skipped" | "computed" | "unavailable";
+};
+
+type InferenceProviderView = {
+  providerKind: string;
+  baseUrl: string;
+  model: string;
+  configured: boolean;
+  apiKeyMasked: string | null;
+  updatedAt: string | null;
+};
+
+type Balances = BalanceResponse;
+type CenterView = "candles" | "execution";
+
+type CreateBotForm = {
   name: string;
-  description: string;
-  amountUsd: number;
-  amountDecimal: string;
-  amountAtomic: string;
-  currency: string;
-  mint: string;
-  interval: string;
-  features: string[];
+  baseUrl: string;
+  model: string;
+  apiKey: string;
 };
 
-type CheckoutIntent = {
-  id: string;
-  planId: string;
-  status: "pending" | "verified" | "expired";
-  expiresAt: string;
-  payment: {
-    recipient: string;
-    amountDecimal: string;
-    amountAtomic: string;
-    currency: "USDC" | "SOL";
-    splToken: string | null;
-    reference: string;
-    label: string;
-    message: string;
-    memo: string;
-  };
-};
+const DEFAULT_PROVIDER_BASE_URL = "https://api.z.ai/api/paas/v4";
+const DEFAULT_PROVIDER_MODEL = "glm-5";
 
-type Balances = {
-  sol: { lamports: string; display: string };
-  usdc: { atomic: string; display: string };
-};
-
-const PROFILE_KEY = "str-financial-profile";
-const ONBOARDING_KEY = "str-onboarding-complete";
-
-const PROFILE_FIELDS: {
-  key: keyof FinancialProfile;
-  label: string;
-  options: string[];
-}[] = [
-  {
-    key: "annualIncome",
-    label: "Annual income",
-    options: [
-      "Less than $25,000",
-      "$25,000 – $50,000",
-      "$50,000 – $100,000",
-      "$100,000 – $250,000",
-      "More than $250,000",
-    ],
-  },
-  {
-    key: "liquidNetWorth",
-    label: "Liquid net worth",
-    options: [
-      "Less than $10,000",
-      "$10,000 – $50,000",
-      "$50,000 – $100,000",
-      "$100,000 – $500,000",
-      "More than $500,000",
-    ],
-  },
-  {
-    key: "investmentExperience",
-    label: "Investment experience",
-    options: ["None", "Beginner", "Intermediate", "Advanced", "Professional"],
-  },
-  {
-    key: "riskTolerance",
-    label: "Risk tolerance",
-    options: [
-      "Conservative",
-      "Moderately conservative",
-      "Moderate",
-      "Aggressive",
-      "Very aggressive",
-    ],
-  },
-  {
-    key: "investmentGoal",
-    label: "Investment goal",
-    options: [
-      "Capital preservation",
-      "Income generation",
-      "Growth",
-      "Speculation",
-      "Learning / experimentation",
-    ],
-  },
-  {
-    key: "cryptoExperience",
-    label: "Crypto experience",
-    options: ["None", "Beginner", "Intermediate", "Advanced"],
-  },
-  {
-    key: "timeHorizon",
-    label: "Time horizon",
-    options: [
-      "Less than 1 month",
-      "1 – 6 months",
-      "6 – 12 months",
-      "1 – 3 years",
-      "No specific timeline",
-    ],
-  },
-];
-
-const emptyProfile: FinancialProfile = {
-  annualIncome: "",
-  liquidNetWorth: "",
-  investmentExperience: "",
-  riskTolerance: "",
-  investmentGoal: "",
-  cryptoExperience: "",
-  timeHorizon: "",
-};
-
-function loadProfile(): FinancialProfile {
-  try {
-    const raw = localStorage.getItem(PROFILE_KEY);
-    if (!raw) return { ...emptyProfile };
-    return {
-      ...emptyProfile,
-      ...(JSON.parse(raw) as Partial<FinancialProfile>),
-    };
-  } catch {
-    return { ...emptyProfile };
+function toNumericString(value: unknown): string | null {
+  if (typeof value === "string" && value.trim() !== "") return value;
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value).toString();
   }
+  return null;
+}
+
+function formatUsdLabel(raw: string): string {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  return n.toFixed(2);
+}
+
+function parseOnboardingStatus(raw: unknown): OnboardingStatus {
+  return raw === "active" ? "active" : "being_onboarded";
+}
+
+function parseBotCreationLimits(payload: unknown): BotCreationLimits | null {
+  if (!isRecord(payload)) return null;
+  const maxFreeBots = Number(payload.maxFreeBots);
+  const requiredUsdForExtraBots = String(payload.requiredUsdForExtraBots ?? "");
+  const currentUsd = String(payload.currentUsd ?? "0.00");
+  const canCreateExtraBot = Boolean(payload.canCreateExtraBot);
+  const assetBasis = String(payload.assetBasis ?? "sol_usdc_only");
+  const valuationStateRaw = String(payload.valuationState ?? "unavailable");
+  const valuationState: BotCreationLimits["valuationState"] =
+    valuationStateRaw === "computed" || valuationStateRaw === "skipped"
+      ? valuationStateRaw
+      : "unavailable";
+
+  if (!Number.isFinite(maxFreeBots) || maxFreeBots <= 0) {
+    return null;
+  }
+  if (!requiredUsdForExtraBots) return null;
+
+  return {
+    maxFreeBots,
+    requiredUsdForExtraBots,
+    currentUsd,
+    canCreateExtraBot,
+    assetBasis,
+    valuationState,
+  };
+}
+
+function parseInferenceProvider(
+  payload: unknown,
+): InferenceProviderView | null {
+  if (!isRecord(payload)) return null;
+  const provider = isRecord(payload.provider) ? payload.provider : payload;
+  if (!isRecord(provider)) return null;
+
+  return {
+    providerKind: String(provider.providerKind ?? "openai_compatible"),
+    baseUrl: String(provider.baseUrl ?? ""),
+    model: String(provider.model ?? ""),
+    configured: Boolean(provider.configured),
+    apiKeyMasked:
+      typeof provider.apiKeyMasked === "string" ? provider.apiKeyMasked : null,
+    updatedAt:
+      typeof provider.updatedAt === "string" ? provider.updatedAt : null,
+  };
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 export default function AppPage() {
@@ -197,7 +155,7 @@ export default function AppPage() {
         <div className="sticky top-0 z-10 bg-paper border-b border-border py-4">
           <div className="w-[min(1120px,92vw)] mx-auto flex items-center justify-between gap-4">
             <a href="/" className="text-sm font-semibold tracking-tight">
-              Serious Trader Ralph
+              Trader Ralph
             </a>
           </div>
         </div>
@@ -221,172 +179,211 @@ export default function AppPage() {
   return <ControlRoom />;
 }
 
-const STEP_LABELS = ["Profile", "Billing", "Agent", "Fund"];
-
-function WizardProgress({ step }: { step: number }) {
-  return (
-    <div className="flex items-center mb-10">
-      {STEP_LABELS.map((label, i) => {
-        const num = i + 1;
-        return (
-          <div key={label} className="contents">
-            <div className="flex items-center gap-2">
-              <div
-                className={cn(
-                  "w-8 h-8 rounded-full border border-border flex items-center justify-center text-xs font-semibold shrink-0",
-                  num < step && "bg-ink text-surface border-ink",
-                  num === step && "bg-accent-soft border-accent text-ink",
-                  num > step && "bg-surface text-muted",
-                )}
-              >
-                {num}
-              </div>
-              <span className="text-xs text-muted font-medium whitespace-nowrap">
-                {label}
-              </span>
-            </div>
-            {i < STEP_LABELS.length - 1 && (
-              <div className="flex-1 h-px bg-border-strong mx-3 min-w-6" />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function ControlRoom() {
-  const { ready, authenticated, logout, getAccessToken } = usePrivy();
+  const { ready, authenticated, getAccessToken } = usePrivy();
   const router = useRouter();
 
   const [bots, setBots] = useState<Bot[]>([]);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [botsLoaded, setBotsLoaded] = useState(false);
+  const [selectedBotId, setSelectedBotId] = useState<string>("");
   const [subscription, setSubscription] = useState<Subscription | null>(null);
-  const [billingPlans, setBillingPlans] = useState<BillingPlan[]>([]);
-  const [selectedPlanId, setSelectedPlanId] = useState("byok_annual");
-  const [selectedPaymentAsset, setSelectedPaymentAsset] = useState<
-    "USDC" | "SOL"
-  >("USDC");
-  const [checkoutIntent, setCheckoutIntent] = useState<CheckoutIntent | null>(
+  const [onboardingStatus, setOnboardingStatus] =
+    useState<OnboardingStatus>("being_onboarded");
+  const [botLimits, setBotLimits] = useState<BotCreationLimits | null>(null);
+  const [inferenceProvider, setInferenceProvider] =
+    useState<InferenceProviderView | null>(null);
+
+  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [botsLoaded, setBotsLoaded] = useState(false);
+  const [_centerView, _setCenterView] = useState<CenterView>("candles");
+  const [gridRevision, setGridRevision] = useState(0);
+  const [hasCustomGridLayout, setHasCustomGridLayout] = useState(false);
+
+  const [fundOpen, setFundOpen] = useState(false);
+  const [walletBalances, setWalletBalances] = useState<Balances | null>(null);
+  const [walletBalanceError, setWalletBalanceError] = useState<string | null>(
     null,
   );
-  const [checkoutUrl, setCheckoutUrl] = useState("");
-  const [checkingPayment, setCheckingPayment] = useState(false);
-  const [walletBalances, setWalletBalances] = useState<Balances | null>(null);
 
-  // Funding modal
-  const [fundOpen, setFundOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createForm, setCreateForm] = useState<CreateBotForm>({
+    name: "",
+    baseUrl: DEFAULT_PROVIDER_BASE_URL,
+    model: DEFAULT_PROVIDER_MODEL,
+    apiKey: "",
+  });
 
-  // Wizard state
-  const [wizardStep, setWizardStep] = useState(1);
-  const [profile, setProfile] = useState<FinancialProfile>(loadProfile);
-  const [createdBot, setCreatedBot] = useState<Bot | null>(null);
+  const selectedBot = useMemo(
+    () => bots.find((item) => item.id === selectedBotId) ?? bots[0] ?? null,
+    [bots, selectedBotId],
+  );
+  const marketFeed = useSolMarketFeed();
+  const selectedBotInferenceConfigured = Boolean(inferenceProvider?.configured);
 
-  const bot = bots[0] ?? null;
+  const hasManualAccess = Boolean(subscription?.active);
+  const capBlocked = Boolean(
+    botLimits &&
+      bots.length >= botLimits.maxFreeBots &&
+      !botLimits.canCreateExtraBot,
+  );
 
-  const profileComplete = PROFILE_FIELDS.every((f) => profile[f.key] !== "");
+  const resetDashboardLayout = useCallback(() => {
+    clearDashboardGridLayouts();
+    setHasCustomGridLayout(false);
+    setGridRevision((value) => value + 1);
+  }, []);
+
+  useEffect(() => {
+    setHasCustomGridLayout(hasCustomDashboardGridLayouts());
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent): void {
+      if (isTypingTarget(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key.toLowerCase() !== "r") return;
+      event.preventDefault();
+      resetDashboardLayout();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [resetDashboardLayout]);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!authenticated) return;
     setLoading(true);
     setMessage(null);
+
     try {
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
-      const [payload, plansPayload] = await Promise.all([
-        apiFetchJson("/api/me", token, { method: "GET" }),
-        apiFetchJson("/api/billing/plans", token, { method: "GET" }),
-      ]);
+      const payload = await apiFetchJson("/api/me", token, { method: "GET" });
 
       const nextBotsRaw = isRecord(payload) ? payload.bots : null;
       const nextBots = Array.isArray(nextBotsRaw) ? (nextBotsRaw as Bot[]) : [];
       setBots(nextBots);
       setBotsLoaded(true);
 
-      const subscriptionRaw = isRecord(payload) ? payload.subscription : null;
+      setSelectedBotId((current) => {
+        if (current && nextBots.some((bot) => bot.id === current))
+          return current;
+        return nextBots[0]?.id ?? "";
+      });
+
+      const nextStatus = parseOnboardingStatus(
+        isRecord(payload) ? payload.onboardingStatus : undefined,
+      );
+      setOnboardingStatus(nextStatus);
+
+      const subRaw = isRecord(payload) ? payload.subscription : null;
       if (
-        isRecord(subscriptionRaw) &&
-        (subscriptionRaw.status === "active" ||
-          subscriptionRaw.status === "inactive")
+        isRecord(subRaw) &&
+        (subRaw.status === "active" || subRaw.status === "inactive")
       ) {
-        setSubscription(subscriptionRaw as unknown as Subscription);
+        setSubscription(subRaw as unknown as Subscription);
       } else {
         setSubscription(null);
       }
 
-      const plansRaw = isRecord(plansPayload) ? plansPayload.plans : null;
-      const plans = Array.isArray(plansRaw)
-        ? (plansRaw.filter((p) => isRecord(p)) as BillingPlan[])
-        : [];
-      setBillingPlans(plans);
-      if (!plans.some((p) => p.id === selectedPlanId) && plans.length > 0) {
-        setSelectedPlanId(plans[0].id);
-      }
-
-      // Hydrate profile from API if available
-      const userRaw = isRecord(payload) ? payload.user : null;
-      const apiProfile =
-        isRecord(userRaw) && isRecord(userRaw.profile)
-          ? (userRaw.profile as Partial<FinancialProfile>)
+      const limitsRaw =
+        isRecord(payload) &&
+        isRecord(payload.limits) &&
+        isRecord(payload.limits.botCreation)
+          ? payload.limits.botCreation
           : null;
-      if (apiProfile) {
-        const merged = { ...emptyProfile, ...apiProfile };
-        setProfile(merged);
-        localStorage.setItem(PROFILE_KEY, JSON.stringify(merged));
-      }
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
+      setBotLimits(parseBotCreationLimits(limitsRaw));
+    } catch (error) {
+      const nextError =
+        error instanceof Error ? error.message : "Failed to load control room";
       setBotsLoaded(true);
+      setMessage(nextError);
     } finally {
       setLoading(false);
     }
-  }, [authenticated, getAccessToken, selectedPlanId]);
-
-  const refreshTrades = useCallback(
-    async (botId: string): Promise<void> => {
-      if (!authenticated) return;
-      try {
-        const token = await getAccessToken();
-        if (!token) throw new Error("missing-access-token");
-        const payload = await apiFetchJson(
-          `/api/bots/${botId}/trades?limit=25`,
-          token,
-          { method: "GET" },
-        );
-        const nextTradesRaw = isRecord(payload) ? payload.trades : null;
-        const nextTrades = Array.isArray(nextTradesRaw)
-          ? (nextTradesRaw as Trade[])
-          : [];
-        setTrades(nextTrades);
-      } catch (err) {
-        setMessage(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [authenticated, getAccessToken],
-  );
+  }, [authenticated, getAccessToken]);
 
   const refreshWalletBalances = useCallback(
     async (botId: string): Promise<void> => {
-      if (!authenticated) return;
+      if (!authenticated || !botId) return;
       try {
         const token = await getAccessToken();
         if (!token) return;
-        const payload = await apiFetchJson(`/api/bots/${botId}/balance`, token, {
-          method: "GET",
-        });
+        const payload = await apiFetchJson(
+          `/api/bots/${botId}/balance`,
+          token,
+          {
+            method: "GET",
+          },
+        );
         const balancesRaw = isRecord(payload) ? payload.balances : null;
+        const hasError =
+          isRecord(payload) &&
+          (Array.isArray(payload.errors) ||
+            (typeof payload.errors === "string" &&
+              payload.errors.trim() !== ""));
+
+        if (hasError) {
+          const errorPayload = (payload as Record<string, unknown>).errors;
+          if (typeof errorPayload === "string") {
+            setWalletBalanceError(errorPayload);
+          } else if (Array.isArray(errorPayload)) {
+            setWalletBalanceError(
+              errorPayload.map((item) => String(item)).join(", "),
+            );
+          } else {
+            setWalletBalanceError("Invalid balance payload");
+          }
+          return;
+        }
+
         if (
           isRecord(balancesRaw) &&
           isRecord(balancesRaw.sol) &&
           isRecord(balancesRaw.usdc)
         ) {
-          setWalletBalances(balancesRaw as unknown as Balances);
+          const solLamports = toNumericString(
+            (balancesRaw.sol as Record<string, unknown>).lamports,
+          );
+          const usdcAtomic = toNumericString(
+            (balancesRaw.usdc as Record<string, unknown>).atomic,
+          );
+          setWalletBalances({
+            sol: { lamports: solLamports ?? "0" },
+            usdc: { atomic: usdcAtomic ?? "0" },
+          });
+          setWalletBalanceError(null);
+          return;
         }
+
+        setWalletBalanceError("Invalid balance payload");
       } catch {
-        // Keep the latest known balance in the navbar on transient failures.
+        setWalletBalanceError("Failed to fetch wallet balance");
+      }
+    },
+    [authenticated, getAccessToken],
+  );
+
+  const refreshInferenceProvider = useCallback(
+    async (botId: string): Promise<void> => {
+      if (!authenticated || !botId) return;
+      try {
+        const token = await getAccessToken();
+        if (!token) return;
+        const payload = await apiFetchJson(
+          `/api/bots/${botId}/inference`,
+          token,
+          {
+            method: "GET",
+          },
+        );
+        setInferenceProvider(parseInferenceProvider(payload));
+      } catch {
+        setInferenceProvider(null);
       }
     },
     [authenticated, getAccessToken],
@@ -403,212 +400,33 @@ function ControlRoom() {
   }, [ready, authenticated, router]);
 
   useEffect(() => {
-    if (!bot) return;
-    void refreshTrades(bot.id);
-  }, [bot, refreshTrades]);
-
-  useEffect(() => {
-    if (!bot) {
+    if (!selectedBot) {
       setWalletBalances(null);
+      setWalletBalanceError(null);
+      setInferenceProvider(null);
       return;
     }
-    void refreshWalletBalances(bot.id);
+
+    void Promise.all([
+      refreshWalletBalances(selectedBot.id),
+      refreshInferenceProvider(selectedBot.id),
+    ]);
+  }, [selectedBot, refreshInferenceProvider, refreshWalletBalances]);
+
+  useEffect(() => {
+    if (!selectedBot) return;
     const timer = window.setInterval(() => {
-      void refreshWalletBalances(bot.id);
-    }, 15000);
+      void refreshWalletBalances(selectedBot.id);
+    }, 15_000);
     return () => window.clearInterval(timer);
-  }, [bot, refreshWalletBalances]);
-
-  useEffect(() => {
-    if (wizardStep === 1 && profileComplete) {
-      setWizardStep(subscription?.active ? 3 : 2);
-      return;
-    }
-    if (wizardStep === 2 && subscription?.active) {
-      setWizardStep(3);
-    }
-  }, [wizardStep, profileComplete, subscription?.active]);
-
-  // Step 3: auto-create bot on mount
-  const [creating, setCreating] = useState(false);
-  useEffect(() => {
-    if (!botsLoaded || bots.length > 0) return;
-    if (wizardStep !== 3 || creating || createdBot) return;
-    setCreating(true);
-    (async () => {
-      setMessage(null);
-      try {
-        const token = await getAccessToken();
-        if (!token) throw new Error("missing-access-token");
-        const payload = await apiFetchJson("/api/bots", token, {
-          method: "POST",
-          body: JSON.stringify({ name: "Ralph" }),
-        });
-        const botRaw = isRecord(payload) ? payload.bot : null;
-        if (!isRecord(botRaw) || typeof botRaw.id !== "string")
-          throw new Error("bot-create-failed");
-        setCreatedBot(botRaw as unknown as Bot);
-        await refresh();
-      } catch (err) {
-        setMessage(err instanceof Error ? err.message : String(err));
-      } finally {
-        setCreating(false);
-      }
-    })();
-  }, [
-    botsLoaded,
-    bots.length,
-    wizardStep,
-    creating,
-    createdBot,
-    getAccessToken,
-    refresh,
-  ]);
-
-  function handleProfileChange(key: keyof FinancialProfile, value: string) {
-    setProfile((prev) => {
-      const next = { ...prev, [key]: value };
-      localStorage.setItem(PROFILE_KEY, JSON.stringify(next));
-      return next;
-    });
-  }
-
-  async function saveProfileAndContinue(): Promise<void> {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const token = await getAccessToken();
-      if (!token) throw new Error("missing-access-token");
-      await apiFetchJson("/api/me/profile", token, {
-        method: "PATCH",
-        body: JSON.stringify({ profile }),
-      });
-      setWizardStep(subscription?.active ? 3 : 2);
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function finishOnboarding() {
-    localStorage.setItem(ONBOARDING_KEY, "true");
-    // Force re-render into dashboard by refreshing bots
-    void refresh();
-  }
-
-  const buildSolanaPayUrl = useCallback((intent: CheckoutIntent): string => {
-    const fields: {
-      recipient: ReturnType<typeof createRecipient>;
-      amount: bigint;
-      reference: ReturnType<typeof createRecipient>;
-      label: string;
-      message: string;
-      memo: string;
-      splToken?: ReturnType<typeof createSPLToken>;
-    } = {
-      recipient: createRecipient(intent.payment.recipient),
-      amount: BigInt(intent.payment.amountAtomic),
-      reference: createRecipient(intent.payment.reference),
-      label: intent.payment.label,
-      message: intent.payment.message,
-      memo: intent.payment.memo,
-    };
-    if (intent.payment.splToken) {
-      fields.splToken = createSPLToken(intent.payment.splToken);
-    }
-    const url = encodeURL(fields);
-    url.searchParams.set("cluster", "devnet");
-    return url.toString();
-  }, []);
-
-  async function beginCheckout(): Promise<void> {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const token = await getAccessToken();
-      if (!token) throw new Error("missing-access-token");
-      const payload = await apiFetchJson("/api/billing/checkout", token, {
-        method: "POST",
-        body: JSON.stringify({
-          planId: selectedPlanId,
-          paymentAsset: selectedPaymentAsset,
-        }),
-      });
-      const intentRaw = isRecord(payload) ? payload.intent : null;
-      if (
-        !isRecord(intentRaw) ||
-        typeof intentRaw.id !== "string" ||
-        !isRecord(intentRaw.payment)
-      ) {
-        throw new Error("billing-intent-create-failed");
-      }
-      const intent = intentRaw as unknown as CheckoutIntent;
-      setCheckoutIntent(intent);
-      setCheckoutUrl(buildSolanaPayUrl(intent));
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const checkCheckoutStatus = useCallback(
-    async (intentId?: string): Promise<void> => {
-      const id = intentId ?? checkoutIntent?.id;
-      if (!id) return;
-      setCheckingPayment(true);
-      try {
-        const token = await getAccessToken();
-        if (!token) throw new Error("missing-access-token");
-        const payload = await apiFetchJson(
-          `/api/billing/checkout/${id}`,
-          token,
-          {
-            method: "GET",
-          },
-        );
-        const intentRaw = isRecord(payload) ? payload.intent : null;
-        if (
-          isRecord(intentRaw) &&
-          typeof intentRaw.id === "string" &&
-          isRecord(intentRaw.payment)
-        ) {
-          const intent = intentRaw as unknown as CheckoutIntent;
-          setCheckoutIntent(intent);
-          setCheckoutUrl(buildSolanaPayUrl(intent));
-        }
-
-        const subRaw = isRecord(payload) ? payload.subscription : null;
-        if (
-          isRecord(subRaw) &&
-          (subRaw.status === "active" || subRaw.status === "inactive")
-        ) {
-          const sub = subRaw as unknown as Subscription;
-          setSubscription(sub);
-          if (sub.active) {
-            setMessage("Payment verified. Subscription is active.");
-            setWizardStep(3);
-          }
-        }
-      } catch (err) {
-        setMessage(err instanceof Error ? err.message : String(err));
-      } finally {
-        setCheckingPayment(false);
-      }
-    },
-    [checkoutIntent?.id, getAccessToken, buildSolanaPayUrl],
-  );
-
-  useEffect(() => {
-    if (!checkoutIntent || checkoutIntent.status !== "pending") return;
-    const timer = window.setInterval(() => {
-      void checkCheckoutStatus(checkoutIntent.id);
-    }, 8000);
-    return () => window.clearInterval(timer);
-  }, [checkoutIntent, checkCheckoutStatus]);
+  }, [selectedBot, refreshWalletBalances]);
 
   async function startBot(botId: string): Promise<void> {
+    if (!hasManualAccess) return;
+    if (!selectedBotInferenceConfigured) {
+      setMessage("Configure inference provider before starting this bot.");
+      return;
+    }
     setLoading(true);
     setMessage(null);
     try {
@@ -617,7 +435,12 @@ function ControlRoom() {
       await apiFetchJson(`/api/bots/${botId}/start`, token, { method: "POST" });
       await refresh();
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
+      const nextMessage = err instanceof Error ? err.message : String(err);
+      setMessage(
+        nextMessage === "inference-provider-not-configured"
+          ? "Configure inference provider before starting this bot."
+          : nextMessage,
+      );
     } finally {
       setLoading(false);
     }
@@ -638,14 +461,15 @@ function ControlRoom() {
     }
   }
 
-  async function tickBot(botId: string): Promise<void> {
+  async function _tickBot(botId: string): Promise<void> {
+    if (!hasManualAccess) return;
     setLoading(true);
     setMessage(null);
     try {
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
       await apiFetchJson(`/api/bots/${botId}/tick`, token, { method: "POST" });
-      await Promise.all([refresh(), refreshTrades(botId)]);
+      await refresh();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -653,560 +477,532 @@ function ControlRoom() {
     }
   }
 
-  const showWizard = botsLoaded && bots.length === 0;
-  const showDashboard = botsLoaded && bots.length > 0;
-  const selectedPlan =
-    billingPlans.find((p) => p.id === selectedPlanId) ?? null;
-  const shouldRedirectToCheckout =
-    ready &&
-    authenticated &&
-    showDashboard &&
-    bot &&
-    subscription != null &&
-    !subscription.active;
+  async function createBot(): Promise<void> {
+    if (!authenticated) return;
+    if (!createForm.name.trim()) {
+      setCreateError("Bot name is required.");
+      return;
+    }
+    if (
+      !createForm.baseUrl.trim() ||
+      !createForm.model.trim() ||
+      !createForm.apiKey.trim()
+    ) {
+      setCreateError("Inference provider fields are required.");
+      return;
+    }
+    if (capBlocked && botLimits) {
+      setCreateError(
+        `Bot cap reached. Current baseline value is $${formatUsdLabel(botLimits.currentUsd)}; need at least $${formatUsdLabel(botLimits.requiredUsdForExtraBots)}.`,
+      );
+      return;
+    }
 
+    setCreateBusy(true);
+    setCreateError(null);
+    setMessage(null);
+
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("missing-access-token");
+      const payload = await apiFetchJson("/api/bots", token, {
+        method: "POST",
+        body: JSON.stringify({
+          name: createForm.name.trim(),
+          provider: {
+            providerKind: "openai_compatible",
+            baseUrl: createForm.baseUrl.trim(),
+            model: createForm.model.trim(),
+            apiKey: createForm.apiKey.trim(),
+          },
+        }),
+      });
+
+      const createdBotId =
+        isRecord(payload) &&
+        isRecord(payload.bot) &&
+        typeof payload.bot.id === "string"
+          ? payload.bot.id
+          : "";
+
+      await refresh();
+      if (createdBotId) {
+        setSelectedBotId(createdBotId);
+      }
+      setCreateOpen(false);
+      setCreateForm((current) => ({
+        ...current,
+        name: "",
+        apiKey: "",
+      }));
+      setMessage("Bot created.");
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (
+          error.message === "bot-cap-threshold-not-met" &&
+          isRecord(error.data)
+        ) {
+          const requiredUsd = String(error.data.requiredUsd ?? "5000");
+          const currentUsd = String(error.data.currentUsd ?? "0.00");
+          setCreateError(
+            `Cannot create another bot yet. Current baseline value: $${formatUsdLabel(currentUsd)}; required: $${formatUsdLabel(requiredUsd)} (SOL + USDC across oldest 3 bots).`,
+          );
+          await refresh();
+          return;
+        }
+        if (error.message === "inference-provider-ping-timeout") {
+          setCreateError(
+            "Inference provider test timed out. Check endpoint and network.",
+          );
+          return;
+        }
+        if (
+          error.message === "inference-encryption-key-missing" ||
+          error.message === "invalid-inference-encryption-key"
+        ) {
+          setCreateError("Server-side inference encryption is not configured.");
+          return;
+        }
+        if (error.message.startsWith("inference-provider-ping-failed")) {
+          setCreateError(
+            "Inference provider test failed. Verify endpoint, model, and API key.",
+          );
+          return;
+        }
+        setCreateError(error.message);
+        return;
+      }
+      setCreateError(
+        error instanceof Error ? error.message : "Failed to create bot",
+      );
+    } finally {
+      setCreateBusy(false);
+    }
+  }
+
+  const {
+    setOnboardingStatus: setGlobalOnboardingStatus,
+    setWalletBalances: setGlobalWalletBalances,
+    setWalletBalanceError: setGlobalWalletBalanceError,
+    setFundAction,
+    setRefreshAction,
+    setIsRefreshing,
+    setShowFundButton,
+    setShowBalance,
+  } = useDashboard();
+
+  // Sync state to global context
   useEffect(() => {
-    if (!shouldRedirectToCheckout) return;
-    router.replace(
-      `/checkout?plan=${selectedPlanId}&asset=${selectedPaymentAsset}&pay=1`,
-    );
-  }, [shouldRedirectToCheckout, router, selectedPlanId, selectedPaymentAsset]);
+    const shouldClearGlobalBalance = botsLoaded && !selectedBot;
+
+    setGlobalOnboardingStatus(onboardingStatus);
+    if (walletBalances || shouldClearGlobalBalance) {
+      setGlobalWalletBalances(shouldClearGlobalBalance ? null : walletBalances);
+    }
+    if (walletBalanceError || shouldClearGlobalBalance) {
+      setGlobalWalletBalanceError(
+        shouldClearGlobalBalance ? null : walletBalanceError,
+      );
+    }
+    setFundAction(selectedBot ? () => setFundOpen(true) : null);
+    setRefreshAction(() => void refresh());
+    setIsRefreshing(loading);
+    setShowFundButton(true);
+    setShowBalance(true);
+
+    // Cleanup actions on unmount
+    return () => {
+      setFundAction(null);
+      setRefreshAction(null);
+    };
+  }, [
+    onboardingStatus,
+    botsLoaded,
+    walletBalances,
+    walletBalanceError,
+    loading,
+    selectedBot,
+    setGlobalOnboardingStatus,
+    setGlobalWalletBalances,
+    setGlobalWalletBalanceError,
+    setFundAction,
+    setRefreshAction,
+    setIsRefreshing,
+    setShowFundButton,
+    setShowBalance,
+    refresh, // refresh is a dependency
+  ]);
 
   return (
-    <main>
-      <div className="sticky top-0 z-10 bg-paper border-b border-border py-4">
-        <div className="w-[min(1120px,92vw)] mx-auto flex items-center justify-between gap-4">
-          <a href="/" className="text-sm font-semibold tracking-tight">
-            Serious Trader Ralph
-          </a>
-          <div className="flex items-center justify-end gap-3 flex-wrap">
-            {ready && authenticated && (
-              <>
-                {bot && (
-                  <span className="inline-flex items-center rounded-full border border-border bg-surface px-2.5 py-1 text-[0.8rem] text-muted whitespace-nowrap">
-                    {walletBalances
-                      ? `${walletBalances.sol.display} SOL · ${walletBalances.usdc.display} USDC`
-                      : "Balance —"}
-                  </span>
-                )}
-                {bot && (
-                  <button
-                    className={BTN_PRIMARY}
-                    onClick={() => setFundOpen(true)}
-                    type="button"
-                  >
-                    Fund
-                  </button>
-                )}
-                <button
-                  className={BTN_SECONDARY}
-                  onClick={logout}
-                  type="button"
-                >
-                  Log out
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {(bot || createdBot) && (
+    <>
+      {selectedBot && (
         <FundingModal
           key={String(fundOpen)}
-          walletAddress={bot?.walletAddress ?? createdBot?.walletAddress ?? ""}
+          walletAddress={selectedBot.walletAddress}
           open={fundOpen}
           onClose={() => setFundOpen(false)}
         />
       )}
 
-      <section className="py-[clamp(3rem,6vw,6rem)] border-t border-border">
-        <div className="w-[min(1120px,92vw)] mx-auto">
-          <PresenceCard show={!!message}>
-            <div className="card card-flat p-5 mb-5">
-              <p className="label">Notice</p>
-              <p className="text-muted">{message}</p>
+      <CreateBotModal
+        open={createOpen}
+        onClose={() => {
+          if (createBusy) return;
+          setCreateOpen(false);
+          setCreateError(null);
+        }}
+        onSubmit={() => {
+          void createBot();
+        }}
+        onChange={setCreateForm}
+        form={createForm}
+        submitting={createBusy}
+        error={createError}
+        capBlocked={capBlocked}
+        limits={botLimits}
+        botCount={bots.length}
+      />
+
+      <section className="flex-1 min-h-0 w-full">
+        <div className="w-full h-full min-h-0">
+          <PresenceCard show={Boolean(message)}>
+            <div className="mb-4 rounded-md border-l-4 border-red-500 bg-red-500/10 p-3 text-sm text-red-400">
+              {message}
             </div>
           </PresenceCard>
 
           {!ready || !botsLoaded ? (
-            <div>
-              <h1>Loading…</h1>
+            <div className="flex items-center justify-center py-20">
+              <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-accent" />
             </div>
-          ) : shouldRedirectToCheckout ? (
-            <div>
-              <h1>Redirecting to checkout…</h1>
-            </div>
-          ) : showWizard ? (
-            <div>
-              <FadeUp>
-                <h1>Set up Ralph</h1>
-              </FadeUp>
-              <p className="text-muted mt-4 max-w-[600px]">
-                Answer a few questions, then we&apos;ll create your trading
-                agent and generate a dedicated wallet.
-              </p>
-
-              <div className="mt-8">
-                <WizardProgress step={wizardStep} />
-
-                {/* Step 1: Financial Profile */}
-                <PresenceCard show={wizardStep === 1}>
-                  <div className="card card-flat p-6">
-                    <p className="label">Financial profile</p>
-                    <p className="text-muted mt-2 mb-5">
-                      Standard investment suitability questions. All fields
-                      required.
-                    </p>
-                    <div className="grid gap-3">
-                      {PROFILE_FIELDS.map((field) => (
-                        <div key={field.key}>
-                          <label
-                            className="label mb-1 block"
-                            htmlFor={`profile-${field.key}`}
-                          >
-                            {field.label}
-                          </label>
-                          <select
-                            id={`profile-${field.key}`}
-                            className="input"
-                            value={profile[field.key]}
-                            onChange={(e) =>
-                              handleProfileChange(field.key, e.target.value)
-                            }
-                          >
-                            <option value="" disabled>
-                              Select…
-                            </option>
-                            {field.options.map((opt) => (
-                              <option key={opt} value={opt}>
-                                {opt}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ))}
-                      <div className="flex flex-wrap items-center gap-3 mt-2">
-                        <button
-                          className={BTN_PRIMARY}
-                          disabled={!profileComplete || loading}
-                          onClick={() => void saveProfileAndContinue()}
-                          type="button"
-                        >
-                          Continue
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </PresenceCard>
-
-                {/* Step 2: Billing */}
-                <PresenceCard show={wizardStep === 2}>
-                  <div className="card card-flat p-6">
-                    <p className="label">Annual license</p>
-                    <h2 className="mt-2.5">Pay in USDC or SOL on Solana</h2>
-                    <p className="text-muted mt-3 max-w-[560px]">
-                      Choose BYOK or Hobbyist. We generate a Solana Pay request
-                      and verify your on-chain transfer automatically.
-                    </p>
-                    <div className="grid gap-3 mt-5">
-                      {billingPlans.length === 0 ? (
-                        <div className="mt-2 grid gap-3">
-                          <Skeleton height="1.2rem" width="70%" />
-                          <Skeleton height="1.2rem" width="55%" />
-                        </div>
-                      ) : (
-                        billingPlans.map((plan) => (
-                          <button
-                            key={plan.id}
-                            type="button"
-                            onClick={() => {
-                              if (selectedPlanId !== plan.id) {
-                                setCheckoutIntent(null);
-                                setCheckoutUrl("");
-                              }
-                              setSelectedPlanId(plan.id);
-                            }}
-                            className={cn(
-                              "text-left rounded-md border p-4 transition-colors",
-                              selectedPlanId === plan.id
-                                ? "border-accent bg-accent-soft"
-                                : "border-border bg-surface hover:bg-paper",
-                            )}
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <strong>{plan.name}</strong>
-                              <span className="text-sm font-semibold">
-                                ${plan.amountUsd}/year
-                              </span>
-                            </div>
-                            <p className="text-muted text-sm mt-1">
-                              {plan.description}
-                            </p>
-                            <p className="text-muted text-xs mt-2">
-                              {plan.amountDecimal} {plan.currency} • SPL mint{" "}
-                              {plan.mint}
-                            </p>
-                          </button>
-                        ))
-                      )}
-                    </div>
-
-                    <div className="mt-5">
-                      <p className="label">Pay with</p>
-                      <div className="flex flex-wrap items-center gap-2 mt-2">
-                        {(["USDC", "SOL"] as const).map((asset) => (
-                          <button
-                            key={asset}
-                            type="button"
-                            className={cn(
-                              BTN_SECONDARY,
-                              selectedPaymentAsset === asset &&
-                                "!border-accent !bg-accent-soft",
-                            )}
-                            onClick={() => {
-                              if (selectedPaymentAsset !== asset) {
-                                setCheckoutIntent(null);
-                                setCheckoutUrl("");
-                              }
-                              setSelectedPaymentAsset(asset);
-                            }}
-                          >
-                            {asset}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-3 mt-5">
-                      <button
-                        className={BTN_PRIMARY}
-                        onClick={() => void beginCheckout()}
-                        disabled={
-                          loading ||
-                          subscription?.active === true ||
-                          !selectedPlan
-                        }
-                        type="button"
-                      >
-                        {loading ? "Preparing…" : "Generate payment request"}
-                      </button>
-                      {checkoutIntent && !subscription?.active && (
-                        <button
-                          className={BTN_SECONDARY}
-                          onClick={() => void checkCheckoutStatus()}
-                          disabled={checkingPayment}
-                          type="button"
-                        >
-                          {checkingPayment ? "Checking…" : "I paid, check now"}
-                        </button>
-                      )}
-                      {subscription?.active && (
-                        <button
-                          className={BTN_PRIMARY}
-                          onClick={() => setWizardStep(3)}
-                          type="button"
-                        >
-                          Continue
-                        </button>
-                      )}
-                    </div>
-
-                    {checkoutIntent && checkoutUrl && !subscription?.active && (
-                      <div className="mt-6 rounded-md border border-border bg-paper p-4">
-                        <p className="label">Checkout request</p>
-                        <p className="text-muted text-sm mt-1">
-                          Send exactly {checkoutIntent.payment.amountDecimal}{" "}
-                          {checkoutIntent.payment.currency} before{" "}
-                          {checkoutIntent.expiresAt}.
-                        </p>
-                        <div className="flex justify-center mt-4">
-                          <QRCodeSVG
-                            value={checkoutUrl}
-                            size={180}
-                            level="M"
-                            bgColor="transparent"
-                            fgColor="var(--color-ink)"
-                          />
-                        </div>
-                        <div className="grid gap-1 mt-4">
-                          <span className="text-muted text-[0.85rem]">
-                            Recipient
-                          </span>
-                          <code>{checkoutIntent.payment.recipient}</code>
-                        </div>
-                        <div className="grid gap-1 mt-3">
-                          <span className="text-muted text-[0.85rem]">
-                            Solana Pay URL
-                          </span>
-                          <code className="break-all">{checkoutUrl}</code>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-3 mt-4">
-                          <a
-                            className={BTN_SECONDARY}
-                            href={checkoutUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Open in wallet
-                          </a>
-                        </div>
-                      </div>
+          ) : (
+            <div className="relative h-full">
+              {hasCustomGridLayout && (
+                <div className="pointer-events-none absolute right-2 top-2 z-20">
+                  <button
+                    className={cn(
+                      BTN_SECONDARY,
+                      "pointer-events-auto h-7 border-border/70 bg-paper/90 px-2.5 text-[11px] backdrop-blur",
                     )}
-                  </div>
-                </PresenceCard>
-
-                {/* Step 3: Create Agent */}
-                <PresenceCard show={wizardStep === 3}>
-                  <div className="card card-flat p-6">
-                    <p className="label">Create agent</p>
-                    {!createdBot ? (
-                      <div className="mt-4 grid gap-3">
-                        <Skeleton height="1.2rem" width="70%" />
-                        <Skeleton height="1rem" width="50%" />
-                        <Skeleton
-                          height="2.5rem"
-                          width="40%"
-                          style={{ marginTop: "0.5rem" }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="mt-4">
-                        <h2 className="mt-1.5">Ralph is ready</h2>
-                        <div className="grid gap-2.5 mt-4">
-                          <div className="grid gap-1">
-                            <span className="text-muted text-[0.85rem]">
-                              Wallet address
-                            </span>
-                            <code>{createdBot.walletAddress}</code>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-3 mt-5">
-                          <button
-                            className={BTN_PRIMARY}
-                            onClick={() => setWizardStep(4)}
-                            type="button"
-                          >
-                            Continue
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </PresenceCard>
-
-                {/* Step 4: Fund Wallet */}
-                <PresenceCard show={wizardStep === 4}>
-                  <div className="card card-flat p-6">
-                    <p className="label">Fund wallet</p>
-                    <h2 className="mt-2.5">Send SOL or USDC to your agent</h2>
-                    <p className="text-muted mt-3 max-w-[520px]">
-                      Fund your agent with SOL (for fees) and USDC (for
-                      trading). You can always fund later from the dashboard.
+                    onClick={resetDashboardLayout}
+                    title="Reorganize layout (R)"
+                    type="button"
+                  >
+                    Reset layout
+                  </button>
+                </div>
+              )}
+              {/* ─── NEW MONITOR GRID LAYOUT (Draggable / High Density) ─── */}
+              <DashboardGrid
+                key={gridRevision}
+                className="w-full h-full border border-border bg-border pb-1"
+                onLayoutChange={() =>
+                  setHasCustomGridLayout(hasCustomDashboardGridLayouts())
+                }
+              >
+                {/* AREA: MARKET MONITOR */}
+                <div
+                  key="market"
+                  className="flex flex-col overflow-hidden bg-surface"
+                >
+                  <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
+                    <p className="label flex items-center gap-2 dashboard-drag-handle cursor-move select-none">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      MARKET_MONITOR
                     </p>
-                    <div className="flex flex-wrap items-center gap-3 mt-5">
-                      <button
-                        className={BTN_PRIMARY}
-                        onClick={() => setFundOpen(true)}
-                        type="button"
+                    <div className="flex gap-2 text-[10px] font-mono uppercase tracking-wider">
+                      <span className="text-muted">SOL/USDC</span>
+                      <span
+                        className={cn(
+                          "tabular-nums",
+                          (marketFeed.change24hPct ?? 0) >= 0
+                            ? "text-emerald-400"
+                            : "text-red-400",
+                        )}
                       >
-                        Fund your bot
-                      </button>
-                      <button
-                        className={BTN_SECONDARY}
-                        onClick={finishOnboarding}
-                        type="button"
-                      >
-                        Skip to dashboard
-                      </button>
-                    </div>
-                    <p className="text-muted text-[0.85rem] mt-3">
-                      You can fund later — this step is not blocking.
-                    </p>
-                  </div>
-                </PresenceCard>
-              </div>
-            </div>
-          ) : showDashboard && bot ? (
-            <div>
-              {/* Agent status card */}
-              <FadeUp delay={0.1}>
-                <div className="card p-6 mt-8">
-                  <div className="flex flex-wrap items-center gap-3 justify-between">
-                    <p className="label">Agent</p>
-                    <PillPop
-                      className={cn(
-                        "inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-medium",
-                        bot.enabled
-                          ? "border-accent bg-accent-soft text-ink"
-                          : "border-border bg-surface text-muted",
-                      )}
-                    >
-                      {bot.enabled ? "On" : "Off"}
-                    </PillPop>
-                  </div>
-                  <h2 className="mt-1.5">{bot.name}</h2>
-                  <div className="grid gap-2.5 mt-4">
-                    <div className="grid gap-1">
-                      <span className="text-muted text-[0.85rem]">
-                        Subscription
+                        ${formatPrice(marketFeed.latestPrice)}
                       </span>
-                      <code>
-                        {subscription?.active
-                          ? (subscription.planName ?? "Active")
-                          : "Inactive"}
-                      </code>
                     </div>
-                    <div className="grid gap-1">
-                      <span className="text-muted text-[0.85rem]">Wallet</span>
-                      <code>{bot.walletAddress}</code>
-                    </div>
-                    <div className="grid gap-1">
-                      <span className="text-muted text-[0.85rem]">
-                        Last tick
-                      </span>
-                      <code>{formatTick(bot.lastTickAt)}</code>
-                    </div>
-                    <div className="grid gap-1">
-                      <span className="text-muted text-[0.85rem]">Trades</span>
-                      <code>{trades.length}</code>
-                    </div>
-                    {bot.lastError ? (
-                      <div className="grid gap-1">
-                        <span className="text-muted text-[0.85rem]">
-                          Last error
-                        </span>
-                        <code>{bot.lastError}</code>
-                      </div>
-                    ) : null}
                   </div>
-
-                  <div className="flex flex-wrap items-center gap-3 mt-6">
-                    {bot.enabled ? (
-                      <button
-                        className={BTN_SECONDARY}
-                        onClick={() => void stopBot(bot.id)}
-                        disabled={loading || !subscription?.active}
-                        type="button"
-                      >
-                        Stop
-                      </button>
-                    ) : (
-                      <button
-                        className={BTN_PRIMARY}
-                        onClick={() => void startBot(bot.id)}
-                        disabled={loading || !subscription?.active}
-                        type="button"
-                      >
-                        Start
-                      </button>
-                    )}
-                    <button
-                      className={BTN_SECONDARY}
-                      onClick={() => void tickBot(bot.id)}
-                      disabled={loading || !subscription?.active}
-                      type="button"
-                    >
-                      Tick now
-                    </button>
-                    <button
-                      className={BTN_SECONDARY}
-                      onClick={() => router.push(`/app/bots/${bot.id}`)}
-                      disabled={loading}
-                      type="button"
-                    >
-                      Open workspace
-                    </button>
+                  <div className="flex-1 relative bg-[var(--color-chart-bg)]">
+                    <MarketChart className="opacity-80" />
                   </div>
                 </div>
-              </FadeUp>
 
-              {/* Funding reminder when no trades */}
-              <PresenceCard show={trades.length === 0}>
-                <div className="card card-flat p-6 mt-6 border border-accent/30">
-                  <p className="label">Funding</p>
-                  <p className="text-muted mt-1.5">
-                    Your agent hasn&apos;t made any trades yet. Make sure the
-                    wallet is funded with SOL or USDC, then start the agent.
-                  </p>
-                  <div className="flex flex-wrap items-center gap-3 mt-3">
-                    <button
-                      className={BTN_PRIMARY}
-                      onClick={() => setFundOpen(true)}
-                      type="button"
-                    >
-                      Fund your bot
-                    </button>
+                {/* AREA: AGENT STATS */}
+                <div
+                  key="agents"
+                  className="flex flex-col overflow-hidden bg-surface"
+                >
+                  <div className="flex items-center justify-between border-b border-border bg-surface/50 px-3 py-1.5 shrink-0">
+                    <p className="text-[10px] uppercase tracking-wider text-muted font-bold dashboard-drag-handle cursor-move select-none">
+                      AGENT_STATUS
+                    </p>
+                    <span className="text-[10px] text-muted font-mono">
+                      {bots.length} ACTIVE
+                    </span>
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <AgentStats
+                      bots={bots}
+                      selectedBotId={selectedBotId}
+                      onSelectBot={setSelectedBotId}
+                      onCreateBot={() => {
+                        setCreateOpen(true);
+                        setCreateError(null);
+                      }}
+                      onStartBot={startBot}
+                      onStopBot={stopBot}
+                      loading={loading}
+                      hasManualAccess={hasManualAccess}
+                      selectedBotInferenceConfigured={
+                        selectedBotInferenceConfigured
+                      }
+                    />
                   </div>
                 </div>
-              </PresenceCard>
 
-              {/* Recent trades */}
-              <FadeUp delay={0.2}>
-                <div className="card card-flat p-6 mt-6">
-                  <div className="flex flex-wrap items-center gap-3 justify-between">
-                    <p className="label">Recent trades</p>
-                    <button
-                      className={cn(BTN_SECONDARY, "!px-3 !py-1.5 !text-xs")}
-                      onClick={() => void refreshTrades(bot.id)}
-                      disabled={loading}
-                      type="button"
-                    >
-                      Refresh
-                    </button>
+                {/* AREA: WALLET & EXECUTION */}
+                <div
+                  key="wallet"
+                  className="flex flex-col overflow-hidden bg-surface"
+                >
+                  <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
+                    <p className="label text-[10px] text-muted dashboard-drag-handle cursor-move select-none">
+                      WALLET_AND_PNL
+                    </p>
                   </div>
-                  <div className="mt-4">
-                    {trades.length === 0 ? (
-                      <p className="text-muted">
-                        No trades yet. Start the agent after funding.
+                  <div className="flex-1 p-4 grid grid-cols-2 gap-4 place-content-center">
+                    <div className="space-y-1">
+                      <p className="text-[10px] text-muted uppercase tracking-wider">
+                        Solana Balance
                       </p>
-                    ) : (
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr>
-                            <th className="border border-border px-3 py-2.5 text-left text-xs font-semibold text-muted bg-surface">
-                              Time
-                            </th>
-                            <th className="border border-border px-3 py-2.5 text-left text-xs font-semibold text-muted bg-surface">
-                              Market
-                            </th>
-                            <th className="border border-border px-3 py-2.5 text-left text-xs font-semibold text-muted bg-surface">
-                              Side
-                            </th>
-                            <th className="border border-border px-3 py-2.5 text-left text-xs font-semibold text-muted bg-surface">
-                              Status
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {trades.map((t) => (
-                            <tr key={t.id}>
-                              <td className="border border-border px-3 py-2.5 text-muted text-[0.85rem] align-top">
-                                {t.createdAt}
-                              </td>
-                              <td className="border border-border px-3 py-2.5 text-[0.85rem] align-top">
-                                {t.market ?? "—"}
-                              </td>
-                              <td className="border border-border px-3 py-2.5 text-[0.85rem] align-top">
-                                {t.side ?? "—"}
-                              </td>
-                              <td className="border border-border px-3 py-2.5 text-[0.85rem] align-top">
-                                <span className="inline-flex items-center px-2 py-1 rounded-full border border-border text-xs font-medium text-muted bg-surface">
-                                  {t.status ?? "—"}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
+                      <p className="text-2xl font-mono font-medium text-ink">
+                        {formatSolBalanceDisplay(
+                          walletBalances?.sol.lamports ?? "0",
+                        )}
+                        <span className="text-sm text-muted ml-1 font-sans">
+                          SOL
+                        </span>
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[10px] text-muted uppercase tracking-wider">
+                        USDC Balance
+                      </p>
+                      <p className="text-2xl font-mono font-medium text-ink">
+                        {formatUsdcBalanceDisplay(
+                          walletBalances?.usdc.atomic ?? "0",
+                        )}
+                        <span className="text-sm text-muted ml-1 font-sans">
+                          USDC
+                        </span>
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </FadeUp>
+
+                <div key="macro_radar" className="overflow-hidden">
+                  <MacroRadarWidget />
+                </div>
+
+                <div key="macro_fred" className="overflow-hidden">
+                  <MacroFredWidget />
+                </div>
+
+                <div key="macro_etf" className="overflow-hidden">
+                  <MacroEtfWidget />
+                </div>
+
+                <div key="macro_stablecoin" className="overflow-hidden">
+                  <MacroStablecoinWidget />
+                </div>
+
+                <div key="macro_oil" className="overflow-hidden">
+                  <MacroOilWidget />
+                </div>
+              </DashboardGrid>
             </div>
-          ) : null}
+          )}
         </div>
       </section>
-    </main>
+    </>
+  );
+}
+
+function CreateBotModal(props: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: () => void;
+  onChange: (next: CreateBotForm) => void;
+  form: CreateBotForm;
+  submitting: boolean;
+  error: string | null;
+  capBlocked: boolean;
+  limits: BotCreationLimits | null;
+  botCount: number;
+}) {
+  const {
+    open,
+    onClose,
+    onSubmit,
+    onChange,
+    form,
+    submitting,
+    error,
+    capBlocked,
+    limits,
+    botCount,
+  } = props;
+
+  if (!open) return null;
+
+  const requiredUsd = limits?.requiredUsdForExtraBots ?? "5000";
+  const currentUsd = limits?.currentUsd ?? "0.00";
+  const maxFreeBots = limits?.maxFreeBots ?? 3;
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-[4px]"
+      onClick={onClose}
+    >
+      <div
+        className="card w-[min(560px,94vw)] p-0"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <p className="font-semibold">Create Bot</p>
+          <button
+            className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:bg-surface"
+            onClick={onClose}
+            type="button"
+            disabled={submitting}
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="space-y-4 p-5">
+          <div className="rounded-md border border-border bg-paper p-3 text-xs text-muted">
+            <p>
+              {maxFreeBots} free bots. Extra bots require at least $
+              {formatUsdLabel(requiredUsd)} across the oldest {maxFreeBots} bot
+              wallets.
+            </p>
+            <p className="mt-1">
+              Current baseline value: ${formatUsdLabel(currentUsd)} (SOL + USDC
+              only).
+            </p>
+            {capBlocked && botCount >= maxFreeBots && (
+              <p className="mt-2 text-amber-300">
+                Creation is blocked until the threshold is met.
+              </p>
+            )}
+          </div>
+
+          <label className="block">
+            <span className="mb-1 block text-xs text-muted">Bot name</span>
+            <input
+              className="input"
+              value={form.name}
+              maxLength={120}
+              onChange={(event) =>
+                onChange({
+                  ...form,
+                  name: event.target.value,
+                })
+              }
+              placeholder="Momentum-SOL"
+            />
+          </label>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="block md:col-span-2">
+              <span className="mb-1 block text-xs text-muted">
+                Provider base URL
+              </span>
+              <input
+                className="input"
+                value={form.baseUrl}
+                onChange={(event) =>
+                  onChange({
+                    ...form,
+                    baseUrl: event.target.value,
+                  })
+                }
+                placeholder="https://api.z.ai/api/paas/v4"
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-xs text-muted">Model</span>
+              <input
+                className="input"
+                value={form.model}
+                onChange={(event) =>
+                  onChange({
+                    ...form,
+                    model: event.target.value,
+                  })
+                }
+                placeholder="glm-5"
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-xs text-muted">
+                Provider kind
+              </span>
+              <input
+                className="input bg-subtle text-muted"
+                value="openai_compatible"
+                readOnly
+              />
+            </label>
+          </div>
+
+          <label className="block">
+            <span className="mb-1 block text-xs text-muted">API key</span>
+            <input
+              className="input"
+              type="password"
+              value={form.apiKey}
+              onChange={(event) =>
+                onChange({
+                  ...form,
+                  apiKey: event.target.value,
+                })
+              }
+              placeholder="sk-..."
+            />
+          </label>
+
+          {error && (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
+              {error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2">
+            <button
+              className={cn(BTN_SECONDARY, "h-9 px-3 text-xs")}
+              onClick={onClose}
+              type="button"
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+            <button
+              className={cn(BTN_PRIMARY, "h-9 px-3 text-xs")}
+              onClick={onSubmit}
+              type="button"
+              disabled={submitting || capBlocked}
+            >
+              {submitting ? "Creating..." : "Create bot"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

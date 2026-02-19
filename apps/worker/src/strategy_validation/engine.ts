@@ -1,4 +1,6 @@
 import { getLoopConfig, updateLoopConfig } from "../config";
+import { createDataSourceRegistry } from "../data_sources/registry";
+import type { FixturePattern, PriceBar } from "../data_sources/types";
 import { SOL_MINT, USDC_MINT } from "../defaults";
 import type {
   DataSourcesConfig,
@@ -13,8 +15,6 @@ import type {
   ValidationGateMode,
   ValidationProfile,
 } from "../types";
-import { createDataSourceRegistry } from "../data_sources/registry";
-import type { FixturePattern, PriceBar } from "../data_sources/types";
 import { computeStrategyHash } from "./hash";
 import { computeValidationMetrics, type ValidationMetrics } from "./metrics";
 import { getValidationThresholds, type ValidationThresholds } from "./profiles";
@@ -112,7 +112,12 @@ export type StartGateLatestValidation = {
   createdAt: string;
 };
 
-function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+function clampInt(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(n)));
@@ -134,7 +139,9 @@ export function normalizeValidationConfig(
 ): NormalizedValidationConfig {
   const profileRaw = input?.profile;
   const profile: ValidationProfile =
-    profileRaw === "strict" || profileRaw === "loose" || profileRaw === "balanced"
+    profileRaw === "strict" ||
+    profileRaw === "loose" ||
+    profileRaw === "balanced"
       ? profileRaw
       : "balanced";
   const gateModeRaw = input?.gateMode;
@@ -163,20 +170,42 @@ export function normalizeAutotuneConfig(
     maxChangePctPerTune: clampFloat(input?.maxChangePctPerTune, 10, 1, 50),
     rails: {
       dca: {
-        everyMinutesMin: clampInt(input?.rails?.dca?.everyMinutesMin, 15, 1, 10_000),
-        everyMinutesMax: clampInt(input?.rails?.dca?.everyMinutesMax, 240, 1, 10_000),
+        everyMinutesMin: clampInt(
+          input?.rails?.dca?.everyMinutesMin,
+          15,
+          1,
+          10_000,
+        ),
+        everyMinutesMax: clampInt(
+          input?.rails?.dca?.everyMinutesMax,
+          240,
+          1,
+          10_000,
+        ),
         amountMinRatio: clampFloat(0.5, 0.5, 0.1, 2),
         amountMaxRatio: clampFloat(1.5, 1.5, 0.1, 5),
       },
       rebalance: {
-        thresholdPctMin: clampFloat(input?.rails?.rebalance?.thresholdPctMin, 0.005, 0.001, 1),
-        thresholdPctMax: clampFloat(input?.rails?.rebalance?.thresholdPctMax, 0.05, 0.001, 1),
+        thresholdPctMin: clampFloat(
+          input?.rails?.rebalance?.thresholdPctMin,
+          0.005,
+          0.001,
+          1,
+        ),
+        thresholdPctMax: clampFloat(
+          input?.rails?.rebalance?.thresholdPctMax,
+          0.05,
+          0.001,
+          1,
+        ),
       },
     },
   };
 }
 
-function supportsQuantValidation(strategy: StrategyConfig | undefined): strategy is DcaStrategy | RebalanceStrategy {
+function supportsQuantValidation(
+  strategy: StrategyConfig | undefined,
+): strategy is DcaStrategy | RebalanceStrategy {
   return (
     !!strategy &&
     typeof strategy === "object" &&
@@ -186,7 +215,10 @@ function supportsQuantValidation(strategy: StrategyConfig | undefined): strategy
 }
 
 function parseMetricsMaybe(value: unknown): ValidationMetrics {
-  const v = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const v =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
   return {
     netReturnPct: Number(v.netReturnPct ?? 0),
     maxDrawdownPct: Number(v.maxDrawdownPct ?? 0),
@@ -223,10 +255,7 @@ function buildBarsRequest(
   }
 
   // For DCA validation we map into a base/quote orientation suitable for directional evaluation.
-  if (
-    strategy.inputMint === USDC_MINT &&
-    strategy.outputMint === SOL_MINT
-  ) {
+  if (strategy.inputMint === USDC_MINT && strategy.outputMint === SOL_MINT) {
     return {
       baseMint: SOL_MINT,
       quoteMint: USDC_MINT,
@@ -237,10 +266,7 @@ function buildBarsRequest(
     };
   }
 
-  if (
-    strategy.inputMint === SOL_MINT &&
-    strategy.outputMint === USDC_MINT
-  ) {
+  if (strategy.inputMint === SOL_MINT && strategy.outputMint === USDC_MINT) {
     return {
       baseMint: SOL_MINT,
       quoteMint: USDC_MINT,
@@ -272,7 +298,10 @@ function simulateDca(
   effectiveCostBps: number,
 ): SimulatedSeries {
   const sorted = [...bars].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
-  const intervalBars = Math.max(1, Math.floor((strategy.everyMinutes ?? 60) / 60));
+  const intervalBars = Math.max(
+    1,
+    Math.floor((strategy.everyMinutes ?? 60) / 60),
+  );
   const costRate = effectiveCostBps / 10_000;
   const finalClose = sorted[sorted.length - 1]?.close ?? 0;
 
@@ -288,7 +317,12 @@ function simulateDca(
 
   for (let i = 0; i < sorted.length; i += intervalBars) {
     const entry = sorted[i]?.close ?? 0;
-    if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(finalClose) || finalClose <= 0) {
+    if (
+      !Number.isFinite(entry) ||
+      entry <= 0 ||
+      !Number.isFinite(finalClose) ||
+      finalClose <= 0
+    ) {
       continue;
     }
 
@@ -350,7 +384,7 @@ function simulateRebalance(
     if (price <= 0 || nextPrice <= 0) continue;
 
     let valueNow = baseUnits * price + quoteCash;
-    let baseValue = baseUnits * price;
+    const baseValue = baseUnits * price;
     const basePct = valueNow > 0 ? baseValue / valueNow : 0;
 
     if (Math.abs(basePct - target) > threshold) {
@@ -529,13 +563,17 @@ function tuneDcaStrategy(
   const amountMin = BigInt(
     Math.max(
       1,
-      Math.floor(Number(currentAmount.toString()) * autotune.rails.dca.amountMinRatio),
+      Math.floor(
+        Number(currentAmount.toString()) * autotune.rails.dca.amountMinRatio,
+      ),
     ),
   );
   const amountMax = BigInt(
     Math.max(
       1,
-      Math.floor(Number(currentAmount.toString()) * autotune.rails.dca.amountMaxRatio),
+      Math.floor(
+        Number(currentAmount.toString()) * autotune.rails.dca.amountMaxRatio,
+      ),
     ),
   );
   const everyMin = autotune.rails.dca.everyMinutesMin;
@@ -546,7 +584,11 @@ function tuneDcaStrategy(
   let reason = "no-change";
 
   if (shouldRiskOff(metrics, thresholds)) {
-    nextAmount = adjustBigintByPct(currentAmount, autotune.maxChangePctPerTune, false);
+    nextAmount = adjustBigintByPct(
+      currentAmount,
+      autotune.maxChangePctPerTune,
+      false,
+    );
     nextEvery = Math.floor(
       currentEvery * (1 + autotune.maxChangePctPerTune / 100),
     );
@@ -710,7 +752,9 @@ export function evaluateStartGate(input: {
     };
   }
   const nowMs = input.nowMs ?? Date.now();
-  const latestMs = Date.parse(input.latest.completedAt ?? input.latest.createdAt);
+  const latestMs = Date.parse(
+    input.latest.completedAt ?? input.latest.createdAt,
+  );
   if (!Number.isFinite(latestMs) || nowMs - latestMs > DAY_MS) {
     return {
       ok: false,
@@ -750,7 +794,10 @@ export async function runValidationForTenant(
     throw new Error("validation-disabled");
   }
 
-  const thresholds = getValidationThresholds(validation.profile, validation.minTrades);
+  const thresholds = getValidationThresholds(
+    validation.profile,
+    validation.minTrades,
+  );
   const strategyHash = await computeStrategyHash(currentConfig);
   const runId = await createValidationRun(env, {
     tenantId,
@@ -813,7 +860,8 @@ export async function runValidationForTenant(
 
     await recordStrategyEvent(env, {
       tenantId,
-      eventType: status === "passed" ? "validation_passed" : "validation_failed",
+      eventType:
+        status === "passed" ? "validation_passed" : "validation_failed",
       actor,
       reason,
       beforeConfig: currentConfig,
@@ -826,7 +874,13 @@ export async function runValidationForTenant(
       validation.autoEnableOnPass &&
       (opts?.autoEnableOnPass ?? true);
     if (shouldEnable) {
-      await maybeAutoEnableValidatedStrategy(env, tenantId, currentConfig, actor, runId);
+      await maybeAutoEnableValidatedStrategy(
+        env,
+        tenantId,
+        currentConfig,
+        actor,
+        runId,
+      );
       const after = await getRuntimeState(env, tenantId);
       await updateRuntimeState(env, tenantId, markActiveState(after));
     }
@@ -948,7 +1002,9 @@ export async function maybeRevalidateAndTuneForTenant(
   if (!validation.enabled) return;
 
   const runtime = await getRuntimeState(env, tenantId);
-  const nextAt = runtime.nextRevalidateAt ? Date.parse(runtime.nextRevalidateAt) : NaN;
+  const nextAt = runtime.nextRevalidateAt
+    ? Date.parse(runtime.nextRevalidateAt)
+    : NaN;
   if (Number.isFinite(nextAt) && nextAt > Date.now()) return;
 
   const result = await runValidationForTenant(env, tenantId, {
@@ -972,14 +1028,26 @@ export async function maybeRevalidateAndTuneForTenant(
 
   if (fresh.consecutiveFailures === 1 && canTune(fresh, autotune)) {
     const strategy = currentConfig.strategy;
-    let tuned:
-      | { changed: boolean; strategy: DcaStrategy | RebalanceStrategy; reason: string }
-      | null = null;
+    let tuned: {
+      changed: boolean;
+      strategy: DcaStrategy | RebalanceStrategy;
+      reason: string;
+    } | null = null;
 
     if (strategy?.type === "dca") {
-      tuned = tuneDcaStrategy(strategy, result.metrics, result.thresholds, autotune);
+      tuned = tuneDcaStrategy(
+        strategy,
+        result.metrics,
+        result.thresholds,
+        autotune,
+      );
     } else if (strategy?.type === "rebalance") {
-      tuned = tuneRebalanceStrategy(strategy, result.metrics, result.thresholds, autotune);
+      tuned = tuneRebalanceStrategy(
+        strategy,
+        result.metrics,
+        result.thresholds,
+        autotune,
+      );
     }
 
     if (tuned?.changed) {
@@ -1016,7 +1084,11 @@ export async function maybeRevalidateAndTuneForTenant(
 
   if (fresh.consecutiveFailures >= 2) {
     const beforeConfig = await getLoopConfig(env, tenantId);
-    const afterConfig = await updateLoopConfig(env, { enabled: false }, tenantId);
+    const afterConfig = await updateLoopConfig(
+      env,
+      { enabled: false },
+      tenantId,
+    );
     await env.WAITLIST_DB.prepare(
       "UPDATE bots SET enabled = 0, last_error = ?1, updated_at = datetime('now') WHERE id = ?2",
     )
@@ -1039,14 +1111,16 @@ export async function maybeRevalidateAndTuneForTenant(
       validationId: result.validationId,
     });
 
-    log?.("error", "strategy auto-suspended after repeated validation failure", {
-      validationId: result.validationId,
-    });
+    log?.(
+      "error",
+      "strategy auto-suspended after repeated validation failure",
+      {
+        validationId: result.validationId,
+      },
+    );
   }
 }
 
-export function metricsFromValidationRun(
-  metrics: unknown,
-): ValidationMetrics {
+export function metricsFromValidationRun(metrics: unknown): ValidationMetrics {
   return parseMetricsMaybe(metrics);
 }

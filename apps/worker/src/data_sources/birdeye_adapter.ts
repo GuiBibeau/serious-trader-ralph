@@ -1,5 +1,9 @@
 import type { Env } from "../types";
-import type { HistoricalBarsRequest, MarketDataAdapter, PriceBar } from "./types";
+import type {
+  HistoricalBarsRequest,
+  MarketDataAdapter,
+  PriceBar,
+} from "./types";
 import { instrumentKey } from "./types";
 
 type BirdeyeOhlcvItem = {
@@ -33,11 +37,17 @@ export class BirdeyeDataAdapter implements MarketDataAdapter {
       throw new Error("birdeye-api-key-missing");
     }
 
-    const url = new URL("/defi/ohlcv/base_quote", "https://public-api.birdeye.so");
+    const url = new URL(
+      "/defi/ohlcv/base_quote",
+      "https://public-api.birdeye.so",
+    );
     url.searchParams.set("base_address", request.baseMint);
     url.searchParams.set("quote_address", request.quoteMint);
     url.searchParams.set("type", "1H");
-    url.searchParams.set("time_from", String(Math.floor(request.startMs / 1000)));
+    url.searchParams.set(
+      "time_from",
+      String(Math.floor(request.startMs / 1000)),
+    );
     url.searchParams.set("time_to", String(Math.floor(request.endMs / 1000)));
 
     const response = await fetch(url.toString(), {
@@ -51,7 +61,9 @@ export class BirdeyeDataAdapter implements MarketDataAdapter {
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error(`birdeye-ohlcv-failed:${response.status}${body ? `:${body}` : ""}`);
+      throw new Error(
+        `birdeye-ohlcv-failed:${response.status}${body ? `:${body}` : ""}`,
+      );
     }
 
     const payload = (await response.json()) as BirdeyeOhlcvResponse;
@@ -72,7 +84,13 @@ export class BirdeyeDataAdapter implements MarketDataAdapter {
       const low = toNumber(item.l);
       const close = toNumber(item.c);
       const volume = toNumber(item.v) ?? undefined;
-      if (tsSec === null || open === null || high === null || low === null || close === null) {
+      if (
+        tsSec === null ||
+        open === null ||
+        high === null ||
+        low === null ||
+        close === null
+      ) {
         continue;
       }
       bars.push({

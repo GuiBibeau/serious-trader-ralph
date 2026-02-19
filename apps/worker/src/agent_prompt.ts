@@ -1,3 +1,4 @@
+import { inferMandateProfile } from "./agent_mandate";
 import type { NormalizedPolicy } from "./policy";
 import type { TradeIndexResult } from "./trade_index";
 import type { AgentMemory, AgentStrategy, MarketSnapshot } from "./types";
@@ -29,8 +30,10 @@ export function buildAgentSystemPrompt(input: {
 }): string {
   const { memory, snapshot, recentTrades, strategy, policy } = input;
 
-  const maxTradesPerDay = strategy.maxTradesPerDay ?? 5;
-  const remaining = Math.max(0, maxTradesPerDay - memory.tradesProposedToday);
+  const mandate =
+    (strategy.mandate ?? "").trim() ||
+    "Trade aggressively and opportunistically on Solana to maximize absolute PnL within policy constraints.";
+  const mandateProfile = inferMandateProfile(mandate);
 
   const observationsBlock =
     memory.observations.length > 0
@@ -43,6 +46,19 @@ export function buildAgentSystemPrompt(input: {
     memory.reflections.length > 0
       ? memory.reflections.map((r, i) => `${i + 1}. ${r}`).join("\n")
       : "(none yet)";
+  const latestCompaction =
+    memory.compaction?.summaries?.[memory.compaction.summaries.length - 1] ??
+    null;
+  const compactionBlock = latestCompaction
+    ? [
+        `Last compacted at: ${latestCompaction.generatedAt}`,
+        `Facts: ${latestCompaction.facts.slice(0, 4).join(" | ") || "(none)"}`,
+        `Decisions: ${latestCompaction.decisions.slice(0, 4).join(" | ") || "(none)"}`,
+        `Open threads: ${latestCompaction.openThreads.slice(0, 4).join(" | ") || "(none)"}`,
+        `Risk flags: ${latestCompaction.riskFlags.slice(0, 4).join(" | ") || "(none)"}`,
+        `Pending steering: ${latestCompaction.pendingSteering.slice(0, 4).join(" | ") || "(none)"}`,
+      ].join("\n")
+    : "(none yet)";
 
   const tradesBlock =
     recentTrades.length > 0
@@ -54,11 +70,6 @@ export function buildAgentSystemPrompt(input: {
           .join("\n")
       : "(no trades yet)";
 
-  const mandate =
-    strategy.mandate ||
-    "Build a disciplined trading strategy. Research before acting.";
-  const minConfidence = strategy.minConfidence ?? "medium";
-
   const baseBalanceDisplay = formatAtomic(snapshot.baseBalanceAtomic, 9, 4);
   const quoteBalanceDisplay = formatAtomic(
     snapshot.quoteBalanceAtomic,
@@ -69,6 +80,11 @@ export function buildAgentSystemPrompt(input: {
   return `You are Ralph, an autonomous trading agent operating on Solana.
 You run in a loop. Each tick you may call tools to observe, research, and act.
 
+DECISION HIERARCHY (strict):
+1) Never violate POLICY CONSTRAINTS.
+2) Execute the fund-manager mandate as your primary objective.
+3) Use generic risk heuristics only when mandate is silent.
+
 YOUR MEMORY (persists between ticks):
 Thesis: ${memory.thesis || "No thesis yet. Build one from your observations."}
 
@@ -77,6 +93,9 @@ ${observationsBlock}
 
 Learnings:
 ${reflectionsBlock}
+
+Compacted context memory:
+${compactionBlock}
 
 CURRENT MARKET STATE:
 Timestamp: ${snapshot.ts}
@@ -94,6 +113,12 @@ ${tradesBlock}
 YOUR MANDATE (from the fund manager):
 ${mandate}
 
+MANDATE EXECUTION MODE:
+- Aggressive posture: ${mandateProfile.aggressive ? "ON" : "OFF"}
+- Opportunistic posture: ${mandateProfile.opportunistic ? "ON" : "OFF"}
+- If Allowed mints is "any", do NOT self-restrict to SOL/USDC.
+- Seek edge across policy-allowed Solana assets (including DeFi/meme) when liquidity/impact constraints permit.
+
 POLICY CONSTRAINTS (non-negotiable):
 Allowed mints: ${policy.allowedMints.length > 0 ? policy.allowedMints.join(", ") : "any"}
 Max price impact: ${(policy.maxPriceImpactPct * 100).toFixed(1)}%
@@ -101,13 +126,16 @@ Slippage tolerance: ${policy.slippageBps} bps
 Min SOL reserve (fees/rent): ${policy.minSolReserveLamports} lamports
 Simulate-only mode: ${policy.simulateOnly}
 Dry run: ${policy.dryRun}
-Trades remaining today: ${remaining} of ${maxTradesPerDay}
-Minimum trade confidence: ${minConfidence}
 
 TOOL LOOP RULES:
 1. You may call tools multiple times in a tick to gather data and validate actions.
-2. Execute at most ONE trade per tick (trade_jupiter_swap).
+2. You may execute multiple trades in a tick when the mandate and policy support it.
 3. When you are done, call control_finish with a concise summary and reasoning.
-4. If you are uncertain, gather more data or finish without trading.
-5. Amounts are atomic units: lamports for SOL; token atomic units for SPL tokens.`;
+4. If no trade is executed, explicitly state why there was no valid edge under the mandate.
+5. Amounts are atomic units: lamports for SOL; token atomic units for SPL tokens.
+
+NETWORK NOTES:
+- x402 payments are on Solana devnet for testing.
+- Agentic market/trade tools ALWAYS use mainnet data and liquidity.
+- Some markets/tokens visible via tools do not exist on devnet.`;
 }

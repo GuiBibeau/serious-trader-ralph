@@ -16,10 +16,13 @@
     "loop:status:local": "curl -sS http://127.0.0.1:8888/api/loop/status | cat",
     "loop:tick:local": "curl -sS http://127.0.0.1:8888/__scheduled | cat",
     "validate:manual:local": "bun run scripts/manual-validation-run.ts",
+    "test:integration:live": "RUN_INTEGRATION_TESTS=1 RUN_WORKER_LIVE_TESTS=1 bun test ../../tests/integration/worker_x402_live.integration.test.ts ../../tests/integration/worker_agent_tools_live.integration.test.ts ../../tests/integration/worker_agent_runtime_live.integration.test.ts",
+    "access:grant": "./scripts/mark-paid.sh",
     "billing:mark-paid": "./scripts/mark-paid.sh",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
+    "agents": "^0.5.0",
     "bs58": "^6.0.0",
     "jose": "^6.1.3"
   },

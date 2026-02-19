@@ -1,9 +1,13 @@
 import type { DataSourcesConfig, Env } from "../types";
 import { BirdeyeDataAdapter } from "./birdeye_adapter";
+import { DuneDataAdapter } from "./dune_adapter";
 import { listFeaturePoints, upsertFeaturePoint } from "./feature_store";
 import { FixtureDataAdapter } from "./fixture_adapter";
-import { DuneDataAdapter } from "./dune_adapter";
-import type { HistoricalBarsRequest, MarketDataAdapter, PriceBar } from "./types";
+import type {
+  HistoricalBarsRequest,
+  MarketDataAdapter,
+  PriceBar,
+} from "./types";
 import { instrumentKey, resolveSourcePriority } from "./types";
 
 const FEATURE_NAME = "ohlcv_1h";
@@ -18,7 +22,9 @@ function normalizeTtlMinutes(value: unknown): number {
   return Math.min(24 * 60, Math.floor(n));
 }
 
-function parseCachedBars(rows: Array<{ source: string; ts: string; value: unknown }>): PriceBar[] {
+function parseCachedBars(
+  rows: Array<{ source: string; ts: string; value: unknown }>,
+): PriceBar[] {
   const bars: PriceBar[] = [];
   for (const row of rows) {
     const v = row.value;
@@ -90,7 +96,10 @@ export class DataSourceRegistry {
       const parsed = parseCachedBars(cached);
       if (parsed.length > 24) {
         const newest = Date.parse(parsed[parsed.length - 1]?.ts ?? "");
-        if (Number.isFinite(newest) && Date.now() - newest <= ttlMinutes * 60_000) {
+        if (
+          Number.isFinite(newest) &&
+          Date.now() - newest <= ttlMinutes * 60_000
+        ) {
           return parsed;
         }
       }
@@ -105,7 +114,7 @@ export class DataSourceRegistry {
           ...request,
           pattern:
             source === "fixture"
-              ? request.pattern ?? this.config?.fixturePattern
+              ? (request.pattern ?? this.config?.fixturePattern)
               : request.pattern,
         });
         if (bars.length === 0) continue;
@@ -137,7 +146,9 @@ export class DataSourceRegistry {
     }
 
     throw new Error(
-      lastError instanceof Error ? lastError.message : "data-source-fetch-failed",
+      lastError instanceof Error
+        ? lastError.message
+        : "data-source-fetch-failed",
     );
   }
 }

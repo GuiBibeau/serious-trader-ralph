@@ -292,7 +292,9 @@ export async function getRuntimeState(
   const rawLastValidationId = r.lastValidationId;
   return {
     tenantId,
-    lifecycleState: String(r.lifecycleState ?? "candidate") as StrategyRuntimeStateRow["lifecycleState"],
+    lifecycleState: String(
+      r.lifecycleState ?? "candidate",
+    ) as StrategyRuntimeStateRow["lifecycleState"],
     activeStrategyHash: r.activeStrategyHash
       ? String(r.activeStrategyHash)
       : null,

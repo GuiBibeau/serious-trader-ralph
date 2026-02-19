@@ -1,9 +1,6 @@
 import { callLlm } from "../agent_llm";
 import type { Env } from "../types";
-import {
-  summarizeLatestValidation,
-  type TelemetrySnapshot,
-} from "./context";
+import { summarizeLatestValidation, type TelemetrySnapshot } from "./context";
 import type { ConversationSource } from "./types";
 
 export type ConversationAnswer = {
@@ -43,11 +40,7 @@ function maskSecrets(value: unknown): unknown {
       out[rawKey] = "[redacted]";
       continue;
     }
-    if (
-      rawValue &&
-      typeof rawValue === "object" &&
-      !Array.isArray(rawValue)
-    ) {
+    if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
       out[rawKey] = maskSecrets(rawValue);
       continue;
     }
@@ -99,7 +92,11 @@ function deterministicTemplate(
   };
   addSource(sources, runtimeSource);
 
-  if (q.includes("what happened recently") || q.includes("what happened") || q.includes("recent")) {
+  if (
+    q.includes("what happened recently") ||
+    q.includes("what happened") ||
+    q.includes("recent")
+  ) {
     const recentEvents = telemetry.botEvents.slice(0, 6);
     const eventLines = recentEvents.map(
       (event, index) =>
@@ -146,7 +143,10 @@ function deterministicTemplate(
     };
   }
 
-  if (q.includes("validation") && (q.includes("status") || q.includes("how") || q.includes("how's"))) {
+  if (
+    q.includes("validation") &&
+    (q.includes("status") || q.includes("how") || q.includes("how's"))
+  ) {
     const latest = telemetry.latestValidation;
     if (latest) {
       addSource(sources, {
@@ -170,7 +170,12 @@ function deterministicTemplate(
       answer:
         "No validation run has been executed yet. Run a validation before starting.",
       sources: [
-        { type: "runtime", id: telemetry.tenantId, label: "Validation state", hint: "No run" },
+        {
+          type: "runtime",
+          id: telemetry.tenantId,
+          label: "Validation state",
+          hint: "No run",
+        },
       ],
     };
   }
@@ -181,6 +186,9 @@ function deterministicTemplate(
     q.includes("start gate")
   ) {
     const blocked = !telemetry.startGate.ok;
+    const inferenceBlocked =
+      telemetry.agentRun.state === "blocked_inference" ||
+      (telemetry.agentRun.blockedReason ?? "").startsWith("inference-provider");
     addSource(sources, {
       type: "runtime",
       id: telemetry.tenantId,
@@ -188,9 +196,11 @@ function deterministicTemplate(
       hint: gateReason,
     });
     return {
-      answer: blocked
-        ? `Start is blocked by validation: ${gateReason}. Start the bot only after a passed validation for strategy hash ${telemetry.startGate.strategyHash ?? "latest config"}.`
-        : "Start gate is clear. Bot is allowed to run.",
+      answer: inferenceBlocked
+        ? `Execution is blocked by inference health: ${telemetry.agentRun.blockedReason ?? "inference-provider-unreachable"}. Fix provider settings and retest connection.`
+        : blocked
+          ? `Start is blocked by validation: ${gateReason}. Start the bot only after a passed validation for strategy hash ${telemetry.startGate.strategyHash ?? "latest config"}.`
+          : "Start gate is clear. Bot is allowed to run.",
       sources,
     };
   }
@@ -278,11 +288,17 @@ export async function answerQuestion(
   telemetry: TelemetrySnapshot,
   question: string,
   explain: boolean,
+  providerOverride?: {
+    baseUrl: string;
+    apiKey: string;
+    model?: string;
+  },
 ): Promise<ConversationAnswer> {
   const normalized = question.trim();
   if (!normalized) {
     return {
-      answer: "No question was provided. Ask about validation, events, or trades.",
+      answer:
+        "No question was provided. Ask about validation, events, or trades.",
       sources: [],
       model: null,
     };
@@ -302,8 +318,9 @@ export async function answerQuestion(
     };
   }
 
-  const modelAvailable =
-    Boolean(env.ZAI_BASE_URL && env.ZAI_API_KEY && env.ZAI_MODEL);
+  const modelAvailable = Boolean(
+    providerOverride?.baseUrl && providerOverride?.apiKey && providerOverride?.model,
+  );
   if (!modelAvailable) {
     const fallback = clampAnswer(
       `I can summarize what I know: ${telemetry.strategyDescriptor.headline}; ${
@@ -312,7 +329,9 @@ export async function answerQuestion(
     );
     return {
       answer: fallback,
-      sources: [{ type: "runtime", id: telemetry.tenantId, label: "Runtime snapshot" }],
+      sources: [
+        { type: "runtime", id: telemetry.tenantId, label: "Runtime snapshot" },
+      ],
       model: null,
     };
   }
@@ -327,6 +346,7 @@ Use this strict format with bullet points where possible:
   try {
     const llm = await callLlm(env, {
       modelOverride: undefined,
+      providerOverride,
       messages: [
         { role: "system", content: system },
         {
@@ -338,7 +358,9 @@ Use this strict format with bullet points where possible:
       timeoutMs: LLM_TIMEOUT_MS,
     });
     const raw = llm.assistantMessage.content ?? "";
-    const answer = clampAnswer(raw.trim() || "I could not produce a confident response.");
+    const answer = clampAnswer(
+      raw.trim() || "I could not produce a confident response.",
+    );
     return {
       answer,
       sources: [],

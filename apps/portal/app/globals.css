@@ -3,18 +3,29 @@
 /* ── Design tokens ─────────────────────────────────────── */
 
 @theme {
-  /* Calm neutrals (OpenAI-ish), with a rare pink accent. */
-  --color-ink: #0f172a;
-  --color-paper: #f8fafc;
-  --color-surface: #ffffff;
-  --color-muted: #64748b;
-  --color-border: rgba(15, 23, 42, 0.12);
-  --color-border-strong: rgba(15, 23, 42, 0.18);
-  --color-subtle: rgba(15, 23, 42, 0.04);
-  --color-subtle-strong: rgba(15, 23, 42, 0.06);
+  /* Dark-first, high contrast "monitor" aesthetic */
+  --color-ink: #f0f6fc;
+  /* Main text (white-ish) */
+  --color-paper: #0a0a0a;
+  /* Deep background */
+  --color-surface: #111111;
+  /* Slightly lighter background for cards */
+  --color-muted: #a1a1aa;
+  /* Muted text */
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-strong: rgba(255, 255, 255, 0.2);
+  --color-subtle: rgba(255, 255, 255, 0.03);
+  --color-subtle-strong: rgba(255, 255, 255, 0.07);
 
-  --color-accent: #ff4fa3;
-  --color-accent-soft: rgba(255, 79, 163, 0.18);
+  /* Accent */
+  --color-accent: #3b82f6;
+  --color-accent-soft: rgba(59, 130, 246, 0.12);
+  --color-success: #22c55e;
+  /* Neon Green */
+  --color-warning: #f59e0b;
+  /* Amber */
+  --color-chart-bg: #0d0d0d;
+  --color-chart-grid: rgba(255, 255, 255, 0.08);
 
   /* Semantic UI tokens */
   --radius-card: 1rem;
@@ -23,9 +34,8 @@
   --text-label--line-height: 1.2;
   --tracking-label: 0.08em;
   --shadow-card:
-    0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 28px rgba(15, 23, 42, 0.1);
-  /* Backward compatibility for existing references. */
-  --shadow-brutal: var(--shadow-card);
+    0 0 0 1px rgba(255, 255, 255, 0.1), 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(59, 130, 246, 0.3);
 
   --font-family-display:
     var(--font-display), ui-sans-serif, system-ui, sans-serif;
@@ -48,27 +58,54 @@
   }
 
   html {
-    color-scheme: light;
+    /* Allow system preference */
   }
 
-  html.dark {
-    color-scheme: dark;
-
-    --color-ink: #e2e8f0;
-    --color-paper: #050a12;
-    --color-surface: #0b1220;
-    --color-muted: #94a3b8;
-    --color-border: rgba(226, 232, 240, 0.14);
-    --color-border-strong: rgba(226, 232, 240, 0.22);
-    --color-subtle: rgba(226, 232, 240, 0.06);
-    --color-subtle-strong: rgba(226, 232, 240, 0.09);
-
-    --color-accent: #ff4fa3;
-    --color-accent-soft: rgba(255, 79, 163, 0.22);
-
+  /* We are enforcing a dark aesthetic regardless of system preference for now */
+  /* Light/Dark mode variables */
+  :root {
+    /* Light Mode (Default) */
+    --color-ink: #0f172a;
+    /* Slate 900 */
+    --color-paper: #f8fafc;
+    /* Slate 50 */
+    --color-surface: #ffffff;
+    /* White */
+    --color-muted: #64748b;
+    /* Slate 500 */
+    --color-border: #e2e8f0;
+    /* Slate 200 */
+    --color-border-strong: #cbd5e1;
+    /* Slate 300 */
+    --color-subtle: #f1f5f9;
+    /* Slate 100 */
+    --color-subtle-strong: #e2e8f0;
+    /* Slate 200 */
+    --color-accent: #2563eb;
+    /* Blue 600 */
+    --color-accent-soft: rgba(37, 99, 235, 0.1);
+    --color-chart-bg: #ffffff;
+    --color-chart-grid: rgba(15, 23, 42, 0.09);
     --shadow-card:
-      0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 36px rgba(0, 0, 0, 0.55);
-    --shadow-brutal: var(--shadow-card);
+      0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  }
+
+  .dark {
+    /* Dark Mode (Overrides) */
+    --color-ink: #f0f6fc;
+    --color-paper: #0a0a0a;
+    --color-surface: #111111;
+    --color-muted: #a1a1aa;
+    --color-border: rgba(255, 255, 255, 0.1);
+    --color-border-strong: rgba(255, 255, 255, 0.2);
+    --color-subtle: rgba(255, 255, 255, 0.03);
+    --color-subtle-strong: rgba(255, 255, 255, 0.07);
+    --color-accent: #3b82f6;
+    --color-accent-soft: rgba(59, 130, 246, 0.12);
+    --color-chart-bg: #0d0d0d;
+    --color-chart-grid: rgba(255, 255, 255, 0.08);
+    --shadow-card:
+      0 0 0 1px rgba(255, 255, 255, 0.1), 0 4px 12px rgba(0, 0, 0, 0.5);
   }
 
   body {

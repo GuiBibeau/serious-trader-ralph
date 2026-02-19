@@ -111,31 +111,34 @@ describe("worker dune adapter", () => {
       seenUrl = String(input);
     });
     try {
-      const adapter = new DuneDataAdapter({
-        ...(buildMockEnv({
-          DUNE_API_KEY: "provider-key",
-          DUNE_QUERY_ID: "ignored-query",
-        }) as Env),
-      }, {
-        providers: {
-          dune: {
-            apiKey: "provider-key",
-            queryId: "query-registry-inline",
-            params: {
-              venue: "prediction",
-              ignoreThis: "ignored",
+      const adapter = new DuneDataAdapter(
+        {
+          ...(buildMockEnv({
+            DUNE_API_KEY: "provider-key",
+            DUNE_QUERY_ID: "ignored-query",
+          }) as Env),
+        },
+        {
+          providers: {
+            dune: {
+              apiKey: "provider-key",
+              queryId: "query-registry-inline",
+              params: {
+                venue: "prediction",
+                ignoreThis: "ignored",
+              },
+              columns: {
+                ts: "t",
+                open: "o",
+                high: "h",
+                low: "l",
+                close: "c",
+              },
+              parameterWhitelist: ["venue"],
             },
-            columns: {
-              ts: "t",
-              open: "o",
-              high: "h",
-              low: "l",
-              close: "c",
-            },
-            parameterWhitelist: ["venue"],
           },
         },
-      });
+      );
       const bars = await adapter.fetchHourlyBars({
         baseMint: SOL_MINT,
         quoteMint: USDC_MINT,
@@ -150,7 +153,9 @@ describe("worker dune adapter", () => {
       expect(bars[0]?.low).toBe(24.9);
       expect(bars[0]?.close).toBe(26.1);
       expect(seenUrl).toContain("/query/query-registry-inline/results");
-      expect(new URL(seenUrl).searchParams.get("resolution_minutes")).toBe("60");
+      expect(new URL(seenUrl).searchParams.get("resolution_minutes")).toBe(
+        "60",
+      );
       expect(new URL(seenUrl).searchParams.get("venue")).toBe("prediction");
       expect(new URL(seenUrl).searchParams.get("ignoreThis")).toBeNull();
     } finally {

@@ -13,32 +13,20 @@ type BillingPlanConfig = {
   features: string[];
 };
 
+const LEGACY_BILLING_PLAN_IDS = ["byok_annual", "hobbyist_annual"] as const;
+type LegacyBillingPlanId = (typeof LEGACY_BILLING_PLAN_IDS)[number];
+
 const PLAN_CONFIGS: BillingPlanConfig[] = [
   {
-    id: "byok_annual",
-    name: "BYOK Annual",
+    id: "manual_access",
+    name: "Manual Access",
     description:
-      "Full edge fund access with autonomous execution; you pay your own inference.",
-    amountUsd: 99,
+      "Access and commercial terms are provisioned manually by the Trader Ralph team.",
+    amountUsd: 0,
     features: [
-      "1-year license",
-      "Full edge fund feature access",
-      "Autonomous execution enabled",
-      "Bring your own model/API keys",
-      "Inference billed to your own providers",
-    ],
-  },
-  {
-    id: "hobbyist_annual",
-    name: "Hobbyist Annual",
-    description: "Full edge fund access with managed inference included.",
-    amountUsd: 790,
-    features: [
-      "1-year license",
-      "Full edge fund feature access",
-      "Autonomous execution enabled",
-      "AI LLM inference cost included",
-      "Managed execution routing",
+      "Manual onboarding required",
+      "No self-serve tier checkout",
+      "Access configured per team",
     ],
   },
 ];
@@ -47,7 +35,7 @@ const INTENT_TTL_MINUTES = 30;
 const USDC_DECIMALS = 6;
 const SOL_DECIMALS = 9;
 
-export type BillingPlanId = "byok_annual" | "hobbyist_annual";
+export type BillingPlanId = "manual_access" | LegacyBillingPlanId;
 export type PaymentAsset = "USDC" | "SOL";
 
 export type BillingPlan = {
@@ -207,11 +195,19 @@ export function toSubscriptionView(
 ): SubscriptionView {
   const active = isSubscriptionActive(sub);
   const plan = sub ? findBillingPlan(env, sub.planId) : undefined;
+  const legacyPlanName: Record<LegacyBillingPlanId, string> = {
+    byok_annual: "Legacy BYOK Annual",
+    hobbyist_annual: "Legacy Hobbyist Annual",
+  };
   return {
     status: active ? "active" : "inactive",
     active,
     planId: sub?.planId ?? null,
-    planName: plan?.name ?? null,
+    planName:
+      plan?.name ??
+      (sub?.planId && sub.planId in legacyPlanName
+        ? legacyPlanName[sub.planId as LegacyBillingPlanId]
+        : null),
     startsAt: sub?.startsAt ?? null,
     expiresAt: sub?.expiresAt ?? null,
     sourceSignature: sub?.sourceSignature ?? null,
@@ -314,8 +310,8 @@ export function toCheckoutIntentView(
       currency,
       splToken: currency === "USDC" ? intent.mint : null,
       reference: intent.referenceKey,
-      label: `Serious Trader Ralph • ${plan.name}`,
-      message: `Annual license payment (${plan.name})`,
+      label: `Trader Ralph • ${plan.name}`,
+      message: `Trader Ralph payment (${plan.name})`,
       memo: `ralph:${plan.id}:${intent.id}`,
     },
   };
@@ -622,7 +618,10 @@ function mapIntentRow(row: unknown): PaymentIntentRow | null {
 }
 
 function isBillingPlanId(value: string): value is BillingPlanId {
-  return value === "byok_annual" || value === "hobbyist_annual";
+  return (
+    value === "manual_access" ||
+    LEGACY_BILLING_PLAN_IDS.includes(value as LegacyBillingPlanId)
+  );
 }
 
 function resolveMerchantWallet(env: Env): string {

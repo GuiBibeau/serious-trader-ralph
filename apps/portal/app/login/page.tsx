@@ -40,7 +40,15 @@ export default function LoginPage() {
             <p className="label">Access</p>
             <h1 className="mt-2.5">Sign in to Ralph</h1>
             <p className="text-muted mt-3 max-w-[540px]">
-              Authenticate to access your control room and existing bot setup.
+              Access is granted through manual onboarding. Sign in if your
+              account has already been approved.
+            </p>
+            <p className="text-muted mt-2 text-[0.92rem] max-w-[540px]">
+              Need access? Email{" "}
+              <a className="underline" href="mailto:hello@ralph.fund">
+                hello@ralph.fund
+              </a>{" "}
+              with your team details.
             </p>
             <div className="flex flex-wrap items-center gap-3 mt-6">
               <button

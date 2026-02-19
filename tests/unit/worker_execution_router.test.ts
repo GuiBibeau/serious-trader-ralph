@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { executeSwapViaRouter, registerExecutionAdapter } from "../../apps/worker/src/execution/router";
+import {
+  executeSwapViaRouter,
+  registerExecutionAdapter,
+} from "../../apps/worker/src/execution/router";
 import { normalizePolicy } from "../../apps/worker/src/policy";
 
 describe("worker execution router", () => {

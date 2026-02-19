@@ -25,7 +25,8 @@ export function registerExecutionAdapter(
 export async function executeSwapViaRouter(
   input: ExecuteSwapInput,
 ): Promise<ExecuteSwapResult> {
-  const adapterName = (input.execution?.adapter ?? "jupiter").trim() || "jupiter";
+  const adapterName =
+    (input.execution?.adapter ?? "jupiter").trim() || "jupiter";
   const adapter = ADAPTERS.get(adapterName);
   if (!adapter) {
     throw new Error(`execution-adapter-not-registered:${adapterName}`);

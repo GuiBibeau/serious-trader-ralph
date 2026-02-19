@@ -55,12 +55,6 @@ export function validateStrategy(strategy: unknown): void {
         throw new Error("invalid-agent-minConfidence");
       }
     }
-    if (s.maxTradesPerDay !== undefined) {
-      const n = Number(s.maxTradesPerDay);
-      if (!Number.isFinite(n) || n < 0 || n > 100) {
-        throw new Error("invalid-agent-maxTradesPerDay");
-      }
-    }
     if (s.maxStepsPerTick !== undefined) {
       const n = Number(s.maxStepsPerTick);
       if (!Number.isFinite(n) || n < 1 || n > 12) {
@@ -253,7 +247,10 @@ export function validateValidationConfig(input: unknown): void {
   ) {
     throw new Error("invalid-validation-autoEnableOnPass");
   }
-  if (v.overrideAllowed !== undefined && typeof v.overrideAllowed !== "boolean") {
+  if (
+    v.overrideAllowed !== undefined &&
+    typeof v.overrideAllowed !== "boolean"
+  ) {
     throw new Error("invalid-validation-overrideAllowed");
   }
 }
@@ -380,7 +377,11 @@ export function validateDataSourcesConfig(input: unknown): void {
     }
   }
   if (d.providers !== undefined) {
-    if (!d.providers || typeof d.providers !== "object" || Array.isArray(d.providers)) {
+    if (
+      !d.providers ||
+      typeof d.providers !== "object" ||
+      Array.isArray(d.providers)
+    ) {
       throw new Error("invalid-dataSources-providers");
     }
     for (const [name, providerConfig] of Object.entries(d.providers)) {
@@ -398,7 +399,11 @@ export function validateDataSourcesConfig(input: unknown): void {
   }
   if (d.fixturePattern !== undefined) {
     const pattern = String(d.fixturePattern);
-    if (pattern !== "uptrend" && pattern !== "downtrend" && pattern !== "whipsaw") {
+    if (
+      pattern !== "uptrend" &&
+      pattern !== "downtrend" &&
+      pattern !== "whipsaw"
+    ) {
       throw new Error("invalid-dataSources-fixturePattern");
     }
   }

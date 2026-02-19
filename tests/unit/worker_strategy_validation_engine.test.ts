@@ -13,7 +13,9 @@ import type {
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-async function loadFixtureBars(pattern: "uptrend" | "downtrend"): Promise<PriceBar[]> {
+async function loadFixtureBars(
+  pattern: "uptrend" | "downtrend",
+): Promise<PriceBar[]> {
   const adapter = new FixtureDataAdapter();
   const endMs = Date.now();
   const startMs = endMs - 45 * 24 * 60 * 60 * 1000;

@@ -17,8 +17,9 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Serious Trader Ralph",
-  description: "An agentic edge fund system for autonomous on-chain execution.",
+  title: "Trader Ralph",
+  description:
+    "Solana-focused research and automation infrastructure for API users, quant teams, DAOs, and funds.",
 };
 
 export default function RootLayout({

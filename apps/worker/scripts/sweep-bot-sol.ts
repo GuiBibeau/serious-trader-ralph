@@ -9,7 +9,10 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { getPrivyWalletAddressById, signTransactionWithPrivyById } from "../src/privy";
+import {
+  getPrivyWalletAddressById,
+  signTransactionWithPrivyById,
+} from "../src/privy";
 import { SolanaRpc } from "../src/solana_rpc";
 import type { Env } from "../src/types";
 
@@ -71,7 +74,8 @@ function parseArgs(argv: string[]): CliArgs {
     else if (a === "--privy-user-id") args.privyUserId = argv[++i];
     else if (a === "--destination") args.destination = argv[++i];
     else if (a === "--rpc") args.rpcEndpoint = argv[++i];
-    else if (a === "--keep-lamports") args.keepLamports = Number(argv[++i] ?? "0");
+    else if (a === "--keep-lamports")
+      args.keepLamports = Number(argv[++i] ?? "0");
     else if (a === "--execute") args.execute = true;
     else usage();
   }
@@ -152,7 +156,8 @@ function autoDetectDbPath(): string {
 function parseBotRows(lines: string[]): BotRow[] {
   const bots: BotRow[] = [];
   for (const line of lines) {
-    const [id, userId, walletAddress, privyWalletId, createdAt] = line.split("|");
+    const [id, userId, walletAddress, privyWalletId, createdAt] =
+      line.split("|");
     if (!id || !userId || !walletAddress || !privyWalletId || !createdAt) {
       continue;
     }
@@ -276,7 +281,11 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const feeLamports = await estimateFeeLamports(connection, from, destination);
+    const feeLamports = await estimateFeeLamports(
+      connection,
+      from,
+      destination,
+    );
     const amountLamports = balanceLamports - feeLamports - args.keepLamports;
     if (amountLamports <= 0) {
       console.log(
@@ -317,10 +326,15 @@ async function main(): Promise<void> {
         `transfer failed for ${bot.walletAddress}; signature=${signature}; status=${confirm.status ?? "unknown"}`,
       );
     }
-    console.log(`  sent signature=${signature} status=${confirm.status ?? "confirmed"}`);
+    console.log(
+      `  sent signature=${signature} status=${confirm.status ?? "confirmed"}`,
+    );
   }
 
-  const finalDestinationBalance = await connection.getBalance(destination, "confirmed");
+  const finalDestinationBalance = await connection.getBalance(
+    destination,
+    "confirmed",
+  );
   console.log(
     `Done: transfers=${transfers} plannedLamports=${totalPlannedLamports} finalDestinationLamports=${finalDestinationBalance}`,
   );

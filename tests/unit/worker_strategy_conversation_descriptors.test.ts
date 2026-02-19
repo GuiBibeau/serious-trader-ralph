@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { StrategyConfig } from "../../apps/worker/src/types";
 import {
   describeStrategyState,
   registerStrategyDescriptor,
 } from "../../apps/worker/src/strategy_validation/descriptors";
+import type { StrategyConfig } from "../../apps/worker/src/types";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyDTt1v";
@@ -121,7 +121,9 @@ describe("worker strategy conversation descriptors", () => {
       describe({ strategy }) {
         return {
           headline: "Custom PM",
-          bullets: [`market=${(strategy as unknown as { marketId?: string }).marketId ?? "n/a"}`],
+          bullets: [
+            `market=${(strategy as unknown as { marketId?: string }).marketId ?? "n/a"}`,
+          ],
         };
       },
     });

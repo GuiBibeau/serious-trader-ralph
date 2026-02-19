@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { handleChatHistory, handleChatRequest, handleTelemetry } from "../../apps/worker/src/conversation/router";
+import {
+  handleChatHistory,
+  handleChatRequest,
+  handleTelemetry,
+} from "../../apps/worker/src/conversation/router";
 import { createConversationTestEnv } from "./_conversation_test_utils";
 
 describe("worker chat endpoints", () => {
@@ -103,12 +107,21 @@ describe("worker chat endpoints", () => {
     const telemetry = await handleTelemetry(
       env,
       tenantId,
-      new Request("http://localhost/api/bots/bot-chat-2/telemetry?includeSources=runtime&limit=5"),
+      new Request(
+        "http://localhost/api/bots/bot-chat-2/telemetry?includeSources=runtime&limit=5",
+      ),
     );
 
     expect(telemetry.ok).toBe(true);
-    expect(Array.isArray((telemetry.telemetry as { strategyDescriptor: unknown }).strategyDescriptor)).toBe(false);
-    expect((telemetry.telemetry as { tenantId: string }).tenantId).toBe(tenantId);
+    expect(
+      Array.isArray(
+        (telemetry.telemetry as { strategyDescriptor: unknown })
+          .strategyDescriptor,
+      ),
+    ).toBe(false);
+    expect((telemetry.telemetry as { tenantId: string }).tenantId).toBe(
+      tenantId,
+    );
   });
 
   test("truncates long messages to enforce open question limit", async () => {
@@ -138,14 +151,14 @@ describe("worker chat endpoints", () => {
       validationRuns: [],
     });
 
-    const response = await handleChatRequest(
+    const response = await handleChatRequest(env, tenantId, {
+      message: "x".repeat(700),
+    });
+    const history = await handleChatHistory(
       env,
       tenantId,
-      {
-        message: "x".repeat(700),
-      },
+      new Request(`http://localhost/api/bots/${tenantId}/chat`),
     );
-    const history = await handleChatHistory(env, tenantId, new Request(`http://localhost/api/bots/${tenantId}/chat`));
 
     expect(response.ok).toBe(true);
     const userMessage = history.messages.find((row) => row.role === "user");
@@ -174,8 +187,8 @@ describe("worker chat endpoints", () => {
       validationRuns: [],
     });
 
-    await expect(handleChatRequest(env, tenantId, { message: "   " } as never)).rejects.toThrow(
-      /invalid-message/,
-    );
+    await expect(
+      handleChatRequest(env, tenantId, { message: "   " } as never),
+    ).rejects.toThrow(/invalid-message/);
   });
 });

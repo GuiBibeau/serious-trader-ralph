@@ -23,7 +23,8 @@ function parseLogEventLine(line: string): BotLogEvent | null {
     return null;
   }
 
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return null;
   const row = parsed as Record<string, unknown>;
   const ts = typeof row.ts === "string" ? row.ts : "";
   const level = typeof row.level === "string" ? row.level : "info";
@@ -35,7 +36,13 @@ function parseLogEventLine(line: string): BotLogEvent | null {
   const details: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(row)) {
-    if (key === "ts" || key === "level" || key === "message" || key === "runId" || key === "reason") {
+    if (
+      key === "ts" ||
+      key === "level" ||
+      key === "message" ||
+      key === "runId" ||
+      key === "reason"
+    ) {
       continue;
     }
     details[key] = value;
