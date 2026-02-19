@@ -13,7 +13,14 @@ export function withCors(response: Response, env: Env) {
   const headers = new Headers(response.headers);
   headers.set("access-control-allow-origin", allowed);
   headers.set("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
-  headers.set("access-control-allow-headers", "content-type,authorization");
+  headers.set(
+    "access-control-allow-headers",
+    "content-type,authorization,payment-signature,x-payment",
+  );
+  headers.set(
+    "access-control-expose-headers",
+    "payment-required,payment-response",
+  );
   headers.set("access-control-max-age", "86400");
   return new Response(response.body, {
     status: response.status,

@@ -31,9 +31,9 @@ const AgentDefinitionSchema = z.object({
 const AgentsSchema = z
   .object({
     defaultAgentId: z.string().default("main"),
-    agents: z.record(AgentDefinitionSchema).default({}),
+    agents: z.record(z.string(), AgentDefinitionSchema).default({}),
   })
-  .default({});
+  .default({ defaultAgentId: "main", agents: {} });
 
 const RuntimeSchema = z
   .object({
@@ -41,10 +41,15 @@ const RuntimeSchema = z
     runsDir: z.string().default("runs"),
     tasksDir: z.string().default("tasks"),
     lanes: z
-      .record(z.number().int().positive())
+      .record(z.string(), z.number().int().positive())
       .default({ main: 1, subagent: 4, autopilot: 1 }),
   })
-  .default({});
+  .default({
+    sessionsDir: "sessions",
+    runsDir: "runs",
+    tasksDir: "tasks",
+    lanes: { main: 1, subagent: 4, autopilot: 1 },
+  });
 
 const ConfigSchema = z.object({
   rpc: z.object({
@@ -93,7 +98,7 @@ const ConfigSchema = z.object({
       allow: z.array(z.string()).optional(),
       deny: z.array(z.string()).optional(),
     })
-    .default({}),
+    .default({ skillsDir: "skills" }),
   openclaw: z
     .object({
       pluginsDir: z.string().optional(),

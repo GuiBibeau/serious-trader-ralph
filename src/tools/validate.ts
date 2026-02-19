@@ -71,7 +71,7 @@ const DailyPnlSchema = z.object({
 const NotifySchema = z.object({
   level: z.enum(["info", "warn", "error"]),
   message: z.string(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const TickSchema = z.object({
@@ -128,7 +128,7 @@ const TasksListSchema = z.object({
 const TasksCreateSchema = z.object({
   title: z.string().min(1),
   status: TaskStatusSchema.optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   sessionKey: z.string().min(1).optional(),
 });
 
@@ -136,7 +136,7 @@ const TasksUpdateSchema = z.object({
   taskId: z.string().min(1),
   title: z.string().min(1).optional(),
   status: TaskStatusSchema.optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   sessionKey: z.string().min(1).optional(),
 });
 
@@ -218,7 +218,7 @@ const LiquidityByMintSchema = z.object({
 
 const OpenClawInvokeSchema = z.object({
   tool: z.string().min(1),
-  args: z.record(z.unknown()).optional(),
+  args: z.record(z.string(), z.unknown()).optional(),
   action: z.string().optional(),
 });
 

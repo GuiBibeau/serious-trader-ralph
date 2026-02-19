@@ -1,18 +1,30 @@
-# Serious Trader Ralph (MVP)
+# Trader Ralph
 
-A customizable, long‑running Solana trading bot you can deploy. It ships with a WebSocket gateway, CLI operator, tool registry, and hot‑wallet custody. This repo is **web3‑only** right now.
+Trader Ralph is a Solana-first trading stack with:
+- a Next.js control room UI (`apps/portal`)
+- a Cloudflare Worker runtime for multi-tenant bot loops (`apps/worker`)
+- a legacy local CLI/gateway path (`src/`)
 
-Active development: expect rapid iteration, feature growth, and occasional breaking changes.
+## What Is Live In This Repo
+
+- Bot control room + per-bot room in the portal
+- x402-gated market read endpoints in the worker
+- Agent strategy tool loop (market research + optional trade execution)
+- Async backtest queue with bot-scoped run history and details
+- Historical OHLCV and technical indicators backed by live providers
+- Live integration test suite for x402 routes and agent market tools
+
+Important network behavior:
+- x402 payments are configured for devnet USDC in testing environments
+- x402 and agentic market tools fetch mainnet market data/liquidity
 
 ## Requirements
 
-- **Bun** (repo package manager)
-- **Wrangler CLI** (Cloudflare Workers)
-- Node 18+ (for local tooling)
+- Bun (monorepo package manager / test runner)
+- Node 18+
+- Wrangler CLI (`npm i -g wrangler` or local install in `apps/worker`)
 
-## Quick start (monorepo dev: portal + edge worker)
-
-This starts both the Next.js portal and the Cloudflare worker locally.
+## Quick Start (Portal + Worker)
 
 ```bash
 bun install
@@ -20,146 +32,118 @@ bun run dev
 ```
 
 - Portal: `http://localhost:3000`
-- Edge worker: `http://127.0.0.1:8888/api/health`
+- Worker: `http://127.0.0.1:8888/api/health`
 
-If you only want the local CLI/gateway, run:
-
-```bash
-bun run dev:cli
-```
-
-## Quick start (Cloudflare worker, local)
+## Worker Local Quick Start
 
 ```bash
 cd apps/worker
 npm install
-
-wrangler d1 create ralph_waitlist
-wrangler kv:namespace create CONFIG_KV
-wrangler r2 bucket create ralph-logs
-wrangler d1 migrations apply ralph_waitlist
-wrangler secret put ADMIN_TOKEN
-wrangler secret put PRIVY_APP_ID
-wrangler secret put PRIVY_APP_SECRET
-wrangler secret put PRIVY_WALLET_ID
-
-wrangler dev
+npm run db:migrate:local
+npm run loop:enable:local
+npm run dev:local
 ```
 
-Replace the `REPLACE_WITH_*` placeholders in `apps/worker/wrangler.toml` with
-the IDs output by Wrangler (KV namespace IDs and D1 database IDs).
-
-## Control the loop (local or deployed)
+Recommended `apps/worker/.dev.vars` baseline:
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/loop/start \\
-  -H \"Authorization: Bearer $ADMIN_TOKEN\"
+# Auth / control
+ADMIN_TOKEN=local-dev
 
-curl -X POST http://127.0.0.1:8787/api/loop/stop \\
-  -H \"Authorization: Bearer $ADMIN_TOKEN\"
+# RPC (mainnet data path)
+RPC_ENDPOINT=https://api.mainnet-beta.solana.com
+BALANCE_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
 
-curl -X POST http://127.0.0.1:8787/api/config \\
-  -H \"Authorization: Bearer $ADMIN_TOKEN\" \\
-  -H \"Content-Type: application/json\" \\
-  -d '{\"policy\":{\"maxSlippageBps\":50}}'
+# Inference defaults (optional if you store per-bot provider in UI)
+ZAI_BASE_URL=https://api.z.ai/api/paas/v4
+ZAI_MODEL=glm-5
+ZAI_API_KEY=...
+
+# Required to persist encrypted per-bot inference provider API keys
+# Generate with: openssl rand -base64 32
+INFERENCE_ENCRYPTION_KEY_B64=...
+
+# OHLCV providers (at least one for live historical endpoints/tools)
+BIRDEYE_API_KEY=...
+# Or use Dune:
+# DUNE_API_KEY=...
+# DUNE_QUERY_ID=...
+# DUNE_API_URL=https://api.dune.com
 ```
 
-## Paths & entrypoints
+## x402 Read Endpoints
 
-- CLI entry: `src/bin/ralph.ts`
-- Gateway server: `src/gateway/server.ts`
-- Tools registry: `src/tools/registry.ts`
-- Tools list: `src/tools/tools.ts`
-- Skills folder (auto‑loaded): `skills/`
-- Web3 adapter: `src/solana/web3_adapter.ts`
-- Landing page (Next.js): `apps/portal`
-- Cloudflare edge worker: `apps/worker`
+All are `POST` under `/api/x402/read/*`:
 
-Legacy CLI/gateway config is deprecated and not supported for the SaaS path.
+- `market_snapshot`
+- `market_snapshot_v2`
+- `market_token_balance`
+- `market_jupiter_quote`
+- `market_jupiter_quote_batch`
+- `market_ohlcv` (hourly bars, live sources only)
+- `market_indicators` (SMA/EMA/RSI/MACD + returns from hourly bars)
+- `macro_signals` (macro radar with composite BUY/CASH verdict)
+- `macro_fred_indicators` (FRED macro series snapshot)
+- `macro_etf_flows` (BTC/SOL ETF flow-structure proxy)
+- `macro_stablecoin_health` (stablecoin peg stress monitor)
+- `macro_oil_analytics` (WTI/Brent/US production/inventory)
 
-## Config notes (Worker)
+`apps/worker/wrangler.toml` includes matching `X402_*_PRICE_USD` vars for each route.
 
-- All runtime config is stored in **KV** and controlled via `/api/config`.
-- Secrets (Privy, admin token) are managed via Wrangler.
+## Agent Tooling (Strategy `type: "agent"`)
 
-## Portal dev
+Current tool catalog includes:
+
+- `control_finish`
+- `market_snapshot`
+- `market_token_balance`
+- `market_jupiter_quote`
+- `market_jupiter_quote_batch`
+- `market_ohlcv_history`
+- `market_indicators`
+- `macro_signals`
+- `macro_fred_indicators`
+- `macro_etf_flows`
+- `macro_stablecoin_health`
+- `macro_oil_analytics`
+- `backtest_run_create`
+- `backtest_run_list`
+- `backtest_run_get`
+- `trades_list_recent`
+- `memory_update_thesis`
+- `memory_log_observation`
+- `memory_add_reflection`
+- `trade_jupiter_swap`
+
+## Run Worker Live Integration Tests
+
+From repo root:
 
 ```bash
-cd apps/portal
-bun install
-bun dev
+bun run test:integration:worker:live
 ```
 
-## Monorepo layout
+These tests:
+- verify all x402 routes return proper payment requirements (devnet USDC)
+- verify paid x402 calls return live mainnet data
+- verify agent market tools work without x402 payment config
 
-- `apps/portal`: Next.js landing page (brutalist UI, waitlist form).
-- `apps/worker`: Cloudflare Worker for waitlist + loop control + cron tick.
-- Root (`src/`): local CLI + gateway for full-featured bot DX.
+Notes:
+- Tests auto-load env from shell or `apps/worker/.dev.vars`
+- For OHLCV tests, you must set either:
+  - `BIRDEYE_API_KEY`, or
+  - both `DUNE_API_KEY` and `DUNE_QUERY_ID`
+- Optional macro providers:
+  - `FRED_API_KEY` (for `macro_fred_indicators`)
+  - `EIA_API_KEY` (for `macro_oil_analytics`)
 
-## Cloudflare edge services (portal + worker)
+## Monorepo Layout
 
-The edge worker provides the waitlist API and control endpoints (start/stop loop,
-config). The portal posts to `/api/waitlist`.
+- `apps/portal`: Next.js UI (landing + control room + bot room)
+- `apps/worker`: Cloudflare Worker runtime, x402, loop engine, agent tools
+- `src/`: legacy CLI/gateway toolchain
+- `tests/`: unit + integration tests
 
-### Worker setup (wrangler)
+## Additional Docs
 
-```bash
-cd apps/worker
-
-# 1) create D1 database
-wrangler d1 create ralph_waitlist
-
-# 2) create KV namespace for config
-wrangler kv:namespace create CONFIG_KV
-
-# 3) create R2 bucket for logs
-wrangler r2 bucket create ralph-logs
-
-# 4) apply migrations
-wrangler d1 migrations apply ralph_waitlist
-
-# 5) set admin token (for loop control APIs)
-wrangler secret put ADMIN_TOKEN
-
-# 6) dev
-wrangler dev
-```
-
-### Portal dev
-
-```bash
-cd apps/portal
-bun install
-bun dev
-```
-
-## Integration tests (Surfpool/devnet friendly)
-
-These are **skipped by default**. They hit RPC and Jupiter, but do **not** send swaps unless you explicitly opt in.
-
-```bash
-export RUN_INTEGRATION_TESTS=1
-export RPC_ENDPOINT="http://127.0.0.1:8899"   # surfpool / local validator
-export JUPITER_API_KEY="..."
-export WALLET_PRIVATE_KEY="..."               # or WALLET_KEYFILE="/path/to/id.json"
-
-bun test
-```
-
-Optional swap simulation (build + sign + simulate only, no send):
-
-```bash
-export RUN_SWAP_SIM=1
-export AIRDROP=1   # request local airdrop for the wallet
-bun test
-```
-
-## Security reminders
-
-- Use Privy or approved custody for production keys.
-- Lock down admin tokens.
-- Keep minimal funds in hot wallets.
-
----
-
-If you want a built‑in UI or sub‑agents like Molt, open an issue or ask and I’ll wire it in.
+- Worker details and route examples: `apps/worker/README.md`

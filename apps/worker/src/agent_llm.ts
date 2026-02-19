@@ -56,11 +56,16 @@ type ChatCompletionResponse = {
 };
 
 export async function callLlm(
-  env: Env,
+  _env: Env,
   input: {
     messages: ChatMessage[];
     tools: ChatTool[];
     modelOverride?: string;
+    providerOverride?: {
+      baseUrl: string;
+      apiKey: string;
+      model?: string;
+    };
     timeoutMs?: number;
   },
 ): Promise<{
@@ -68,16 +73,16 @@ export async function callLlm(
   toolCalls: ChatToolCall[];
   finishReason?: string;
 }> {
-  const baseUrl = env.ZAI_BASE_URL;
-  if (!baseUrl) throw new Error("zai-base-url-missing");
-  const apiKey = env.ZAI_API_KEY;
-  if (!apiKey) throw new Error("zai-api-key-missing");
-  const model = input.modelOverride || env.ZAI_MODEL;
-  if (!model) throw new Error("zai-model-not-configured");
+  const baseUrl = input.providerOverride?.baseUrl?.trim();
+  const apiKey = input.providerOverride?.apiKey?.trim();
+  const model = input.modelOverride || input.providerOverride?.model;
+  if (!baseUrl || !apiKey || !model) {
+    throw new Error("inference-provider-not-configured");
+  }
 
   const timeoutMs = Math.max(
     1_000,
-    Math.min(30_000, input.timeoutMs ?? 20_000),
+    Math.min(120_000, input.timeoutMs ?? 20_000),
   );
   // Trim trailing slashes so callers can pass either "https://host" or "https://host/".
   const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -105,7 +110,7 @@ export async function callLlm(
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       throw new Error(
-        `llm-api-error: ${response.status} ${text.slice(0, 200)}`,
+        `inference-provider-unreachable:${response.status}:${text.slice(0, 200)}`,
       );
     }
 
@@ -129,7 +134,17 @@ export async function callLlm(
     if (err instanceof DOMException && err.name === "AbortError") {
       throw new Error(`llm-timeout: ${timeoutMs}ms exceeded`);
     }
-    throw err;
+    if (
+      err instanceof Error &&
+      (err.message.startsWith("llm-timeout:") ||
+        err.message.startsWith("inference-provider-unreachable:") ||
+        err.message === "inference-provider-not-configured")
+    ) {
+      throw err;
+    }
+    throw new Error(
+      `inference-provider-unreachable:${err instanceof Error ? err.message : String(err)}`,
+    );
   } finally {
     clearTimeout(timer);
   }

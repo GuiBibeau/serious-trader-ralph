@@ -11,9 +11,14 @@ import { registerDefaultTools } from "../../src/tools/tools.js";
 const runIntegration = process.env.RUN_INTEGRATION_TESTS === "1";
 const runSwapSim = process.env.RUN_SWAP_SIM === "1";
 const requestAirdrop = process.env.AIRDROP === "1";
+const hasBaseIntegrationEnv = Boolean(
+  process.env.RPC_ENDPOINT && process.env.JUPITER_API_KEY,
+);
 
-const integrationTest = runIntegration ? test : test.skip;
-const swapTest = runIntegration && runSwapSim ? test : test.skip;
+const integrationTest =
+  runIntegration && hasBaseIntegrationEnv ? test : test.skip;
+const swapTest =
+  runIntegration && hasBaseIntegrationEnv && runSwapSim ? test : test.skip;
 
 function isRateLimitError(err: unknown): boolean {
   if (!err) return false;
