@@ -1,6 +1,6 @@
+import type { BotRunLifecycleState } from "../agents_runtime/runtime_repo";
 import type { BacktestListItem } from "../backtests/types";
 import type { BotLogEvent } from "../bot_events";
-import type { BotRunLifecycleState } from "../agents_runtime/runtime_repo";
 import type { StrategyConversationDescriptor } from "../strategy_validation/descriptors";
 import type {
   StrategyEventRow,

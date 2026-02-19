@@ -1,5 +1,5 @@
 import { Bot, Send, User } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../../cn";
 
 interface Message {
@@ -30,27 +30,29 @@ export function AgentChat({
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasMountedRef = useRef(false);
   const latestMessage = messages[messages.length - 1];
-  const latestMessageKey = latestMessage
+  const messageCount = messages.length;
+  const _latestMessageKey = latestMessage
     ? `${latestMessage.id}:${latestMessage.ts}:${latestMessage.content}`
     : "__empty__";
 
-  const scrollToLatest = (behavior: ScrollBehavior) => {
+  const scrollToLatest = useCallback((behavior: ScrollBehavior) => {
     const node = scrollRef.current;
     if (!node) return;
     node.scrollTo({
       top: node.scrollHeight,
       behavior,
     });
-  };
+  }, []);
 
   useEffect(() => {
-    const behavior: ScrollBehavior = hasMountedRef.current ? "smooth" : "auto";
+    const behavior: ScrollBehavior =
+      hasMountedRef.current && messageCount > 0 ? "smooth" : "auto";
     hasMountedRef.current = true;
     const frame = window.requestAnimationFrame(() => {
       scrollToLatest(behavior);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [latestMessageKey]);
+  }, [messageCount, scrollToLatest]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

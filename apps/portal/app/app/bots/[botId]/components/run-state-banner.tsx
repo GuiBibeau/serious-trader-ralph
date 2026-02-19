@@ -28,7 +28,9 @@ export function RunStateBanner({
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-wide text-muted">Run State</p>
+          <p className="text-xs uppercase tracking-wide text-muted">
+            Run State
+          </p>
           <p className="text-sm font-semibold text-ink">{state}</p>
           {blockedReason ? (
             <p className="text-xs text-amber-300 mt-1">{blockedReason}</p>

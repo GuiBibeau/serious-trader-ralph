@@ -91,6 +91,8 @@ export function LiveTicksChart({ className }: LiveTicksChartProps) {
   return (
     <div
       className={`relative w-full h-full overflow-hidden bg-[var(--color-chart-bg)] flex flex-col ${className}`}
+      role="img"
+      aria-label="Live SOL/USDC chart"
       onMouseMove={(event) => {
         if (!hasData) return;
         const rect = event.currentTarget.getBoundingClientRect();
@@ -133,6 +135,7 @@ export function LiveTicksChart({ className }: LiveTicksChartProps) {
         viewBox="0 0 1000 200"
         preserveAspectRatio="none"
       >
+        <title>Live SOL/USDC chart</title>
         {hasData ? (
           <motion.path
             d={chart.pathData}

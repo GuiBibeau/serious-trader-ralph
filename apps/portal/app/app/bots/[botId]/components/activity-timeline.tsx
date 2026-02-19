@@ -14,12 +14,17 @@ export function ActivityTimeline({ events }: { events: TimelineEvent[] }) {
           <p className="text-xs text-muted">No activity yet.</p>
         ) : (
           events.map((event) => (
-            <div key={event.id} className="rounded border border-border/70 bg-paper/40 p-2">
+            <div
+              key={event.id}
+              className="rounded border border-border/70 bg-paper/40 p-2"
+            >
               <p className="text-xs text-ink">{event.label}</p>
               {event.detail ? (
                 <p className="mt-1 text-[11px] text-muted">{event.detail}</p>
               ) : null}
-              <p className="mt-1 text-[11px] text-muted">{formatTs(event.ts)}</p>
+              <p className="mt-1 text-[11px] text-muted">
+                {formatTs(event.ts)}
+              </p>
             </div>
           ))
         )}

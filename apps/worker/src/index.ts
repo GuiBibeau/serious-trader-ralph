@@ -1,10 +1,13 @@
 import { requireUser } from "./auth";
-import { getAgentByName, routeAgentRequest } from "agents";
 
+export { TradingOrchestratorAgent } from "./agents_runtime/trading_orchestrator_agent";
 export { BacktestQueue } from "./backtest_queue_do";
 export { BotLoop } from "./bot_loop_do";
-export { TradingOrchestratorAgent } from "./agents_runtime/trading_orchestrator_agent";
 
+import {
+  enqueueSteeringMessage,
+  listSteeringMessages,
+} from "./agents_runtime/runtime_repo";
 import {
   newBacktestRunId,
   normalizeBacktestRunRequest,
@@ -22,18 +25,14 @@ import {
 } from "./billing";
 import { listRecentBotEvents } from "./bot_events";
 import { computeBotCreationLimits, MAX_FREE_BOTS } from "./bot_limits";
-import {
-  enqueueSteeringMessage,
-  listSteeringMessages,
-} from "./agents_runtime/runtime_repo";
 import type { UserRow } from "./bots_db";
 import {
   createBotRow,
   findUserByPrivyUserId,
   getBotById,
   getBotForUser,
-  listEnabledBots,
   listBotsForUser,
+  listEnabledBots,
   setBotEnabledById,
   setBotEnabledForUser,
   setUserOnboardingStatus,
@@ -58,7 +57,6 @@ import {
   setBotInferenceProvider,
 } from "./inference_provider";
 import { JupiterClient } from "./jupiter";
-import { computeMarketIndicators } from "./market_indicators";
 import {
   fetchMacroEtfFlows,
   fetchMacroFredIndicators,
@@ -66,6 +64,7 @@ import {
   fetchMacroSignals,
   fetchMacroStablecoinHealth,
 } from "./macro_sources";
+import { computeMarketIndicators } from "./market_indicators";
 import { getAgentMemory, saveAgentMemory } from "./memory";
 import { normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
@@ -102,6 +101,16 @@ const X402_READ_RPC_ENDPOINT_FALLBACK = "https://api.mainnet-beta.solana.com";
 const X402_READ_JUPITER_BASE_URL = "https://lite-api.jup.ag";
 const X402_SOL_MINT = "So11111111111111111111111111111111111111112";
 
+type AgentsModule = typeof import("agents");
+let cachedAgentsModule: Promise<AgentsModule> | null = null;
+
+async function loadAgentsModule(): Promise<AgentsModule> {
+  if (!cachedAgentsModule) {
+    cachedAgentsModule = import("agents");
+  }
+  return cachedAgentsModule;
+}
+
 function resolveX402ReadRpcEndpoint(env: Env): string {
   const balanceRpc = String(env.BALANCE_RPC_ENDPOINT ?? "").trim();
   if (balanceRpc) return balanceRpc;
@@ -130,6 +139,7 @@ export default {
       }
 
       if (env.TRADING_ORCHESTRATOR) {
+        const { routeAgentRequest } = await loadAgentsModule();
         const routed = await routeAgentRequest(request, env);
         if (routed) return routed;
       }
@@ -569,7 +579,7 @@ export default {
         if (paymentRequired) return withCors(paymentRequired, env);
 
         const payload = await readPayload(request);
-        let ohlcv;
+        let ohlcv: Awaited<ReturnType<typeof fetchHistoricalOhlcvRuntime>>;
         try {
           ohlcv = await fetchHistoricalOhlcvRuntime(env, payload, {
             defaultLookbackHours: 168,
@@ -634,7 +644,7 @@ export default {
         if (paymentRequired) return withCors(paymentRequired, env);
 
         const payload = await readPayload(request);
-        let ohlcv;
+        let ohlcv: Awaited<ReturnType<typeof fetchHistoricalOhlcvRuntime>>;
         try {
           ohlcv = await fetchHistoricalOhlcvRuntime(env, payload, {
             defaultLookbackHours: 168,
@@ -1152,7 +1162,7 @@ export default {
           if (request.method === "PATCH") {
             const payload = await readPayload(request);
             const patch = parseInferencePatchPayload(payload);
-            let provider;
+            let provider: Awaited<ReturnType<typeof patchBotInferenceProvider>>;
             try {
               provider = await patchBotInferenceProvider(env, {
                 botId: bot.id,
@@ -1202,10 +1212,7 @@ export default {
           }
           if (!providerHealthy) {
             return withCors(
-              json(
-                { ok: false, error: providerError },
-                { status: 409 },
-              ),
+              json({ ok: false, error: providerError }, { status: 409 }),
               env,
             );
           }
@@ -2026,30 +2033,30 @@ export default {
             ? 404
             : message === "inference-provider-unreachable"
               ? 503
-            : message.startsWith("inference-provider-ping-failed")
-              ? 400
-              : message === "inference-provider-ping-timeout"
-                ? 504
-                : message === "inference-encryption-key-missing" ||
-                    message === "invalid-inference-encryption-key"
-                  ? 503
-                  : message === "manual-onboarding-required" ||
-                      message === "manual-access-required"
-                    ? 403
-                    : message === "trading-orchestrator-binding-missing"
-                      ? 503
-                    : message === "bot-limit-valuation-unavailable" ||
-                        message.startsWith("x402-route-config-")
-                      ? 503
-                      : message === "strategy-not-validated" ||
-                          message === "strategy-validation-stale"
-                        ? 409
-                        : message === "not-found"
-                          ? 404
-                          : message.startsWith("invalid-") ||
-                              message.startsWith("missing-")
-                            ? 400
-                            : 500;
+              : message.startsWith("inference-provider-ping-failed")
+                ? 400
+                : message === "inference-provider-ping-timeout"
+                  ? 504
+                  : message === "inference-encryption-key-missing" ||
+                      message === "invalid-inference-encryption-key"
+                    ? 503
+                    : message === "manual-onboarding-required" ||
+                        message === "manual-access-required"
+                      ? 403
+                      : message === "trading-orchestrator-binding-missing"
+                        ? 503
+                        : message === "bot-limit-valuation-unavailable" ||
+                            message.startsWith("x402-route-config-")
+                          ? 503
+                          : message === "strategy-not-validated" ||
+                              message === "strategy-validation-stale"
+                            ? 409
+                            : message === "not-found"
+                              ? 404
+                              : message.startsWith("invalid-") ||
+                                  message.startsWith("missing-")
+                                ? 400
+                                : 500;
       if (status >= 500) {
         // Avoid leaking request headers or secrets; log only safe metadata.
         console.error("api.error", {
@@ -2283,6 +2290,7 @@ async function botLoopFetchJson(
   if (!env.TRADING_ORCHESTRATOR) {
     throw new Error("trading-orchestrator-binding-missing");
   }
+  const { getAgentByName } = await loadAgentsModule();
   const stub = await getAgentByName(env.TRADING_ORCHESTRATOR, botId);
 
   const headers = new Headers(init.headers);

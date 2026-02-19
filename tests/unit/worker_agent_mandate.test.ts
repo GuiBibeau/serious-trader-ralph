@@ -1,5 +1,5 @@
-import { defaultAgentStrategy } from "../../apps/worker/src/defaults";
 import { inferMandateProfile } from "../../apps/worker/src/agent_mandate";
+import { defaultAgentStrategy } from "../../apps/worker/src/defaults";
 
 describe("worker agent mandate profile", () => {
   test("defaults to aggressive/autonomous profile when mandate is missing", () => {

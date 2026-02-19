@@ -40,6 +40,7 @@ export function AgentStats({
           {bots.map((bot) => (
             <button
               key={bot.id}
+              type="button"
               onClick={() => onSelectBot(bot.id)}
               className={cn(
                 "w-full text-left px-3 py-2.5 rounded border text-sm font-mono transition-all duration-200 group relative overflow-hidden",
@@ -72,6 +73,7 @@ export function AgentStats({
             </button>
           ))}
           <button
+            type="button"
             onClick={onCreateBot}
             className="w-full py-2 border border-dashed border-border text-xs text-muted hover:text-ink hover:border-muted hover:bg-white/5 transition-colors rounded uppercase tracking-wide opacity-60 hover:opacity-100"
           >
@@ -111,6 +113,7 @@ export function AgentStats({
             View Details
           </Link>
           <button
+            type="button"
             disabled={
               !selectedBot ||
               loading ||
@@ -124,6 +127,7 @@ export function AgentStats({
             Stop Agent
           </button>
           <button
+            type="button"
             disabled={
               !selectedBot ||
               loading ||
@@ -152,9 +156,7 @@ export function AgentStats({
           </p>
         ) : null}
         {selectedBot?.enabled ? (
-          <p className="mt-2 text-[11px] text-emerald-400">
-            Ticking started.
-          </p>
+          <p className="mt-2 text-[11px] text-emerald-400">Ticking started.</p>
         ) : null}
       </div>
     </div>

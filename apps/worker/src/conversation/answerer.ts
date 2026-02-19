@@ -319,7 +319,9 @@ export async function answerQuestion(
   }
 
   const modelAvailable = Boolean(
-    providerOverride?.baseUrl && providerOverride?.apiKey && providerOverride?.model,
+    providerOverride?.baseUrl &&
+      providerOverride?.apiKey &&
+      providerOverride?.model,
   );
   if (!modelAvailable) {
     const fallback = clampAnswer(

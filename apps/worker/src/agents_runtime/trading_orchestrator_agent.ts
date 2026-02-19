@@ -1,16 +1,12 @@
 import { Agent } from "agents";
-import { json } from "../response";
-import {
-  getLoopConfig,
-  updateLoopConfig,
-  type LoopConfig,
-} from "../config";
+import { getLoopConfig, type LoopConfig, updateLoopConfig } from "../config";
 import { defaultAgentStrategy } from "../defaults";
 import {
-  resolveBotProviderSnapshot,
   type ProviderSnapshot,
+  resolveBotProviderSnapshot,
 } from "../inference_provider";
 import { runAutopilotTickForTenant } from "../loop";
+import { json } from "../response";
 import { checkStrategyStartGate } from "../strategy_validation/engine";
 import type { Env } from "../types";
 import {
@@ -121,7 +117,8 @@ export class TradingOrchestratorAgent extends Agent<Env, OrchestratorState> {
                 },
               );
             } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
+              const message =
+                error instanceof Error ? error.message : String(error);
               await upsertBotRunState(this.env, {
                 botId,
                 state: "blocked_inference",
@@ -147,15 +144,18 @@ export class TradingOrchestratorAgent extends Agent<Env, OrchestratorState> {
               state: "running",
               blockedReason: null,
               providerBaseUrlHash:
-                resolvedProviderSnapshot?.baseUrlHash ?? this.state.providerSnapshot?.baseUrlHash ?? null,
+                resolvedProviderSnapshot?.baseUrlHash ??
+                this.state.providerSnapshot?.baseUrlHash ??
+                null,
               providerModel:
-                resolvedProviderSnapshot?.model ?? this.state.providerSnapshot?.model ?? null,
-              providerPingAgeMs:
-                toProviderPingAgeMs(
-                  resolvedProviderSnapshot?.lastPingAt ??
-                    this.state.providerSnapshot?.lastPingAt ??
-                    null,
-                ),
+                resolvedProviderSnapshot?.model ??
+                this.state.providerSnapshot?.model ??
+                null,
+              providerPingAgeMs: toProviderPingAgeMs(
+                resolvedProviderSnapshot?.lastPingAt ??
+                  this.state.providerSnapshot?.lastPingAt ??
+                  null,
+              ),
               resolutionSource:
                 resolvedProviderSnapshot?.resolutionSource ??
                 this.state.providerSnapshot?.resolutionSource ??
@@ -285,7 +285,9 @@ export class TradingOrchestratorAgent extends Agent<Env, OrchestratorState> {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await updateLoopConfig(this.env, { enabled: false }, botId).catch(() => {});
+      await updateLoopConfig(this.env, { enabled: false }, botId).catch(
+        () => {},
+      );
       await upsertBotRunState(this.env, {
         botId,
         state: "blocked_inference",
@@ -386,7 +388,8 @@ export class TradingOrchestratorAgent extends Agent<Env, OrchestratorState> {
             verify: true,
           },
         ).catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           return {
             error: toInferenceBlockedReason(message),
           } as const;
@@ -436,15 +439,22 @@ export class TradingOrchestratorAgent extends Agent<Env, OrchestratorState> {
           providerSnapshot,
           steering: {
             pullCheckpointMessages: async () => {
-              const rows = await listPendingSteeringMessages(this.env, botId, 20);
+              const rows = await listPendingSteeringMessages(
+                this.env,
+                botId,
+                20,
+              );
               return rows.map((row) => ({ id: row.id, message: row.message }));
             },
             markApplied: async (ids: number[], runId: string) => {
-              const lastAppliedId = await markSteeringMessagesApplied(this.env, {
-                botId,
-                ids,
-                runId,
-              });
+              const lastAppliedId = await markSteeringMessagesApplied(
+                this.env,
+                {
+                  botId,
+                  ids,
+                  runId,
+                },
+              );
               if (lastAppliedId) {
                 await upsertBotRunState(this.env, {
                   botId,
@@ -523,7 +533,7 @@ export class TradingOrchestratorAgent extends Agent<Env, OrchestratorState> {
           message === "inference-provider-unreachable" ||
           message === "inference-provider-not-configured"
             ? message
-            : runState?.blockedReason ?? message,
+            : (runState?.blockedReason ?? message),
         lastTickAt: new Date().toISOString(),
         nextTickAt: new Date(Date.now() + TICK_INTERVAL_MS).toISOString(),
       }).catch(() => {});
@@ -545,7 +555,10 @@ export class TradingOrchestratorAgent extends Agent<Env, OrchestratorState> {
       }
       this.setState({ ...this.state, intervalScheduleId: null });
     }
-    const schedule = await this.scheduleEvery(TICK_INTERVAL_SECONDS, "scheduledTick");
+    const schedule = await this.scheduleEvery(
+      TICK_INTERVAL_SECONDS,
+      "scheduledTick",
+    );
     this.setState({
       ...this.state,
       intervalScheduleId: schedule.id,
@@ -593,7 +606,9 @@ export class TradingOrchestratorAgent extends Agent<Env, OrchestratorState> {
   }
 }
 
-function toLoopConfigUpdate(payload: Record<string, unknown>): Partial<LoopConfig> {
+function toLoopConfigUpdate(
+  payload: Record<string, unknown>,
+): Partial<LoopConfig> {
   const update: Partial<LoopConfig> = {};
   if (payload.enabled !== undefined) {
     if (typeof payload.enabled !== "boolean") {

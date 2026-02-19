@@ -46,7 +46,9 @@ export function InferenceHealthCard({
         <div className="flex justify-between gap-3">
           <dt>base url hash</dt>
           <dd className="text-ink font-mono">
-            {providerBaseUrlHash ? `${providerBaseUrlHash.slice(0, 10)}...` : "n/a"}
+            {providerBaseUrlHash
+              ? `${providerBaseUrlHash.slice(0, 10)}...`
+              : "n/a"}
           </dd>
         </div>
         <div className="flex justify-between gap-3">
@@ -64,7 +66,11 @@ export function InferenceHealthCard({
       ) : null}
 
       <div className="mt-3 flex items-center gap-2">
-        <button className={BTN_SECONDARY} onClick={onOpenSettings} type="button">
+        <button
+          className={BTN_SECONDARY}
+          onClick={onOpenSettings}
+          type="button"
+        >
           Edit
         </button>
         <button

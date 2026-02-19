@@ -232,14 +232,16 @@ integrationTest(
     expect(bars.length).toBeGreaterThan(0);
     expect((ohlcv.ohlcv?.sourcePriorityUsed ?? []).length).toBeGreaterThan(0);
     for (let i = 0; i < bars.length; i += 1) {
-      const bar = bars[i]!;
+      const bar = bars[i];
+      if (!bar) continue;
       expect(["birdeye", "dune"]).toContain(bar.source);
       expect(bar.low).toBeLessThanOrEqual(bar.open);
       expect(bar.low).toBeLessThanOrEqual(bar.close);
       expect(bar.high).toBeGreaterThanOrEqual(bar.open);
       expect(bar.high).toBeGreaterThanOrEqual(bar.close);
       if (i > 0) {
-        const prev = bars[i - 1]!;
+        const prev = bars[i - 1];
+        if (!prev) continue;
         expect(Date.parse(prev.ts)).toBeLessThanOrEqual(Date.parse(bar.ts));
       }
     }
@@ -283,9 +285,7 @@ integrationTest(
     expect(typeof macroSignals.totalCount).toBe("number");
     expect(typeof macroSignals.signals).toBe("object");
 
-    const macroFred = (await withRetries(() =>
-      macroFredTool({}, runtime),
-    )) as {
+    const macroFred = (await withRetries(() => macroFredTool({}, runtime))) as {
       ok?: boolean;
       configured?: boolean;
       series?: Array<unknown>;
@@ -294,9 +294,7 @@ integrationTest(
     expect(typeof macroFred.configured).toBe("boolean");
     expect(Array.isArray(macroFred.series)).toBe(true);
 
-    const macroEtf = (await withRetries(() =>
-      macroEtfTool({}, runtime),
-    )) as {
+    const macroEtf = (await withRetries(() => macroEtfTool({}, runtime))) as {
       ok?: boolean;
       summary?: { etfCount?: number; netDirection?: string };
       etfs?: Array<unknown>;
@@ -318,9 +316,7 @@ integrationTest(
     expect(typeof macroStablecoin.summary?.healthStatus).toBe("string");
     expect(Array.isArray(macroStablecoin.stablecoins)).toBe(true);
 
-    const macroOil = (await withRetries(() =>
-      macroOilTool({}, runtime),
-    )) as {
+    const macroOil = (await withRetries(() => macroOilTool({}, runtime))) as {
       ok?: boolean;
       configured?: boolean;
       wtiPrice?: { current?: number } | null;
@@ -329,7 +325,8 @@ integrationTest(
     expect(macroOil.ok).toBe(true);
     expect(typeof macroOil.configured).toBe("boolean");
     expect(
-      macroOil.wtiPrice === null || typeof macroOil.wtiPrice?.current === "number",
+      macroOil.wtiPrice === null ||
+        typeof macroOil.wtiPrice?.current === "number",
     ).toBe(true);
     expect(
       macroOil.brentPrice === null ||

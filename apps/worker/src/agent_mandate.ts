@@ -34,8 +34,12 @@ function containsAny(text: string, hints: string[]): boolean {
   return false;
 }
 
-export function inferMandateProfile(mandate: string | undefined): MandateProfile {
-  const raw = String(mandate ?? "").trim().toLowerCase();
+export function inferMandateProfile(
+  mandate: string | undefined,
+): MandateProfile {
+  const raw = String(mandate ?? "")
+    .trim()
+    .toLowerCase();
   const aggressive = raw.length === 0 || containsAny(raw, AGGRESSIVE_HINTS);
   const opportunistic = aggressive || containsAny(raw, OPPORTUNISTIC_HINTS);
 

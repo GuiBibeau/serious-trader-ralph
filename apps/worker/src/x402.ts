@@ -88,7 +88,9 @@ function loadRouteConfig(env: Env, routeKey: X402RouteKey): X402RouteConfig {
                           env.X402_MACRO_FRED_INDICATORS_PRICE_USD ?? "",
                         ).trim()
                       : routeKey === "macro_etf_flows"
-                        ? String(env.X402_MACRO_ETF_FLOWS_PRICE_USD ?? "").trim()
+                        ? String(
+                            env.X402_MACRO_ETF_FLOWS_PRICE_USD ?? "",
+                          ).trim()
                         : routeKey === "macro_stablecoin_health"
                           ? String(
                               env.X402_MACRO_STABLECOIN_HEALTH_PRICE_USD ?? "",

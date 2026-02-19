@@ -55,7 +55,8 @@ export function MacroStablecoinWidget() {
                   <div className="mt-0.5 flex items-center justify-between text-[10px] text-muted">
                     <span>{row.pegStatus}</span>
                     <span>
-                      dev {row.deviation.toFixed(3)}% | {formatPct(row.change24h)}
+                      dev {row.deviation.toFixed(3)}% |{" "}
+                      {formatPct(row.change24h)}
                     </span>
                   </div>
                 </div>

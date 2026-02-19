@@ -32,7 +32,9 @@ function normalizeMemory(value: unknown): AgentMemory | null {
       )
     : [];
   const reflections = Array.isArray(row.reflections)
-    ? row.reflections.filter((entry): entry is string => typeof entry === "string")
+    ? row.reflections.filter(
+        (entry): entry is string => typeof entry === "string",
+      )
     : [];
   const tradesProposedToday = Number(row.tradesProposedToday);
   const updatedAt =
@@ -43,11 +45,14 @@ function normalizeMemory(value: unknown): AgentMemory | null {
     typeof row.lastTradeDate === "string" ? row.lastTradeDate : "";
 
   const compactionRaw =
-    row.compaction && typeof row.compaction === "object" && !Array.isArray(row.compaction)
+    row.compaction &&
+    typeof row.compaction === "object" &&
+    !Array.isArray(row.compaction)
       ? (row.compaction as Record<string, unknown>)
       : null;
   const compactionUpdatedAt =
-    typeof compactionRaw?.updatedAt === "string" && compactionRaw.updatedAt.trim()
+    typeof compactionRaw?.updatedAt === "string" &&
+    compactionRaw.updatedAt.trim()
       ? compactionRaw.updatedAt
       : new Date().toISOString();
   const compactedCount = Number(compactionRaw?.compactedCount);
@@ -57,7 +62,9 @@ function normalizeMemory(value: unknown): AgentMemory | null {
     : [];
   const summaries = summariesRaw
     .filter((entry): entry is Record<string, unknown> => {
-      return Boolean(entry) && typeof entry === "object" && !Array.isArray(entry);
+      return (
+        Boolean(entry) && typeof entry === "object" && !Array.isArray(entry)
+      );
     })
     .map((entry) => {
       const toStrings = (value: unknown): string[] =>
@@ -177,10 +184,7 @@ export async function saveAgentMemory(
 ): Promise<void> {
   const next = { ...memory, updatedAt: new Date().toISOString() };
   await saveAgentMemoryToD1(env, tenantId, next).catch(() => {});
-  await env.CONFIG_KV.put(
-    memoryKey(tenantId),
-    JSON.stringify(next),
-  );
+  await env.CONFIG_KV.put(memoryKey(tenantId), JSON.stringify(next));
 }
 
 export function appendObservation(

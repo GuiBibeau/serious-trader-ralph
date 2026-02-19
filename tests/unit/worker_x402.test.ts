@@ -88,12 +88,15 @@ describe("worker x402 helpers", () => {
 
   test("withX402SettlementHeader sets payment-response for macro_signals", () => {
     const env = createEnv();
-    const request = new Request("http://localhost/api/x402/read/macro_signals", {
-      method: "POST",
-      headers: {
-        "payment-signature": "signed",
+    const request = new Request(
+      "http://localhost/api/x402/read/macro_signals",
+      {
+        method: "POST",
+        headers: {
+          "payment-signature": "signed",
+        },
       },
-    });
+    );
     const base = new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -116,9 +119,12 @@ describe("worker x402 helpers", () => {
 
   test("missing macro_signals price var throws config error", () => {
     const env = createEnv({ X402_MACRO_SIGNALS_PRICE_USD: undefined });
-    const request = new Request("http://localhost/api/x402/read/macro_signals", {
-      method: "POST",
-    });
+    const request = new Request(
+      "http://localhost/api/x402/read/macro_signals",
+      {
+        method: "POST",
+      },
+    );
     expect(() =>
       requireX402Payment(
         request,

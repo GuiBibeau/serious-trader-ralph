@@ -23,12 +23,12 @@ import {
   DashboardGrid,
   hasCustomDashboardGridLayouts,
 } from "./components/dashboard-grid";
-import { MarketChart } from "./components/market-chart";
 import { MacroEtfWidget } from "./components/macro-etf-widget";
 import { MacroFredWidget } from "./components/macro-fred-widget";
 import { MacroOilWidget } from "./components/macro-oil-widget";
 import { MacroRadarWidget } from "./components/macro-radar-widget";
 import { MacroStablecoinWidget } from "./components/macro-stablecoin-widget";
+import { MarketChart } from "./components/market-chart";
 import { formatPrice, useSolMarketFeed } from "./components/sol-market-feed";
 import { useDashboard } from "./context";
 
@@ -862,14 +862,14 @@ function CreateBotModal(props: {
   const maxFreeBots = limits?.maxFreeBots ?? 3;
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-[4px]"
-      onClick={onClose}
-    >
-      <div
-        className="card w-[min(560px,94vw)] p-0"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-40 flex items-center justify-center">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/60 backdrop-blur-[4px]"
+        onClick={onClose}
+        aria-label="Close create bot modal"
+      />
+      <div className="card relative w-[min(560px,94vw)] p-0">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <p className="font-semibold">Create Bot</p>
           <button

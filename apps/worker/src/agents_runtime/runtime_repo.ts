@@ -91,7 +91,9 @@ function mapSteeringRow(row: unknown): SteeringMessageRow | null {
   const r = row as Record<string, unknown>;
   const rawStatus = String(r.status ?? "").trim();
   const status =
-    rawStatus === "pending" || rawStatus === "applied" || rawStatus === "canceled"
+    rawStatus === "pending" ||
+    rawStatus === "applied" ||
+    rawStatus === "canceled"
       ? rawStatus
       : "pending";
   const id = Number(r.id);
@@ -261,10 +263,14 @@ export async function enqueueSteeringMessage(
     .bind(input.botId)
     .first();
 
-  const pendingCount = Number((row as Record<string, unknown> | null)?.pendingCount ?? 0);
+  const pendingCount = Number(
+    (row as Record<string, unknown> | null)?.pendingCount ?? 0,
+  );
   return {
     queueId: safeQueueId,
-    queuePosition: Number.isFinite(pendingCount) ? Math.max(1, Math.trunc(pendingCount)) : 1,
+    queuePosition: Number.isFinite(pendingCount)
+      ? Math.max(1, Math.trunc(pendingCount))
+      : 1,
   };
 }
 
@@ -381,7 +387,9 @@ export async function countPendingSteeringMessages(
   )
     .bind(botId)
     .first();
-  const value = Number((row as Record<string, unknown> | null)?.pendingCount ?? 0);
+  const value = Number(
+    (row as Record<string, unknown> | null)?.pendingCount ?? 0,
+  );
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.trunc(value));
 }

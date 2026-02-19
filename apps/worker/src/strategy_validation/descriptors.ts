@@ -103,10 +103,7 @@ function registerBuiltInDescriptors() {
       const status = runtimeState?.lifecycleState ?? "candidate";
       return {
         headline: "Agent strategy",
-        bullets: [
-          `mandate: ${mandate}`,
-          `lifecycle: ${status}`,
-        ],
+        bullets: [`mandate: ${mandate}`, `lifecycle: ${status}`],
       };
     },
   });

@@ -120,19 +120,6 @@ type ChatSource = {
   hint?: string;
 };
 
-type ChatMessage = {
-  id: number;
-  tenantId: string;
-  role: "user" | "assistant";
-  actor: "user" | "admin";
-  question: string | null;
-  answer: string | null;
-  model: string | null;
-  sources: ChatSource[];
-  createdAt: string;
-  error: string | null;
-};
-
 type BotTelemetry = {
   tenantId: string;
   strategyDescriptor: {
@@ -342,9 +329,7 @@ const TOOL_CALL_DESCRIPTIONS: Record<string, string> = {
 function formatToolCallLabel(toolName: string): string {
   const cleaned = String(toolName || "").trim();
   if (!cleaned) return "agent action";
-  return cleaned
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+  return cleaned.replace(/_/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
 function formatToolCallDescription(toolName: string): string {
@@ -844,7 +829,7 @@ function BotWorkspace({
     setChatBusy(false);
   };
 
-  function toInferenceUiMessage(raw: unknown): string {
+  const toInferenceUiMessage = useCallback((raw: unknown): string => {
     const message = String(raw ?? "");
     if (message === "inference-provider-not-configured") {
       return "Inference provider is not configured.";
@@ -862,7 +847,7 @@ function BotWorkspace({
       return "Provider test failed. Verify endpoint, model, and API key.";
     }
     return message || "Inference provider request failed.";
-  }
+  }, []);
 
   const refreshInferenceProvider = useCallback(async (): Promise<void> => {
     const token = await getAccessToken();
@@ -949,9 +934,13 @@ function BotWorkspace({
   const refreshSteering = useCallback(async (): Promise<void> => {
     const token = await getAccessToken();
     if (!token) return;
-    const payload = await apiFetchJson(`/api/bots/${bot.id}/steering?limit=50`, token, {
-      method: "GET",
-    }).catch(() => null);
+    const payload = await apiFetchJson(
+      `/api/bots/${bot.id}/steering?limit=50`,
+      token,
+      {
+        method: "GET",
+      },
+    ).catch(() => null);
     const messagesRaw =
       isRecord(payload) && Array.isArray(payload.messages)
         ? payload.messages
@@ -961,11 +950,9 @@ function BotWorkspace({
       .map((item) => ({
         id: Number(item.id ?? 0),
         message: String(item.message ?? ""),
-        status: (
-          item.status === "applied" || item.status === "canceled"
-            ? item.status
-            : "pending"
-        ) as SteeringMessageEntry["status"],
+        status: (item.status === "applied" || item.status === "canceled"
+          ? item.status
+          : "pending") as SteeringMessageEntry["status"],
         queuedAt: String(item.queuedAt ?? ""),
         appliedAt:
           typeof item.appliedAt === "string" ? String(item.appliedAt) : null,
@@ -998,8 +985,7 @@ function BotWorkspace({
   const pingCurrentInference = async (): Promise<void> => {
     if (!inferenceProvider?.configured) return;
     await handlePingSettings({
-      baseUrl:
-        inferenceProvider.baseUrl || DEFAULT_PROVIDER_BASE_URL,
+      baseUrl: inferenceProvider.baseUrl || DEFAULT_PROVIDER_BASE_URL,
       model: inferenceProvider.model || DEFAULT_PROVIDER_MODEL,
     });
     await refreshInferenceProvider();
@@ -1012,22 +998,22 @@ function BotWorkspace({
     setRefreshing(true);
     const [balRes, telemetryRes, chatRes, eventsRes, steeringRes] =
       await Promise.all([
-      apiFetchJson(`/api/bots/${bot.id}/balance`, token, {
-        method: "GET",
-      }).catch(() => null),
-      apiFetchJson(`/api/bots/${bot.id}/telemetry?limit=30`, token, {
-        method: "GET",
-      }).catch(() => null),
-      apiFetchJson(`/api/bots/${bot.id}/chat?limit=30`, token, {
-        method: "GET",
-      }).catch(() => null),
-      apiFetchJson(`/api/bots/${bot.id}/events?limit=80`, token, {
-        method: "GET",
-      }).catch(() => null),
-      apiFetchJson(`/api/bots/${bot.id}/steering?limit=50`, token, {
-        method: "GET",
-      }).catch(() => null),
-    ]);
+        apiFetchJson(`/api/bots/${bot.id}/balance`, token, {
+          method: "GET",
+        }).catch(() => null),
+        apiFetchJson(`/api/bots/${bot.id}/telemetry?limit=30`, token, {
+          method: "GET",
+        }).catch(() => null),
+        apiFetchJson(`/api/bots/${bot.id}/chat?limit=30`, token, {
+          method: "GET",
+        }).catch(() => null),
+        apiFetchJson(`/api/bots/${bot.id}/events?limit=80`, token, {
+          method: "GET",
+        }).catch(() => null),
+        apiFetchJson(`/api/bots/${bot.id}/steering?limit=50`, token, {
+          method: "GET",
+        }).catch(() => null),
+      ]);
     setRefreshing(false);
 
     if (
@@ -1150,11 +1136,9 @@ function BotWorkspace({
           .map((item) => ({
             id: Number(item.id ?? 0),
             message: String(item.message ?? ""),
-            status: (
-              item.status === "applied" || item.status === "canceled"
-                ? item.status
-                : "pending"
-            ) as SteeringMessageEntry["status"],
+            status: (item.status === "applied" || item.status === "canceled"
+              ? item.status
+              : "pending") as SteeringMessageEntry["status"],
             queuedAt: String(item.queuedAt ?? ""),
             appliedAt:
               typeof item.appliedAt === "string"
@@ -1250,7 +1234,8 @@ function BotWorkspace({
       const pol = config.policy;
       const nextPolicy: PolicyFields = isRecord(pol)
         ? (() => {
-            const rawImpact = (pol as Record<string, unknown>).maxPriceImpactPct;
+            const rawImpact = (pol as Record<string, unknown>)
+              .maxPriceImpactPct;
             const impactDecimal =
               typeof rawImpact === "number" ? rawImpact : Number(rawImpact);
             const impactPct = Number.isFinite(impactDecimal)
@@ -1634,18 +1619,20 @@ function BotWorkspace({
 
   const inferenceConfigured = Boolean(inferenceProvider?.configured);
   const inferenceHealthy =
-    inferenceConfigured && !String(inferenceProvider?.lastPingError ?? "").trim();
+    inferenceConfigured &&
+    !String(inferenceProvider?.lastPingError ?? "").trim();
   const blockedByInferenceRunState =
     _telemetry?.agentRun?.state === "blocked_inference";
-  const canStartBot = inferenceConfigured && inferenceHealthy && !blockedByInferenceRunState;
+  const canStartBot =
+    inferenceConfigured && inferenceHealthy && !blockedByInferenceRunState;
   const startBlockedReason = !inferenceConfigured
     ? "Configure inference provider before starting this bot."
     : !inferenceHealthy
       ? (inferenceProvider?.lastPingError ??
-          "Inference provider is unhealthy. Test + save a healthy provider first.")
+        "Inference provider is unhealthy. Test + save a healthy provider first.")
       : blockedByInferenceRunState
         ? (_telemetry?.agentRun?.blockedReason ??
-            "Inference provider is unhealthy.")
+          "Inference provider is unhealthy.")
         : null;
   const agentRun = _telemetry?.agentRun ?? {
     state: (bot.enabled ? "running" : "idle") as
@@ -1736,14 +1723,14 @@ function BotWorkspace({
         />
       </div>
       {settingsOpen ? (
-        <div
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm p-3 md:p-8"
-          onClick={() => setSettingsOpen(false)}
-        >
-          <div
-            className="mx-auto h-full max-h-[860px] w-full max-w-[1280px] overflow-hidden rounded-3xl border border-border bg-surface shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-50 p-3 md:p-8">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            aria-label="Close settings"
+            onClick={() => setSettingsOpen(false)}
+          />
+          <div className="relative mx-auto h-full max-h-[860px] w-full max-w-[1280px] overflow-hidden rounded-3xl border border-border bg-surface shadow-2xl">
             <div className="flex h-full">
               <aside className="w-64 shrink-0 border-r border-border/80 bg-paper p-4">
                 <button
@@ -1793,6 +1780,7 @@ function BotWorkspace({
                           {(["agent"] as StrategyType[]).map((t) => (
                             <button
                               key={t}
+                              type="button"
                               onClick={() => setStrategyType(t)}
                               className={cn(
                                 "px-3 py-1.5 rounded text-xs font-medium border transition-colors",
@@ -2163,6 +2151,7 @@ function BotWorkspace({
                   </span>
                   <div className="flex items-center gap-2">
                     <button
+                      type="button"
                       className={BTN_SECONDARY}
                       onClick={() => void onTick()}
                       disabled={saving || parentLoading}
@@ -2170,6 +2159,7 @@ function BotWorkspace({
                       Run Loop
                     </button>
                     <button
+                      type="button"
                       className={BTN_PRIMARY}
                       onClick={() => void saveConfig()}
                       disabled={saving || parentLoading}

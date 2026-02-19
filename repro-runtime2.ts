@@ -27,10 +27,5 @@ const baseEnv = createConversationTestEnv({
   validationRuns: [],
 });
 
-(baseEnv.WAITLIST_DB as any).prepare = ((sql: string) => {
-  console.log("SQL::", sql);
-  return (baseEnv.WAITLIST_DB as any).prepare(sql);
-}) as never;
-
 const rs = await getRuntimeState(baseEnv, tenantId);
 console.log("runtime", rs);

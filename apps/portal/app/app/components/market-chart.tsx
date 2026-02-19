@@ -92,6 +92,8 @@ export function MarketChart({ className }: { className?: string }) {
         "relative w-full h-full overflow-hidden bg-[var(--color-chart-bg)]",
         className,
       )}
+      role="img"
+      aria-label="Market price chart"
       onMouseMove={(event) => {
         if (!hasData) return;
         const rect = event.currentTarget.getBoundingClientRect();
@@ -117,6 +119,7 @@ export function MarketChart({ className }: { className?: string }) {
         viewBox="0 0 1000 200"
         preserveAspectRatio="none"
       >
+        <title>Market price chart</title>
         <defs>
           <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
             <stop

@@ -1,11 +1,11 @@
 "use client";
 
+import type { SVGProps } from "react";
 import { FadeUp, StaggerChildren, StaggerItem } from "./motion";
 
 // ── Icons (Inline SVGs) ──────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type IconProps = any;
+type IconProps = SVGProps<SVGSVGElement>;
 
 function IconArrowRight(props: IconProps) {
   return (
@@ -20,6 +20,7 @@ function IconArrowRight(props: IconProps) {
       strokeLinejoin="round"
       {...props}
     >
+      <title>Arrow right icon</title>
       <path d="M3.33334 8H12.6667" />
       <path d="M8 3.33334L12.6667 8.00001L8 12.6667" />
     </svg>
@@ -39,6 +40,7 @@ function IconCheck(props: IconProps) {
       strokeLinejoin="round"
       {...props}
     >
+      <title>Check icon</title>
       <polyline points="20 6 9 17 4 12" />
       <path d="M3.5 8L6.5 11L13 4.5" />
     </svg>
@@ -58,6 +60,7 @@ function IconZap(props: IconProps) {
       strokeLinejoin="round"
       {...props}
     >
+      <title>Zap icon</title>
       <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
     </svg>
   );
@@ -76,6 +79,7 @@ function _IconTerminal(props: IconProps) {
       strokeLinejoin="round"
       {...props}
     >
+      <title>Terminal icon</title>
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" y1="19" x2="20" y2="19" />
     </svg>
@@ -95,6 +99,7 @@ function IconActivity(props: IconProps) {
       strokeLinejoin="round"
       {...props}
     >
+      <title>Activity icon</title>
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
     </svg>
   );
@@ -113,6 +118,7 @@ function IconCpu(props: IconProps) {
       strokeLinejoin="round"
       {...props}
     >
+      <title>CPU icon</title>
       <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
       <rect x="9" y="9" width="6" height="6" />
       <line x1="9" y1="1" x2="9" y2="4" />
@@ -140,6 +146,7 @@ function IconLayers(props: IconProps) {
       strokeLinejoin="round"
       {...props}
     >
+      <title>Layers icon</title>
       <polygon points="12 2 2 7 12 12 22 7 12 2" />
       <polyline points="2 17 12 22 22 17" />
       <polyline points="2 12 12 17 22 12" />
@@ -160,6 +167,7 @@ function IconLock(props: IconProps) {
       strokeLinejoin="round"
       {...props}
     >
+      <title>Lock icon</title>
       <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
       <path d="M7 11V7a5 5 0 0 1 10 0v4" />
     </svg>
@@ -426,7 +434,7 @@ function AccessModel() {
 
           {steps.map((step, i) => (
             <div
-              key={i}
+              key={step.title}
               className="relative z-10 flex flex-col items-center text-center"
             >
               <div className="w-24 h-24 rounded-full bg-paper border-4 border-surface shadow-xl flex items-center justify-center mb-6 z-10">

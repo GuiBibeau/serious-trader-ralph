@@ -17,8 +17,8 @@ import {
   type SpecialistRuntime,
 } from "./agents/specialists";
 import {
-  resolveBotProviderSnapshot,
   type ProviderSnapshot,
+  resolveBotProviderSnapshot,
 } from "./inference_provider";
 import type { JupiterClient } from "./jupiter";
 import {
@@ -123,7 +123,11 @@ function estimateMessageTokens(messages: ChatMessage[]): number {
     if (message.role === "assistant") {
       chars += String(message.content ?? "").length;
       chars += (message.tool_calls ?? []).reduce((sum, call) => {
-        return sum + String(call.function.name ?? "").length + String(call.function.arguments ?? "").length;
+        return (
+          sum +
+          String(call.function.name ?? "").length +
+          String(call.function.arguments ?? "").length
+        );
       }, 0);
       continue;
     }
@@ -290,17 +294,24 @@ function compactMessagesForStep(
 } | null {
   const [system] = messages;
   if (!system || system.role !== "system") {
-    if (messages.length <= maxMessages && estimateMessageTokens(messages) <= maxTokens) {
+    if (
+      messages.length <= maxMessages &&
+      estimateMessageTokens(messages) <= maxTokens
+    ) {
       return null;
     }
     const summary = buildDeterministicCompactionSummary(messages);
     return {
       summary,
-      messages: [summaryToSystemMessage(summary), ...messages.slice(-(maxMessages - 1))],
+      messages: [
+        summaryToSystemMessage(summary),
+        ...messages.slice(-(maxMessages - 1)),
+      ],
     };
   }
   const shouldCompact =
-    messages.length > maxMessages || estimateMessageTokens(messages) > maxTokens;
+    messages.length > maxMessages ||
+    estimateMessageTokens(messages) > maxTokens;
   if (!shouldCompact) return null;
 
   const rest = messages.slice(1);
@@ -313,7 +324,9 @@ function compactMessagesForStep(
   const recentWindowSize = Math.max(6, maxMessages - 2);
   const historyCount = Math.max(0, filteredRest.length - recentWindowSize);
   const historyChunk =
-    historyCount > 0 ? filteredRest.slice(0, historyCount) : filteredRest.slice(0, 1);
+    historyCount > 0
+      ? filteredRest.slice(0, historyCount)
+      : filteredRest.slice(0, 1);
   const summary = buildDeterministicCompactionSummary(historyChunk);
   const summaryMessage = summaryToSystemMessage(summary);
   const recent = filteredRest.slice(-recentWindowSize);
@@ -621,7 +634,9 @@ export async function runAgentTick(input: {
               role: "user",
               content: `Operator steering updates:\n${accepted
                 .map((entry) => `- [#${entry.id}] ${entry.message}`)
-                .join("\n")}\nApply these updates at this checkpoint before continuing.`,
+                .join(
+                  "\n",
+                )}\nApply these updates at this checkpoint before continuing.`,
             });
             if (steering.markApplied) {
               await steering
@@ -846,7 +861,9 @@ export async function runAgentTick(input: {
       (previousCompaction?.compactedCount ?? 0) + compactedCount,
     );
     const priorSummaries = previousCompaction?.summaries ?? [];
-    const nextSummaries = [...priorSummaries, ...compactionSummaries].slice(-12);
+    const nextSummaries = [...priorSummaries, ...compactionSummaries].slice(
+      -12,
+    );
     rt.memory = {
       ...rt.memory,
       compaction: {

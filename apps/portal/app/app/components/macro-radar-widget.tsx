@@ -28,9 +28,7 @@ export function MacroRadarWidget() {
         {feed.status === "loading" && !data ? (
           <p className="text-muted">Loading macro radar...</p>
         ) : null}
-        {feed.error ? (
-          <p className="text-amber-300">{feed.error}</p>
-        ) : null}
+        {feed.error ? <p className="text-amber-300">{feed.error}</p> : null}
 
         {data ? (
           <>

@@ -150,7 +150,7 @@ export async function fetchHistoricalOhlcvRuntime(
   ];
   const registry = createDataSourceRegistry(env, dataSources);
 
-  let bars;
+  let bars: Awaited<ReturnType<typeof registry.fetchHourlyBars>>;
   try {
     bars = await registry.fetchHourlyBars({
       baseMint,

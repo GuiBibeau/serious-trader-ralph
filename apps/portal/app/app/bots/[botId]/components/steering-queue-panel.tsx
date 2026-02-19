@@ -36,7 +36,11 @@ export function SteeringQueuePanel({
     <div className="rounded-xl border border-border bg-surface p-3">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-medium text-ink">Steering Queue</h3>
-        <button className={BTN_SECONDARY} onClick={() => void onRefresh()}>
+        <button
+          type="button"
+          className={BTN_SECONDARY}
+          onClick={() => void onRefresh()}
+        >
           Refresh
         </button>
       </div>
@@ -48,7 +52,12 @@ export function SteeringQueuePanel({
           placeholder="Guide the current run..."
           disabled={loading}
         />
-        <button className={BTN_PRIMARY} onClick={() => void submit()} disabled={loading}>
+        <button
+          type="button"
+          className={BTN_PRIMARY}
+          onClick={() => void submit()}
+          disabled={loading}
+        >
           Queue
         </button>
       </div>
@@ -57,11 +66,16 @@ export function SteeringQueuePanel({
           <p className="text-xs text-muted">No steering messages yet.</p>
         ) : (
           items.map((item) => (
-            <div key={item.id} className="rounded border border-border/70 bg-paper/40 p-2">
+            <div
+              key={item.id}
+              className="rounded border border-border/70 bg-paper/40 p-2"
+            >
               <p className="text-xs text-ink">{item.message}</p>
               <p className="mt-1 text-[11px] text-muted">
                 #{item.id} · {item.status} · {formatTs(item.queuedAt)}
-                {item.appliedRunId ? ` · run ${item.appliedRunId.slice(0, 8)}` : ""}
+                {item.appliedRunId
+                  ? ` · run ${item.appliedRunId.slice(0, 8)}`
+                  : ""}
               </p>
             </div>
           ))

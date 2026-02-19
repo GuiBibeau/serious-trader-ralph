@@ -40,6 +40,7 @@ type ComparableLayout = {
   h: number;
 };
 type ComparableLayouts = Record<LayoutBreakpoint, ComparableLayout[]>;
+type DashboardLayouts = Record<string, Layout[]>;
 
 const DEFAULT_DASHBOARD_LAYOUTS: Record<LayoutBreakpoint, Layout[]> = {
   lg: [
@@ -149,11 +150,11 @@ export function DashboardGrid({
   // Use the hook to get width
   const { width, containerRef, mounted } = useContainerWidth();
 
-  const [layouts, setLayouts] = useState<any>(() => {
+  const [layouts, setLayouts] = useState<DashboardLayouts>(() => {
     const stored = readStoredDashboardLayouts();
     if (!stored || !isDashboardLayoutModified(stored)) {
       clearDashboardGridLayouts();
-      return DEFAULT_DASHBOARD_LAYOUTS;
+      return DEFAULT_DASHBOARD_LAYOUTS as DashboardLayouts;
     }
 
     return {
@@ -204,7 +205,7 @@ export function DashboardGrid({
           width={width}
           margin={[1, 1]}
           containerPadding={[0, 0]}
-          onLayoutChange={(layout: any, allLayouts: any) => {
+          onLayoutChange={(layout: Layout[], allLayouts: DashboardLayouts) => {
             setLayouts(allLayouts);
             if (isDashboardLayoutModified(allLayouts)) {
               try {

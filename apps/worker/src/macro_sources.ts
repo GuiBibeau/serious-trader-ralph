@@ -11,8 +11,7 @@ const FRED_OBSERVATIONS_URL =
   "https://api.stlouisfed.org/fred/series/observations";
 const FEAR_GREED_URL = "https://api.alternative.me/fng/?limit=30&format=json";
 const MEMPOOL_HASHRATE_URL = "https://mempool.space/api/v1/mining/hashrate/1m";
-const COINGECKO_MARKETS_URL =
-  "https://api.coingecko.com/api/v3/coins/markets";
+const COINGECKO_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets";
 const EIA_SERIES_BASE = "https://api.eia.gov/v2/seriesid";
 const STOOQ_DAILY_CSV_BASE = "https://stooq.com/q/d/l/";
 const COINPAPRIKA_TICKER_BASE = "https://api.coinpaprika.com/v1/tickers";
@@ -265,7 +264,10 @@ const macroSignalsCache: CacheCell<MacroSignalsResponse> = {
   updatedAtMs: 0,
 };
 
-const macroFredCache = new Map<string, CacheCell<MacroFredIndicatorsResponse>>();
+const macroFredCache = new Map<
+  string,
+  CacheCell<MacroFredIndicatorsResponse>
+>();
 const macroEtfCache = new Map<string, CacheCell<MacroEtfFlowsResponse>>();
 const macroStablecoinCache = new Map<
   string,
@@ -423,7 +425,13 @@ function normalizeStablecoins(input?: string[]): string[] {
 
 function extractClosePrices(chart: unknown): number[] {
   const rows = (
-    chart as { chart?: { result?: Array<{ indicators?: { quote?: Array<{ close?: Array<number | null> }> } }> } }
+    chart as {
+      chart?: {
+        result?: Array<{
+          indicators?: { quote?: Array<{ close?: Array<number | null> }> };
+        }>;
+      };
+    }
   )?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
   if (!Array.isArray(rows)) return [];
   return rows.filter((value): value is number => Number.isFinite(value));
@@ -431,7 +439,13 @@ function extractClosePrices(chart: unknown): number[] {
 
 function extractVolumes(chart: unknown): number[] {
   const rows = (
-    chart as { chart?: { result?: Array<{ indicators?: { quote?: Array<{ volume?: Array<number | null> }> } }> } }
+    chart as {
+      chart?: {
+        result?: Array<{
+          indicators?: { quote?: Array<{ volume?: Array<number | null> }> };
+        }>;
+      };
+    }
   )?.chart?.result?.[0]?.indicators?.quote?.[0]?.volume;
   if (!Array.isArray(rows)) return [];
   return rows.filter((value): value is number => Number.isFinite(value));
@@ -560,7 +574,10 @@ export async function fetchMacroSignals(
   timeoutMs = 9_000,
 ): Promise<MacroSignalsResponse> {
   const startedAt = Date.now();
-  if (macroSignalsCache.value && isFresh(macroSignalsCache.updatedAtMs, MACRO_SIGNALS_TTL_MS)) {
+  if (
+    macroSignalsCache.value &&
+    isFresh(macroSignalsCache.updatedAtMs, MACRO_SIGNALS_TTL_MS)
+  ) {
     if (!isMacroSignalsDegraded(macroSignalsCache.value)) {
       logMacroFetch({
         source: "macro_signals",
@@ -575,20 +592,38 @@ export async function fetchMacroSignals(
   try {
     const [jpyChart, btcChart, qqqChart, xlpChart, fearGreed, mempoolHash] =
       await Promise.allSettled([
-        fetchJsonWithTimeout(`${YAHOO_CHART_BASE}/JPY=X?range=1y&interval=1d`, timeoutMs),
-        fetchJsonWithTimeout(`${YAHOO_CHART_BASE}/BTC-USD?range=1y&interval=1d`, timeoutMs),
-        fetchJsonWithTimeout(`${YAHOO_CHART_BASE}/QQQ?range=1y&interval=1d`, timeoutMs),
-        fetchJsonWithTimeout(`${YAHOO_CHART_BASE}/XLP?range=1y&interval=1d`, timeoutMs),
+        fetchJsonWithTimeout(
+          `${YAHOO_CHART_BASE}/JPY=X?range=1y&interval=1d`,
+          timeoutMs,
+        ),
+        fetchJsonWithTimeout(
+          `${YAHOO_CHART_BASE}/BTC-USD?range=1y&interval=1d`,
+          timeoutMs,
+        ),
+        fetchJsonWithTimeout(
+          `${YAHOO_CHART_BASE}/QQQ?range=1y&interval=1d`,
+          timeoutMs,
+        ),
+        fetchJsonWithTimeout(
+          `${YAHOO_CHART_BASE}/XLP?range=1y&interval=1d`,
+          timeoutMs,
+        ),
         fetchJsonWithTimeout(FEAR_GREED_URL, timeoutMs),
         fetchJsonWithTimeout(MEMPOOL_HASHRATE_URL, timeoutMs),
       ]);
 
-    let jpyPrices = jpyChart.status === "fulfilled" ? extractClosePrices(jpyChart.value) : [];
-    let btcPrices = btcChart.status === "fulfilled" ? extractClosePrices(btcChart.value) : [];
-    let qqqPrices = qqqChart.status === "fulfilled" ? extractClosePrices(qqqChart.value) : [];
-    let xlpPrices = xlpChart.status === "fulfilled" ? extractClosePrices(xlpChart.value) : [];
+    let jpyPrices =
+      jpyChart.status === "fulfilled" ? extractClosePrices(jpyChart.value) : [];
+    let btcPrices =
+      btcChart.status === "fulfilled" ? extractClosePrices(btcChart.value) : [];
+    let qqqPrices =
+      qqqChart.status === "fulfilled" ? extractClosePrices(qqqChart.value) : [];
+    let xlpPrices =
+      xlpChart.status === "fulfilled" ? extractClosePrices(xlpChart.value) : [];
     const btcAligned =
-      btcChart.status === "fulfilled" ? extractAlignedPriceVolume(btcChart.value) : [];
+      btcChart.status === "fulfilled"
+        ? extractAlignedPriceVolume(btcChart.value)
+        : [];
 
     const fallbackSeriesRequests: Array<
       Promise<{ key: "jpy" | "btc" | "qqq" | "xlp"; values: number[] }>
@@ -660,7 +695,8 @@ export async function fetchMacroSignals(
 
     const btcSma50 = sma(btcPrices, 50);
     const btcSma200 = sma(btcPrices, 200);
-    const btcCurrent = btcPrices.length > 0 ? btcPrices[btcPrices.length - 1] : null;
+    const btcCurrent =
+      btcPrices.length > 0 ? btcPrices[btcPrices.length - 1] : null;
 
     let btcVwap: number | null = null;
     if (btcAligned.length >= 30) {
@@ -716,7 +752,11 @@ export async function fetchMacroSignals(
         if (older > 0 && recent > 0) {
           hashChange = round(((recent - older) / older) * 100, 1);
           hashStatus =
-            hashChange > 3 ? "GROWING" : hashChange < -3 ? "DECLINING" : "STABLE";
+            hashChange > 3
+              ? "GROWING"
+              : hashChange < -3
+                ? "DECLINING"
+                : "STABLE";
         }
       }
     }
@@ -810,7 +850,11 @@ export async function fetchMacroSignals(
     }
 
     const verdict: "BUY" | "CASH" | "UNKNOWN" =
-      totalCount === 0 ? "UNKNOWN" : bullishCount / totalCount >= 0.57 ? "BUY" : "CASH";
+      totalCount === 0
+        ? "UNKNOWN"
+        : bullishCount / totalCount >= 0.57
+          ? "BUY"
+          : "CASH";
 
     const payload: MacroSignalsResponse = {
       timestamp: nowIso(),
@@ -872,7 +916,8 @@ export async function fetchMacroSignals(
 
     return payload;
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "macro-signals-failed";
+    const reason =
+      error instanceof Error ? error.message : "macro-signals-failed";
     if (macroSignalsCache.value) {
       const fallback = {
         ...macroSignalsCache.value,
@@ -1014,7 +1059,7 @@ export async function fetchMacroFredIndicators(
         const change = prevValue !== null ? latestValue - prevValue : null;
         const changePercent =
           prevValue !== null && prevValue !== 0
-            ? (change ?? 0) / prevValue * 100
+            ? ((change ?? 0) / prevValue) * 100
             : null;
 
         return {
@@ -1037,7 +1082,9 @@ export async function fetchMacroFredIndicators(
       timestamp: nowIso(),
       configured: true,
       series,
-      ...(series.length > 0 ? {} : { unavailableReason: "fred-no-series-data" }),
+      ...(series.length > 0
+        ? {}
+        : { unavailableReason: "fred-no-series-data" }),
     };
 
     macroFredCache.set(cacheKey, { value: response, updatedAtMs: Date.now() });
@@ -1151,7 +1198,9 @@ function buildEtfFlowFromSeries(input: {
     avgVolume: Math.round(avgVolume),
     volumeRatio: round(volumeRatio, 2),
     direction,
-    estFlow: Math.round(latestVolume * latestPrice * (priceChange > 0 ? 1 : -1) * 0.1),
+    estFlow: Math.round(
+      latestVolume * latestPrice * (priceChange > 0 ? 1 : -1) * 0.1,
+    ),
   };
 }
 
@@ -1566,9 +1615,17 @@ export async function fetchMacroStablecoinHealth(
       stablecoins = await fetchStablecoinsFromCoinPaprika(coins, timeoutMs);
     }
 
-    const totalMarketCap = stablecoins.reduce((sum, row) => sum + row.marketCap, 0);
-    const totalVolume24h = stablecoins.reduce((sum, row) => sum + row.volume24h, 0);
-    const depeggedCount = stablecoins.filter((row) => row.pegStatus === "DEPEGGED").length;
+    const totalMarketCap = stablecoins.reduce(
+      (sum, row) => sum + row.marketCap,
+      0,
+    );
+    const totalVolume24h = stablecoins.reduce(
+      (sum, row) => sum + row.volume24h,
+      0,
+    );
+    const depeggedCount = stablecoins.filter(
+      (row) => row.pegStatus === "DEPEGGED",
+    ).length;
 
     const response: MacroStablecoinHealthResponse = {
       timestamp: nowIso(),
@@ -1610,7 +1667,8 @@ export async function fetchMacroStablecoinHealth(
 
     return response;
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "stablecoin-fetch-failed";
+    const reason =
+      error instanceof Error ? error.message : "stablecoin-fetch-failed";
     if (cached?.value) {
       const fallback = { ...cached.value, timestamp: nowIso() };
       logMacroFetch({
@@ -1649,7 +1707,9 @@ function parseOilMetric(
   id: string,
 ): MacroOilMetric {
   const changePct =
-    data.previous !== 0 ? ((data.current - data.previous) / data.previous) * 100 : 0;
+    data.previous !== 0
+      ? ((data.current - data.previous) / data.previous) * 100
+      : 0;
   const trend: MacroOilMetric["trend"] =
     changePct > 0.5 ? "up" : changePct < -0.5 ? "down" : "stable";
   return {
@@ -1692,7 +1752,10 @@ export async function fetchMacroOilAnalytics(
   void cacheKey;
   const startedAt = Date.now();
 
-  if (macroOilCache.value && isFresh(macroOilCache.updatedAtMs, MACRO_OIL_TTL_MS)) {
+  if (
+    macroOilCache.value &&
+    isFresh(macroOilCache.updatedAtMs, MACRO_OIL_TTL_MS)
+  ) {
     logMacroFetch({
       source: "macro_oil_analytics",
       status: "success",
@@ -1753,45 +1816,40 @@ export async function fetchMacroOilAnalytics(
     });
 
     const rows = await Promise.all(requests);
-    const metrics = new Map<string, {
-      current: number;
-      previous: number;
-      date: string;
-      unit: string;
-    }>();
+    const metrics = new Map<
+      string,
+      {
+        current: number;
+        previous: number;
+        date: string;
+        unit: string;
+      }
+    >();
     for (const [key, value] of rows) {
       if (value) metrics.set(key, value);
     }
+    const wtiMetric = metrics.get("wti");
+    const brentMetric = metrics.get("brent");
+    const productionMetric = metrics.get("production");
+    const inventoryMetric = metrics.get("inventory");
 
     const response: MacroOilAnalyticsResponse = {
       timestamp: nowIso(),
       configured: true,
       fetchedAt: nowIso(),
-      wtiPrice: metrics.has("wti")
-        ? parseOilMetric("WTI Crude", metrics.get("wti")!, "wti-crude")
+      wtiPrice: wtiMetric
+        ? parseOilMetric("WTI Crude", wtiMetric, "wti-crude")
         : null,
-      brentPrice: metrics.has("brent")
-        ? parseOilMetric("Brent Crude", metrics.get("brent")!, "brent-crude")
+      brentPrice: brentMetric
+        ? parseOilMetric("Brent Crude", brentMetric, "brent-crude")
         : null,
-      usProduction: metrics.has("production")
-        ? parseOilMetric(
-            "US Production",
-            metrics.get("production")!,
-            "us-production",
-          )
+      usProduction: productionMetric
+        ? parseOilMetric("US Production", productionMetric, "us-production")
         : null,
-      usInventory: metrics.has("inventory")
-        ? parseOilMetric(
-            "US Inventory",
-            metrics.get("inventory")!,
-            "us-inventory",
-          )
+      usInventory: inventoryMetric
+        ? parseOilMetric("US Inventory", inventoryMetric, "us-inventory")
         : null,
-      ...(
-        metrics.size > 0
-          ? {}
-          : { unavailableReason: "oil-no-series-data" }
-      ),
+      ...(metrics.size > 0 ? {} : { unavailableReason: "oil-no-series-data" }),
     };
 
     macroOilCache.value = response;

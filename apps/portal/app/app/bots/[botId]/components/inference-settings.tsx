@@ -81,10 +81,14 @@ export function InferenceSettings({
     <div className="bg-surface border border-border rounded-lg p-4">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium mb-1">
+          <label
+            htmlFor="provider-base-url"
+            className="block text-sm font-medium mb-1"
+          >
             Provider Base URL
           </label>
           <input
+            id="provider-base-url"
             value={baseUrl}
             onChange={(e) => {
               setBaseUrl(e.target.value);
@@ -95,8 +99,14 @@ export function InferenceSettings({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Model</label>
+          <label
+            htmlFor="provider-model"
+            className="block text-sm font-medium mb-1"
+          >
+            Model
+          </label>
           <input
+            id="provider-model"
             value={model}
             onChange={(e) => {
               setModel(e.target.value);
@@ -107,8 +117,14 @@ export function InferenceSettings({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">API Key</label>
+          <label
+            htmlFor="provider-api-key"
+            className="block text-sm font-medium mb-1"
+          >
+            API Key
+          </label>
           <input
+            id="provider-api-key"
             type="password"
             value={apiKey}
             onChange={(e) => {

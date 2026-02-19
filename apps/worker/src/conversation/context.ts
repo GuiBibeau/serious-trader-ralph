@@ -1,8 +1,8 @@
-import { countBacktestRunsByStatus, listBacktestRuns } from "../backtests/repo";
 import {
   countPendingSteeringMessages,
   getBotRunState,
 } from "../agents_runtime/runtime_repo";
+import { countBacktestRunsByStatus, listBacktestRuns } from "../backtests/repo";
 import type { BotLogEvent } from "../bot_events";
 import { listRecentBotEvents } from "../bot_events";
 import { getLoopConfig } from "../config";
@@ -149,13 +149,13 @@ export async function buildConversationContext(
 
   const [runningBacktests, latestBacktests, runState, steeringPendingCount] =
     await Promise.all([
-    countBacktestRunsByStatus(env, tenantId, ["queued", "running"]).catch(
-      () => 0,
-    ),
-    listBacktestRuns(env, tenantId, { limit: 20 }).catch(() => []),
-    getBotRunState(env, tenantId).catch(() => null),
-    countPendingSteeringMessages(env, tenantId).catch(() => 0),
-  ]);
+      countBacktestRunsByStatus(env, tenantId, ["queued", "running"]).catch(
+        () => 0,
+      ),
+      listBacktestRuns(env, tenantId, { limit: 20 }).catch(() => []),
+      getBotRunState(env, tenantId).catch(() => null),
+      countPendingSteeringMessages(env, tenantId).catch(() => 0),
+    ]);
 
   const normalizedPolicy = normalizePolicy(config.policy);
   const strategyType = config.strategy?.type;

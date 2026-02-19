@@ -1,5 +1,5 @@
 import { format } from "date-fns";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { cn } from "../../../../cn";
 
 interface Thought {
@@ -30,18 +30,20 @@ export function AgentThoughtsLog({
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasMountedRef = useRef(false);
   const latestThought = thoughts[thoughts.length - 1];
-  const latestThoughtKey = latestThought
+  const thoughtCount = thoughts.length;
+  const _latestThoughtKey = latestThought
     ? `${latestThought.id}:${latestThought.ts}:${latestThought.content}`
     : "__empty__";
 
-  const scrollToLatest = (behavior: ScrollBehavior) => {
+  const scrollToLatest = useCallback((behavior: ScrollBehavior) => {
     const node = scrollRef.current;
     if (!node) return;
     node.scrollTo({ top: node.scrollHeight, behavior });
-  };
+  }, []);
 
   useEffect(() => {
-    const behavior: ScrollBehavior = hasMountedRef.current ? "smooth" : "auto";
+    const behavior: ScrollBehavior =
+      hasMountedRef.current && thoughtCount > 0 ? "smooth" : "auto";
     hasMountedRef.current = true;
 
     const frame = window.requestAnimationFrame(() => {
@@ -55,7 +57,7 @@ export function AgentThoughtsLog({
       window.cancelAnimationFrame(frame);
       window.clearTimeout(settleTimer);
     };
-  }, [latestThoughtKey]);
+  }, [scrollToLatest, thoughtCount]);
 
   return (
     <div

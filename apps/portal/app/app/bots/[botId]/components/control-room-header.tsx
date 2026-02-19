@@ -84,6 +84,7 @@ export function ControlRoomHeader({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
             className={cn(BTN_SECONDARY, "h-9 px-3")}
             onClick={onOpenSettings}
             disabled={loading}
@@ -92,6 +93,7 @@ export function ControlRoomHeader({
             Settings
           </button>
           <button
+            type="button"
             className={cn(BTN_SECONDARY, "h-9 px-3")}
             onClick={onFund}
             disabled={loading}
@@ -101,6 +103,7 @@ export function ControlRoomHeader({
           </button>
           {bot.enabled ? (
             <button
+              type="button"
               className={cn(BTN_SECONDARY, "h-9 px-3")}
               onClick={onStop}
               disabled={loading}
@@ -110,10 +113,11 @@ export function ControlRoomHeader({
             </button>
           ) : (
             <button
+              type="button"
               className={cn(BTN_PRIMARY, "h-9 px-3")}
               onClick={onStart}
               disabled={loading || !canStart}
-              title={canStart ? undefined : startBlockedReason ?? undefined}
+              title={canStart ? undefined : (startBlockedReason ?? undefined)}
             >
               <CirclePlay className="h-4 w-4" />
               Start
@@ -123,7 +127,8 @@ export function ControlRoomHeader({
       </div>
       {!canStart ? (
         <p className="mt-2 text-xs text-amber-400">
-          {startBlockedReason ?? "Configure inference provider before starting."}
+          {startBlockedReason ??
+            "Configure inference provider before starting."}
         </p>
       ) : null}
     </div>

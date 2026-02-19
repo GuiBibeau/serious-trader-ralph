@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import worker from "../../apps/worker/src/index";
 import {
   createExecutionContextStub,
   createWorkerLiveEnv,
@@ -14,6 +13,11 @@ import {
 } from "./_worker_live_test_utils";
 
 const integrationTest = runWorkerLiveIntegration ? test : test.skip;
+
+async function loadWorker() {
+  const mod = await import("../../apps/worker/src/index");
+  return mod.default;
+}
 
 const PATHS = {
   snapshot: "/api/x402/read/market_snapshot",
@@ -53,6 +57,7 @@ function toPositiveNumber(value: unknown): number {
 integrationTest(
   "x402 endpoints emit devnet USDC payment requirements",
   async () => {
+    const worker = await loadWorker();
     const env = createWorkerLiveEnv();
     const ctx = createExecutionContextStub();
     const walletAddress = resolveSnapshotWallet(env);
@@ -185,6 +190,7 @@ integrationTest(
 integrationTest(
   "x402 endpoints return live data when payment signature is present",
   async () => {
+    const worker = await loadWorker();
     if (!hasLiveOhlcvProviderConfig()) {
       throw new Error(
         "Missing OHLCV provider config. Set BIRDEYE_API_KEY or DUNE_API_KEY+DUNE_QUERY_ID.",
@@ -393,14 +399,16 @@ integrationTest(
     const bars = ohlcvBody.ohlcv?.bars ?? [];
     expect(bars.length).toBeGreaterThan(0);
     for (let i = 0; i < bars.length; i += 1) {
-      const bar = bars[i]!;
+      const bar = bars[i];
+      if (!bar) continue;
       expect(["birdeye", "dune"]).toContain(bar.source);
       expect(bar.low).toBeLessThanOrEqual(bar.open);
       expect(bar.low).toBeLessThanOrEqual(bar.close);
       expect(bar.high).toBeGreaterThanOrEqual(bar.open);
       expect(bar.high).toBeGreaterThanOrEqual(bar.close);
       if (i > 0) {
-        const prev = bars[i - 1]!;
+        const prev = bars[i - 1];
+        if (!prev) continue;
         expect(Date.parse(prev.ts)).toBeLessThanOrEqual(Date.parse(bar.ts));
       }
     }
@@ -464,7 +472,11 @@ integrationTest(
 
     const macroFredRes = await withRetries(() =>
       worker.fetch(
-        buildRequest(PATHS.macroFredIndicators, {}, "integration-signed-payment"),
+        buildRequest(
+          PATHS.macroFredIndicators,
+          {},
+          "integration-signed-payment",
+        ),
         env,
         ctx,
       ),
@@ -553,6 +565,7 @@ integrationTest(
 integrationTest(
   "x402 route input validation returns 400 on malformed requests",
   async () => {
+    const worker = await loadWorker();
     const env = createWorkerLiveEnv();
     const ctx = createExecutionContextStub();
     const walletAddress = resolveSnapshotWallet(env);

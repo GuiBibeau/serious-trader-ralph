@@ -47,8 +47,9 @@ integrationTest("worker historical ohlcv (live birdeye smoke)", async () => {
 
   expect(result.bars.length).toBeGreaterThan(0);
   for (let i = 1; i < result.bars.length; i += 1) {
-    const prev = result.bars[i - 1]!;
-    const cur = result.bars[i]!;
+    const prev = result.bars[i - 1];
+    const cur = result.bars[i];
+    if (!prev || !cur) continue;
     expect(Date.parse(prev.ts)).toBeLessThanOrEqual(Date.parse(cur.ts));
     expect(prev.low).toBeLessThanOrEqual(prev.high);
     expect(cur.low).toBeLessThanOrEqual(cur.high);

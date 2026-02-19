@@ -56,7 +56,7 @@ type ChatCompletionResponse = {
 };
 
 export async function callLlm(
-  env: Env,
+  _env: Env,
   input: {
     messages: ChatMessage[];
     tools: ChatTool[];

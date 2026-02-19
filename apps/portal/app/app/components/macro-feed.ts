@@ -308,7 +308,9 @@ function parseMacroSignals(input: unknown): MacroSignalsData | null {
   const technicalTrend = isRecord(input.signals.technicalTrend)
     ? input.signals.technicalTrend
     : {};
-  const hashRate = isRecord(input.signals.hashRate) ? input.signals.hashRate : {};
+  const hashRate = isRecord(input.signals.hashRate)
+    ? input.signals.hashRate
+    : {};
   const miningCost = isRecord(input.signals.miningCost)
     ? input.signals.miningCost
     : {};
@@ -323,7 +325,9 @@ function parseMacroSignals(input: unknown): MacroSignalsData | null {
     totalCount: toNumber(input.totalCount),
     unavailable: Boolean(input.unavailable),
     unavailableReason:
-      typeof input.unavailableReason === "string" ? input.unavailableReason : null,
+      typeof input.unavailableReason === "string"
+        ? input.unavailableReason
+        : null,
     signals: {
       liquidity: {
         status: toStringValue(liquidity.status, "UNKNOWN"),
@@ -385,7 +389,9 @@ function parseMacroFred(input: unknown): MacroFredData | null {
     configured: Boolean(input.configured),
     series,
     unavailableReason:
-      typeof input.unavailableReason === "string" ? input.unavailableReason : null,
+      typeof input.unavailableReason === "string"
+        ? input.unavailableReason
+        : null,
   };
 }
 
@@ -418,7 +424,9 @@ function parseMacroEtf(input: unknown): MacroEtfData | null {
     timestamp: toStringValue(input.timestamp),
     unavailable: Boolean(input.unavailable),
     unavailableReason:
-      typeof input.unavailableReason === "string" ? input.unavailableReason : null,
+      typeof input.unavailableReason === "string"
+        ? input.unavailableReason
+        : null,
     summary: {
       etfCount: toNumber(summary.etfCount),
       totalVolume: toNumber(summary.totalVolume),
@@ -461,7 +469,9 @@ function parseMacroStablecoin(input: unknown): MacroStablecoinData | null {
     timestamp: toStringValue(input.timestamp),
     unavailable: Boolean(input.unavailable),
     unavailableReason:
-      typeof input.unavailableReason === "string" ? input.unavailableReason : null,
+      typeof input.unavailableReason === "string"
+        ? input.unavailableReason
+        : null,
     summary: {
       totalMarketCap: toNumber(summary.totalMarketCap),
       totalVolume24h: toNumber(summary.totalVolume24h),
@@ -494,7 +504,9 @@ function parseMacroOil(input: unknown): MacroOilData | null {
     configured: Boolean(input.configured),
     fetchedAt: toStringValue(input.fetchedAt),
     unavailableReason:
-      typeof input.unavailableReason === "string" ? input.unavailableReason : null,
+      typeof input.unavailableReason === "string"
+        ? input.unavailableReason
+        : null,
     wtiPrice: parseMacroOilMetric(input.wtiPrice),
     brentPrice: parseMacroOilMetric(input.brentPrice),
     usProduction: parseMacroOilMetric(input.usProduction),
