@@ -4,11 +4,7 @@ import { usePrivy } from "@privy-io/react-auth";
 import { Wallet } from "lucide-react";
 import Link from "next/link";
 import { cn } from "../../cn";
-import {
-  BTN_PRIMARY,
-  BTN_SECONDARY,
-  formatBalanceSummary,
-} from "../../lib";
+import { BTN_PRIMARY, BTN_SECONDARY, formatBalanceSummary } from "../../lib";
 
 interface DashboardHeaderProps {
   walletBalances?: {
@@ -49,7 +45,8 @@ export function DashboardHeader({
           href="/terminal"
           className="text-sm font-semibold tracking-tight hover:text-ink transition-colors"
         >
-          Trader Ralph <span className="ml-2 text-muted font-normal">Terminal</span>
+          Trader Ralph{" "}
+          <span className="ml-2 text-muted font-normal">Terminal</span>
         </Link>
         <div className="flex min-w-0 items-center justify-end gap-2 overflow-x-auto text-xs">
           <span

@@ -18,8 +18,7 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: "Trader Ralph",
-  description:
-    "Trader Ralph terminal for Solana market and macro monitoring.",
+  description: "Trader Ralph terminal for Solana market and macro monitoring.",
 };
 
 export default function RootLayout({
