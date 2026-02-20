@@ -1,17 +1,4 @@
-DELETE FROM backtest_run_events;
-DELETE FROM backtest_runs;
-DELETE FROM strategy_events;
-DELETE FROM strategy_runtime_state;
-DELETE FROM strategy_validations;
-DELETE FROM bot_conversations;
-DELETE FROM bot_steering_messages;
-DELETE FROM bot_agent_memory;
-DELETE FROM bot_run_state;
-DELETE FROM bot_prediction_provider;
-DELETE FROM bot_inference_providers;
-DELETE FROM trade_index;
-DELETE FROM loop_configs;
-DELETE FROM bots;
+PRAGMA foreign_keys = OFF;
 
 DROP TABLE IF EXISTS backtest_run_events;
 DROP TABLE IF EXISTS backtest_runs;
@@ -27,3 +14,5 @@ DROP TABLE IF EXISTS bot_inference_providers;
 DROP TABLE IF EXISTS trade_index;
 DROP TABLE IF EXISTS loop_configs;
 DROP TABLE IF EXISTS bots;
+
+PRAGMA foreign_keys = ON;
