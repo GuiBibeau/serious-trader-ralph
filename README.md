@@ -79,6 +79,18 @@ All are `POST` under `/api/x402/read/*`:
 - `macro_stablecoin_health`
 - `macro_oil_analytics`
 
+## API Catalog Maintenance Rule
+
+When a new public x402 read endpoint is production-ready, update the public
+catalog in the same PR before merge:
+- `/Users/guillaumebibeau-laviolette/github/serious-trader-ralph/apps/portal/app/api/_catalog.ts`
+- `/Users/guillaumebibeau-laviolette/github/serious-trader-ralph/apps/portal/app/api/page.tsx` (if presentation needs adjustment)
+- `/Users/guillaumebibeau-laviolette/github/serious-trader-ralph/tests/unit/portal_api_catalog_routes.test.ts`
+
+Rule: worker route changes under `/api/x402/read/*` and catalog/discovery docs
+must ship together so `/api`, `/api/endpoints.json`, `/api/endpoints.txt`, and
+`/llms.txt` remain accurate.
+
 ## Tests
 
 ```bash

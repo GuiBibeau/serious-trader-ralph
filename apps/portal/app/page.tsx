@@ -217,6 +217,9 @@ function Navbar() {
           <a href="#roadmap" className="hover:text-ink transition-colors">
             Roadmap
           </a>
+          <a href="/api" className="hover:text-ink transition-colors">
+            API
+          </a>
         </div>
         <div className="flex items-center gap-4">
           <a
@@ -507,6 +510,11 @@ function Footer() {
             <li>
               <a href="#roadmap" className="hover:text-ink">
                 Roadmap
+              </a>
+            </li>
+            <li>
+              <a href="/api" className="hover:text-ink">
+                API
               </a>
             </li>
           </ul>

@@ -1,0 +1,76 @@
+import {
+  X402_CATALOG_VERSION,
+  X402_ENDPOINTS,
+  X402_OVERVIEW,
+  X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
+  type X402EndpointSpec,
+} from "../_catalog";
+
+const CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=600";
+
+function formatFields(
+  label: string,
+  fields: X402EndpointSpec["requiredFields"],
+): string {
+  if (fields.length < 1) return `${label}: none`;
+  const fieldText = fields
+    .map((field) => `${field.name}:${field.type}`)
+    .join(", ");
+  return `${label}: ${fieldText}`;
+}
+
+function formatExample(value: Record<string, unknown>): string {
+  if (Object.keys(value).length < 1) return "{} (no body required)";
+  return JSON.stringify(value);
+}
+
+export function GET(request: Request): Response {
+  const origin = new URL(request.url).origin;
+
+  const lines: string[] = [
+    "Trader Ralph x402 API Catalog",
+    `version: ${X402_CATALOG_VERSION}`,
+    "",
+    `offering: ${X402_OVERVIEW.offering}`,
+    "scope: x402 public read endpoints only",
+    "",
+    "x402 flow:",
+    "1) POST endpoint",
+    "2) if unpaid, receive 402 + payment-required",
+    "3) pay, retry with payment-signature",
+    "4) on success, response includes payment-response",
+    "",
+    "headers:",
+    "request: payment-signature",
+    "response: payment-required, payment-response",
+    "",
+    `example 402 response: ${JSON.stringify(X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE)}`,
+    "",
+    "discovery:",
+    `html: ${origin}/api`,
+    `json: ${origin}/api/endpoints.json`,
+    `text: ${origin}/api/endpoints.txt`,
+    `llms: ${origin}/llms.txt`,
+    "",
+    "endpoints:",
+  ];
+
+  for (const endpoint of X402_ENDPOINTS) {
+    lines.push(`${endpoint.method} ${endpoint.path} - ${endpoint.summary}`);
+    lines.push(`  ${formatFields("required", endpoint.requiredFields)}`);
+    lines.push(`  ${formatFields("optional", endpoint.optionalFields)}`);
+    lines.push(`  example request: ${formatExample(endpoint.requestExample)}`);
+    lines.push(
+      `  example response: ${JSON.stringify(endpoint.responseExample)}`,
+    );
+  }
+
+  const body = `${lines.join("\n")}\n`;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "cache-control": CACHE_CONTROL,
+      "content-type": "text/plain; charset=utf-8",
+    },
+  });
+}
