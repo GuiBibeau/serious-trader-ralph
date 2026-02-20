@@ -5,10 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 account_id = "4e3939d5df701303b59ffbe4472184de"
 
 [vars]
-LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
-ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
-ZAI_MODEL = "glm-4.7"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
 
@@ -45,25 +42,6 @@ migrations_dir = "migrations"
 binding = "LOGS_BUCKET"
 bucket_name = "ralph-logs-dev"
 
-[durable_objects]
-bindings = [
-  { name = "BOT_LOOP", class_name = "BotLoop" },
-  { name = "TRADING_ORCHESTRATOR", class_name = "TradingOrchestratorAgent" },
-  { name = "BACKTEST_QUEUE", class_name = "BacktestQueue" }
-]
-
-[[migrations]]
-tag = "v1"
-new_classes = ["BotLoop"]
-
-[[migrations]]
-tag = "v2"
-new_classes = ["BacktestQueue"]
-
-[[migrations]]
-tag = "v3"
-new_sqlite_classes = ["TradingOrchestratorAgent"]
-
 [triggers]
 crons = ["*/1 * * * *"]
 
@@ -71,10 +49,7 @@ crons = ["*/1 * * * *"]
 name = "ralph-edge-staging"
 
 [env.staging.vars]
-LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
-ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
-ZAI_MODEL = "glm-4.7"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
 
@@ -118,10 +93,7 @@ crons = ["*/1 * * * *"]
 name = "ralph-edge"
 
 [env.production.vars]
-LOOP_ENABLED_DEFAULT = "false"
 ALLOWED_ORIGINS = "*"
-ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
-ZAI_MODEL = "glm-4.7"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
 

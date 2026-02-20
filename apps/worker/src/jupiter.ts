@@ -22,6 +22,15 @@ export type JupiterSwapResponse = {
   [k: string]: unknown;
 };
 
+export type TokenInfo = {
+  id: string;
+  name?: string;
+  symbol?: string;
+  icon?: string | null;
+  decimals: number;
+  usdPrice?: number | null;
+};
+
 export type QuoteRequest = {
   inputMint: string;
   outputMint: string;
@@ -124,5 +133,67 @@ export class JupiterClient {
       throw new Error("Jupiter swap missing lastValidBlockHeight");
     }
     return parsed as JupiterSwapResponse;
+  }
+
+  async programIdToLabel(): Promise<Record<string, string>> {
+    const url = new URL("/swap/v1/program-id-to-label", this.baseUrl);
+    const headers: Record<string, string> = {};
+    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const response = await fetch(url.toString(), { method: "GET", headers });
+    if (!response.ok) {
+      throw new Error(`Jupiter program-id-to-label failed: ${response.status}`);
+    }
+    const payload = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return {};
+    }
+    const output: Record<string, string> = {};
+    for (const [key, value] of Object.entries(payload)) {
+      if (typeof value === "string" && value.trim()) {
+        output[key] = value.trim();
+      }
+    }
+    return output;
+  }
+
+  async searchTokens(query: string): Promise<TokenInfo[]> {
+    const q = String(query ?? "").trim();
+    if (!q) return [];
+    const url = new URL("/tokens/v2/search", this.baseUrl);
+    url.searchParams.set("query", q);
+    const headers: Record<string, string> = {};
+    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const response = await fetch(url.toString(), { method: "GET", headers });
+    if (!response.ok) {
+      throw new Error(`Jupiter token search failed: ${response.status}`);
+    }
+    const payload = (await response.json().catch(() => null)) as unknown;
+    if (!Array.isArray(payload)) return [];
+    return payload
+      .filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) &&
+          typeof item === "object" &&
+          !Array.isArray(item) &&
+          typeof (item as Record<string, unknown>).id === "string" &&
+          typeof (item as Record<string, unknown>).decimals === "number",
+      )
+      .map((item) => ({
+        id: String(item.id ?? ""),
+        name: typeof item.name === "string" ? item.name : undefined,
+        symbol: typeof item.symbol === "string" ? item.symbol : undefined,
+        icon:
+          typeof item.icon === "string" || item.icon === null
+            ? (item.icon as string | null)
+            : undefined,
+        decimals: Number(item.decimals),
+        usdPrice: Number.isFinite(Number(item.usdPrice))
+          ? Number(item.usdPrice)
+          : null,
+      }))
+      .filter((item) => item.id && Number.isFinite(item.decimals));
   }
 }

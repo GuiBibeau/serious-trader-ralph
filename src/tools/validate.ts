@@ -68,94 +68,6 @@ const DailyPnlSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
-const NotifySchema = z.object({
-  level: z.enum(["info", "warn", "error"]),
-  message: z.string(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
-
-const TickSchema = z.object({
-  reason: z.enum(["timer", "operator", "recovery"]),
-});
-
-const AgentMessageSchema = z.object({
-  content: z.string().min(1),
-  triggerTick: z.boolean().optional(),
-  sessionKey: z.string().optional(),
-});
-
-const SessionsListSchema = z.object({});
-
-const SessionsHistorySchema = z.object({
-  sessionKey: z.string().min(1),
-  limit: z.number().int().positive().optional(),
-});
-
-const SessionsSendSchema = z.object({
-  sessionKey: z.string().min(1),
-  content: z.string().min(1),
-  agentId: z.string().optional(),
-  triggerRun: z.boolean().optional(),
-});
-
-const SessionsSpawnSchema = z.object({
-  task: z.string().min(1),
-  label: z.string().optional(),
-  agentId: z.string().optional(),
-});
-
-const RunsStatusSchema = z.object({
-  runId: z.string().min(1),
-});
-
-const RunsWaitSchema = z.object({
-  runId: z.string().min(1),
-  timeoutMs: z.number().int().positive().optional(),
-});
-
-const TaskStatusSchema = z.enum([
-  "open",
-  "in_progress",
-  "blocked",
-  "done",
-  "canceled",
-]);
-
-const TasksListSchema = z.object({
-  sessionKey: z.string().min(1).optional(),
-});
-
-const TasksCreateSchema = z.object({
-  title: z.string().min(1),
-  status: TaskStatusSchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  sessionKey: z.string().min(1).optional(),
-});
-
-const TasksUpdateSchema = z.object({
-  taskId: z.string().min(1),
-  title: z.string().min(1).optional(),
-  status: TaskStatusSchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  sessionKey: z.string().min(1).optional(),
-});
-
-const TasksAddNoteSchema = z.object({
-  taskId: z.string().min(1),
-  note: z.string().min(1),
-  sessionKey: z.string().min(1).optional(),
-});
-
-const TasksCompleteSchema = z.object({
-  taskId: z.string().min(1),
-  sessionKey: z.string().min(1).optional(),
-});
-
-const TasksCancelSchema = z.object({
-  taskId: z.string().min(1),
-  sessionKey: z.string().min(1).optional(),
-});
-
 const PricesSchema = z.object({
   mints: z.array(z.string().min(1)).min(1),
   venue: z.string().optional(),
@@ -216,12 +128,6 @@ const LiquidityByMintSchema = z.object({
   mint: z.string().min(1),
 });
 
-const OpenClawInvokeSchema = z.object({
-  tool: z.string().min(1),
-  args: z.record(z.string(), z.unknown()).optional(),
-  action: z.string().optional(),
-});
-
 export const TOOL_VALIDATORS: Record<string, z.ZodTypeAny> = {
   "wallet.get_balances": BalancesSchema,
   "market.jupiter_quote": QuoteSchema,
@@ -238,24 +144,8 @@ export const TOOL_VALIDATORS: Record<string, z.ZodTypeAny> = {
   "market.perps_funding_rates": PerpsFundingRatesSchema,
   "market.switchboard_price": SwitchboardPriceSchema,
   "market.liquidity_by_mint": LiquidityByMintSchema,
-  "openclaw.invoke": OpenClawInvokeSchema,
   "risk.max_position_check": MaxPositionSchema,
   "risk.daily_pnl_snapshot": DailyPnlSchema,
   "risk.check_trade": RiskSchema,
   "trade.jupiter_swap": TradeSchema,
-  "notify.emit": NotifySchema,
-  "system.autopilot_tick": TickSchema,
-  "agent.message": AgentMessageSchema,
-  "sessions.list": SessionsListSchema,
-  "sessions.history": SessionsHistorySchema,
-  "sessions.send": SessionsSendSchema,
-  "sessions.spawn": SessionsSpawnSchema,
-  "runs.status": RunsStatusSchema,
-  "runs.wait": RunsWaitSchema,
-  "tasks.list": TasksListSchema,
-  "tasks.create": TasksCreateSchema,
-  "tasks.update": TasksUpdateSchema,
-  "tasks.add_note": TasksAddNoteSchema,
-  "tasks.complete": TasksCompleteSchema,
-  "tasks.cancel": TasksCancelSchema,
 };

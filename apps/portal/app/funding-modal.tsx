@@ -62,7 +62,7 @@ export function FundingModal({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-6 py-5 border-b border-border">
-              <p className="label">Fund your bot</p>
+              <p className="label">Fund account wallet</p>
               <button
                 className="flex items-center justify-center w-9 h-9 rounded-md border border-border bg-surface text-xl cursor-pointer hover:bg-paper transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
                 onClick={onClose}
@@ -110,7 +110,7 @@ export function FundingModal({
               </div>
 
               <p className="text-muted text-[0.85rem] text-center mt-4">
-                SOL for fees &middot; USDC for trading
+                SOL for fees &middot; USDC for monitoring
               </p>
             </div>
           </motion.div>

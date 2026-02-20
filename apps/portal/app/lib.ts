@@ -12,6 +12,22 @@ export type BalanceResponse = {
   usdc: { atomic: string; display?: string };
 };
 
+export type RiskBand = "conservative" | "balanced" | "aggressive";
+export type TimeHorizon = "short" | "medium" | "long";
+export type GoalPrimary =
+  | "preserve_capital"
+  | "grow_steadily"
+  | "learn_active_trading"
+  | "high_risk_opportunities";
+
+export type ConsumerProfileSummary = {
+  goalPrimary: GoalPrimary;
+  riskBand: RiskBand;
+  timeHorizon: TimeHorizon;
+  literacyScore: number;
+  feedSeedVersion: number;
+};
+
 function zeroDisplay(): string {
   return `0.${"0".repeat(DISPLAY_DECIMALS)}`;
 }
@@ -134,15 +150,47 @@ export const BTN_PRIMARY = `${BTN} bg-ink text-surface border-transparent hover:
 export const BTN_SECONDARY = `${BTN} bg-surface text-ink border-border hover:bg-paper`;
 
 // Shared types
-export type Bot = {
-  id: string;
-  name: string;
-  enabled: boolean;
+export type AccountWallet = {
   signerType: string;
   privyWalletId: string;
   walletAddress: string;
-  lastTickAt: string | null;
-  lastError: string | null;
-  createdAt: string;
-  updatedAt: string;
+  walletMigratedAt?: string | null;
 };
+
+export function parseConsumerProfileSummary(
+  payload: unknown,
+): ConsumerProfileSummary | null {
+  if (!isRecord(payload)) return null;
+  const goalPrimary = String(payload.goalPrimary ?? "").trim() as GoalPrimary;
+  const riskBand = String(payload.riskBand ?? "").trim() as RiskBand;
+  const timeHorizon = String(payload.timeHorizon ?? "").trim() as TimeHorizon;
+  const literacyScore = Number(payload.literacyScore);
+  const feedSeedVersion = Number(payload.feedSeedVersion);
+
+  const validGoal =
+    goalPrimary === "preserve_capital" ||
+    goalPrimary === "grow_steadily" ||
+    goalPrimary === "learn_active_trading" ||
+    goalPrimary === "high_risk_opportunities";
+  const validRiskBand =
+    riskBand === "conservative" ||
+    riskBand === "balanced" ||
+    riskBand === "aggressive";
+  const validHorizon =
+    timeHorizon === "short" ||
+    timeHorizon === "medium" ||
+    timeHorizon === "long";
+  if (!validGoal || !validRiskBand || !validHorizon) return null;
+
+  if (!Number.isFinite(literacyScore) || !Number.isFinite(feedSeedVersion)) {
+    return null;
+  }
+
+  return {
+    goalPrimary,
+    riskBand,
+    timeHorizon,
+    literacyScore: Math.max(0, Math.min(3, Math.floor(literacyScore))),
+    feedSeedVersion: Math.max(1, Math.floor(feedSeedVersion)),
+  };
+}

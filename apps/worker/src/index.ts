@@ -1,61 +1,18 @@
 import { requireUser } from "./auth";
 
-export { TradingOrchestratorAgent } from "./agents_runtime/trading_orchestrator_agent";
-export { BacktestQueue } from "./backtest_queue_do";
-export { BotLoop } from "./bot_loop_do";
-
-import {
-  enqueueSteeringMessage,
-  listSteeringMessages,
-} from "./agents_runtime/runtime_repo";
-import {
-  newBacktestRunId,
-  normalizeBacktestRunRequest,
-} from "./backtests/engine";
-import {
-  enqueueBacktestRun,
-  getBacktestRun,
-  listBacktestRunEvents,
-  listBacktestRuns,
-} from "./backtests/repo";
-import {
-  getUserSubscription,
-  isSubscriptionActive,
-  toSubscriptionView,
-} from "./billing";
-import { listRecentBotEvents } from "./bot_events";
-import { computeBotCreationLimits, MAX_FREE_BOTS } from "./bot_limits";
-import type { UserRow } from "./bots_db";
-import {
-  createBotRow,
-  findUserByPrivyUserId,
-  getBotById,
-  getBotForUser,
-  listBotsForUser,
-  listEnabledBots,
-  setBotEnabledById,
-  setBotEnabledForUser,
-  setUserOnboardingStatus,
-  setUserProfile,
-  upsertUser,
-} from "./bots_db";
-import { getLoopConfig, requireAdmin, updateLoopConfig } from "./config";
-import {
-  handleChatHistory,
-  handleChatRequest,
-  handleTelemetry,
-} from "./conversation/router";
-import type { ConversationRequest } from "./conversation/types";
+import { getUserSubscription, toSubscriptionView } from "./billing";
 import { USDC_MINT } from "./defaults";
-import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
+import { executeSwapViaRouter } from "./execution/router";
 import {
-  assertBotInferenceProviderHealthy,
-  getBotInferenceProviderView,
-  patchBotInferenceProvider,
-  pingBotInferenceProvider,
-  pingInferenceProviderConfig,
-  setBotInferenceProvider,
-} from "./inference_provider";
+  type ExperienceLevel,
+  evaluateOnboarding,
+  mergeConsumerProfile,
+  parseConsumerProfileSummary,
+  parseExperienceLevel,
+  parseLevelSource,
+  validateOnboardingInput,
+} from "./experience";
+import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
 import { JupiterClient } from "./jupiter";
 import {
   fetchMacroEtfFlows,
@@ -65,51 +22,46 @@ import {
   fetchMacroStablecoinHealth,
 } from "./macro_sources";
 import { computeMarketIndicators } from "./market_indicators";
-import { getAgentMemory, saveAgentMemory } from "./memory";
-import { normalizePolicy } from "./policy";
+import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
 import { SolanaRpc } from "./solana_rpc";
-import {
-  checkStrategyStartGate,
-  markStrategyCandidateFromConfigChange,
-  maybeRevalidateAndTuneForTenant,
-  runValidationForTenant,
-} from "./strategy_validation/engine";
-import {
-  getLatestValidation,
-  getRuntimeState,
-  listStrategyEvents,
-  listValidationRuns,
-  recordStrategyEvent,
-  updateRuntimeState,
-} from "./strategy_validation/repo";
-import { listTrades } from "./trade_index";
 import type { Env } from "./types";
+import type { UserRow } from "./users_db";
 import {
-  validateAutotuneConfig,
-  validateDataSourcesConfig,
-  validateExecutionConfig,
-  validatePolicy,
-  validateStrategy,
-  validateValidationConfig,
-} from "./validation";
+  findUserByPrivyUserId,
+  setUserExperience,
+  setUserOnboardingStatus,
+  setUserProfile,
+  setUserWallet,
+  upsertUser,
+} from "./users_db";
 import { requireX402Payment, withX402SettlementHeader } from "./x402";
 
 const X402_READ_RPC_ENDPOINT_FALLBACK = "https://api.mainnet-beta.solana.com";
 const X402_READ_JUPITER_BASE_URL = "https://lite-api.jup.ag";
 const X402_SOL_MINT = "So11111111111111111111111111111111111111112";
+const MAX_EXPERIENCE_EVENTS = 200;
 
-type AgentsModule = typeof import("agents");
-let cachedAgentsModule: Promise<AgentsModule> | null = null;
+type ExperienceEventName =
+  | "onboarding_started"
+  | "onboarding_step_completed"
+  | "onboarding_completed"
+  | "level_assigned_auto"
+  | "level_overridden_manual"
+  | "degen_acknowledged"
+  | "terminal_opened_from_consumer";
 
-async function loadAgentsModule(): Promise<AgentsModule> {
-  if (!cachedAgentsModule) {
-    cachedAgentsModule = import("agents");
-  }
-  return cachedAgentsModule;
-}
+const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
+  "onboarding_started",
+  "onboarding_step_completed",
+  "onboarding_completed",
+  "level_assigned_auto",
+  "level_overridden_manual",
+  "degen_acknowledged",
+  "terminal_opened_from_consumer",
+]);
 
 function resolveX402ReadRpcEndpoint(env: Env): string {
   const balanceRpc = String(env.BALANCE_RPC_ENDPOINT ?? "").trim();
@@ -120,7 +72,7 @@ function resolveX402ReadRpcEndpoint(env: Env): string {
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext) {
     if (request.method === "OPTIONS") {
       return okCors(env);
     }
@@ -136,12 +88,6 @@ export default {
           json({ ok: false, error: "manual-onboarding-only" }, { status: 410 }),
           env,
         );
-      }
-
-      if (env.TRADING_ORCHESTRATOR) {
-        const { routeAgentRequest } = await loadAgentsModule();
-        const routed = await routeAgentRequest(request, env);
-        if (routed) return routed;
       }
 
       if (
@@ -942,44 +888,272 @@ export default {
         return withCors(settled, env);
       }
 
+      if (request.method === "POST" && url.pathname === "/api/trade/swap") {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        if (!user.walletAddress || !user.privyWalletId) {
+          return withCors(
+            json({ ok: false, error: "user-wallet-missing" }, { status: 503 }),
+            env,
+          );
+        }
+
+        const payload = await readPayload(request);
+        const inputMint = String(payload.inputMint ?? "").trim();
+        const outputMint = String(payload.outputMint ?? "").trim();
+        const amount = String(payload.amount ?? "").trim();
+        const slippageBps = toBoundedInt(payload.slippageBps, 50, 1, 5_000);
+        const source = String(payload.source ?? "")
+          .trim()
+          .slice(0, 80);
+        const reason = String(payload.reason ?? "")
+          .trim()
+          .slice(0, 240);
+
+        if (
+          !inputMint ||
+          !outputMint ||
+          inputMint === outputMint ||
+          !amount ||
+          !/^\d+$/.test(amount)
+        ) {
+          return withCors(
+            json(
+              { ok: false, error: "invalid-trade-request" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        if (
+          (inputMint !== X402_SOL_MINT && inputMint !== USDC_MINT) ||
+          (outputMint !== X402_SOL_MINT && outputMint !== USDC_MINT)
+        ) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error: "unsupported-trade-pair",
+                supportedMints: [X402_SOL_MINT, USDC_MINT],
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
+        if (!rpcEndpoint) {
+          return withCors(
+            json({ ok: false, error: "rpc-endpoint-missing" }, { status: 500 }),
+            env,
+          );
+        }
+
+        const jupiter = new JupiterClient(
+          String(env.JUPITER_BASE_URL ?? "").trim() ||
+            X402_READ_JUPITER_BASE_URL,
+          env.JUPITER_API_KEY,
+        );
+        const rpc = new SolanaRpc(rpcEndpoint);
+        const policy = normalizePolicy({
+          allowedMints: [X402_SOL_MINT, USDC_MINT],
+          slippageBps,
+          maxPriceImpactPct: 0.05,
+          minSolReserveLamports: "50000000",
+          commitment: "confirmed",
+        });
+
+        const walletAddress = user.walletAddress;
+        const inputAmount = BigInt(amount);
+        if (inputAmount <= 0n) {
+          return withCors(
+            json(
+              { ok: false, error: "invalid-trade-request" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+        if (inputMint === X402_SOL_MINT) {
+          const balanceLamports = await rpc.getBalanceLamports(walletAddress);
+          const minSolReserveLamports = BigInt(policy.minSolReserveLamports);
+          if (inputAmount + minSolReserveLamports > balanceLamports) {
+            return withCors(
+              json(
+                {
+                  ok: false,
+                  error: "insufficient-sol-reserve",
+                  reserveLamports: minSolReserveLamports.toString(),
+                  balanceLamports: balanceLamports.toString(),
+                },
+                { status: 400 },
+              ),
+              env,
+            );
+          }
+        } else {
+          const tokenBalance = await rpc.getTokenBalanceAtomic(
+            walletAddress,
+            inputMint,
+          );
+          if (inputAmount > tokenBalance) {
+            return withCors(
+              json(
+                {
+                  ok: false,
+                  error: "insufficient-token-balance",
+                  balanceAtomic: tokenBalance.toString(),
+                },
+                { status: 400 },
+              ),
+              env,
+            );
+          }
+        }
+
+        const quoteResponse = await jupiter.quote({
+          inputMint,
+          outputMint,
+          amount,
+          slippageBps: policy.slippageBps,
+          swapMode: "ExactIn",
+        });
+        enforcePolicy(policy, quoteResponse);
+
+        const result = await executeSwapViaRouter({
+          env,
+          policy,
+          rpc,
+          jupiter,
+          quoteResponse,
+          userPublicKey: walletAddress,
+          privyWalletId: user.privyWalletId,
+          log(level, message, meta) {
+            console[level]("trade.swap", {
+              userId: user.id,
+              inputMint,
+              outputMint,
+              amount,
+              slippageBps: policy.slippageBps,
+              source: source || "TERMINAL",
+              reason: reason || undefined,
+              message,
+              ...(meta ?? {}),
+            });
+          },
+        });
+
+        return withCors(
+          json({
+            ok: true,
+            status: result.status,
+            signature: result.signature,
+            refreshed: result.refreshed,
+            lastValidBlockHeight: result.lastValidBlockHeight,
+            quote: summarizeJupiterQuote(
+              result.usedQuote as unknown as Record<string, unknown>,
+            ),
+            source: source || "TERMINAL",
+            err: result.err ?? null,
+          }),
+          env,
+        );
+      }
+
       if (request.method === "GET" && url.pathname === "/api/me") {
         let user = await requireOnboardedUser(request, env);
-        const [bots, subscription] = await Promise.all([
-          listBotsForUser(env, user.id),
-          getUserSubscription(env, user.id),
-        ]);
-        const onboardingStatus =
-          user.onboardingStatus === "active" ||
-          isSubscriptionActive(subscription)
-            ? "active"
-            : "being_onboarded";
-        if (onboardingStatus !== user.onboardingStatus) {
-          await setUserOnboardingStatus(env, user.id, onboardingStatus).catch(
-            () => {},
-          );
-          user = { ...user, onboardingStatus };
-        }
-        const botLimits = await computeBotCreationLimits(env, bots, {
-          strictValuation: false,
-        });
+        user = await ensureUserWallet(env, user);
+        const experience = buildExperienceView(user);
+        const consumerProfile = parseConsumerProfileSummary(
+          user.profile,
+          user.feedSeedVersion,
+        );
         return withCors(
           json({
             ok: true,
             user,
-            onboardingStatus,
-            workspaceStatus: onboardingStatus,
-            bots,
-            subscription: toSubscriptionView(env, subscription),
-            limits: {
-              botCreation: {
-                maxFreeBots: botLimits.maxFreeBots,
-                requiredUsdForExtraBots: botLimits.requiredUsdForExtraBots,
-                currentUsd: botLimits.currentUsd,
-                canCreateExtraBot: botLimits.canCreateExtraBot,
-                assetBasis: botLimits.assetBasis,
-                valuationState: botLimits.valuationState,
+            wallet:
+              user.walletAddress && user.privyWalletId
+                ? {
+                    signerType: user.signerType ?? "privy",
+                    privyWalletId: user.privyWalletId,
+                    walletAddress: user.walletAddress,
+                    walletMigratedAt: user.walletMigratedAt ?? null,
+                  }
+                : null,
+            experience,
+            consumerProfile,
+          }),
+          env,
+        );
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/wallet/balance") {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        if (!user.walletAddress) {
+          return withCors(
+            json({ ok: false, error: "user-wallet-missing" }, { status: 503 }),
+            env,
+          );
+        }
+        const balanceRpcEndpoint =
+          String(env.BALANCE_RPC_ENDPOINT ?? "").trim() ||
+          String(env.RPC_ENDPOINT ?? "").trim();
+        if (!balanceRpcEndpoint) {
+          return withCors(
+            json({ ok: false, error: "rpc-endpoint-missing" }, { status: 500 }),
+            env,
+          );
+        }
+        const rpc = new SolanaRpc(balanceRpcEndpoint);
+        let lamports = 0n;
+        let usdcAtomic = 0n;
+        const balanceErrors: string[] = [];
+
+        try {
+          lamports = await rpc.getBalanceLamports(user.walletAddress);
+        } catch (error) {
+          balanceErrors.push(
+            `sol:${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+
+        try {
+          usdcAtomic = await rpc.getTokenBalanceAtomic(
+            user.walletAddress,
+            USDC_MINT,
+          );
+        } catch (error) {
+          balanceErrors.push(
+            `usdc:${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+
+        return withCors(
+          json({
+            ok: true,
+            balances: {
+              sol: {
+                lamports: lamports.toString(),
+                display: (Number(lamports) / 1e9)
+                  .toFixed(9)
+                  .replace(/0+$/, "")
+                  .replace(/\.$/, ".0"),
+              },
+              usdc: {
+                atomic: usdcAtomic.toString(),
+                display: (Number(usdcAtomic) / 1e6)
+                  .toFixed(6)
+                  .replace(/0+$/, "")
+                  .replace(/\.$/, ".0"),
               },
             },
+            ...(balanceErrors.length > 0
+              ? { errors: balanceErrors }
+              : Object.create(null)),
           }),
           env,
         );
@@ -996,6 +1170,166 @@ export default {
           );
         }
         await setUserProfile(env, user.id, profile as Record<string, unknown>);
+        return withCors(json({ ok: true }), env);
+      }
+
+      if (
+        request.method === "PUT" &&
+        url.pathname === "/api/onboarding/complete"
+      ) {
+        const user = await requireOnboardedUser(request, env);
+        const payload = await readPayload(request);
+        const validated = validateOnboardingInput(payload);
+        if (!validated.ok) {
+          return withCors(
+            json({ ok: false, error: validated.error }, { status: 400 }),
+            env,
+          );
+        }
+
+        const nowIso = new Date().toISOString();
+        const evaluated = evaluateOnboarding(validated.input);
+        const mergedProfile = mergeConsumerProfile(user.profile, {
+          ...evaluated.consumerProfile,
+          completedAt: nowIso,
+        });
+
+        await setUserProfile(env, user.id, mergedProfile);
+        await setUserExperience(env, {
+          userId: user.id,
+          experienceLevel: evaluated.level,
+          levelSource: "auto",
+          onboardingCompletedAt: nowIso,
+          onboardingVersion: 1,
+          feedSeedVersion: 1,
+          degenAcknowledgedAt: null,
+        });
+        await setUserOnboardingStatus(env, user.id, "active");
+
+        const experience = {
+          level: evaluated.level,
+          levelSource: "auto" as const,
+          onboardingCompleted: true,
+          onboardingCompletedAt: nowIso,
+          onboardingVersion: 1,
+        };
+        const consumerProfile = {
+          goalPrimary: evaluated.consumerProfile.goalPrimary,
+          riskBand: evaluated.riskBand,
+          timeHorizon: evaluated.consumerProfile.timeHorizon,
+          literacyScore: evaluated.literacyScore,
+          feedSeedVersion: 1,
+        };
+
+        return withCors(
+          json({
+            ok: true,
+            experience,
+            consumerProfile,
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "PATCH" &&
+        url.pathname === "/api/me/experience-level"
+      ) {
+        const user = await requireOnboardedUser(request, env);
+        const payload = await readPayload(request);
+        const level = String(payload.level ?? "").trim();
+        if (
+          level !== "beginner" &&
+          level !== "intermediate" &&
+          level !== "pro" &&
+          level !== "degen"
+        ) {
+          return withCors(
+            json(
+              { ok: false, error: "invalid-experience-level" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        const currentOnboardingCompletedAt = user.onboardingCompletedAt ?? null;
+        const onboardingCompleted =
+          Boolean(currentOnboardingCompletedAt) ||
+          user.onboardingStatus === "active";
+        if (!onboardingCompleted) {
+          return withCors(
+            json(
+              { ok: false, error: "onboarding-not-complete" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        const acknowledgeHighRisk = payload.acknowledgeHighRisk === true;
+        if (level === "degen" && !acknowledgeHighRisk) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error: "missing-high-risk-acknowledgement",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        const degenAcknowledgedAt =
+          level === "degen"
+            ? new Date().toISOString()
+            : (user.degenAcknowledgedAt ?? null);
+
+        await setUserExperience(env, {
+          userId: user.id,
+          experienceLevel: level as ExperienceLevel,
+          levelSource: "manual",
+          onboardingCompletedAt:
+            currentOnboardingCompletedAt ?? new Date().toISOString(),
+          onboardingVersion: user.onboardingVersion,
+          feedSeedVersion: user.feedSeedVersion,
+          degenAcknowledgedAt,
+        });
+
+        const experience = {
+          level,
+          levelSource: "manual" as const,
+          onboardingCompleted: true,
+          onboardingCompletedAt:
+            currentOnboardingCompletedAt ?? new Date().toISOString(),
+          onboardingVersion:
+            Number.isFinite(user.onboardingVersion) &&
+            user.onboardingVersion > 0
+              ? user.onboardingVersion
+              : 1,
+        };
+
+        return withCors(json({ ok: true, experience }), env);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/events") {
+        const user = await requireOnboardedUser(request, env);
+        const payload = await readPayload(request);
+        const name = parseExperienceEventName(payload.name ?? payload.event);
+        if (!name) {
+          return withCors(
+            json({ ok: false, error: "invalid-event-name" }, { status: 400 }),
+            env,
+          );
+        }
+        const properties = sanitizeEventProperties(payload.properties);
+        const profile = appendExperienceEventToProfile(user.profile, {
+          name,
+          ts: new Date().toISOString(),
+          properties,
+        });
+        await setUserProfile(env, user.id, profile);
         return withCors(json({ ok: true }), env);
       }
 
@@ -1033,982 +1367,19 @@ export default {
         );
       }
 
-      if (url.pathname === "/api/bots" && request.method === "GET") {
-        const user = await requireOnboardedUser(request, env);
-        const bots = await listBotsForUser(env, user.id);
-        return withCors(json({ ok: true, bots }), env);
-      }
-
-      if (url.pathname === "/api/bots" && request.method === "POST") {
-        const user = await requireOnboardedUser(request, env);
-        const payload = await readPayload(request);
-        const createInput = parseCreateBotPayload(payload);
-        await pingInferenceProviderConfig({
-          providerKind: createInput.providerKind,
-          baseUrl: createInput.baseUrl,
-          model: createInput.model,
-          apiKey: createInput.apiKey,
-        });
-        const existingBots = await listBotsForUser(env, user.id);
-
-        if (existingBots.length >= MAX_FREE_BOTS) {
-          const limits = await computeBotCreationLimits(env, existingBots, {
-            strictValuation: true,
-          });
-          if (!limits.canCreateExtraBot) {
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "bot-cap-threshold-not-met",
-                  maxFreeBots: limits.maxFreeBots,
-                  requiredUsd: limits.requiredUsdForExtraBots,
-                  currentUsd: limits.currentUsd,
-                  assetBasis: limits.assetBasis,
-                },
-                { status: 403 },
-              ),
-              env,
-            );
-          }
-        }
-
-        const wallet = await createPrivySolanaWallet(env);
-        const bot = await createBotRow(env, {
-          userId: user.id,
-          name: createInput.name,
-          enabled: false,
-          signerType: "privy",
-          privyWalletId: wallet.walletId,
-          walletAddress: wallet.address,
-        });
-
-        const provider = await setBotInferenceProvider(
-          env,
-          {
-            botId: bot.id,
-            providerKind: createInput.providerKind,
-            baseUrl: createInput.baseUrl,
-            model: createInput.model,
-            apiKey: createInput.apiKey,
-          },
-          { skipPing: true },
-        );
-        await updateLoopConfig(env, { enabled: false }, bot.id);
-
-        const nextBots = [bot, ...existingBots];
-        const nextLimits = await computeBotCreationLimits(env, nextBots, {
-          strictValuation: false,
-        });
-        return withCors(
-          json({
-            ok: true,
-            bot,
-            inferenceProvider: provider,
-            limits: {
-              botCreation: {
-                maxFreeBots: nextLimits.maxFreeBots,
-                requiredUsdForExtraBots: nextLimits.requiredUsdForExtraBots,
-                currentUsd: nextLimits.currentUsd,
-                canCreateExtraBot: nextLimits.canCreateExtraBot,
-                assetBasis: nextLimits.assetBasis,
-                valuationState: nextLimits.valuationState,
-              },
-            },
-          }),
-          env,
-        );
-      }
-
-      // Bot actions: /api/bots/:id/(start|stop|tick|config|trades)
-      if (url.pathname.startsWith("/api/bots/")) {
-        const parts = url.pathname.split("/").filter(Boolean);
-        const botId = parts[2] ?? "";
-        const action = parts[3] ?? "";
-        if (!botId) {
-          return withCors(
-            json({ ok: false, error: "not-found" }, { status: 404 }),
-            env,
-          );
-        }
-
-        const user = await requireOnboardedUser(request, env);
-        const bot = await getBotForUser(env, user.id, botId);
-        if (!bot) {
-          return withCors(
-            json({ ok: false, error: "not-found" }, { status: 404 }),
-            env,
-          );
-        }
-
-        if (request.method === "GET" && !action) {
-          return withCors(json({ ok: true, bot }), env);
-        }
-
-        if (action === "inference") {
-          if (request.method === "GET") {
-            const provider = await getBotInferenceProviderView(env, bot.id);
-            return withCors(json({ ok: true, provider }), env);
-          }
-          if (request.method === "POST" && parts[4] === "ping") {
-            const payload = await readPayload(request);
-            const pingInput = parseInferencePingPayload(payload);
-            await pingBotInferenceProvider(env, {
-              botId: bot.id,
-              ...pingInput,
-            });
-            return withCors(json({ ok: true, ping: "ok" }), env);
-          }
-          if (request.method === "PATCH") {
-            const payload = await readPayload(request);
-            const patch = parseInferencePatchPayload(payload);
-            let provider: Awaited<ReturnType<typeof patchBotInferenceProvider>>;
-            try {
-              provider = await patchBotInferenceProvider(env, {
-                botId: bot.id,
-                ...patch,
-              });
-            } catch (error) {
-              const message =
-                error instanceof Error ? error.message : String(error);
-              if (message !== "inference-provider-not-configured") throw error;
-              if (
-                patch.baseUrl === undefined ||
-                patch.model === undefined ||
-                patch.apiKey === undefined
-              ) {
-                throw new Error("missing-inference-provider-config");
-              }
-              provider = await setBotInferenceProvider(env, {
-                botId: bot.id,
-                providerKind: patch.providerKind,
-                baseUrl: patch.baseUrl,
-                model: patch.model,
-                apiKey: patch.apiKey,
-              });
-            }
-            return withCors(json({ ok: true, provider }), env);
-          }
-        }
-
-        if (request.method === "POST" && action === "start") {
-          const gate = await ensureManualAccess(env, user.id);
-          if (gate) return withCors(gate, env);
-          let providerHealthy = true;
-          let providerError = "inference-provider-unreachable";
-          try {
-            await assertBotInferenceProviderHealthy(env, botId);
-          } catch (error) {
-            providerHealthy = false;
-            const message =
-              error instanceof Error ? error.message : String(error);
-            providerError = message;
-            if (
-              message !== "inference-provider-not-configured" &&
-              message !== "inference-provider-unreachable"
-            ) {
-              throw error;
-            }
-          }
-          if (!providerHealthy) {
-            return withCors(
-              json({ ok: false, error: providerError }, { status: 409 }),
-              env,
-            );
-          }
-          const config = await getLoopConfig(env, botId);
-          const validationGate = await checkStrategyStartGate(
-            env,
-            botId,
-            config,
-          );
-          if (!validationGate.ok) {
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: validationGate.reason ?? "strategy-not-validated",
-                },
-                { status: 409 },
-              ),
-              env,
-            );
-          }
-          const nextBot = await setBotEnabledForUser(env, user.id, botId, true);
-          try {
-            const payload = (await botLoopFetchJson(env, botId, "/start", {
-              method: "POST",
-            })) as { config?: unknown };
-            return withCors(
-              json({ ok: true, bot: nextBot, config: payload.config }),
-              env,
-            );
-          } catch (err) {
-            // Rollback the enabled flag if the DO refused to start.
-            await setBotEnabledForUser(env, user.id, botId, false).catch(
-              () => {},
-            );
-            throw err;
-          }
-        }
-
-        if (request.method === "POST" && action === "validate") {
-          const gate = await ensureManualAccess(env, user.id);
-          if (gate) return withCors(gate, env);
-          const payload = await readPayload(request);
-          const fixturePatternRaw = String(payload.fixturePattern ?? "").trim();
-          const fixturePattern =
-            fixturePatternRaw === "uptrend" ||
-            fixturePatternRaw === "downtrend" ||
-            fixturePatternRaw === "whipsaw"
-              ? fixturePatternRaw
-              : undefined;
-          const result = await runValidationForTenant(env, botId, {
-            actor: "user",
-            reason: "manual-validate",
-            fixturePattern,
-          });
-          ctx.waitUntil(
-            botLoopFetchJson(env, botId, "/ensure", {
-              method: "POST",
-            }).catch(() => {}),
-          );
-          return withCors(json({ ok: true, validation: result }), env);
-        }
-
-        if (request.method === "GET" && action === "validation" && !parts[4]) {
-          const latest = await getLatestValidation(env, botId);
-          return withCors(json({ ok: true, validation: latest }), env);
-        }
-
-        if (
-          request.method === "GET" &&
-          action === "validation" &&
-          parts[4] === "runs"
-        ) {
-          const limitRaw = url.searchParams.get("limit") ?? "20";
-          const limit = Number(limitRaw);
-          const runs = await listValidationRuns(
-            env,
-            botId,
-            Number.isFinite(limit) ? limit : 20,
-          );
-          return withCors(json({ ok: true, runs }), env);
-        }
-
-        if (action === "backtests") {
-          if (request.method === "POST" && !parts[4]) {
-            const gate = await ensureManualAccess(env, user.id);
-            if (gate) return withCors(gate, env);
-            const payload = await readPayload(request);
-            const runRequest = normalizeBacktestRunRequest(payload);
-            const run = await enqueueBacktestRun(env, {
-              runId: newBacktestRunId(),
-              tenantId: botId,
-              kind: runRequest.kind,
-              request: runRequest,
-            });
-            ctx.waitUntil(
-              backtestQueueFetchJson(env, botId, "/enqueue", {
-                method: "POST",
-              }).catch(() => {}),
-            );
-            return withCors(
-              json({
-                ok: true,
-                run: {
-                  runId: run.runId,
-                  status: run.status,
-                  queuedAt: run.queuedAt,
-                },
-              }),
-              env,
-            );
-          }
-
-          if (request.method === "GET" && !parts[4]) {
-            const limitRaw = Number(url.searchParams.get("limit") ?? "20");
-            const statusRaw = String(
-              url.searchParams.get("status") ?? "",
-            ).trim();
-            const status =
-              statusRaw === "queued" ||
-              statusRaw === "running" ||
-              statusRaw === "completed" ||
-              statusRaw === "failed" ||
-              statusRaw === "canceled"
-                ? statusRaw
-                : undefined;
-            const runs = await listBacktestRuns(env, botId, {
-              limit: Number.isFinite(limitRaw) ? limitRaw : 20,
-              status,
-            });
-            return withCors(json({ ok: true, runs }), env);
-          }
-
-          if (request.method === "GET" && parts[4]) {
-            const runId = String(parts[4] ?? "").trim();
-            if (!runId) {
-              return withCors(
-                json({ ok: false, error: "not-found" }, { status: 404 }),
-                env,
-              );
-            }
-
-            if (parts[5] === "events") {
-              const limitRaw = Number(url.searchParams.get("limit") ?? "200");
-              const events = await listBacktestRunEvents(
-                env,
-                botId,
-                runId,
-                Number.isFinite(limitRaw) ? limitRaw : 200,
-              );
-              return withCors(json({ ok: true, events }), env);
-            }
-
-            const run = await getBacktestRun(env, botId, runId);
-            if (!run) {
-              return withCors(
-                json({ ok: false, error: "not-found" }, { status: 404 }),
-                env,
-              );
-            }
-            const events = await listBacktestRunEvents(env, botId, runId, 80);
-            let result: Record<string, unknown> | null = null;
-            if (run.resultRef && env.LOGS_BUCKET) {
-              const object = await env.LOGS_BUCKET.get(run.resultRef).catch(
-                () => null,
-              );
-              if (object) {
-                const raw = await object.text().catch(() => "");
-                if (raw.trim()) {
-                  try {
-                    const parsed = JSON.parse(raw);
-                    if (
-                      parsed &&
-                      typeof parsed === "object" &&
-                      !Array.isArray(parsed)
-                    ) {
-                      result = parsed as Record<string, unknown>;
-                    }
-                  } catch {
-                    // best effort
-                  }
-                }
-              }
-            }
-            if (!result) {
-              const completionEvent = [...events]
-                .reverse()
-                .find((event) => event.message === "backtest-run-completed");
-              if (
-                completionEvent?.meta?.result &&
-                typeof completionEvent.meta.result === "object" &&
-                !Array.isArray(completionEvent.meta.result)
-              ) {
-                result = completionEvent.meta.result as Record<string, unknown>;
-              }
-            }
-
-            return withCors(
-              json({
-                ok: true,
-                run: {
-                  runId: run.runId,
-                  status: run.status,
-                  kind: run.kind,
-                  request: run.request,
-                  summary: run.summary,
-                  resultRef: run.resultRef,
-                  errorCode: run.errorCode,
-                  errorMessage: run.errorMessage,
-                  queuedAt: run.queuedAt,
-                  startedAt: run.startedAt,
-                  completedAt: run.completedAt,
-                  createdAt: run.createdAt,
-                  strategyLabel:
-                    run.summary?.strategyLabel ??
-                    (run.kind === "validation"
-                      ? "validation"
-                      : String(
-                          (run.request.kind === "strategy_json" &&
-                          run.request.spec &&
-                          typeof run.request.spec.strategy === "object"
-                            ? (
-                                run.request.spec.strategy as Record<
-                                  string,
-                                  unknown
-                                >
-                              ).type
-                            : "strategy_json") ?? "strategy_json",
-                        )),
-                },
-                result,
-                events,
-              }),
-              env,
-            );
-          }
-        }
-
-        if (request.method === "POST" && action === "stop") {
-          // Stop should take effect as fast as possible; disable config first.
-          let config: unknown = null;
-          try {
-            const payload = (await botLoopFetchJson(env, botId, "/stop", {
-              method: "POST",
-            })) as { config?: unknown };
-            config = payload.config ?? null;
-          } catch {
-            // Safety fallback: disable config even if DO isn't reachable.
-            config = await updateLoopConfig(env, { enabled: false }, botId);
-          }
-          const nextBot = await setBotEnabledForUser(
-            env,
-            user.id,
-            botId,
-            false,
-          );
-          return withCors(json({ ok: true, bot: nextBot, config }), env);
-        }
-
-        if (request.method === "POST" && action === "tick") {
-          const gate = await ensureManualAccess(env, user.id);
-          if (gate) return withCors(gate, env);
-          await botLoopFetchJson(env, botId, "/tick", { method: "POST" });
-          return withCors(json({ ok: true, submitted: true }), env);
-        }
-
-        if (action === "config") {
-          if (request.method === "GET") {
-            const config = await getLoopConfig(env, botId);
-            if (bot.enabled && config.enabled) {
-              ctx.waitUntil(
-                botLoopFetchJson(env, botId, "/ensure", {
-                  method: "POST",
-                }).catch(() => {}),
-              );
-            }
-            return withCors(json({ ok: true, config }), env);
-          }
-          if (request.method === "PATCH") {
-            const payload = await readPayload(request);
-            if (payload.enabled === true || payload.runNow === true) {
-              const gate = await ensureManualAccess(env, user.id);
-              if (gate) return withCors(gate, env);
-            }
-            const beforeConfig = await getLoopConfig(env, botId);
-            const doPayload = (await botLoopFetchJson(env, botId, "/config", {
-              method: "PATCH",
-              body: JSON.stringify(payload),
-            })) as { config?: unknown };
-            const afterConfig =
-              doPayload.config &&
-              typeof doPayload.config === "object" &&
-              !Array.isArray(doPayload.config)
-                ? (doPayload.config as import("./types").LoopConfig)
-                : await getLoopConfig(env, botId);
-            await markStrategyCandidateFromConfigChange(env, botId, {
-              actor: "user",
-              reason: "config-patch",
-              beforeConfig,
-              afterConfig,
-            }).catch(() => {});
-            return withCors(json({ ok: true, config: doPayload.config }), env);
-          }
-        }
-
-        if (request.method === "GET" && action === "trades") {
-          const limitRaw = url.searchParams.get("limit") ?? "50";
-          const limit = Number(limitRaw);
-          const trades = await listTrades(
-            env,
-            botId,
-            Number.isFinite(limit) ? limit : 50,
-          );
-          return withCors(json({ ok: true, trades }), env);
-        }
-
-        if (request.method === "GET" && action === "balance") {
-          if (!env.BALANCE_RPC_ENDPOINT) {
-            return withCors(
-              json(
-                { ok: false, error: "rpc-endpoint-missing" },
-                { status: 500 },
-              ),
-              env,
-            );
-          }
-          const rpc = new SolanaRpc(env.BALANCE_RPC_ENDPOINT);
-
-          let lamports = 0n;
-          let usdcAtomic = 0n;
-          const balanceErrors: string[] = [];
-
-          try {
-            lamports = await rpc.getBalanceLamports(bot.walletAddress);
-          } catch (error) {
-            balanceErrors.push(
-              `sol:${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-
-          try {
-            usdcAtomic = await rpc.getTokenBalanceAtomic(
-              bot.walletAddress,
-              USDC_MINT,
-            );
-          } catch (error) {
-            balanceErrors.push(
-              `usdc:${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-
-          return withCors(
-            json({
-              ok: true,
-              balances: {
-                sol: {
-                  lamports: lamports.toString(),
-                  display: (Number(lamports) / 1e9)
-                    .toFixed(9)
-                    .replace(/0+$/, "")
-                    .replace(/\.$/, ".0"),
-                },
-                usdc: {
-                  atomic: usdcAtomic.toString(),
-                  display: (Number(usdcAtomic) / 1e6)
-                    .toFixed(6)
-                    .replace(/0+$/, "")
-                    .replace(/\.$/, ".0"),
-                },
-              },
-              ...(balanceErrors.length > 0
-                ? { errors: balanceErrors }
-                : Object.create(null)),
-            }),
-            env,
-          );
-        }
-
-        if (request.method === "GET" && action === "events") {
-          const limitRaw = url.searchParams.get("limit") ?? "40";
-          const limit = Number(limitRaw);
-          const events = await listRecentBotEvents(env, {
-            tenantId: botId,
-            limit: Number.isFinite(limit)
-              ? Math.max(1, Math.min(120, limit))
-              : 40,
-          });
-          return withCors(json({ ok: true, events }), env);
-        }
-
-        if (action === "steering") {
-          if (request.method === "POST") {
-            const payload = await readPayload(request);
-            const message = String(payload.message ?? "").trim();
-            if (!message) {
-              return withCors(
-                json(
-                  { ok: false, error: "invalid-steering-message" },
-                  { status: 400 },
-                ),
-                env,
-              );
-            }
-            const queued = await enqueueSteeringMessage(env, {
-              botId,
-              message,
-            });
-            return withCors(
-              json({
-                ok: true,
-                queued: true,
-                queueId: queued.queueId,
-                queuePosition: queued.queuePosition,
-              }),
-              env,
-            );
-          }
-          if (request.method === "GET") {
-            const limitRaw = Number(url.searchParams.get("limit") ?? "50");
-            const steering = await listSteeringMessages(
-              env,
-              botId,
-              Number.isFinite(limitRaw) ? limitRaw : 50,
-            );
-            return withCors(json({ ok: true, messages: steering }), env);
-          }
-        }
-
-        if (request.method === "POST" && action === "chat") {
-          const payload = (await readPayload(request)) as ConversationRequest;
-          const chat = await handleChatRequest(env, botId, payload);
-          return withCors(json({ ok: true, ...chat }), env);
-        }
-
-        if (request.method === "GET" && action === "chat") {
-          const history = await handleChatHistory(env, botId, request);
-          return withCors(json(history), env);
-        }
-
-        if (request.method === "GET" && action === "telemetry") {
-          const telemetry = await handleTelemetry(env, botId, request);
-          return withCors(json(telemetry), env);
-        }
-
-        if (
-          request.method === "GET" &&
-          action === "strategy" &&
-          parts[4] === "events"
-        ) {
-          const limitRaw = url.searchParams.get("limit") ?? "40";
-          const limit = Number(limitRaw);
-          const events = await listStrategyEvents(
-            env,
-            botId,
-            Number.isFinite(limit) ? Math.max(1, Math.min(200, limit)) : 40,
-          );
-          return withCors(json({ ok: true, events }), env);
-        }
-
-        if (action === "agent" && parts[4] === "memory") {
-          if (request.method === "GET") {
-            const memory = await getAgentMemory(env, bot.id);
-            return withCors(json({ ok: true, memory }), env);
-          }
-          if (request.method === "PATCH") {
-            const payload = await readPayload(request);
-            const memory = await getAgentMemory(env, bot.id);
-            if (typeof payload.thesis === "string") {
-              memory.thesis = payload.thesis;
-            }
-            if (typeof payload.mandate === "string") {
-              // Mandate is stored in the strategy config, not memory.
-              // We update it via the loop config.
-              const config = await getLoopConfig(env, bot.id);
-              const strat = config.strategy;
-              if (
-                strat &&
-                typeof strat === "object" &&
-                (strat as Record<string, unknown>).type === "agent"
-              ) {
-                (strat as Record<string, unknown>).mandate = payload.mandate;
-                await updateLoopConfig(
-                  env,
-                  { strategy: strat as import("./types").StrategyConfig },
-                  bot.id,
-                );
-              }
-            }
-            await saveAgentMemory(env, bot.id, memory);
-            return withCors(json({ ok: true, memory }), env);
-          }
-        }
-      }
-
-      if (request.method === "GET" && url.pathname === "/api/loop/status") {
-        return withCors(
-          json(
-            { ok: false, error: "legacy-loop-runtime-disabled" },
-            { status: 410 },
-          ),
-          env,
-        );
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/loop/start") {
-        requireAdmin(request, env);
-        return withCors(
-          json(
-            { ok: false, error: "legacy-loop-runtime-disabled" },
-            { status: 410 },
-          ),
-          env,
-        );
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/loop/stop") {
-        requireAdmin(request, env);
-        return withCors(
-          json(
-            { ok: false, error: "legacy-loop-runtime-disabled" },
-            { status: 410 },
-          ),
-          env,
-        );
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/config") {
-        requireAdmin(request, env);
-        const payload = await readPayload(request);
-        const runNow = Boolean(payload.runNow);
-        const adminUpdate: Partial<import("./types").LoopConfig> = {};
-        if (payload.policy !== undefined) {
-          validatePolicy(payload.policy);
-          adminUpdate.policy = payload.policy as import("./types").LoopPolicy;
-        }
-        if (payload.strategy && typeof payload.strategy === "object") {
-          validateStrategy(payload.strategy);
-          adminUpdate.strategy =
-            payload.strategy as import("./types").StrategyConfig;
-        }
-        if (payload.validation !== undefined) {
-          validateValidationConfig(payload.validation);
-          adminUpdate.validation =
-            payload.validation as import("./types").LoopValidationConfig;
-        }
-        if (payload.autotune !== undefined) {
-          validateAutotuneConfig(payload.autotune);
-          adminUpdate.autotune =
-            payload.autotune as import("./types").LoopAutotuneConfig;
-        }
-        if (payload.execution !== undefined) {
-          validateExecutionConfig(payload.execution);
-          adminUpdate.execution =
-            payload.execution as import("./types").ExecutionConfig;
-        }
-        if (payload.dataSources !== undefined) {
-          validateDataSourcesConfig(payload.dataSources);
-          adminUpdate.dataSources =
-            payload.dataSources as import("./types").DataSourcesConfig;
-        }
-        const config = await updateLoopConfig(env, adminUpdate);
-        return withCors(
-          json({
-            ok: true,
-            config,
-            ...(runNow
-              ? {
-                  runNowIgnored: true,
-                  note: "runNow is disabled; trigger per-bot start/tick through the orchestrator runtime",
-                }
-              : Object.create(null)),
-          }),
-          env,
-        );
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/loop/tick") {
-        requireAdmin(request, env);
-        return withCors(
-          json(
-            { ok: false, error: "legacy-loop-runtime-disabled" },
-            { status: 410 },
-          ),
-          env,
-        );
-      }
-
-      if (request.method === "GET" && url.pathname === "/api/trades") {
-        requireAdmin(request, env);
-        const limitRaw = url.searchParams.get("limit") ?? "50";
-        const limit = Number(limitRaw);
-        const tenantId = env.TENANT_ID ?? "default";
-        const trades = await listTrades(
-          env,
-          tenantId,
-          Number.isFinite(limit) ? limit : 50,
-        );
-        return withCors(json({ ok: true, trades }), env);
-      }
-
       if (
-        request.method === "POST" &&
-        url.pathname.startsWith("/api/admin/bots/")
+        url.pathname === "/api/bots" ||
+        url.pathname.startsWith("/api/bots/") ||
+        url.pathname.startsWith("/api/admin/bots/") ||
+        url.pathname === "/api/config" ||
+        url.pathname === "/api/trades" ||
+        url.pathname === "/api/loop/status" ||
+        url.pathname === "/api/loop/start" ||
+        url.pathname === "/api/loop/stop" ||
+        url.pathname === "/api/loop/tick"
       ) {
-        requireAdmin(request, env);
-        const parts = url.pathname.split("/").filter(Boolean);
-        const botId = parts[3] ?? "";
-        const action = parts[4] ?? "";
-        if (!botId) {
-          return withCors(
-            json({ ok: false, error: "not-found" }, { status: 404 }),
-            env,
-          );
-        }
-        const bot = await getBotById(env, botId);
-        if (!bot) {
-          return withCors(
-            json({ ok: false, error: "not-found" }, { status: 404 }),
-            env,
-          );
-        }
-
-        if (action === "start") {
-          const payload = await readPayload(request);
-          const overrideValidation = Boolean(payload.overrideValidation);
-          const reason = String(payload.reason ?? "admin-start").slice(0, 300);
-          let providerError = "";
-          try {
-            await assertBotInferenceProviderHealthy(env, botId);
-          } catch (error) {
-            providerError =
-              error instanceof Error ? error.message : String(error);
-          }
-          if (
-            providerError === "inference-provider-not-configured" ||
-            providerError === "inference-provider-unreachable"
-          ) {
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: providerError,
-                },
-                { status: 409 },
-              ),
-              env,
-            );
-          }
-          const config = await getLoopConfig(env, botId);
-          const gate = await checkStrategyStartGate(env, botId, config);
-          if (
-            !gate.ok &&
-            (!overrideValidation || gate.overrideAllowed === false)
-          ) {
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: gate.reason ?? "strategy-not-validated",
-                },
-                { status: 409 },
-              ),
-              env,
-            );
-          }
-          await setBotEnabledById(env, botId, true);
-          try {
-            const doPayload = (await botLoopFetchJson(env, botId, "/start", {
-              method: "POST",
-              headers:
-                overrideValidation && gate.ok === false
-                  ? { "x-validation-override": "1" }
-                  : undefined,
-            })) as { config?: unknown };
-
-            if (overrideValidation && !gate.ok) {
-              await recordStrategyEvent(env, {
-                tenantId: botId,
-                eventType: "start_override",
-                actor: "admin",
-                reason,
-                beforeConfig: config,
-                afterConfig:
-                  (doPayload.config as import("./types").LoopConfig) ?? config,
-              }).catch(() => {});
-            }
-
-            return withCors(
-              json({ ok: true, botId, config: doPayload.config ?? null }),
-              env,
-            );
-          } catch (err) {
-            await setBotEnabledById(env, botId, false).catch(() => {});
-            throw err;
-          }
-        }
-
-        if (action === "validate") {
-          const payload = await readPayload(request);
-          const fixturePatternRaw = String(payload.fixturePattern ?? "").trim();
-          const fixturePattern =
-            fixturePatternRaw === "uptrend" ||
-            fixturePatternRaw === "downtrend" ||
-            fixturePatternRaw === "whipsaw"
-              ? fixturePatternRaw
-              : undefined;
-          const result = await runValidationForTenant(env, botId, {
-            actor: "admin",
-            reason: "admin-validate",
-            fixturePattern,
-          });
-          ctx.waitUntil(
-            botLoopFetchJson(env, botId, "/ensure", {
-              method: "POST",
-            }).catch(() => {}),
-          );
-          return withCors(json({ ok: true, validation: result }), env);
-        }
-
-        if (action === "revalidate") {
-          const payload = await readPayload(request);
-          if (payload.force === true) {
-            await updateRuntimeState(env, botId, {
-              nextRevalidateAt: new Date(0).toISOString(),
-            });
-          }
-          await maybeRevalidateAndTuneForTenant(env, botId);
-          const runtime = await getRuntimeState(env, botId);
-          const latest = await getLatestValidation(env, botId);
-          const config = await getLoopConfig(env, botId);
-          const freshBot = await getBotById(env, botId);
-          return withCors(
-            json({
-              ok: true,
-              runtime,
-              validation: latest,
-              config,
-              bot: freshBot,
-            }),
-            env,
-          );
-        }
-
-        if (action === "config") {
-          const payload = await readPayload(request);
-          if (payload.policy !== undefined) {
-            validatePolicy(payload.policy);
-          }
-          if (payload.strategy !== undefined) {
-            if (
-              !payload.strategy ||
-              typeof payload.strategy !== "object" ||
-              Array.isArray(payload.strategy)
-            ) {
-              return withCors(
-                json({ ok: false, error: "invalid-strategy" }, { status: 400 }),
-                env,
-              );
-            }
-            validateStrategy(payload.strategy);
-          }
-          if (payload.validation !== undefined) {
-            validateValidationConfig(payload.validation);
-          }
-          if (payload.autotune !== undefined) {
-            validateAutotuneConfig(payload.autotune);
-          }
-          if (payload.execution !== undefined) {
-            validateExecutionConfig(payload.execution);
-          }
-          if (payload.dataSources !== undefined) {
-            validateDataSourcesConfig(payload.dataSources);
-          }
-
-          const beforeConfig = await getLoopConfig(env, botId);
-          const doPayload = (await botLoopFetchJson(env, botId, "/config", {
-            method: "PATCH",
-            body: JSON.stringify(payload),
-          })) as { config?: unknown };
-          const afterConfig =
-            doPayload.config &&
-            typeof doPayload.config === "object" &&
-            !Array.isArray(doPayload.config)
-              ? (doPayload.config as import("./types").LoopConfig)
-              : await getLoopConfig(env, botId);
-          await markStrategyCandidateFromConfigChange(env, botId, {
-            actor: "admin",
-            reason: "admin-config-patch",
-            beforeConfig,
-            afterConfig,
-          }).catch(() => {});
-          return withCors(json({ ok: true, config: doPayload.config }), env);
-        }
-
         return withCors(
-          json({ ok: false, error: "not-found" }, { status: 404 }),
+          json({ ok: false, error: "bot-runtime-removed" }, { status: 410 }),
           env,
         );
       }
@@ -2029,34 +1400,17 @@ export default {
       const status =
         message === "unauthorized"
           ? 401
-          : message === "inference-provider-not-configured"
-            ? 404
-            : message === "inference-provider-unreachable"
+          : message === "manual-onboarding-required"
+            ? 403
+            : message === "d1-migrations-not-applied" ||
+                message.startsWith("x402-route-config-")
               ? 503
-              : message.startsWith("inference-provider-ping-failed")
-                ? 400
-                : message === "inference-provider-ping-timeout"
-                  ? 504
-                  : message === "inference-encryption-key-missing" ||
-                      message === "invalid-inference-encryption-key"
-                    ? 503
-                    : message === "manual-onboarding-required" ||
-                        message === "manual-access-required"
-                      ? 403
-                      : message === "trading-orchestrator-binding-missing"
-                        ? 503
-                        : message === "bot-limit-valuation-unavailable" ||
-                            message.startsWith("x402-route-config-")
-                          ? 503
-                          : message === "strategy-not-validated" ||
-                              message === "strategy-validation-stale"
-                            ? 409
-                            : message === "not-found"
-                              ? 404
-                              : message.startsWith("invalid-") ||
-                                  message.startsWith("missing-")
-                                ? 400
-                                : 500;
+              : message === "not-found"
+                ? 404
+                : message.startsWith("invalid-") ||
+                    message.startsWith("missing-")
+                  ? 400
+                  : 500;
       if (status >= 500) {
         // Avoid leaking request headers or secrets; log only safe metadata.
         console.error("api.error", {
@@ -2070,24 +1424,8 @@ export default {
     }
   },
 
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    // The Cloudflare Agents runtime owns autonomous tick scheduling.
-    // Cron only ensures enabled bots keep their orchestrator schedules healthy.
-    const enabledBots = await listEnabledBots(env, 200).catch(() => []);
-    for (const bot of enabledBots) {
-      ctx.waitUntil(
-        (async () => {
-          await botLoopFetchJson(env, bot.id, "/ensure", {
-            method: "POST",
-          }).catch((error) => {
-            console.error("trading-orchestrator.ensure.failed", {
-              botId: bot.id,
-              err: error instanceof Error ? error.message : String(error),
-            });
-          });
-        })(),
-      );
-    }
+  async scheduled(_event: ScheduledEvent, _env: Env, _ctx: ExecutionContext) {
+    // Bot runtime has been removed; cron is intentionally a no-op.
   },
 };
 
@@ -2101,26 +1439,95 @@ async function requireOnboardedUser(
   return await upsertUser(env, auth.privyUserId);
 }
 
-async function ensureManualAccess(
-  env: Env,
-  userId: string,
-): Promise<Response | null> {
-  const sub = await getUserSubscription(env, userId);
-  if (isSubscriptionActive(sub)) return null;
-  return json(
-    {
-      ok: false,
-      error: "manual-access-required",
-      message:
-        "Access is provisioned manually. Contact the Trader Ralph team to activate your workspace.",
-      subscription: toSubscriptionView(env, sub),
-    },
-    { status: 403 },
-  );
+async function ensureUserWallet(env: Env, user: UserRow): Promise<UserRow> {
+  if (user.walletAddress && user.privyWalletId) return user;
+  const wallet = await createPrivySolanaWallet(env);
+  await setUserWallet(env, {
+    userId: user.id,
+    signerType: "privy",
+    privyWalletId: wallet.walletId,
+    walletAddress: wallet.address,
+    walletMigratedAt: new Date().toISOString(),
+  });
+  return {
+    ...user,
+    signerType: "privy",
+    privyWalletId: wallet.walletId,
+    walletAddress: wallet.address,
+    walletMigratedAt: new Date().toISOString(),
+  };
+}
+
+function buildExperienceView(user: UserRow): {
+  level: ExperienceLevel;
+  levelSource: "auto" | "manual";
+  onboardingCompleted: boolean;
+  onboardingCompletedAt: string | null;
+  onboardingVersion: number;
+} {
+  const onboardingCompletedAt = user.onboardingCompletedAt ?? null;
+  const onboardingCompleted =
+    Boolean(onboardingCompletedAt) || user.onboardingStatus === "active";
+  return {
+    level: parseExperienceLevel(user.experienceLevel),
+    levelSource: parseLevelSource(user.levelSource),
+    onboardingCompleted,
+    onboardingCompletedAt,
+    onboardingVersion:
+      Number.isFinite(user.onboardingVersion) && user.onboardingVersion > 0
+        ? Math.floor(user.onboardingVersion)
+        : 1,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseExperienceEventName(value: unknown): ExperienceEventName | null {
+  const raw = String(value ?? "").trim() as ExperienceEventName;
+  return EXPERIENCE_EVENT_NAMES.has(raw) ? raw : null;
+}
+
+function sanitizeEventProperties(
+  value: unknown,
+): Record<string, string | number | boolean> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, string | number | boolean> = {};
+  let count = 0;
+  for (const [key, raw] of Object.entries(value)) {
+    if (!key.trim()) continue;
+    if (typeof raw === "string") {
+      output[key] = raw.slice(0, 200);
+    } else if (typeof raw === "number" && Number.isFinite(raw)) {
+      output[key] = raw;
+    } else if (typeof raw === "boolean") {
+      output[key] = raw;
+    } else {
+      continue;
+    }
+    count += 1;
+    if (count >= 20) break;
+  }
+  return output;
+}
+
+function appendExperienceEventToProfile(
+  existingProfile: Record<string, unknown> | null,
+  event: {
+    name: ExperienceEventName;
+    ts: string;
+    properties: Record<string, string | number | boolean>;
+  },
+): Record<string, unknown> {
+  const profile = isRecord(existingProfile) ? { ...existingProfile } : {};
+  const analyticsRaw = profile.analytics;
+  const analytics = isRecord(analyticsRaw) ? { ...analyticsRaw } : {};
+  const eventsRaw = Array.isArray(analytics.events) ? analytics.events : [];
+  const nextEvents = [...eventsRaw, event].slice(-MAX_EXPERIENCE_EVENTS);
+  analytics.events = nextEvents;
+  profile.analytics = analytics;
+  return profile;
 }
 
 function toBoundedInt(
@@ -2177,98 +1584,6 @@ function summarizeJupiterQuote(
   };
 }
 
-function parseCreateBotPayload(payload: Record<string, unknown>): {
-  name: string;
-  providerKind?: unknown;
-  baseUrl: unknown;
-  model: unknown;
-  apiKey: unknown;
-} {
-  const name = String(payload.name ?? "").trim();
-  if (!name || name.length > 120) throw new Error("invalid-bot-name");
-
-  const provider = isRecord(payload.provider) ? payload.provider : payload;
-  const providerKind = provider.providerKind ?? provider.kind;
-  const baseUrl = provider.baseUrl ?? provider.url;
-  const model = provider.model;
-  const apiKey = provider.apiKey ?? provider.api_key;
-  if (baseUrl === undefined || model === undefined || apiKey === undefined) {
-    throw new Error("missing-inference-provider-config");
-  }
-
-  return {
-    name,
-    providerKind,
-    baseUrl,
-    model,
-    apiKey,
-  };
-}
-
-function parseInferencePatchPayload(payload: Record<string, unknown>): {
-  providerKind?: unknown;
-  baseUrl?: unknown;
-  model?: unknown;
-  apiKey?: unknown;
-} {
-  const provider = isRecord(payload.provider) ? payload.provider : payload;
-  const next: {
-    providerKind?: unknown;
-    baseUrl?: unknown;
-    model?: unknown;
-    apiKey?: unknown;
-  } = {};
-  if (provider.providerKind !== undefined || provider.kind !== undefined) {
-    next.providerKind = provider.providerKind ?? provider.kind;
-  }
-  if (provider.baseUrl !== undefined || provider.url !== undefined) {
-    next.baseUrl = provider.baseUrl ?? provider.url;
-  }
-  if (provider.model !== undefined) {
-    next.model = provider.model;
-  }
-  if (provider.apiKey !== undefined || provider.api_key !== undefined) {
-    next.apiKey = provider.apiKey ?? provider.api_key;
-  }
-  if (
-    next.providerKind === undefined &&
-    next.baseUrl === undefined &&
-    next.model === undefined &&
-    next.apiKey === undefined
-  ) {
-    throw new Error("invalid-inference-provider-patch");
-  }
-  return next;
-}
-
-function parseInferencePingPayload(payload: Record<string, unknown>): {
-  providerKind?: unknown;
-  baseUrl?: unknown;
-  model?: unknown;
-  apiKey?: unknown;
-} {
-  const provider = isRecord(payload.provider) ? payload.provider : payload;
-  const next: {
-    providerKind?: unknown;
-    baseUrl?: unknown;
-    model?: unknown;
-    apiKey?: unknown;
-  } = {};
-  if (provider.providerKind !== undefined || provider.kind !== undefined) {
-    next.providerKind = provider.providerKind ?? provider.kind;
-  }
-  if (provider.baseUrl !== undefined || provider.url !== undefined) {
-    next.baseUrl = provider.baseUrl ?? provider.url;
-  }
-  if (provider.model !== undefined) {
-    next.model = provider.model;
-  }
-  if (provider.apiKey !== undefined || provider.api_key !== undefined) {
-    next.apiKey = provider.apiKey ?? provider.api_key;
-  }
-  return next;
-}
-
 async function readPayload(request: Request): Promise<Record<string, unknown>> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -2279,74 +1594,4 @@ async function readPayload(request: Request): Promise<Record<string, unknown>> {
     return Object.fromEntries(form.entries());
   }
   return {};
-}
-
-async function botLoopFetchJson(
-  env: Env,
-  botId: string,
-  path: string,
-  init: RequestInit,
-): Promise<unknown> {
-  if (!env.TRADING_ORCHESTRATOR) {
-    throw new Error("trading-orchestrator-binding-missing");
-  }
-  const { getAgentByName } = await loadAgentsModule();
-  const stub = await getAgentByName(env.TRADING_ORCHESTRATOR, botId);
-
-  const headers = new Headers(init.headers);
-  headers.set("x-ralph-bot-id", botId);
-  if (init.body != null && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-
-  const response = await stub.fetch(`https://trading-orchestrator${path}`, {
-    ...init,
-    headers,
-  });
-
-  const payload = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) {
-    const msg =
-      payload &&
-      typeof payload === "object" &&
-      !Array.isArray(payload) &&
-      typeof (payload as Record<string, unknown>).error === "string"
-        ? String((payload as Record<string, unknown>).error)
-        : `bot-loop-http-${response.status}`;
-    throw new Error(msg);
-  }
-  return payload;
-}
-
-async function backtestQueueFetchJson(
-  env: Env,
-  botId: string,
-  path: string,
-  init: RequestInit,
-): Promise<unknown> {
-  const id = env.BACKTEST_QUEUE.idFromName(botId);
-  const stub = env.BACKTEST_QUEUE.get(id);
-
-  const headers = new Headers(init.headers);
-  headers.set("x-ralph-bot-id", botId);
-  if (init.body != null && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-
-  const response = await stub.fetch(`https://backtest-queue${path}`, {
-    ...init,
-    headers,
-  });
-  const payload = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) {
-    const msg =
-      payload &&
-      typeof payload === "object" &&
-      !Array.isArray(payload) &&
-      typeof (payload as Record<string, unknown>).error === "string"
-        ? String((payload as Record<string, unknown>).error)
-        : `backtest-queue-http-${response.status}`;
-    throw new Error(msg);
-  }
-  return payload;
 }

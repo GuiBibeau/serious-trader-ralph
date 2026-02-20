@@ -248,18 +248,18 @@ function Hero() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
             </span>
-            Internal Alpha Now Public
+            Solana Intelligence Infrastructure
           </div>
           <h1 className="max-w-4xl text-5xl md:text-7xl font-bold tracking-tight text-ink mb-6">
-            Hedge-fund-grade <br />
+            Agentic hedge fund <br />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-accent to-purple-500">
-              Solana Infrastructure
+              + Consumable Signals
             </span>
           </h1>
           <p className="max-w-2xl text-lg md:text-xl text-muted leading-relaxed mb-8">
-            Trader Ralph is a quantitative investment firm. We are opening our
-            internal high-frequency execution and research engine to select
-            external teams.
+            Trader Ralph is building a Solana-first intelligence factory:
+            automated internal loops plus external signal access through our
+            terminal and x402 endpoints.
           </p>
           <div className="flex flex-wrap items-center gap-4">
             <a
@@ -272,7 +272,7 @@ function Hero() {
               href="#features"
               className="h-12 px-8 inline-flex items-center justify-center rounded-full border border-border bg-surface/50 text-ink font-medium text-lg hover:bg-surface transition-colors"
             >
-              Our Edge
+              What Is Live
             </a>
           </div>
         </FadeUp>
@@ -290,8 +290,8 @@ function BentoGrid() {
       <div className="w-[min(1120px,92vw)] mx-auto">
         <FadeUp>
           <h2 className="text-3xl md:text-4xl font-bold text-center mb-16">
-            Built for our desk. <br />
-            <span className="text-muted">Available for yours.</span>
+            Built for internal operations. <br />
+            <span className="text-muted">Exposed through terminal + APIs.</span>
           </h2>
         </FadeUp>
 
@@ -306,25 +306,25 @@ function BentoGrid() {
                 <div className="w-12 h-12 rounded-lg bg-accent/10 flex items-center justify-center mb-6 text-accent">
                   <IconZap className="w-6 h-6" />
                 </div>
-                <h3 className="text-2xl font-bold mb-2">Signals Engine</h3>
+                <h3 className="text-2xl font-bold mb-2">Signals Layer</h3>
                 <p className="text-muted max-w-md">
-                  Ingest high-conviction alpha streams. Currently indexing{" "}
-                  <strong>prediction markets</strong> and on-chain anomalies.
-                  (Global Intelligence Module coming v2.0).
+                  SOL-focused market and macro signals are available through the
+                  terminal and x402 reads. Coverage expands incrementally as new
+                  feeds are validated.
                 </p>
               </div>
               <div className="bg-paper/50 rounded-lg p-4 font-mono text-xs text-muted border border-border">
                 <span className="text-green-400">root@ralph:~#</span>{" "}
-                ./subscribe_signals --stream=kalshi
+                ./consume_signal --feed=solana
                 <br />
-                <span className="text-blue-400">[INFO]</span> New Event:
-                "Fed_Rate_Cut_Dec" [Prob: 0.72 &rarr; 0.85]
+                <span className="text-blue-400">[INFO]</span> market_snapshot_v2
+                refreshed
                 <br />
-                <span className="text-blue-400">[INFO]</span> Volatility Alert:
-                SOL/USD Spot
+                <span className="text-blue-400">[INFO]</span>{" "}
+                macro_stablecoin_health updated
                 <br />
-                <span className="text-green-400">[SUCCESS]</span> Signal routed
-                to execution engine (3ms).
+                <span className="text-green-400">[SUCCESS]</span> Signal
+                published to terminal + x402 cache
               </div>
             </div>
           </StaggerItem>
@@ -334,11 +334,10 @@ function BentoGrid() {
             <div className="w-12 h-12 rounded-lg bg-blue-500/10 flex items-center justify-center mb-6 text-blue-500">
               <IconLayers className="w-6 h-6" />
             </div>
-            <h3 className="text-xl font-bold mb-2">Liquidity Aggregation</h3>
+            <h3 className="text-xl font-bold mb-2">Swap Routing</h3>
             <p className="text-sm text-muted">
-              Smart Order Routing across 100+ Solana DEXs. We fetch the best
-              price, you just sign the transaction. Prop AMM access coming for
-              partners.
+              SOL/USDC swaps route through supported Solana liquidity via
+              Jupiter. The user signs through the Privy wallet flow.
             </p>
           </StaggerItem>
 
@@ -347,10 +346,10 @@ function BentoGrid() {
             <div className="w-12 h-12 rounded-lg bg-purple-500/10 flex items-center justify-center mb-6 text-purple-500">
               <IconLock className="w-6 h-6" />
             </div>
-            <h3 className="text-xl font-bold mb-2">Perps & Derivatives</h3>
+            <h3 className="text-xl font-bold mb-2">Execution Scope</h3>
             <p className="text-sm text-muted">
-              Native integrations with Drift, Jupiter, and Zeta. Trade leverage
-              efficiently with our unified margin command center.
+              Current terminal trading scope is spot SOL/USDC. Additional
+              markets and derivatives are planned after core loop reliability.
             </p>
           </StaggerItem>
 
@@ -364,17 +363,17 @@ function BentoGrid() {
                 </div>
                 <h3 className="text-2xl font-bold mb-2">Execution Layer</h3>
                 <p className="text-muted max-w-md">
-                  The bedrock of our operation. Direct RPC integration and Jito
-                  bundling for transaction inclusion reliability. Lays the
-                  foundation for future HFT/FPGA upgrades.
+                  Execution is server-side with policy checks, Privy signing,
+                  and RPC submission. Built for deterministic behavior and
+                  operational safety.
                 </p>
               </div>
               <div className="flex items-center gap-4 mt-8">
                 <div className="flex-1 bg-paper h-2 rounded-full overflow-hidden">
-                  <div className="w-[85%] h-full bg-emerald-500 rounded-full"></div>
+                  <div className="w-[70%] h-full bg-emerald-500 rounded-full"></div>
                 </div>
                 <span className="font-mono text-xs text-emerald-400">
-                  99.9% Success Rate
+                  Correctness first
                 </span>
               </div>
             </div>
@@ -388,16 +387,16 @@ function BentoGrid() {
 function AccessModel() {
   const steps = [
     {
-      title: "Agent Request",
-      desc: "Your bot calls an endpoint. No API key required.",
+      title: "Signal Request",
+      desc: "Your terminal or agent calls an x402 read endpoint.",
     },
     {
       title: "HTTP 402",
-      desc: "Server responds with 'Payment Required' and a lightning/payment address.",
+      desc: "Server responds with payment requirements for the requested resource.",
     },
     {
-      title: "Instant Settlement",
-      desc: "Agent pays pennies in stablecoins/SOL. Resource unlocks immediately.",
+      title: "Delivery",
+      desc: "After payment verification, the response is returned and cached.",
     },
   ];
 
@@ -409,9 +408,7 @@ function AccessModel() {
             <span className="text-accent font-mono text-sm tracking-wider uppercase">
               The x402 Standard
             </span>
-            <h2 className="text-3xl font-bold mt-2">
-              Pay-per-execution. Zero friction.
-            </h2>
+            <h2 className="text-3xl font-bold mt-2">Pay-per-request access.</h2>
             <p className="text-muted mt-2 max-w-lg mx-auto">
               We use the{" "}
               <a
@@ -422,8 +419,8 @@ function AccessModel() {
               >
                 x402 standard
               </a>{" "}
-              for agentic payments. No subscriptions, no accounts, just code
-              that pays for what it uses.
+              for machine-native billing on selected read endpoints.
+              Authenticated account features remain separate.
             </p>
           </div>
         </FadeUp>
@@ -461,7 +458,7 @@ function Trust() {
     <section className="py-24 border-t border-border">
       <div className="w-[min(1120px,92vw)] mx-auto text-center">
         <p className="text-sm font-semibold tracking-wider text-muted uppercase mb-8">
-          Trusted by teams at
+          Current stage
         </p>
         <div className="flex flex-wrap justify-center items-center gap-12 opacity-50 grayscale hover:grayscale-0 transition-all duration-500">
           <div className="h-8 w-32 bg-muted/20 rounded animate-pulse"></div>
@@ -486,8 +483,9 @@ function Footer() {
             </span>
           </div>
           <p className="text-muted max-w-sm">
-            Trader Ralph is a principal trading firm. We provide technical
-            infrastructure, not financial advice.
+            Trader Ralph builds Solana trading infrastructure and intelligence
+            systems. This product provides software and data infrastructure, not
+            financial advice.
             <br />
             <br />© {new Date().getFullYear()} Trader Ralph. All rights
             reserved.
@@ -523,10 +521,7 @@ function Footer() {
         </div>
       </div>
       <div className="w-[min(1120px,92vw)] mx-auto text-center text-xs text-muted/50">
-        <p>
-          Infrastructure only. No investment advice. No capital deployment in
-          current stage.
-        </p>
+        <p>Infrastructure and signals only. No investment advice.</p>
       </div>
     </footer>
   );
@@ -555,9 +550,10 @@ function Roadmap() {
       <div className="w-[min(1120px,92vw)] mx-auto">
         <FadeUp>
           <div className="mb-16 text-center">
-            <h2 className="text-3xl font-bold">System Roadmap</h2>
+            <h2 className="text-3xl font-bold">Build Tracks</h2>
             <p className="text-muted mt-2">
-              Active development tracks and upcoming modules.
+              Two tracks: internal automation loops and consumable signal
+              products.
             </p>
           </div>
         </FadeUp>
@@ -567,33 +563,36 @@ function Roadmap() {
           <div className="p-8 rounded-2xl border border-border bg-surface/50">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_#10b981]"></div>
-              <h3 className="text-lg font-bold">v1.0 (Live)</h3>
+              <h3 className="text-lg font-bold">Current (Live)</h3>
             </div>
             <ul className="space-y-4">
               <li className="flex items-start gap-3">
                 <IconCheck className="w-5 h-5 text-emerald-500 mt-0.5" />
                 <div>
-                  <p className="font-medium">Execution Engine</p>
+                  <p className="font-medium">Terminal + Wallet</p>
                   <p className="text-sm text-muted">
-                    Low-latency Solana transaction packing and sending.
+                    Privy-authenticated terminal with account wallet balances
+                    and trade actions.
                   </p>
                 </div>
               </li>
               <li className="flex items-start gap-3">
                 <IconCheck className="w-5 h-5 text-emerald-500 mt-0.5" />
                 <div>
-                  <p className="font-medium">Data Collection</p>
+                  <p className="font-medium">x402 Read Endpoints</p>
                   <p className="text-sm text-muted">
-                    Real-time market data ingestion and normalization.
+                    Paid market and macro reads exposed over HTTP for agent
+                    consumption.
                   </p>
                 </div>
               </li>
               <li className="flex items-start gap-3">
                 <IconCheck className="w-5 h-5 text-emerald-500 mt-0.5" />
                 <div>
-                  <p className="font-medium">Paper Trading</p>
+                  <p className="font-medium">Server-side Swap Path</p>
                   <p className="text-sm text-muted">
-                    Simulate strategies without capital risk.
+                    SOL/USDC swap with policy checks, Privy signing, and RPC
+                    submission.
                   </p>
                 </div>
               </li>
@@ -612,10 +611,10 @@ function Roadmap() {
                   <div className="w-2 h-2 rounded-full bg-muted"></div>
                 </div>
                 <div>
-                  <p className="font-medium">Prop AMM Support</p>
+                  <p className="font-medium">Loop A: Slot Truth Engine</p>
                   <p className="text-sm text-muted">
-                    Internal liquidity provisioning logic for heavily
-                    traded-pairs.
+                    Canonical per-slot state, marks, and repairable ingestion
+                    for Solana entities.
                   </p>
                 </div>
               </li>
@@ -624,10 +623,10 @@ function Roadmap() {
                   <div className="w-2 h-2 rounded-full bg-muted"></div>
                 </div>
                 <div>
-                  <p className="font-medium">HFT Trading Infra</p>
+                  <p className="font-medium">Loop B: Minute Scoring Engine</p>
                   <p className="text-sm text-muted">
-                    Colocation and FPGAs for nanosecond-level execution
-                    optimization.
+                    Versioned features, scores, and cacheable views for terminal
+                    and x402 products.
                   </p>
                 </div>
               </li>
@@ -636,10 +635,10 @@ function Roadmap() {
                   <div className="w-2 h-2 rounded-full bg-muted"></div>
                 </div>
                 <div>
-                  <p className="font-medium">Global Intelligence</p>
+                  <p className="font-medium">Agentic Hedge Fund Loops</p>
                   <p className="text-sm text-muted">
-                    Real-time geopolitical monitoring. AI-powered aggregation of
-                    news, conflicts, and macro signals.
+                    Internal automation loops first, then selective external
+                    product surfaces.
                   </p>
                 </div>
               </li>
