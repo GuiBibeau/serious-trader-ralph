@@ -2,6 +2,15 @@ import { requireUser } from "./auth";
 
 import { getUserSubscription, toSubscriptionView } from "./billing";
 import { USDC_MINT } from "./defaults";
+import {
+  applyExecutionResultToTrace,
+  buildExecutionOutcomeFromError,
+  buildExecutionOutcomeFromResult,
+  createExecutionDecision,
+  createExecutionIntent,
+  newExecutionLatencyTrace,
+  recordExecutionReceipt,
+} from "./execution/contracts";
 import { executeSwapViaRouter } from "./execution/router";
 import {
   type ExperienceLevel,
@@ -40,7 +49,7 @@ import { createPrivySolanaWallet } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
 import { SolanaRpc } from "./solana_rpc";
-import type { Env } from "./types";
+import type { Env, ExecutionConfig } from "./types";
 import type { UserRow } from "./users_db";
 import {
   findUserByPrivyUserId,
@@ -914,6 +923,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/trade/swap") {
+        const requestReceivedAt = new Date().toISOString();
         let user = await requireOnboardedUser(request, env);
         user = await ensureUserWallet(env, user);
         if (!user.walletAddress || !user.privyWalletId) {
@@ -924,6 +934,7 @@ export default {
         }
 
         const payload = await readPayload(request);
+        const execution = parseExecutionConfig(payload.execution);
         const inputMint = String(payload.inputMint ?? "").trim();
         const outputMint = String(payload.outputMint ?? "").trim();
         const amount = String(payload.amount ?? "").trim();
@@ -1047,28 +1058,111 @@ export default {
         });
         enforcePolicy(policy, quoteResponse);
 
-        const result = await executeSwapViaRouter({
-          env,
-          policy,
-          rpc,
-          jupiter,
-          quoteResponse,
-          userPublicKey: walletAddress,
-          privyWalletId: user.privyWalletId,
-          log(level, message, meta) {
-            console[level]("trade.swap", {
-              userId: user.id,
-              inputMint,
-              outputMint,
-              amount,
-              slippageBps: policy.slippageBps,
-              source: source || "TERMINAL",
-              reason: reason || undefined,
-              message,
-              ...(meta ?? {}),
-            });
-          },
+        const trace = newExecutionLatencyTrace(requestReceivedAt);
+        trace.validatedAt = new Date().toISOString();
+        trace.decisionAt = new Date().toISOString();
+
+        const intent = createExecutionIntent({
+          receivedAt: requestReceivedAt,
+          userId: user.id,
+          wallet: walletAddress,
+          inputMint,
+          outputMint,
+          amountAtomic: amount,
+          slippageBps: policy.slippageBps,
+          source: source || "TERMINAL",
+          reason: reason || undefined,
+          execution,
         });
+        const executionRoute =
+          String(execution?.adapter ?? "jupiter").trim() || "jupiter";
+        const decision = createExecutionDecision({
+          intentId: intent.intentId,
+          decidedAt: trace.decisionAt,
+          route: executionRoute,
+          simulateOnly: policy.simulateOnly,
+          dryRun: policy.dryRun,
+          commitment: policy.commitment,
+        });
+
+        let result: Awaited<ReturnType<typeof executeSwapViaRouter>>;
+        try {
+          result = await executeSwapViaRouter({
+            env,
+            execution,
+            policy,
+            rpc,
+            jupiter,
+            quoteResponse,
+            userPublicKey: walletAddress,
+            privyWalletId: user.privyWalletId,
+            log(level, message, meta) {
+              console[level]("trade.swap", {
+                userId: user.id,
+                inputMint,
+                outputMint,
+                amount,
+                slippageBps: policy.slippageBps,
+                source: source || "TERMINAL",
+                reason: reason || undefined,
+                executionRoute,
+                message,
+                ...(meta ?? {}),
+              });
+            },
+          });
+        } catch (error) {
+          trace.failedAt = new Date().toISOString();
+          try {
+            await recordExecutionReceipt(env, {
+              generatedAt: trace.failedAt,
+              intent,
+              decision,
+              trace,
+              outcome: buildExecutionOutcomeFromError(error),
+              quote: quoteResponse,
+            });
+          } catch (receiptError) {
+            console.error("trade.swap.receipt.error", {
+              userId: user.id,
+              route: executionRoute,
+              message:
+                receiptError instanceof Error
+                  ? receiptError.message
+                  : String(receiptError),
+            });
+          }
+          throw error;
+        }
+
+        const settledAt = new Date().toISOString();
+        const traceSettled = applyExecutionResultToTrace({
+          trace,
+          result,
+          settledAt,
+        });
+        let executionReceipt: Awaited<
+          ReturnType<typeof recordExecutionReceipt>
+        > | null = null;
+        try {
+          executionReceipt = await recordExecutionReceipt(env, {
+            generatedAt: settledAt,
+            intent,
+            decision,
+            trace: traceSettled,
+            outcome: buildExecutionOutcomeFromResult(result),
+            quote: result.usedQuote,
+          });
+        } catch (receiptError) {
+          console.error("trade.swap.receipt.error", {
+            userId: user.id,
+            route: executionRoute,
+            message:
+              receiptError instanceof Error
+                ? receiptError.message
+                : String(receiptError),
+          });
+        }
 
         return withCors(
           json({
@@ -1082,6 +1176,13 @@ export default {
             ),
             source: source || "TERMINAL",
             err: result.err ?? null,
+            executionReceipt:
+              executionReceipt === null
+                ? null
+                : {
+                    receiptId: executionReceipt.receiptId,
+                    key: executionReceipt.storage.key,
+                  },
           }),
           env,
         );
@@ -1837,6 +1938,18 @@ function toUniqueStrings(value: unknown, maxItems: number): string[] {
     if (out.length >= maxItems) break;
   }
   return out;
+}
+
+function parseExecutionConfig(value: unknown): ExecutionConfig | undefined {
+  if (!isRecord(value)) return undefined;
+  const adapter = String(value.adapter ?? "").trim();
+  const params =
+    value.params && isRecord(value.params) ? { ...value.params } : undefined;
+  if (!adapter && !params) return undefined;
+  return {
+    ...(adapter ? { adapter } : {}),
+    ...(params ? { params } : {}),
+  };
 }
 
 function parseRiskMode(
