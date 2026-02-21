@@ -1,5 +1,6 @@
 import type { Env } from "../types";
 import { readLoopACursorStateFromKv } from "./cursor_store_kv";
+import { recordLoopAHealthTick } from "./health";
 import { type LoopAPipelineTickResult, runLoopATickPipeline } from "./pipeline";
 import type { LoopACursorHeads, LoopACursorState } from "./types";
 
@@ -131,6 +132,7 @@ export class LoopACoordinator {
   }
 
   private async handleTick(trigger: "fetch" | "alarm"): Promise<Response> {
+    const startedAtMs = Date.now();
     const prevState = await this.loadState();
 
     try {
@@ -152,6 +154,26 @@ export class LoopACoordinator {
 
       await this.persistState(nextState);
       await setBacklogAlarm(this.state, tickResult.backlog);
+      try {
+        await recordLoopAHealthTick(this.env, {
+          ok: true,
+          trigger:
+            trigger === "alarm" ? "coordinator_alarm" : "coordinator_fetch",
+          startedAtMs,
+          tickResult: {
+            ...tickResult,
+            cursorState,
+          },
+        });
+      } catch (healthError) {
+        console.error("loop_a.coordinator.health.error", {
+          trigger,
+          message:
+            healthError instanceof Error
+              ? healthError.message
+              : "unknown-health-error",
+        });
+      }
 
       return new Response(
         JSON.stringify({
@@ -181,6 +203,24 @@ export class LoopACoordinator {
       };
       await this.persistState(nextState);
       await this.state.storage.setAlarm(Date.now() + 60_000);
+      try {
+        await recordLoopAHealthTick(this.env, {
+          ok: false,
+          trigger:
+            trigger === "alarm" ? "coordinator_alarm" : "coordinator_fetch",
+          startedAtMs,
+          cursorStateFallback: prevState.cursorState,
+          error,
+        });
+      } catch (healthError) {
+        console.error("loop_a.coordinator.health.error", {
+          trigger,
+          message:
+            healthError instanceof Error
+              ? healthError.message
+              : "unknown-health-error",
+        });
+      }
       console.error("loop_a.coordinator.tick.error", {
         trigger,
         message,

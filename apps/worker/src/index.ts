@@ -18,6 +18,7 @@ import {
   LOOP_A_COORDINATOR_NAME,
   LoopACoordinator,
 } from "./loop_a/coordinator";
+import { readLoopAHealthFromKv, recordLoopAHealthTick } from "./loop_a/health";
 import { runLoopATickPipeline } from "./loop_a/pipeline";
 import {
   fetchMacroEtfFlows,
@@ -87,7 +88,17 @@ export default {
     const url = new URL(request.url);
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
-        return withCors(json({ ok: true }), env);
+        const loopAHealth = await readLoopAHealthFromKv(env);
+        if (!loopAHealth) {
+          return withCors(json({ ok: true }), env);
+        }
+        return withCors(
+          json({
+            ok: loopAHealth.status !== "error",
+            loopA: loopAHealth,
+          }),
+          env,
+        );
       }
 
       if (request.method === "POST" && url.pathname === "/api/waitlist") {
@@ -1432,6 +1443,7 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+    const startedAtMs = Date.now();
     const slotSourceEnabled =
       String(env.LOOP_A_SLOT_SOURCE_ENABLED ?? "0").trim() === "1";
     if (!slotSourceEnabled) return;
@@ -1478,8 +1490,29 @@ export default {
     }
 
     try {
-      await runLoopATickPipeline(env);
+      const tickResult = await runLoopATickPipeline(env);
+      await recordLoopAHealthTick(env, {
+        ok: true,
+        trigger: "scheduled",
+        startedAtMs,
+        tickResult,
+      });
     } catch (error) {
+      try {
+        await recordLoopAHealthTick(env, {
+          ok: false,
+          trigger: "scheduled",
+          startedAtMs,
+          error,
+        });
+      } catch (healthError) {
+        console.error("loop_a.health.scheduled.error", {
+          message:
+            healthError instanceof Error
+              ? healthError.message
+              : "unknown-health-error",
+        });
+      }
       console.error("loop_a.scheduled.error", {
         message: error instanceof Error ? error.message : "unknown-error",
         stack: error instanceof Error ? error.stack : undefined,
