@@ -3,6 +3,27 @@ import type { Env, ExecutionConfig } from "../types";
 import type { ExecuteSwapResult } from "./types";
 
 export const EXECUTION_SCHEMA_VERSION = "v1" as const;
+export const EXEC_LATENCY_LAST_100_KEY = "exec:v1:latency:last_100";
+export function executionLatencyMinuteKey(minuteId: string): string {
+  return `exec:v1:latency:minute:${minuteId}`;
+}
+
+type MinuteId = `${string}T${string}:00.000Z`;
+
+export type ExecutionLatencyEntry = {
+  receiptId: string;
+  generatedAt: string;
+  minute: MinuteId;
+  route: string;
+  status: ExecutionOutcome["status"];
+  latencyMs: {
+    toSent: number | null;
+    toLanded: number | null;
+    toConfirmed: number | null;
+    toFinalized: number | null;
+    toTerminal: number | null;
+  };
+};
 
 export type ExecutionIntent = {
   schemaVersion: typeof EXECUTION_SCHEMA_VERSION;
@@ -147,8 +168,91 @@ function normalizeError(value: unknown): string | null {
   }
 }
 
+function toMinuteId(input: string): MinuteId | null {
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) return null;
+  parsed.setUTCSeconds(0, 0);
+  return parsed.toISOString() as MinuteId;
+}
+
+function msBetween(a: string | null, b: string | null): number | null {
+  if (!a || !b) return null;
+  const aMs = Date.parse(a);
+  const bMs = Date.parse(b);
+  if (Number.isNaN(aMs) || Number.isNaN(bMs)) return null;
+  if (bMs < aMs) return null;
+  return bMs - aMs;
+}
+
 function receiptStorageKey(hash: string): string {
   return `exec/${EXECUTION_SCHEMA_VERSION}/receipts/sha256=${hash}.json`;
+}
+
+function toLatencyEntry(
+  receipt: ExecutionReceipt,
+): ExecutionLatencyEntry | null {
+  const minute = toMinuteId(receipt.generatedAt);
+  if (!minute) return null;
+  const terminalAt =
+    receipt.trace.finalizedAt ??
+    receipt.trace.confirmedAt ??
+    receipt.trace.failedAt ??
+    receipt.trace.landedAt ??
+    receipt.trace.sentAt;
+  return {
+    receiptId: receipt.receiptId,
+    generatedAt: receipt.generatedAt,
+    minute,
+    route: receipt.decision.route,
+    status: receipt.outcome.status,
+    latencyMs: {
+      toSent: msBetween(receipt.trace.receivedAt, receipt.trace.sentAt),
+      toLanded: msBetween(receipt.trace.receivedAt, receipt.trace.landedAt),
+      toConfirmed: msBetween(
+        receipt.trace.receivedAt,
+        receipt.trace.confirmedAt,
+      ),
+      toFinalized: msBetween(
+        receipt.trace.receivedAt,
+        receipt.trace.finalizedAt,
+      ),
+      toTerminal: msBetween(receipt.trace.receivedAt, terminalAt),
+    },
+  };
+}
+
+function sanitizeKeyToken(input: string): string {
+  return input.replace(/[^a-zA-Z0-9._:-]/g, "_");
+}
+
+function executionLatencyLast100ItemKey(entry: ExecutionLatencyEntry): string {
+  const tsToken = sanitizeKeyToken(entry.generatedAt);
+  return `${EXEC_LATENCY_LAST_100_KEY}:ts=${tsToken}:receipt=${entry.receiptId}`;
+}
+
+function executionLatencyMinuteItemKey(entry: ExecutionLatencyEntry): string {
+  const routeToken = sanitizeKeyToken(entry.route);
+  return `${executionLatencyMinuteKey(entry.minute)}:route=${routeToken}:receipt=${entry.receiptId}`;
+}
+
+async function updateLatencyKv(
+  kv: KVNamespace,
+  receipt: ExecutionReceipt,
+): Promise<void> {
+  const entry = toLatencyEntry(receipt);
+  if (!entry) return;
+  await Promise.all([
+    kv.put(executionLatencyLast100ItemKey(entry), JSON.stringify(entry)),
+    kv.put(
+      executionLatencyMinuteItemKey(entry),
+      JSON.stringify({
+        generatedAt: entry.generatedAt,
+        route: entry.route,
+        status: entry.status,
+        latencyMs: entry.latencyMs,
+      }),
+    ),
+  ]);
 }
 
 export function createExecutionIntent(input: {
@@ -382,6 +486,9 @@ export async function recordExecutionReceipt(
   const receipt = await buildExecutionReceipt(input);
   if (env.LOGS_BUCKET) {
     await env.LOGS_BUCKET.put(receipt.storage.key, JSON.stringify(receipt));
+  }
+  if (env.CONFIG_KV) {
+    await updateLatencyKv(env.CONFIG_KV, receipt);
   }
   return receipt;
 }
