@@ -29,6 +29,7 @@
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
     "test:integration:worker:live": "RUN_INTEGRATION_TESTS=1 RUN_WORKER_LIVE_TESTS=1 bun test tests/integration/worker_x402_live.integration.test.ts",
+    "contracts:loop-a:schemas": "bun run scripts/generate_loop_a_schemas.ts",
     "typecheck": "bunx tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check . --write",

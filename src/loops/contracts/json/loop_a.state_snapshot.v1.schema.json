@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph.trade/schemas/loopA/v1/state_snapshot",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "slot": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "commitment": {
+      "type": "string",
+      "enum": ["processed", "confirmed", "finalized"]
+    },
+    "cursor": {
+      "type": "object",
+      "properties": {
+        "processed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "confirmed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "finalized": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": ["processed", "confirmed", "finalized"],
+      "additionalProperties": false
+    },
+    "stateHash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trackedState": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "parentSlot": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "appliedEventCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "eventRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "snapshotRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["eventRefs"],
+      "additionalProperties": false
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "slot",
+    "commitment",
+    "cursor",
+    "stateHash",
+    "trackedState",
+    "appliedEventCount",
+    "inputs",
+    "version"
+  ],
+  "additionalProperties": false
+}
