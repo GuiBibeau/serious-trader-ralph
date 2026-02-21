@@ -49,6 +49,7 @@ export type Env = {
   WAITLIST_DB: D1Database;
   CONFIG_KV?: KVNamespace;
   LOGS_BUCKET?: R2Bucket;
+  LOOP_A_COORDINATOR_DO?: DurableObjectNamespace;
   ALLOWED_ORIGINS?: string;
   ADMIN_TOKEN?: string;
   PRIVY_APP_ID?: string;
@@ -101,4 +102,5 @@ export type Env = {
   LOOP_A_BACKFILL_MAX_TASKS_PER_TICK?: string;
   LOOP_A_BACKFILL_MAX_SLOTS_PER_TASK?: string;
   LOOP_A_BACKFILL_MAX_TOTAL_SLOTS_PER_TICK?: string;
+  LOOP_A_COORDINATOR_ENABLED?: string;
 };

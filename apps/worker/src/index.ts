@@ -14,23 +14,11 @@ import {
 } from "./experience";
 import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
 import { JupiterClient } from "./jupiter";
-import { createDefaultDecoderRegistry } from "./loop_a/adapters";
-import { runLoopABackfillResolverTick } from "./loop_a/backfill_resolver";
-import { runLoopABlockFetcherTick } from "./loop_a/block_fetcher";
 import {
-  createEmptyMarkerBatch,
-  type LoopAEventBatch,
-  resolveContiguousIngestionSlot,
-  resolveSnapshotEverySlots,
-  resolveStateCommitment,
-  runLoopACanonicalStateTick,
-} from "./loop_a/canonical_state";
-import {
-  readLoopACursorStateFromKv,
-  writeLoopACursorStateToKv,
-} from "./loop_a/cursor_store_kv";
-import { decodeProtocolEventsFromBlock } from "./loop_a/decoder_registry";
-import { runLoopASlotSourceTick } from "./loop_a/slot_source";
+  LOOP_A_COORDINATOR_NAME,
+  LoopACoordinator,
+} from "./loop_a/coordinator";
+import { runLoopATickPipeline } from "./loop_a/pipeline";
 import {
   fetchMacroEtfFlows,
   fetchMacroFredIndicators,
@@ -79,6 +67,8 @@ const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
   "degen_acknowledged",
   "terminal_opened_from_consumer",
 ]);
+
+export { LoopACoordinator };
 
 function resolveX402ReadRpcEndpoint(env: Env): string {
   const balanceRpc = String(env.BALANCE_RPC_ENDPOINT ?? "").trim();
@@ -1453,153 +1443,42 @@ export default {
       return;
     }
 
-    try {
-      const result = await runLoopASlotSourceTick(env);
-      console.log("loop_a.slot_source.tick", {
-        cursorBefore: result.cursorBefore,
-        cursorAfter: result.cursorAfter,
-        cursorStateBefore: result.cursorStateBefore,
-        cursorStateAfter: result.cursorStateAfter,
-        tasksEmitted: result.tasksEmitted,
-      });
+    const coordinatorEnabled =
+      String(env.LOOP_A_COORDINATOR_ENABLED ?? "0").trim() === "1";
 
-      const blockFetchEnabled =
-        String(env.LOOP_A_BLOCK_FETCH_ENABLED ?? "0").trim() === "1";
-      const stateStoreEnabled =
-        String(env.LOOP_A_STATE_STORE_ENABLED ?? "0").trim() === "1";
-      const backfillResolverEnabled =
-        String(env.LOOP_A_BACKFILL_RESOLVER_ENABLED ?? "0").trim() === "1";
-      const decoderEnabled =
-        String(env.LOOP_A_DECODER_ENABLED ?? "0").trim() === "1" ||
-        stateStoreEnabled;
-      const decoderRegistry = decoderEnabled
-        ? createDefaultDecoderRegistry()
-        : null;
-      let decodedEvents = 0;
-      let markerBatches = 0;
-      const decodedBatches: LoopAEventBatch[] = [];
-      let cursorState = result.cursorStateAfter;
-
-      if (blockFetchEnabled) {
-        const blockFetchResult = await runLoopABlockFetcherTick(
-          env,
-          {
-            cursorBefore: result.cursorBefore,
-            cursorAfter: result.cursorAfter,
-          },
-          {
-            onFetchedBlock: decoderRegistry
-              ? async (fetched) => {
-                  const events = decodeProtocolEventsFromBlock({
-                    slot: fetched.slot,
-                    commitment: fetched.commitment,
-                    block: fetched.block,
-                    registry: decoderRegistry,
-                  });
-                  decodedBatches.push({
-                    schemaVersion: "v1",
-                    commitment: fetched.commitment,
-                    slot: fetched.slot,
-                    generatedAt: new Date().toISOString(),
-                    events,
-                  });
-                  decodedEvents += events.length;
-                }
-              : undefined,
-          },
+    if (coordinatorEnabled && env.LOOP_A_COORDINATOR_DO) {
+      try {
+        const id = env.LOOP_A_COORDINATOR_DO.idFromName(
+          LOOP_A_COORDINATOR_NAME,
         );
-
-        for (const task of blockFetchResult.missingTasks) {
-          if (task.reason === "fetch-failed") continue;
-          decodedBatches.push(
-            createEmptyMarkerBatch({
-              commitment: task.commitment,
-              slot: task.slot,
-              generatedAt: new Date().toISOString(),
-              reason:
-                task.reason === "rpc-null" ? "skipped" : "missing_in_storage",
-              source: "block_fetcher",
-            }),
-          );
-          markerBatches += 1;
-        }
-
-        cursorState = {
-          ...cursorState,
-          updatedAt: new Date().toISOString(),
-          fetchedCursor: {
-            processed: Math.max(
-              cursorState.fetchedCursor.processed,
-              blockFetchResult.attemptedThrough.processed,
-            ),
-            confirmed: Math.max(
-              cursorState.fetchedCursor.confirmed,
-              blockFetchResult.attemptedThrough.confirmed,
-            ),
-            finalized: Math.max(
-              cursorState.fetchedCursor.finalized,
-              blockFetchResult.attemptedThrough.finalized,
-            ),
-          },
-        };
-        await writeLoopACursorStateToKv(env, cursorState);
-
-        console.log("loop_a.block_fetcher.tick", {
-          ...blockFetchResult,
-          decodedEvents,
-          decodedBatches: decodedBatches.length,
-          markerBatches,
+        const stub = env.LOOP_A_COORDINATOR_DO.get(id);
+        const response = await stub.fetch("https://internal/loop-a/tick", {
+          method: "POST",
         });
-      }
-
-      if (backfillResolverEnabled) {
-        const resolverResult = await runLoopABackfillResolverTick(env);
-        console.log("loop_a.backfill_resolver.tick", resolverResult);
-      }
-
-      if (stateStoreEnabled) {
-        const cursorStateLatest =
-          (await readLoopACursorStateFromKv(env)) ?? cursorState;
-        const missingSlotsByCommitment: Record<string, number | null> = {};
-        for (const commitment of [
-          "processed",
-          "confirmed",
-          "finalized",
-        ] as const) {
-          const resolved = await resolveContiguousIngestionSlot({
-            env,
-            commitment,
-            fromSlot: cursorStateLatest.ingestionCursor[commitment],
-            targetSlot: cursorStateLatest.headCursor[commitment],
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          console.error("loop_a.coordinator.tick.failed", {
+            status: response.status,
+            body: text.slice(0, 1000),
           });
-          cursorStateLatest.ingestionCursor[commitment] =
-            resolved.ingestionSlot;
-          missingSlotsByCommitment[commitment] = resolved.missingSlot;
         }
-        cursorStateLatest.updatedAt = new Date().toISOString();
-        await writeLoopACursorStateToKv(env, cursorStateLatest);
-        console.log("loop_a.ingestion_cursor.update", {
-          headCursor: cursorStateLatest.headCursor,
-          ingestionCursor: cursorStateLatest.ingestionCursor,
-          missingSlotsByCommitment,
+        return;
+      } catch (error) {
+        console.error("loop_a.coordinator.scheduled.error", {
+          message: error instanceof Error ? error.message : "unknown-error",
+          stack: error instanceof Error ? error.stack : undefined,
         });
-
-        const commitment = resolveStateCommitment(env.LOOP_A_STATE_COMMITMENT);
-        const stateTickResult = await runLoopACanonicalStateTick(env, {
-          cursorAfter: result.cursorAfter,
-          targetSlot: cursorStateLatest.ingestionCursor[commitment],
-          decodedBatches,
-          commitment,
-          snapshotEverySlots: resolveSnapshotEverySlots(
-            env.LOOP_A_SNAPSHOT_EVERY_SLOTS,
-          ),
-        });
-        cursorStateLatest.stateCursor[commitment] =
-          stateTickResult.snapshotAfterSlot;
-        cursorStateLatest.updatedAt = new Date().toISOString();
-        await writeLoopACursorStateToKv(env, cursorStateLatest);
-        console.log("loop_a.state_store.tick", stateTickResult);
+        return;
       }
+    }
+    if (coordinatorEnabled && !env.LOOP_A_COORDINATOR_DO) {
+      console.warn("loop_a.coordinator.skipped", {
+        reason: "loop-a-coordinator-binding-missing",
+      });
+    }
+
+    try {
+      await runLoopATickPipeline(env);
     } catch (error) {
       console.error("loop_a.scheduled.error", {
         message: error instanceof Error ? error.message : "unknown-error",

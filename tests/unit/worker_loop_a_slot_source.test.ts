@@ -259,4 +259,30 @@ describe("worker loop A slot source", () => {
     const cursor = await readLoopACursorFromKv(env);
     expect(cursor).toBeNull();
   });
+
+  test("scheduled delegates to coordinator durable object when enabled", async () => {
+    const { env } = createEnv(true);
+    env.LOOP_A_COORDINATOR_ENABLED = "1";
+
+    let tickCalls = 0;
+    env.LOOP_A_COORDINATOR_DO = {
+      idFromName: (_name: string) => ({ toString: () => "loop-a-id" }) as never,
+      get: (_id: DurableObjectId) =>
+        ({
+          fetch: async (url: string, init?: RequestInit) => {
+            tickCalls += 1;
+            expect(url).toContain("/loop-a/tick");
+            expect(init?.method).toBe("POST");
+            return new Response(JSON.stringify({ ok: true }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          },
+        }) as never,
+    } as never;
+
+    await worker.scheduled({} as ScheduledEvent, env, {} as ExecutionContext);
+
+    expect(tickCalls).toBe(1);
+  });
 });
