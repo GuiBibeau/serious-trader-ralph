@@ -755,12 +755,26 @@ async function publishFinalizedMinute(input: {
   const evidenceRefsByPair = new Map(
     featureSet.rows.map((row) => [row.pairId, row.inputRefs] as const),
   );
+  const featureHintsByPair = new Map(
+    featureSet.rows.map(
+      (row) =>
+        [
+          row.pairId,
+          {
+            markCount: row.markCount,
+            volatilityPct: row.volatilityPct,
+            confidenceAvg: row.confidenceAvg,
+          },
+        ] as const,
+    ),
+  );
   const candidatePool = buildLoopCCandidatePool({
     generatedAt: input.generatedAt,
     minute: input.minute,
     maxCandidates: input.candidateLimit,
     scoreRows: scoreSet.rows,
     evidenceRefsByPair,
+    featureHintsByPair,
   });
 
   await putKvJson(input.env, LOOP_B_TOP_MOVERS_KEY, topMovers);

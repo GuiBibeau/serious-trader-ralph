@@ -75,7 +75,7 @@ function createMockDoState() {
   };
 }
 
-function createEnv(): {
+function createEnv(overrides: Partial<Env> = {}): {
   env: Env;
   kvStore: Map<string, string>;
   r2Store: Map<string, string>;
@@ -89,6 +89,11 @@ function createEnv(): {
       LOGS_BUCKET: bucket as never,
       LOOP_C_RECOMMENDER_ENABLED: "1",
       LOOP_C_RECOMMENDER_DEFAULT_LIMIT: "5",
+      LOOP_C_MIN_LIQUIDITY_SCORE: "0.5",
+      LOOP_C_MAX_STALENESS_MS: "180000",
+      LOOP_C_EXCLUDED_ASSETS: "",
+      LOOP_C_EXCLUDED_PROTOCOLS: "",
+      ...overrides,
     } as Env,
     kvStore,
     r2Store,
@@ -178,6 +183,14 @@ function setCandidatePool(store: Map<string, string>, pairId: string): void {
           featuresRef: `loopB:v1:features:latest:pair:${pairId}`,
           scoreRef: `loopB:v1:scores:latest:pair:${pairId}`,
           evidenceRefs: ["loopA/v1/events/slot=123"],
+          sourceProtocols: ["jupiter"],
+          freshnessMs: 60000,
+          liquidityScore: 2.7,
+          markCount: 3,
+          volatilityPct: 0.8,
+          confidenceAvg: 0.9,
+          riskTags: [],
+          stabilityTags: ["low_volatility", "high_confidence"],
           revision: 2,
           explain: ["source=loopB", "evidence_refs=1"],
         },
@@ -550,5 +563,50 @@ describe("worker loop C recommender durable object", () => {
     const noProb = noPayload.view.recommendations[0]?.acceptProb ?? 0;
     expect(noPayload.ok).toBe(true);
     expect(noProb).toBeLessThan(yesProb);
+  });
+
+  test("risk/stability guardrails suppress stale, low-liquidity, and excluded protocol candidates", async () => {
+    const { env, kvStore } = createEnv({
+      LOOP_C_MIN_LIQUIDITY_SCORE: "3.5",
+      LOOP_C_MAX_STALENESS_MS: "30000",
+      LOOP_C_EXCLUDED_PROTOCOLS: "jupiter",
+    });
+    setCandidatePool(
+      kvStore,
+      "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN:So11111111111111111111111111111111111111112",
+    );
+
+    const mock = createMockDoState();
+    const recommender = new Recommender(mock.state, env, {
+      now: () => "2026-02-21T20:30:00.000Z",
+    });
+    const response = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-guards",
+          wallet: "wallet-guards",
+          observedAt: "2026-02-21T20:30:00.000Z",
+          limit: 5,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      view: {
+        recommendations: Array<unknown>;
+        rejections: Array<{ reasonTags: string[] }>;
+      };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.view.recommendations.length).toBe(0);
+    expect(payload.view.rejections.length).toBe(1);
+    const reasons = payload.view.rejections[0]?.reasonTags ?? [];
+    expect(reasons).toContain("excluded_protocol");
+    expect(reasons).toContain("stale_data");
+    expect(reasons).toContain("low_liquidity");
   });
 });
