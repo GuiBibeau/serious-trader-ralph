@@ -15,6 +15,7 @@ import {
   writeLoopACursorStateToKv,
 } from "./cursor_store_kv";
 import { decodeProtocolEventsFromBlock } from "./decoder_registry";
+import { resolveMarkCommitment, runLoopAMarkEngineTick } from "./mark_engine";
 import { runLoopASlotSourceTick } from "./slot_source";
 import type { LoopACursorState } from "./types";
 
@@ -73,9 +74,12 @@ export async function runLoopATickPipeline(
     String(env.LOOP_A_STATE_STORE_ENABLED ?? "0").trim() === "1";
   const backfillResolverEnabled =
     String(env.LOOP_A_BACKFILL_RESOLVER_ENABLED ?? "0").trim() === "1";
+  const markEngineEnabled =
+    String(env.LOOP_A_MARK_ENGINE_ENABLED ?? "0").trim() === "1";
   const decoderEnabled =
     String(env.LOOP_A_DECODER_ENABLED ?? "0").trim() === "1" ||
-    stateStoreEnabled;
+    stateStoreEnabled ||
+    markEngineEnabled;
   const decoderRegistry = decoderEnabled
     ? createDefaultDecoderRegistry()
     : null;
@@ -158,6 +162,15 @@ export async function runLoopATickPipeline(
   if (backfillResolverEnabled) {
     const resolverResult = await runLoopABackfillResolverTick(env);
     console.log("loop_a.backfill_resolver.tick", resolverResult);
+  }
+
+  if (markEngineEnabled) {
+    const markCommitment = resolveMarkCommitment(env.LOOP_A_MARK_COMMITMENT);
+    const markResult = await runLoopAMarkEngineTick(env, {
+      decodedBatches,
+      commitment: markCommitment,
+    });
+    console.log("loop_a.mark_engine.tick", markResult);
   }
 
   const stateCommitment = resolveStateCommitment(env.LOOP_A_STATE_COMMITMENT);
