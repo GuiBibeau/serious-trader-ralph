@@ -10,6 +10,7 @@ import {
   MinuteAccumulator,
   publishMarksToMinuteAccumulator,
 } from "../../apps/worker/src/loop_b/minute_accumulator";
+import { LOOP_C_CANDIDATE_POOL_LATEST_KEY } from "../../apps/worker/src/loop_c/candidate_pool";
 import type { Env } from "../../apps/worker/src/types";
 import type { Mark } from "../../src/loops/contracts/loop_a";
 
@@ -115,7 +116,10 @@ function createMark(input: {
   };
 }
 
-function createEnv(options?: { withR2?: boolean }): {
+function createEnv(options?: {
+  withR2?: boolean;
+  candidatePoolLimit?: number;
+}): {
   env: Env;
   kvStore: Map<string, string>;
   r2Store: Map<string, string>;
@@ -128,6 +132,7 @@ function createEnv(options?: { withR2?: boolean }): {
       CONFIG_KV: kv as never,
       LOGS_BUCKET: options?.withR2 === false ? undefined : (bucket as never),
       LOOP_B_MINUTE_ACCUMULATOR_ENABLED: "1",
+      LOOP_C_CANDIDATE_POOL_LIMIT: String(options?.candidatePoolLimit ?? 24),
     } as Env,
     kvStore,
     r2Store,
@@ -195,6 +200,7 @@ describe("worker loop B minute accumulator", () => {
     expect(kvStore.has(LOOP_B_FEATURES_LATEST_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_SCORES_LATEST_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_HEALTH_KEY)).toBe(true);
+    expect(kvStore.has(LOOP_C_CANDIDATE_POOL_LATEST_KEY)).toBe(true);
     expect(
       kvStore.has(
         "loopB:v1:scores:latest:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -249,6 +255,20 @@ describe("worker loop B minute accumulator", () => {
     expect(scoreSet.rows[0]?.finalScore).toBeGreaterThan(0);
     expect(scoreSet.rows[0]?.contributions.confidence).toBeGreaterThan(0);
     expect(scoreSet.rows[0]?.explain[0]).toContain("score=momentum");
+    const candidatePool = JSON.parse(
+      kvStore.get(LOOP_C_CANDIDATE_POOL_LATEST_KEY) ?? "{}",
+    ) as {
+      rows: Array<{
+        pairId: string;
+        evidenceRefs: string[];
+        featuresRef: string;
+        scoreRef: string;
+      }>;
+    };
+    expect(candidatePool.rows.length).toBe(2);
+    expect(candidatePool.rows[0]?.evidenceRefs.length).toBeGreaterThan(0);
+    expect(candidatePool.rows[0]?.featuresRef).toContain("loopB:v1:features");
+    expect(candidatePool.rows[0]?.scoreRef).toContain("loopB:v1:scores");
     const topMoversView = JSON.parse(
       kvStore.get(LOOP_B_TOP_MOVERS_KEY) ?? "{}",
     ) as {
@@ -398,6 +418,62 @@ describe("worker loop B minute accumulator", () => {
     expect(secondScoreRow.contributions.momentum).toBeGreaterThan(
       firstScoreRow.contributions.momentum,
     );
+  });
+
+  test("candidate pool is bounded by configured limit", async () => {
+    const { env, kvStore } = createEnv({
+      withR2: false,
+      candidatePoolLimit: 1,
+    });
+    const mock = createMockDoState();
+    const accumulator = new MinuteAccumulator(mock.state, env, {
+      now: () => "2026-02-21T18:10:00.000Z",
+    });
+
+    await accumulator.fetch(
+      new Request("https://internal/loop-b/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          observedAt: "2026-02-21T18:10:00.000Z",
+          marks: [
+            createMark({
+              slot: 910,
+              ts: "2026-02-21T18:09:15.000Z",
+              px: "20",
+              sig: "sig-aa",
+            }),
+            createMark({
+              slot: 911,
+              ts: "2026-02-21T18:09:25.000Z",
+              px: "21",
+              sig: "sig-ab",
+            }),
+            createMark({
+              slot: 912,
+              ts: "2026-02-21T18:09:20.000Z",
+              px: "150",
+              sig: "sig-ac",
+              baseMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              quoteMint: "So11111111111111111111111111111111111111112",
+            }),
+          ],
+        }),
+      }),
+    );
+
+    const candidatePool = JSON.parse(
+      kvStore.get(LOOP_C_CANDIDATE_POOL_LATEST_KEY) ?? "{}",
+    ) as {
+      maxCandidates: number;
+      count: number;
+      rows: Array<{ pairId: string; evidenceRefs: string[] }>;
+    };
+
+    expect(candidatePool.maxCandidates).toBe(1);
+    expect(candidatePool.count).toBe(1);
+    expect(candidatePool.rows.length).toBe(1);
+    expect(candidatePool.rows[0]?.evidenceRefs.length).toBeGreaterThan(0);
   });
 
   test("publish helper sends marks into minute accumulator durable object", async () => {

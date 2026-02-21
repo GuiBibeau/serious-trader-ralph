@@ -42,7 +42,8 @@ It is intentionally written as something you can hand to an implementation agent
   - re-finalizes corrected minutes when late/corrected marks arrive, and writes minute/features/scores/view bundles to Cloudflare R2 object storage.
 - Loop C Recommender (current):
   - Durable Object provides request-time personalized ranking with per-minute cache hits for repeated requests,
-  - reads Loop B score candidates, applies deterministic persona/risk adjustments, and returns ranked recommendation views,
+  - reads bounded candidate pools derived from Loop B minute scores (with score fallback), applies deterministic persona/risk adjustments, and returns ranked recommendation views,
+  - candidate pools are published each finalized minute at `loopC:v1:candidates:latest` with Loop B feature/score evidence references,
   - persists per-user wallet-scoped latest recommendations to Cloudflare Key-Value store and Cloudflare R2 object storage.
 
 ### Execution routing already exists (v0)
