@@ -27,6 +27,9 @@ It is intentionally written as something you can hand to an implementation agent
 - CanonicalState (current):
   - persists decoded batches to Cloudflare R2 object storage (with legacy Cloudflare Key-Value store fallback reads during migration),
   - attempts to replay slot-by-slot until it hits a missing slot (then stops). ([GitHub][5])
+- MarkEngine v1 (current):
+  - computes swap-derived marks from decoded batches,
+  - publishes hot keys for `loopA:v1:marks:confirmed:latest` and per-pair latest marks in Cloudflare Key-Value store.
 
 ### Execution routing already exists (v0)
 
