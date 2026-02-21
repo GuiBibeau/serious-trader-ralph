@@ -10,6 +10,9 @@ type X402RouteKey =
   | "market_jupiter_quote_batch"
   | "market_ohlcv"
   | "market_indicators"
+  | "solana_marks_latest"
+  | "solana_scores_latest"
+  | "solana_views_top"
   | "macro_signals"
   | "macro_fred_indicators"
   | "macro_etf_flows"
@@ -81,23 +84,39 @@ function loadRouteConfig(env: Env, routeKey: X402RouteKey): X402RouteConfig {
                 ? String(env.X402_MARKET_OHLCV_PRICE_USD ?? "").trim()
                 : routeKey === "market_indicators"
                   ? String(env.X402_MARKET_INDICATORS_PRICE_USD ?? "").trim()
-                  : routeKey === "macro_signals"
-                    ? String(env.X402_MACRO_SIGNALS_PRICE_USD ?? "").trim()
-                    : routeKey === "macro_fred_indicators"
+                  : routeKey === "solana_marks_latest"
+                    ? String(
+                        env.X402_SOLANA_MARKS_LATEST_PRICE_USD ?? "",
+                      ).trim()
+                    : routeKey === "solana_scores_latest"
                       ? String(
-                          env.X402_MACRO_FRED_INDICATORS_PRICE_USD ?? "",
+                          env.X402_SOLANA_SCORES_LATEST_PRICE_USD ?? "",
                         ).trim()
-                      : routeKey === "macro_etf_flows"
+                      : routeKey === "solana_views_top"
                         ? String(
-                            env.X402_MACRO_ETF_FLOWS_PRICE_USD ?? "",
+                            env.X402_SOLANA_VIEWS_TOP_PRICE_USD ?? "",
                           ).trim()
-                        : routeKey === "macro_stablecoin_health"
+                        : routeKey === "macro_signals"
                           ? String(
-                              env.X402_MACRO_STABLECOIN_HEALTH_PRICE_USD ?? "",
+                              env.X402_MACRO_SIGNALS_PRICE_USD ?? "",
                             ).trim()
-                          : String(
-                              env.X402_MACRO_OIL_ANALYTICS_PRICE_USD ?? "",
-                            ).trim();
+                          : routeKey === "macro_fred_indicators"
+                            ? String(
+                                env.X402_MACRO_FRED_INDICATORS_PRICE_USD ?? "",
+                              ).trim()
+                            : routeKey === "macro_etf_flows"
+                              ? String(
+                                  env.X402_MACRO_ETF_FLOWS_PRICE_USD ?? "",
+                                ).trim()
+                              : routeKey === "macro_stablecoin_health"
+                                ? String(
+                                    env.X402_MACRO_STABLECOIN_HEALTH_PRICE_USD ??
+                                      "",
+                                  ).trim()
+                                : String(
+                                    env.X402_MACRO_OIL_ANALYTICS_PRICE_USD ??
+                                      "",
+                                  ).trim();
   if (!network || !payTo || !asset || !priceUsdRaw) {
     throw new Error("x402-route-config-missing");
   }

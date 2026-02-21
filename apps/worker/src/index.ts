@@ -32,8 +32,18 @@ import {
   LoopACoordinator,
 } from "./loop_a/coordinator";
 import { readLoopAHealthFromKv, recordLoopAHealthTick } from "./loop_a/health";
+import {
+  loopAMarksLatestKey,
+  resolveMarkCommitment,
+} from "./loop_a/mark_engine";
 import { runLoopATickPipeline } from "./loop_a/pipeline";
-import { MinuteAccumulator } from "./loop_b/minute_accumulator";
+import {
+  LOOP_B_ANOMALY_FEED_KEY,
+  LOOP_B_LIQUIDITY_STRESS_KEY,
+  LOOP_B_SCORES_LATEST_KEY,
+  LOOP_B_TOP_MOVERS_KEY,
+  MinuteAccumulator,
+} from "./loop_b/minute_accumulator";
 import {
   Recommender,
   requestLoopCRecommendations,
@@ -672,6 +682,233 @@ export default {
           request,
           env,
           "market_indicators",
+          url.pathname,
+        );
+        return withCors(settled, env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/x402/read/solana_marks_latest"
+      ) {
+        let paymentRequired: Response | null = null;
+        try {
+          paymentRequired = requireX402Payment(
+            request,
+            env,
+            "solana_marks_latest",
+            "/api/x402/read/solana_marks_latest",
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "x402-route-config-missing";
+          return withCors(
+            json({ ok: false, error: message }, { status: 503 }),
+            env,
+          );
+        }
+        if (paymentRequired) return withCors(paymentRequired, env);
+        if (!env.CONFIG_KV) {
+          return withCors(
+            json(
+              { ok: false, error: "loop-data-unavailable" },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+
+        const payload = await readPayload(request);
+        const commitment = parseLoopACommitment(payload.commitment);
+        if (!commitment) {
+          return withCors(
+            json({ ok: false, error: "invalid-commitment" }, { status: 400 }),
+            env,
+          );
+        }
+
+        const key = loopAMarksLatestKey(commitment);
+        const marks = await readJsonFromKv(env.CONFIG_KV, key);
+        if (marks === null) {
+          return withCors(
+            json(
+              { ok: false, error: "loop-data-unavailable" },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+        const base = json({
+          ok: true,
+          commitment,
+          marks,
+        });
+        const settled = withX402SettlementHeader(
+          base,
+          request,
+          env,
+          "solana_marks_latest",
+          "/api/x402/read/solana_marks_latest",
+        );
+        return withCors(settled, env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/x402/read/solana_scores_latest"
+      ) {
+        let paymentRequired: Response | null = null;
+        try {
+          paymentRequired = requireX402Payment(
+            request,
+            env,
+            "solana_scores_latest",
+            url.pathname,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "x402-route-config-missing";
+          return withCors(
+            json({ ok: false, error: message }, { status: 503 }),
+            env,
+          );
+        }
+        if (paymentRequired) return withCors(paymentRequired, env);
+        if (!env.CONFIG_KV) {
+          return withCors(
+            json(
+              { ok: false, error: "loop-data-unavailable" },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+
+        const payload = await readPayload(request);
+        if (
+          payload.pairId !== undefined &&
+          payload.pairId !== null &&
+          typeof payload.pairId !== "string"
+        ) {
+          return withCors(
+            json(
+              { ok: false, error: "invalid-score-request" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+        const pairId = String(payload.pairId ?? "").trim();
+        const rawScores = await readJsonFromKv(
+          env.CONFIG_KV,
+          LOOP_B_SCORES_LATEST_KEY,
+        );
+        if (rawScores === null) {
+          return withCors(
+            json(
+              { ok: false, error: "loop-data-unavailable" },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+
+        const scores = filterLoopBScores(rawScores, pairId);
+        const base = json({
+          ok: true,
+          ...(pairId ? { pairId } : {}),
+          scores,
+        });
+        const settled = withX402SettlementHeader(
+          base,
+          request,
+          env,
+          "solana_scores_latest",
+          url.pathname,
+        );
+        return withCors(settled, env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/x402/read/solana_views_top"
+      ) {
+        let paymentRequired: Response | null = null;
+        try {
+          paymentRequired = requireX402Payment(
+            request,
+            env,
+            "solana_views_top",
+            url.pathname,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "x402-route-config-missing";
+          return withCors(
+            json({ ok: false, error: message }, { status: 503 }),
+            env,
+          );
+        }
+        if (paymentRequired) return withCors(paymentRequired, env);
+        if (!env.CONFIG_KV) {
+          return withCors(
+            json(
+              { ok: false, error: "loop-data-unavailable" },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+
+        const payload = await readPayload(request);
+        const view = parseLoopBViewSelection(payload.view);
+        if (!view) {
+          return withCors(
+            json({ ok: false, error: "invalid-view-request" }, { status: 400 }),
+            env,
+          );
+        }
+
+        const [topMovers, liquidityStress, anomalyFeed] = await Promise.all([
+          view === "all" || view === "top_movers"
+            ? readJsonFromKv(env.CONFIG_KV, LOOP_B_TOP_MOVERS_KEY)
+            : Promise.resolve(null),
+          view === "all" || view === "liquidity_stress"
+            ? readJsonFromKv(env.CONFIG_KV, LOOP_B_LIQUIDITY_STRESS_KEY)
+            : Promise.resolve(null),
+          view === "all" || view === "anomaly_feed"
+            ? readJsonFromKv(env.CONFIG_KV, LOOP_B_ANOMALY_FEED_KEY)
+            : Promise.resolve(null),
+        ]);
+
+        if (!topMovers && !liquidityStress && !anomalyFeed) {
+          return withCors(
+            json(
+              { ok: false, error: "loop-data-unavailable" },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+
+        const base = json({
+          ok: true,
+          view,
+          ...(topMovers ? { topMovers } : {}),
+          ...(liquidityStress ? { liquidityStress } : {}),
+          ...(anomalyFeed ? { anomalyFeed } : {}),
+        });
+        const settled = withX402SettlementHeader(
+          base,
+          request,
+          env,
+          "solana_views_top",
           url.pathname,
         );
         return withCors(settled, env);
@@ -2013,6 +2250,73 @@ function toUniqueStrings(value: unknown, maxItems: number): string[] {
     if (out.length >= maxItems) break;
   }
   return out;
+}
+
+function parseLoopACommitment(
+  value: unknown,
+): "processed" | "confirmed" | "finalized" | null {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return resolveMarkCommitment(undefined);
+  }
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized !== "processed" &&
+    normalized !== "confirmed" &&
+    normalized !== "finalized"
+  ) {
+    return null;
+  }
+  return resolveMarkCommitment(normalized);
+}
+
+function parseLoopBViewSelection(
+  value: unknown,
+): "all" | "top_movers" | "liquidity_stress" | "anomaly_feed" | null {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return "all";
+  }
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "all" ||
+    normalized === "top_movers" ||
+    normalized === "liquidity_stress" ||
+    normalized === "anomaly_feed"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function filterLoopBScores(rawScores: unknown, pairId: string): unknown {
+  if (!pairId) return rawScores;
+  if (!isRecord(rawScores)) return rawScores;
+  const rows = Array.isArray(rawScores.rows) ? rawScores.rows : [];
+  const filteredRows = rows.filter(
+    (row) =>
+      isRecord(row) &&
+      typeof row.pairId === "string" &&
+      row.pairId.trim() === pairId,
+  );
+  return {
+    ...rawScores,
+    count: filteredRows.length,
+    rows: filteredRows,
+  };
+}
+
+async function readJsonFromKv(
+  kv: KVNamespace,
+  key: string,
+): Promise<unknown | null> {
+  const raw = await kv.get(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function parseExecutionConfig(value: unknown): ExecutionConfig | undefined {

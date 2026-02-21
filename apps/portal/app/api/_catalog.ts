@@ -34,7 +34,7 @@ export type CatalogDoc = {
   endpoints: X402EndpointSpec[];
 };
 
-export const X402_CATALOG_VERSION = "2026-02-20";
+export const X402_CATALOG_VERSION = "2026-02-21";
 
 export const X402_OVERVIEW: CatalogDoc["overview"] = {
   offering:
@@ -469,6 +469,115 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
           h24: 2.1,
           h168: 11.4,
         },
+      },
+    },
+  },
+  {
+    id: "solana_marks_latest",
+    method: "POST",
+    path: "/api/x402/read/solana_marks_latest",
+    summary: "Latest Loop A mark set from KV hot cache.",
+    access: "public-x402-paid",
+    requiredFields: [],
+    optionalFields: [
+      {
+        name: "commitment",
+        type: '"processed" | "confirmed" | "finalized"',
+        description: "Mark commitment filter (default: confirmed).",
+      },
+    ],
+    requestExample: {
+      commitment: "confirmed",
+    },
+    responseExample: {
+      ok: true,
+      commitment: "confirmed",
+      marks: {
+        schemaVersion: "v1",
+        generatedAt: "2026-02-21T20:10:00.000Z",
+        commitment: "confirmed",
+        latestSlot: 321490020,
+        count: 1,
+        marks: [
+          {
+            baseMint: "So11111111111111111111111111111111111111112",
+            quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            px: "145.2204",
+            confidence: 0.73,
+            slot: 321490020,
+          },
+        ],
+      },
+    },
+  },
+  {
+    id: "solana_scores_latest",
+    method: "POST",
+    path: "/api/x402/read/solana_scores_latest",
+    summary: "Latest Loop B score set with optional pair filter.",
+    access: "public-x402-paid",
+    requiredFields: [],
+    optionalFields: [
+      {
+        name: "pairId",
+        type: "string",
+        description: "Optional pair id filter (for example SOL:USDC).",
+      },
+    ],
+    requestExample: {
+      pairId: "SOL:USDC",
+    },
+    responseExample: {
+      ok: true,
+      pairId: "SOL:USDC",
+      scores: {
+        schemaVersion: "v1",
+        generatedAt: "2026-02-21T20:11:00.000Z",
+        minute: "2026-02-21T20:11:00.000Z",
+        count: 1,
+        rows: [
+          {
+            pairId: "SOL:USDC",
+            finalScore: 0.91,
+            explain: ["momentum:+0.48", "confidence:+0.30"],
+          },
+        ],
+      },
+    },
+  },
+  {
+    id: "solana_views_top",
+    method: "POST",
+    path: "/api/x402/read/solana_views_top",
+    summary: "Latest Loop B top views (top movers, stress, anomaly).",
+    access: "public-x402-paid",
+    requiredFields: [],
+    optionalFields: [
+      {
+        name: "view",
+        type: '"all" | "top_movers" | "liquidity_stress" | "anomaly_feed"',
+        description: "Optional top-view selector (default: all).",
+      },
+    ],
+    requestExample: {
+      view: "top_movers",
+    },
+    responseExample: {
+      ok: true,
+      view: "top_movers",
+      topMovers: {
+        schemaVersion: "v1",
+        generatedAt: "2026-02-21T20:12:00.000Z",
+        minute: "2026-02-21T20:12:00.000Z",
+        freshnessMs: 540,
+        count: 1,
+        movers: [
+          {
+            pairId: "SOL:USDC",
+            pctChange: 0.024,
+            avgConfidence: 0.71,
+          },
+        ],
       },
     },
   },

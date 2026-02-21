@@ -18,6 +18,9 @@ function createEnv(overrides?: Partial<Env>): Env {
     X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD: "0.01",
     X402_MARKET_OHLCV_PRICE_USD: "0.01",
     X402_MARKET_INDICATORS_PRICE_USD: "0.01",
+    X402_SOLANA_MARKS_LATEST_PRICE_USD: "0.01",
+    X402_SOLANA_SCORES_LATEST_PRICE_USD: "0.01",
+    X402_SOLANA_VIEWS_TOP_PRICE_USD: "0.01",
     X402_MACRO_SIGNALS_PRICE_USD: "0.01",
     X402_MACRO_FRED_INDICATORS_PRICE_USD: "0.01",
     X402_MACRO_ETF_FLOWS_PRICE_USD: "0.01",
@@ -44,6 +47,18 @@ describe("worker x402 helpers", () => {
       {
         key: "market_indicators",
         path: "/api/x402/read/market_indicators",
+      },
+      {
+        key: "solana_marks_latest",
+        path: "/api/x402/read/solana_marks_latest",
+      },
+      {
+        key: "solana_scores_latest",
+        path: "/api/x402/read/solana_scores_latest",
+      },
+      {
+        key: "solana_views_top",
+        path: "/api/x402/read/solana_views_top",
       },
       {
         key: "macro_signals",
