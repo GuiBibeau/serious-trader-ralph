@@ -52,6 +52,7 @@ type RecommenderState = {
   schemaVersion: typeof LOOP_C_SCHEMA_VERSION;
   updatedAt: string;
   lastMinute: string | null;
+  lastRequestKey: string | null;
   cachedView: RecommendationView | null;
 };
 
@@ -156,6 +157,37 @@ function normalizeSet(input: string[] | undefined): Set<string> {
   );
 }
 
+function normalizePersona(input: UserPersonaInput | undefined): {
+  riskBudget: UserPersonaInput["riskBudget"] | null;
+  horizon: UserPersonaInput["horizon"] | null;
+  sectorPreferences: string[];
+  excludedAssets: string[];
+} {
+  const sectorPreferences = [...normalizeSet(input?.sectorPreferences)].sort();
+  const excludedAssets = [...normalizeSet(input?.excludedAssets)].sort();
+
+  return {
+    riskBudget: input?.riskBudget ?? null,
+    horizon: input?.horizon ?? null,
+    sectorPreferences,
+    excludedAssets,
+  };
+}
+
+function buildRequestKey(input: {
+  userId: string;
+  wallet: string;
+  limit: number;
+  persona?: UserPersonaInput;
+}): string {
+  return JSON.stringify({
+    userId: input.userId,
+    wallet: input.wallet,
+    limit: input.limit,
+    persona: normalizePersona(input.persona),
+  });
+}
+
 function recommendationKey(userId: string, wallet: string): string {
   return `loopC:${LOOP_C_SCHEMA_VERSION}:recs:latest:user:${userId}:wallet:${wallet}`;
 }
@@ -248,6 +280,7 @@ function parseState(input: unknown): RecommenderState {
       schemaVersion: LOOP_C_SCHEMA_VERSION,
       updatedAt: new Date().toISOString(),
       lastMinute: null,
+      lastRequestKey: null,
       cachedView: null,
     };
   }
@@ -322,6 +355,8 @@ function parseState(input: unknown): RecommenderState {
         : new Date().toISOString(),
     lastMinute:
       typeof record.lastMinute === "string" ? record.lastMinute : null,
+    lastRequestKey:
+      typeof record.lastRequestKey === "string" ? record.lastRequestKey : null,
     cachedView,
   };
 }
@@ -379,10 +414,17 @@ export class Recommender {
     const limit = Number.isFinite(payload.limit)
       ? Math.max(1, Math.min(50, Math.floor(payload.limit ?? DEFAULT_LIMIT)))
       : parseDefaultLimit(this.env.LOOP_C_RECOMMENDER_DEFAULT_LIMIT);
+    const requestKey = buildRequestKey({
+      userId,
+      wallet,
+      limit,
+      persona: payload.persona,
+    });
 
     const state = await this.readState();
     if (
       state.lastMinute === minute &&
+      state.lastRequestKey === requestKey &&
       state.cachedView &&
       state.cachedView.userId === userId &&
       state.cachedView.wallet === wallet
@@ -415,6 +457,7 @@ export class Recommender {
       schemaVersion: LOOP_C_SCHEMA_VERSION,
       updatedAt: observedAt,
       lastMinute: minute,
+      lastRequestKey: requestKey,
       cachedView: view,
     };
     await this.writeState(nextState);

@@ -195,6 +195,9 @@ describe("worker loop C recommender durable object", () => {
           wallet: "wallet-1",
           observedAt: "2026-02-21T20:01:30.000Z",
           limit: 2,
+          persona: {
+            riskBudget: "low",
+          },
         }),
       }),
     );
@@ -218,8 +221,11 @@ describe("worker loop C recommender durable object", () => {
         body: JSON.stringify({
           userId: "user-1",
           wallet: "wallet-1",
-          observedAt: "2026-02-21T20:02:00.000Z",
+          observedAt: "2026-02-21T20:01:45.000Z",
           limit: 2,
+          persona: {
+            riskBudget: "high",
+          },
         }),
       }),
     );
@@ -232,7 +238,29 @@ describe("worker loop C recommender durable object", () => {
     };
     expect(thirdPayload.ok).toBe(true);
     expect(thirdPayload.cacheHit).toBe(false);
-    expect(thirdPayload.view.recommendations[0]?.finalScore).toBeGreaterThan(
+
+    const fourthResponse = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-1",
+          wallet: "wallet-1",
+          observedAt: "2026-02-21T20:02:00.000Z",
+          limit: 2,
+        }),
+      }),
+    );
+    const fourthPayload = (await fourthResponse.json()) as {
+      ok: boolean;
+      cacheHit: boolean;
+      view: {
+        recommendations: Array<{ finalScore: number }>;
+      };
+    };
+    expect(fourthPayload.ok).toBe(true);
+    expect(fourthPayload.cacheHit).toBe(false);
+    expect(fourthPayload.view.recommendations[0]?.finalScore).toBeGreaterThan(
       10,
     );
 
