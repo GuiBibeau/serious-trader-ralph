@@ -29,18 +29,61 @@ export type LoopAMarkEngineTickResult = {
   pairKeysWritten: number;
 };
 
-function asPositiveNumber(value: string): number | null {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return parsed;
+const KNOWN_MINT_DECIMALS: Record<string, number> = {
+  So11111111111111111111111111111111111111112: 9,
+  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 6,
+  Es9vMFrzaCERmJfrF4H2FYD6hY5S6Q5p3z7V2jvY4fB: 6,
+};
+
+function asPositiveAtomic(value: string): bigint | null {
+  try {
+    const parsed = BigInt(value);
+    return parsed > 0n ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
-function formatDecimal(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "0";
-  if (value >= 1) {
-    return value.toFixed(8).replace(/\.?0+$/, "");
+function asSafeInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
   }
-  return value.toFixed(12).replace(/\.?0+$/, "");
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    return Number.parseInt(value, 10);
+  }
+  return null;
+}
+
+function pow10(exp: number): bigint {
+  if (exp <= 0) return 1n;
+  let result = 1n;
+  for (let i = 0; i < exp; i += 1) {
+    result *= 10n;
+  }
+  return result;
+}
+
+function ratioAsDecimalString(
+  numerator: bigint,
+  denominator: bigint,
+  precision = 18,
+): string {
+  if (numerator <= 0n || denominator <= 0n) return "0";
+
+  const integerPart = numerator / denominator;
+  let remainder = numerator % denominator;
+  if (remainder === 0n) return integerPart.toString();
+
+  let fractionalPart = "";
+  for (let i = 0; i < precision && remainder > 0n; i += 1) {
+    remainder *= 10n;
+    fractionalPart += (remainder / denominator).toString();
+    remainder %= denominator;
+  }
+
+  const trimmedFraction = fractionalPart.replace(/0+$/, "");
+  if (!trimmedFraction) return integerPart.toString();
+  return `${integerPart.toString()}.${trimmedFraction}`;
 }
 
 function clampConfidence(value: number): number {
@@ -58,8 +101,8 @@ function extractPools(event: ProtocolEvent): string[] | undefined {
 
 function scoreConfidence(input: {
   protocol: string;
-  inAmount: number;
-  outAmount: number;
+  hasUnitSize: boolean;
+  hasLargeSize: boolean;
   venue?: string;
 }): number {
   let confidence = 0.35;
@@ -67,9 +110,8 @@ function scoreConfidence(input: {
   if (input.protocol === "jupiter") confidence += 0.2;
   if (input.venue) confidence += 0.1;
 
-  const minAmount = Math.min(input.inAmount, input.outAmount);
-  if (minAmount >= 1) confidence += 0.1;
-  if (minAmount >= 1_000) confidence += 0.1;
+  if (input.hasUnitSize) confidence += 0.1;
+  if (input.hasLargeSize) confidence += 0.1;
 
   return clampConfidence(confidence);
 }
@@ -103,12 +145,35 @@ function buildMarkFromSwap(input: {
   commitment: SlotCommitment;
   generatedAt: string;
 }): Mark | null {
-  const inAmount = asPositiveNumber(input.event.inAmount);
-  const outAmount = asPositiveNumber(input.event.outAmount);
-  if (!inAmount || !outAmount) return null;
+  const inAtomic = asPositiveAtomic(input.event.inAmount);
+  const outAtomic = asPositiveAtomic(input.event.outAmount);
+  if (!inAtomic || !outAtomic) return null;
 
-  const px = outAmount / inAmount;
-  if (!Number.isFinite(px) || px <= 0) return null;
+  const inDecimalsRaw = asSafeInteger(input.event.meta?.inDecimals);
+  const outDecimalsRaw = asSafeInteger(input.event.meta?.outDecimals);
+  const inDecimals =
+    inDecimalsRaw !== null
+      ? inDecimalsRaw
+      : (KNOWN_MINT_DECIMALS[input.event.inMint] ?? null);
+  const outDecimals =
+    outDecimalsRaw !== null
+      ? outDecimalsRaw
+      : (KNOWN_MINT_DECIMALS[input.event.outMint] ?? null);
+  if (
+    inDecimals === null ||
+    outDecimals === null ||
+    inDecimals < 0 ||
+    outDecimals < 0 ||
+    inDecimals > 18 ||
+    outDecimals > 18
+  ) {
+    return null;
+  }
+
+  const inScale = pow10(inDecimals);
+  const outScale = pow10(outDecimals);
+  const px = ratioAsDecimalString(outAtomic * inScale, inAtomic * outScale, 18);
+  if (px === "0") return null;
 
   const evidenceInput = `${loopAEventBatchR2Key(input.commitment, input.event.slot)}#sig=${input.event.sig}`;
   return {
@@ -118,11 +183,12 @@ function buildMarkFromSwap(input: {
     ts: input.event.ts,
     baseMint: input.event.inMint,
     quoteMint: input.event.outMint,
-    px: formatDecimal(px),
+    px,
     confidence: scoreConfidence({
       protocol: input.event.protocol,
-      inAmount,
-      outAmount,
+      hasUnitSize: inAtomic >= inScale && outAtomic >= outScale,
+      hasLargeSize:
+        inAtomic >= 1_000n * inScale && outAtomic >= 1_000n * outScale,
       venue: input.event.venue,
     }),
     venue: input.event.venue ?? input.event.protocol,

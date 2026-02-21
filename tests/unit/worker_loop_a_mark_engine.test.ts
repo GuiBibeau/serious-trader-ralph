@@ -164,6 +164,7 @@ describe("worker loop A mark engine", () => {
     const mark = parseMark(latest.marks[0]);
     expect(mark.baseMint).toBe("So11111111111111111111111111111111111111112");
     expect(mark.quoteMint).toBe("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+    expect(mark.px).toBe("4");
     expect(mark.evidence?.sigs).toEqual(["sig-100"]);
 
     const pairKey =
@@ -185,8 +186,8 @@ describe("worker loop A mark engine", () => {
             sig: "sig-120",
             inMint: "So11111111111111111111111111111111111111112",
             outMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-            inAmount: "2",
-            outAmount: "4",
+            inAmount: "1000000000",
+            outAmount: "4000000",
           }),
         ]),
         batch("confirmed", 121, [
@@ -195,8 +196,8 @@ describe("worker loop A mark engine", () => {
             sig: "sig-121",
             inMint: "So11111111111111111111111111111111111111112",
             outMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-            inAmount: "2",
-            outAmount: "8",
+            inAmount: "1000000000",
+            outAmount: "8000000",
           }),
         ]),
       ],
@@ -209,6 +210,7 @@ describe("worker loop A mark engine", () => {
     ) as { marks: unknown[] };
     const mark = parseMark(latest.marks[0]);
     expect(mark.slot).toBe(121);
+    expect(mark.px).toBe("8");
     expect(mark.evidence?.sigs).toEqual(["sig-121"]);
   });
 
@@ -226,6 +228,30 @@ describe("worker loop A mark engine", () => {
     expect(result.marksComputed).toBe(0);
     expect(result.latestSlot).toBeNull();
     expect(result.latestKey).toBeNull();
+    expect(store.has(loopAMarksLatestKey("confirmed"))).toBe(false);
+  });
+
+  test("skips swaps when token decimals are unknown", async () => {
+    const { env, store } = createEnv();
+
+    const result = await runLoopAMarkEngineTick(env, {
+      commitment: "confirmed",
+      observedAt: "2026-02-21T04:04:00.000Z",
+      decodedBatches: [
+        batch("confirmed", 140, [
+          swapEvent({
+            slot: 140,
+            sig: "sig-140",
+            inMint: "UnknownMint11111111111111111111111111111111111",
+            outMint: "UnknownMint22222222222222222222222222222222222",
+            inAmount: "1000000",
+            outAmount: "500000",
+          }),
+        ]),
+      ],
+    });
+
+    expect(result.marksComputed).toBe(0);
     expect(store.has(loopAMarksLatestKey("confirmed"))).toBe(false);
   });
 
