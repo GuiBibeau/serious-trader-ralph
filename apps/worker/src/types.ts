@@ -93,4 +93,5 @@ export type Env = {
   LOOP_A_BLOCK_FETCH_MAX_RETRIES?: string;
   LOOP_A_BLOCK_FETCH_BASE_BACKOFF_MS?: string;
   LOOP_A_BLOCK_FETCH_MAX_SLOTS_PER_TICK?: string;
+  LOOP_A_DECODER_ENABLED?: string;
 };
