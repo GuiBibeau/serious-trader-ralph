@@ -20,6 +20,11 @@ export type ExecutionIntent = {
     adapter: string;
     params: Record<string, unknown> | null;
   };
+  policy: {
+    simulateOnly: boolean;
+    dryRun: boolean;
+    commitment: "processed" | "confirmed" | "finalized";
+  };
 };
 
 export type ExecutionDecision = {
@@ -157,6 +162,9 @@ export function createExecutionIntent(input: {
   source: string;
   reason?: string;
   execution?: ExecutionConfig;
+  simulateOnly: boolean;
+  dryRun: boolean;
+  commitment: "processed" | "confirmed" | "finalized";
 }): ExecutionIntent {
   return {
     schemaVersion: EXECUTION_SCHEMA_VERSION,
@@ -182,6 +190,11 @@ export function createExecutionIntent(input: {
         !Array.isArray(input.execution.params)
           ? { ...input.execution.params }
           : null,
+    },
+    policy: {
+      simulateOnly: input.simulateOnly,
+      dryRun: input.dryRun,
+      commitment: input.commitment,
     },
   };
 }

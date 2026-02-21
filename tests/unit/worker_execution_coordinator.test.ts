@@ -1,0 +1,238 @@
+import { describe, expect, test } from "bun:test";
+import type { ExecutionIntent } from "../../apps/worker/src/execution/contracts";
+import {
+  ExecutionCoordinator,
+  type ExecutionCoordinatorDecisionResult,
+  requestExecutionCoordinatorDecision,
+} from "../../apps/worker/src/execution/coordinator";
+import type { Env } from "../../apps/worker/src/types";
+
+function createMockDoState() {
+  const store = new Map<string, unknown>();
+  let alarm: number | null = null;
+  return {
+    state: {
+      storage: {
+        get: async (key: string) => store.get(key),
+        put: async (key: string, value: unknown) => {
+          store.set(key, value);
+        },
+        setAlarm: async (timestamp: number) => {
+          alarm = timestamp;
+        },
+        deleteAlarm: async () => {
+          alarm = null;
+        },
+      },
+      blockConcurrencyWhile: async <T>(fn: () => Promise<T>) => await fn(),
+    } as unknown as DurableObjectState,
+    readAlarm: () => alarm,
+  };
+}
+
+function intent(input: {
+  intentId: string;
+  receivedAt: string;
+  adapter?: string;
+}): ExecutionIntent {
+  return {
+    schemaVersion: "v1",
+    intentId: input.intentId,
+    receivedAt: input.receivedAt,
+    userId: "user-1",
+    wallet: "wallet-1",
+    inputMint: "So11111111111111111111111111111111111111112",
+    outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    amountAtomic: "1000000",
+    slippageBps: 50,
+    source: "TERMINAL",
+    reason: null,
+    execution: {
+      adapter: input.adapter ?? "jupiter",
+      params: null,
+    },
+    policy: {
+      simulateOnly: false,
+      dryRun: false,
+      commitment: "confirmed",
+    },
+  };
+}
+
+describe("worker execution coordinator durable object", () => {
+  test("accepts inline first intent and returns deterministic decision", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      { EXECUTION_AUCTION_WINDOW_MS: "250" } as Env,
+      { now: () => "2026-02-21T20:50:00.000Z" },
+    );
+
+    const response = await coordinator.fetch(
+      new Request("https://internal/execution/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: intent({
+            intentId: "intent-1",
+            receivedAt: "2026-02-21T20:49:59.000Z",
+          }),
+          mode: "inline",
+        }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.result.accepted).toBe(true);
+    expect(payload.result.reason).toBeNull();
+    expect(payload.result.decision?.route).toBe("jupiter");
+    expect(mock.readAlarm()).toBeNull();
+  });
+
+  test("queue tick ordering is deterministic by receivedAt then intentId", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      { EXECUTION_AUCTION_WINDOW_MS: "250" } as Env,
+      { now: () => "2026-02-21T20:55:00.000Z" },
+    );
+
+    const enqueue = async (executionIntent: ExecutionIntent) =>
+      await coordinator.fetch(
+        new Request("https://internal/execution/intent", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            intent: executionIntent,
+            mode: "enqueue",
+          }),
+        }),
+      );
+
+    await enqueue(
+      intent({
+        intentId: "intent-b",
+        receivedAt: "2026-02-21T20:54:50.000Z",
+      }),
+    );
+    await enqueue(
+      intent({
+        intentId: "intent-a",
+        receivedAt: "2026-02-21T20:54:50.000Z",
+      }),
+    );
+
+    const tickResponse = await coordinator.fetch(
+      new Request("https://internal/execution/auction/tick", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(tickResponse.status).toBe(200);
+    const tickPayload = (await tickResponse.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(tickPayload.ok).toBe(true);
+    expect(tickPayload.result.accepted).toBe(true);
+    expect(tickPayload.result.decision?.intentId).toBe("intent-a");
+    expect(mock.readAlarm()).not.toBeNull();
+  });
+
+  test("rejects unsupported execution route with clear reason", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(mock.state, {} as Env, {
+      now: () => "2026-02-21T21:00:00.000Z",
+    });
+
+    const response = await coordinator.fetch(
+      new Request("https://internal/execution/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: intent({
+            intentId: "intent-x",
+            receivedAt: "2026-02-21T20:59:59.000Z",
+            adapter: "unsupported_venue",
+          }),
+          mode: "inline",
+        }),
+      }),
+    );
+
+    const payload = (await response.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(response.status).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(payload.result.accepted).toBe(false);
+    expect(payload.result.reason).toBe("unsupported-route:unsupported_venue");
+  });
+
+  test("helper uses namespace only when coordinator is enabled", async () => {
+    const disabled = await requestExecutionCoordinatorDecision(
+      { EXECUTION_COORDINATOR_ENABLED: "0" } as Env,
+      {
+        intent: intent({
+          intentId: "intent-disabled",
+          receivedAt: "2026-02-21T21:10:00.000Z",
+        }),
+      },
+    );
+    expect(disabled).toBeNull();
+
+    const enabledEnv = {
+      EXECUTION_COORDINATOR_ENABLED: "1",
+      EXECUTION_COORDINATOR_DO: {
+        idFromName(name: string) {
+          return name as never;
+        },
+        get(_id: unknown) {
+          return {
+            fetch: async () =>
+              new Response(
+                JSON.stringify({
+                  ok: true,
+                  result: {
+                    accepted: true,
+                    reason: null,
+                    queueDepth: 0,
+                    queuePosition: 0,
+                    decision: {
+                      schemaVersion: "v1",
+                      decisionId: "decision-1",
+                      intentId: "intent-enabled",
+                      decidedAt: "2026-02-21T21:10:01.000Z",
+                      route: "jupiter",
+                      simulateOnly: false,
+                      dryRun: false,
+                      commitment: "confirmed",
+                    },
+                  },
+                }),
+                {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                },
+              ),
+          };
+        },
+      } as unknown as DurableObjectNamespace,
+    } as Env;
+
+    const decision = await requestExecutionCoordinatorDecision(enabledEnv, {
+      intent: intent({
+        intentId: "intent-enabled",
+        receivedAt: "2026-02-21T21:10:00.000Z",
+      }),
+    });
+    expect(decision?.accepted).toBe(true);
+    expect(decision?.decision?.route).toBe("jupiter");
+  });
+});
