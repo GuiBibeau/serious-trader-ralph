@@ -4,6 +4,7 @@ import {
   LOOP_B_HEALTH_KEY,
   LOOP_B_LIQUIDITY_STRESS_KEY,
   LOOP_B_MINUTE_ACCUMULATOR_NAME,
+  LOOP_B_SCORES_LATEST_KEY,
   LOOP_B_TOP_MOVERS_KEY,
   MinuteAccumulator,
   publishMarksToMinuteAccumulator,
@@ -190,6 +191,7 @@ describe("worker loop B minute accumulator", () => {
     expect(kvStore.has(LOOP_B_TOP_MOVERS_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_LIQUIDITY_STRESS_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_FEATURES_LATEST_KEY)).toBe(true);
+    expect(kvStore.has(LOOP_B_SCORES_LATEST_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_HEALTH_KEY)).toBe(true);
     expect(
       kvStore.has(
@@ -226,6 +228,25 @@ describe("worker loop B minute accumulator", () => {
       "loopA/v1/events/slot=700",
       "loopA/v1/events/slot=701",
     ]);
+    const scoreSet = JSON.parse(
+      kvStore.get(LOOP_B_SCORES_LATEST_KEY) ?? "{}",
+    ) as {
+      rows: Array<{
+        pairId: string;
+        finalScore: number;
+        contributions: {
+          momentum: number;
+          confidence: number;
+          stabilityPenalty: number;
+          activity: number;
+        };
+        explain: string[];
+      }>;
+    };
+    expect(scoreSet.rows.length).toBe(2);
+    expect(scoreSet.rows[0]?.finalScore).toBeGreaterThan(0);
+    expect(scoreSet.rows[0]?.contributions.confidence).toBeGreaterThan(0);
+    expect(scoreSet.rows[0]?.explain[0]).toContain("score=momentum");
 
     expect(r2Store.size).toBeGreaterThan(0);
   });
@@ -278,6 +299,17 @@ describe("worker loop B minute accumulator", () => {
       returnPct: number;
       revision: number;
     };
+    const firstScoreRow = JSON.parse(
+      kvStore.get(
+        "loopB:v1:scores:latest:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      ) ?? "{}",
+    ) as {
+      finalScore: number;
+      revision: number;
+      contributions: {
+        momentum: number;
+      };
+    };
 
     await accumulator.fetch(
       new Request("https://internal/loop-b/ingest", {
@@ -313,6 +345,17 @@ describe("worker loop B minute accumulator", () => {
       returnPct: number;
       revision: number;
     };
+    const secondScoreRow = JSON.parse(
+      kvStore.get(
+        "loopB:v1:scores:latest:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      ) ?? "{}",
+    ) as {
+      finalScore: number;
+      revision: number;
+      contributions: {
+        momentum: number;
+      };
+    };
 
     expect(secondTopMovers.minute).toBe("2026-02-21T18:02:00.000Z");
     expect(secondChange).toBeGreaterThan(firstChange);
@@ -321,6 +364,11 @@ describe("worker loop B minute accumulator", () => {
       firstFeatureRow.returnPct,
     );
     expect(secondFeatureRow.revision).toBeGreaterThan(firstFeatureRow.revision);
+    expect(secondScoreRow.finalScore).toBeGreaterThan(firstScoreRow.finalScore);
+    expect(secondScoreRow.revision).toBeGreaterThan(firstScoreRow.revision);
+    expect(secondScoreRow.contributions.momentum).toBeGreaterThan(
+      firstScoreRow.contributions.momentum,
+    );
   });
 
   test("publish helper sends marks into minute accumulator durable object", async () => {
