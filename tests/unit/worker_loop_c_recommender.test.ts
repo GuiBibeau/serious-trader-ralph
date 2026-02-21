@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { LOOP_B_SCORES_LATEST_KEY } from "../../apps/worker/src/loop_b/minute_accumulator";
+import { LOOP_C_CANDIDATE_POOL_LATEST_KEY } from "../../apps/worker/src/loop_c/candidate_pool";
 import {
   Recommender,
   requestLoopCRecommendations,
@@ -141,6 +142,43 @@ function setScores(store: Map<string, string>, rowFinalScore: number): void {
             "loopB:v1:features:latest:pair:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:So11111111111111111111111111111111111111112",
           revision: 1,
           explain: ["score=momentum+confidence+activity-stability"],
+        },
+      ],
+    }),
+  );
+}
+
+function setCandidatePool(store: Map<string, string>, pairId: string): void {
+  const [baseMint, quoteMint] = pairId.split(":");
+  store.set(
+    LOOP_C_CANDIDATE_POOL_LATEST_KEY,
+    JSON.stringify({
+      schemaVersion: "v1",
+      generatedAt: "2026-02-21T20:00:00.000Z",
+      minute: "2026-02-21T20:00:00.000Z",
+      source: "loopB",
+      maxCandidates: 10,
+      count: 1,
+      rows: [
+        {
+          schemaVersion: "v1",
+          generatedAt: "2026-02-21T20:00:00.000Z",
+          minute: "2026-02-21T20:00:00.000Z",
+          candidateId: `2026-02-21T20:00:00.000Z:${pairId}`,
+          pairId,
+          baseMint,
+          quoteMint,
+          finalScore: 7.7,
+          baseSignal: 7.7,
+          curiosity: 1.2,
+          riskPenalty: 0.4,
+          stabilityBonus: 5,
+          acceptProbPrior: 0.63,
+          featuresRef: `loopB:v1:features:latest:pair:${pairId}`,
+          scoreRef: `loopB:v1:scores:latest:pair:${pairId}`,
+          evidenceRefs: ["loopA/v1/events/slot=123"],
+          revision: 2,
+          explain: ["source=loopB", "evidence_refs=1"],
         },
       ],
     }),
@@ -316,5 +354,48 @@ describe("worker loop C recommender durable object", () => {
     expect(called).toBe(true);
     expect(view?.schemaVersion).toBe("v1");
     expect(view?.wallet).toBe("wallet-y");
+  });
+
+  test("uses loop C candidate pool when available", async () => {
+    const { env, kvStore } = createEnv();
+    setScores(kvStore, 99);
+    setCandidatePool(
+      kvStore,
+      "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN:So11111111111111111111111111111111111111112",
+    );
+
+    const mock = createMockDoState();
+    const recommender = new Recommender(mock.state, env, {
+      now: () => "2026-02-21T20:11:00.000Z",
+    });
+    const response = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-candidate",
+          wallet: "wallet-candidate",
+          observedAt: "2026-02-21T20:11:00.000Z",
+          limit: 5,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      cacheHit: boolean;
+      view: {
+        recommendations: Array<{ pairId: string; finalScore: number }>;
+      };
+    };
+
+    expect(payload.ok).toBe(true);
+    expect(payload.cacheHit).toBe(false);
+    expect(payload.view.recommendations.length).toBe(1);
+    expect(payload.view.recommendations[0]?.pairId).toBe(
+      "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN:So11111111111111111111111111111111111111112",
+    );
+    expect(payload.view.recommendations[0]?.finalScore).toBeCloseTo(7.3, 6);
   });
 });

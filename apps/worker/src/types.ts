@@ -111,4 +111,5 @@ export type Env = {
   LOOP_B_TOP_MOVERS_LIMIT?: string;
   LOOP_C_RECOMMENDER_ENABLED?: string;
   LOOP_C_RECOMMENDER_DEFAULT_LIMIT?: string;
+  LOOP_C_CANDIDATE_POOL_LIMIT?: string;
 };

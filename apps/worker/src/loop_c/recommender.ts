@@ -3,6 +3,10 @@ import {
   type LoopBScoreRow,
 } from "../loop_b/minute_accumulator";
 import type { Env } from "../types";
+import {
+  LOOP_C_CANDIDATE_POOL_LATEST_KEY,
+  parseLoopCCandidateRows,
+} from "./candidate_pool";
 
 const LOOP_C_SCHEMA_VERSION = "v1" as const;
 const STATE_KEY = "loop_c:recommender_state:v1";
@@ -54,6 +58,15 @@ type RecommenderState = {
   lastMinute: string | null;
   lastRequestKey: string | null;
   cachedView: RecommendationView | null;
+};
+
+type RecommendationInputRow = {
+  pairId: string;
+  baseMint: string;
+  quoteMint: string;
+  baseSignal: number;
+  riskPenalty: number;
+  explain: string[];
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -141,6 +154,28 @@ function parseScoreRows(raw: string | null): LoopBScoreRow[] {
   }
 }
 
+function fromScoreRows(rows: LoopBScoreRow[]): RecommendationInputRow[] {
+  return rows.map((row) => ({
+    pairId: row.pairId,
+    baseMint: row.baseMint,
+    quoteMint: row.quoteMint,
+    baseSignal: row.finalScore,
+    riskPenalty: row.contributions.stabilityPenalty,
+    explain: row.explain,
+  }));
+}
+
+function fromCandidatePoolRows(raw: string | null): RecommendationInputRow[] {
+  return parseLoopCCandidateRows(raw).map((row) => ({
+    pairId: row.pairId,
+    baseMint: row.baseMint,
+    quoteMint: row.quoteMint,
+    baseSignal: row.baseSignal,
+    riskPenalty: row.riskPenalty,
+    explain: row.explain,
+  }));
+}
+
 function riskMultiplier(input: UserPersonaInput | undefined): number {
   const budget = input?.riskBudget;
   if (budget === "low") return 1.4;
@@ -213,7 +248,7 @@ function recommendationR2Key(input: {
 }
 
 function buildRecommendations(input: {
-  rows: LoopBScoreRow[];
+  rows: RecommendationInputRow[];
   userId: string;
   wallet: string;
   limit: number;
@@ -231,8 +266,8 @@ function buildRecommendations(input: {
 
     const personaBoost =
       preferred.has(row.baseMint) || preferred.has(row.quoteMint) ? 2.5 : 0;
-    const riskPenalty = row.contributions.stabilityPenalty * risk;
-    const finalScore = row.finalScore + personaBoost - riskPenalty;
+    const riskPenalty = row.riskPenalty * risk;
+    const finalScore = row.baseSignal + personaBoost - riskPenalty;
 
     recommendations.push({
       recommendationId: `${input.minute}:${row.pairId}`,
@@ -240,14 +275,15 @@ function buildRecommendations(input: {
       baseMint: row.baseMint,
       quoteMint: row.quoteMint,
       finalScore: Math.round(finalScore * 1e8) / 1e8,
-      baseSignal: row.finalScore,
+      baseSignal: row.baseSignal,
       riskPenalty: Math.round(riskPenalty * 1e8) / 1e8,
       personaBoost,
       modelVersion: LOOP_C_SCHEMA_VERSION,
       explain: [
-        `base_signal=${row.finalScore.toFixed(4)}`,
+        `base_signal=${row.baseSignal.toFixed(4)}`,
         `persona_boost=${personaBoost.toFixed(4)}`,
         `risk_penalty=${riskPenalty.toFixed(4)}`,
+        ...row.explain.slice(0, 2),
       ],
     });
   }
@@ -438,11 +474,21 @@ export class Recommender {
       );
     }
 
-    const scoreRows = parseScoreRows(
+    const candidateRows = fromCandidatePoolRows(
       this.env.CONFIG_KV
-        ? await this.env.CONFIG_KV.get(LOOP_B_SCORES_LATEST_KEY)
+        ? await this.env.CONFIG_KV.get(LOOP_C_CANDIDATE_POOL_LATEST_KEY)
         : null,
     );
+    const scoreRows =
+      candidateRows.length > 0
+        ? candidateRows
+        : fromScoreRows(
+            parseScoreRows(
+              this.env.CONFIG_KV
+                ? await this.env.CONFIG_KV.get(LOOP_B_SCORES_LATEST_KEY)
+                : null,
+            ),
+          );
     const view = buildRecommendations({
       rows: scoreRows,
       userId,

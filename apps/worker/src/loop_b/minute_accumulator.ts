@@ -2,6 +2,11 @@ import {
   type Mark,
   safeParseMark,
 } from "../../../../src/loops/contracts/loop_a";
+import {
+  buildLoopCCandidatePool,
+  LOOP_C_CANDIDATE_POOL_LATEST_KEY,
+  parseLoopCCandidatePoolLimit,
+} from "../loop_c/candidate_pool";
 import type { Env } from "../types";
 
 export const LOOP_B_SCHEMA_VERSION = "v1" as const;
@@ -682,6 +687,21 @@ function viewSnapshotR2Key(input: {
   return `loopB/${LOOP_B_SCHEMA_VERSION}/views/date=${yyyy}-${mm}-${dd}/hour=${hh}/minute=${yyyy}-${mm}-${dd}T${hh}:${minute}:00Z/revision=${input.revision}/at=${token}.json`;
 }
 
+function candidateSnapshotR2Key(input: {
+  minute: MinuteId;
+  generatedAt: string;
+  revision: number;
+}): string {
+  const date = new Date(input.minute);
+  const yyyy = date.getUTCFullYear().toString().padStart(4, "0");
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  const token = input.generatedAt.replaceAll(":", "-");
+  return `loopC/v1/candidates/date=${yyyy}-${mm}-${dd}/hour=${hh}/minute=${yyyy}-${mm}-${dd}T${hh}:${minute}:00Z/revision=${input.revision}/at=${token}.json`;
+}
+
 async function putKvJson(
   env: Env,
   key: string,
@@ -705,6 +725,7 @@ async function publishFinalizedMinute(input: {
   minuteRecord: MinuteRecord;
   generatedAt: string;
   topLimit: number;
+  candidateLimit: number;
 }): Promise<void> {
   const pairs = aggregateMinutePairs(input.minuteRecord);
   const featureSet = buildFeatureSet({
@@ -731,12 +752,23 @@ async function publishFinalizedMinute(input: {
     pairs,
     limit: input.topLimit,
   });
+  const evidenceRefsByPair = new Map(
+    featureSet.rows.map((row) => [row.pairId, row.inputRefs] as const),
+  );
+  const candidatePool = buildLoopCCandidatePool({
+    generatedAt: input.generatedAt,
+    minute: input.minute,
+    maxCandidates: input.candidateLimit,
+    scoreRows: scoreSet.rows,
+    evidenceRefsByPair,
+  });
 
   await putKvJson(input.env, LOOP_B_TOP_MOVERS_KEY, topMovers);
   await putKvJson(input.env, LOOP_B_LIQUIDITY_STRESS_KEY, liquidityStress);
   await putKvJson(input.env, LOOP_B_ANOMALY_FEED_KEY, anomalyFeed);
   await putKvJson(input.env, LOOP_B_FEATURES_LATEST_KEY, featureSet);
   await putKvJson(input.env, LOOP_B_SCORES_LATEST_KEY, scoreSet);
+  await putKvJson(input.env, LOOP_C_CANDIDATE_POOL_LATEST_KEY, candidatePool);
   const featureRowsByPair = new Map(
     featureSet.rows.map((row) => [row.pairId, row] as const),
   );
@@ -803,8 +835,17 @@ async function publishFinalizedMinute(input: {
             topMovers,
             liquidityStress,
             anomalyFeed,
+            candidatePool,
           },
         }),
+      ),
+      input.env.LOGS_BUCKET.put(
+        candidateSnapshotR2Key({
+          minute: input.minute,
+          generatedAt: input.generatedAt,
+          revision: input.minuteRecord.revision,
+        }),
+        JSON.stringify(candidatePool),
       ),
     ]);
   }
@@ -890,6 +931,9 @@ export class MinuteAccumulator {
       .filter((minute): minute is MinuteId => minute !== null)
       .sort(compareMinutes);
     const topLimit = parseTopLimit(this.env.LOOP_B_TOP_MOVERS_LIMIT);
+    const candidateLimit = parseLoopCCandidatePoolLimit(
+      this.env.LOOP_C_CANDIDATE_POOL_LIMIT,
+    );
 
     let finalizedMinutes = 0;
     let lastFinalized: MinuteId | null = input.state.lastFinalizedMinute;
@@ -907,6 +951,7 @@ export class MinuteAccumulator {
         minuteRecord,
         generatedAt: input.observedAt,
         topLimit,
+        candidateLimit,
       });
       minuteRecord.finalizedRevision = minuteRecord.revision;
       minuteRecord.updatedAt = input.observedAt;
