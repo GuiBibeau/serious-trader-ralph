@@ -50,6 +50,7 @@ export type Env = {
   CONFIG_KV?: KVNamespace;
   LOGS_BUCKET?: R2Bucket;
   LOOP_A_COORDINATOR_DO?: DurableObjectNamespace;
+  LOOP_B_MINUTE_ACCUMULATOR_DO?: DurableObjectNamespace;
   ALLOWED_ORIGINS?: string;
   ADMIN_TOKEN?: string;
   PRIVY_APP_ID?: string;
@@ -105,4 +106,6 @@ export type Env = {
   LOOP_A_MARK_ENGINE_ENABLED?: string;
   LOOP_A_MARK_COMMITMENT?: string;
   LOOP_A_COORDINATOR_ENABLED?: string;
+  LOOP_B_MINUTE_ACCUMULATOR_ENABLED?: string;
+  LOOP_B_TOP_MOVERS_LIMIT?: string;
 };

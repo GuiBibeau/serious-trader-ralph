@@ -44,10 +44,16 @@ LOOP_A_BACKFILL_MAX_TOTAL_SLOTS_PER_TICK = "128"
 LOOP_A_MARK_ENGINE_ENABLED = "0"
 LOOP_A_MARK_COMMITMENT = "confirmed"
 LOOP_A_COORDINATOR_ENABLED = "0"
+LOOP_B_MINUTE_ACCUMULATOR_ENABLED = "0"
+LOOP_B_TOP_MOVERS_LIMIT = "20"
 
 [[durable_objects.bindings]]
 name = "LOOP_A_COORDINATOR_DO"
 class_name = "LoopACoordinator"
+
+[[durable_objects.bindings]]
+name = "LOOP_B_MINUTE_ACCUMULATOR_DO"
+class_name = "MinuteAccumulator"
 
 [[kv_namespaces]]
 binding = "CONFIG_KV"
@@ -111,6 +117,8 @@ LOOP_A_BACKFILL_MAX_TOTAL_SLOTS_PER_TICK = "128"
 LOOP_A_MARK_ENGINE_ENABLED = "0"
 LOOP_A_MARK_COMMITMENT = "confirmed"
 LOOP_A_COORDINATOR_ENABLED = "0"
+LOOP_B_MINUTE_ACCUMULATOR_ENABLED = "0"
+LOOP_B_TOP_MOVERS_LIMIT = "20"
 
 [[env.staging.kv_namespaces]]
 binding = "CONFIG_KV"
@@ -174,10 +182,16 @@ LOOP_A_BACKFILL_MAX_TOTAL_SLOTS_PER_TICK = "128"
 LOOP_A_MARK_ENGINE_ENABLED = "0"
 LOOP_A_MARK_COMMITMENT = "confirmed"
 LOOP_A_COORDINATOR_ENABLED = "0"
+LOOP_B_MINUTE_ACCUMULATOR_ENABLED = "0"
+LOOP_B_TOP_MOVERS_LIMIT = "20"
 
 [[migrations]]
 tag = "v2-loop-a-coordinator"
 new_sqlite_classes = ["LoopACoordinator"]
+
+[[migrations]]
+tag = "v3-loop-b-minute-accumulator"
+new_sqlite_classes = ["MinuteAccumulator"]
 
 [[env.production.kv_namespaces]]
 binding = "CONFIG_KV"

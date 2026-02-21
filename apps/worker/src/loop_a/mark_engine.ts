@@ -27,6 +27,7 @@ export type LoopAMarkEngineTickResult = {
   latestSlot: number | null;
   latestKey: string | null;
   pairKeysWritten: number;
+  marks: Mark[];
 };
 
 const KNOWN_MINT_DECIMALS: Record<string, number> = {
@@ -253,6 +254,7 @@ export async function runLoopAMarkEngineTick(
       latestSlot: null,
       latestKey: null,
       pairKeysWritten: 0,
+      marks: [],
     };
   }
 
@@ -284,5 +286,6 @@ export async function runLoopAMarkEngineTick(
     latestSlot,
     latestKey,
     pairKeysWritten: marks.length,
+    marks,
   };
 }
