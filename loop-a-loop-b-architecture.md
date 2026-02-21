@@ -40,6 +40,10 @@ It is intentionally written as something you can hand to an implementation agent
   - finalizes deterministic, explainable score rows (`loopB:v1:scores:latest` + per-pair score keys) using weighted contribution components,
   - finalizes minute snapshots to hot Cloudflare Key-Value store views (`top_movers`, `liquidity_stress`, `anomaly_feed`, per-pair latest scores, health) with freshness metadata,
   - re-finalizes corrected minutes when late/corrected marks arrive, and writes minute/features/scores/view bundles to Cloudflare R2 object storage.
+- Loop C Recommender (current):
+  - Durable Object provides request-time personalized ranking with per-minute cache hits for repeated requests,
+  - reads Loop B score candidates, applies deterministic persona/risk adjustments, and returns ranked recommendation views,
+  - persists per-user wallet-scoped latest recommendations to Cloudflare Key-Value store and Cloudflare R2 object storage.
 
 ### Execution routing already exists (v0)
 

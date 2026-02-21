@@ -21,6 +21,7 @@ import {
 import { readLoopAHealthFromKv, recordLoopAHealthTick } from "./loop_a/health";
 import { runLoopATickPipeline } from "./loop_a/pipeline";
 import { MinuteAccumulator } from "./loop_b/minute_accumulator";
+import { Recommender } from "./loop_c/recommender";
 import {
   fetchMacroEtfFlows,
   fetchMacroFredIndicators,
@@ -70,7 +71,7 @@ const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
   "terminal_opened_from_consumer",
 ]);
 
-export { LoopACoordinator, MinuteAccumulator };
+export { LoopACoordinator, MinuteAccumulator, Recommender };
 
 function resolveX402ReadRpcEndpoint(env: Env): string {
   const balanceRpc = String(env.BALANCE_RPC_ENDPOINT ?? "").trim();
