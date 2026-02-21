@@ -14,6 +14,7 @@ export const LOOP_B_TOP_MOVERS_KEY = "loopB:v1:views:top_movers:latest";
 export const LOOP_B_LIQUIDITY_STRESS_KEY =
   "loopB:v1:views:liquidity_stress:latest";
 export const LOOP_B_FEATURES_LATEST_KEY = "loopB:v1:features:latest";
+export const LOOP_B_SCORES_LATEST_KEY = "loopB:v1:scores:latest";
 export const LOOP_B_HEALTH_KEY = "loopB:v1:health";
 
 type MinuteId = `${string}T${string}:00Z`;
@@ -86,10 +87,33 @@ type LoopBLiquidityStressView = {
   >;
 };
 
-type LoopBPairScoreRow = PairAggregate & {
+type LoopBScoreContributions = {
+  momentum: number;
+  confidence: number;
+  stabilityPenalty: number;
+  activity: number;
+};
+
+export type LoopBScoreRow = {
   schemaVersion: typeof LOOP_B_SCHEMA_VERSION;
   generatedAt: string;
   minute: MinuteId;
+  pairId: string;
+  baseMint: string;
+  quoteMint: string;
+  finalScore: number;
+  contributions: LoopBScoreContributions;
+  featuresRef: string;
+  revision: number;
+  explain: string[];
+};
+
+type LoopBScoreSet = {
+  schemaVersion: typeof LOOP_B_SCHEMA_VERSION;
+  generatedAt: string;
+  minute: MinuteId;
+  count: number;
+  rows: LoopBScoreRow[];
 };
 
 type LoopBHealth = {
@@ -456,6 +480,62 @@ function buildFeatureSet(input: {
   };
 }
 
+function round(value: number, digits = 6): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function buildScoreSet(input: { featureSet: LoopBFeatureSet }): LoopBScoreSet {
+  const rows = input.featureSet.rows
+    .map((row) => {
+      const momentum = row.returnPct * 0.55;
+      const confidence = row.confidenceAvg * 100 * 0.25;
+      const stabilityPenalty = row.volatilityPct * 0.2;
+      const activity = Math.log10(row.markCount + 1) * 2.5;
+      const finalScore = momentum + confidence + activity - stabilityPenalty;
+
+      const scoreRow: LoopBScoreRow = {
+        schemaVersion: LOOP_B_SCHEMA_VERSION,
+        generatedAt: row.generatedAt,
+        minute: row.minute,
+        pairId: row.pairId,
+        baseMint: row.baseMint,
+        quoteMint: row.quoteMint,
+        finalScore: round(finalScore, 8),
+        contributions: {
+          momentum: round(momentum, 8),
+          confidence: round(confidence, 8),
+          stabilityPenalty: round(stabilityPenalty, 8),
+          activity: round(activity, 8),
+        },
+        featuresRef: `${LOOP_B_FEATURES_LATEST_KEY}:pair:${row.pairId}`,
+        revision: row.revision,
+        explain: [
+          `score=momentum+confidence+activity-stability`,
+          `momentum=${round(momentum, 4)}`,
+          `confidence=${round(confidence, 4)}`,
+          `stability_penalty=${round(stabilityPenalty, 4)}`,
+          `activity=${round(activity, 4)}`,
+        ],
+      };
+      return scoreRow;
+    })
+    .sort((a, b) => {
+      if (a.finalScore !== b.finalScore) return b.finalScore - a.finalScore;
+      if (a.pairId < b.pairId) return -1;
+      if (a.pairId > b.pairId) return 1;
+      return 0;
+    });
+
+  return {
+    schemaVersion: LOOP_B_SCHEMA_VERSION,
+    generatedAt: input.featureSet.generatedAt,
+    minute: input.featureSet.minute,
+    count: rows.length,
+    rows,
+  };
+}
+
 function buildHealthArtifact(input: {
   state: MinuteAccumulatorState;
   generatedAt: string;
@@ -506,6 +586,21 @@ function featureSnapshotR2Key(input: {
   return `loopB/${LOOP_B_SCHEMA_VERSION}/features/date=${yyyy}-${mm}-${dd}/hour=${hh}/minute=${yyyy}-${mm}-${dd}T${hh}:${minute}:00Z/revision=${input.revision}/at=${token}.json`;
 }
 
+function scoreSnapshotR2Key(input: {
+  minute: MinuteId;
+  generatedAt: string;
+  revision: number;
+}): string {
+  const date = new Date(input.minute);
+  const yyyy = date.getUTCFullYear().toString().padStart(4, "0");
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  const token = input.generatedAt.replaceAll(":", "-");
+  return `loopB/${LOOP_B_SCHEMA_VERSION}/scores/date=${yyyy}-${mm}-${dd}/hour=${hh}/minute=${yyyy}-${mm}-${dd}T${hh}:${minute}:00Z/revision=${input.revision}/at=${token}.json`;
+}
+
 async function putKvJson(
   env: Env,
   key: string,
@@ -515,8 +610,8 @@ async function putKvJson(
   await env.CONFIG_KV.put(key, JSON.stringify(payload));
 }
 
-function pairScoreKey(pair: PairAggregate): string {
-  return `loopB:v1:scores:latest:pair:${pair.pairId}`;
+function pairScoreKey(pairIdValue: string): string {
+  return `loopB:v1:scores:latest:pair:${pairIdValue}`;
 }
 
 function featureRowKey(pairIdValue: string): string {
@@ -536,6 +631,7 @@ async function publishFinalizedMinute(input: {
     generatedAt: input.generatedAt,
     pairs,
   });
+  const scoreSet = buildScoreSet({ featureSet });
   const topMovers = buildTopMoversView({
     minute: input.minute,
     generatedAt: input.generatedAt,
@@ -552,18 +648,19 @@ async function publishFinalizedMinute(input: {
   await putKvJson(input.env, LOOP_B_TOP_MOVERS_KEY, topMovers);
   await putKvJson(input.env, LOOP_B_LIQUIDITY_STRESS_KEY, liquidityStress);
   await putKvJson(input.env, LOOP_B_FEATURES_LATEST_KEY, featureSet);
+  await putKvJson(input.env, LOOP_B_SCORES_LATEST_KEY, scoreSet);
   const featureRowsByPair = new Map(
     featureSet.rows.map((row) => [row.pairId, row] as const),
   );
+  const scoreRowsByPair = new Map(
+    scoreSet.rows.map((row) => [row.pairId, row] as const),
+  );
 
   for (const pair of pairs) {
-    const row: LoopBPairScoreRow = {
-      schemaVersion: LOOP_B_SCHEMA_VERSION,
-      generatedAt: input.generatedAt,
-      minute: input.minute,
-      ...pair,
-    };
-    await putKvJson(input.env, pairScoreKey(pair), row);
+    const scoreRow = scoreRowsByPair.get(pair.pairId) ?? null;
+    if (scoreRow) {
+      await putKvJson(input.env, pairScoreKey(pair.pairId), scoreRow);
+    }
     const featureRow = featureRowsByPair.get(pair.pairId) ?? null;
     if (featureRow) {
       await putKvJson(input.env, featureRowKey(pair.pairId), featureRow);
@@ -594,6 +691,14 @@ async function publishFinalizedMinute(input: {
           revision: input.minuteRecord.revision,
         }),
         JSON.stringify(featureSet),
+      ),
+      input.env.LOGS_BUCKET.put(
+        scoreSnapshotR2Key({
+          minute: input.minute,
+          generatedAt: input.generatedAt,
+          revision: input.minuteRecord.revision,
+        }),
+        JSON.stringify(scoreSet),
       ),
     ]);
   }
