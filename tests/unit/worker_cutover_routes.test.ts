@@ -120,5 +120,40 @@ describe("worker botless cutover routes", () => {
       ok: false,
       error: "unauthorized",
     });
+
+    const recommendationsLatestResponse = await worker.fetch(
+      new Request("http://localhost/api/recommendations/latest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wallet: "wallet-1" }),
+      }),
+      authEnv,
+      createExecutionContextStub(),
+    );
+    expect(recommendationsLatestResponse.status).toBe(401);
+    await expect(recommendationsLatestResponse.json()).resolves.toMatchObject({
+      ok: false,
+      error: "unauthorized",
+    });
+
+    const recommendationsFeedbackResponse = await worker.fetch(
+      new Request("http://localhost/api/recommendations/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          recommendationId: "2026-02-21T20:00:00.000Z:SOL:USDC",
+          decision: "yes",
+        }),
+      }),
+      authEnv,
+      createExecutionContextStub(),
+    );
+    expect(recommendationsFeedbackResponse.status).toBe(401);
+    await expect(recommendationsFeedbackResponse.json()).resolves.toMatchObject(
+      {
+        ok: false,
+        error: "unauthorized",
+      },
+    );
   });
 });

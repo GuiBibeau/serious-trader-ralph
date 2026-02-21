@@ -21,7 +21,12 @@ import {
 import { readLoopAHealthFromKv, recordLoopAHealthTick } from "./loop_a/health";
 import { runLoopATickPipeline } from "./loop_a/pipeline";
 import { MinuteAccumulator } from "./loop_b/minute_accumulator";
-import { Recommender } from "./loop_c/recommender";
+import {
+  Recommender,
+  requestLoopCRecommendations,
+  submitLoopCRecommendationFeedback,
+  type UserPersonaInput,
+} from "./loop_c/recommender";
 import {
   fetchMacroEtfFlows,
   fetchMacroFredIndicators,
@@ -1179,6 +1184,172 @@ export default {
         );
       }
 
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/recommendations/latest"
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        const payload = await readPayload(request);
+        const scopedWallet = resolveScopedWallet({
+          requestedWallet: payload.wallet,
+          userWallet: user.walletAddress,
+        });
+        if (!scopedWallet.ok) {
+          return withCors(
+            json({ ok: false, error: scopedWallet.error }, { status: 400 }),
+            env,
+          );
+        }
+        if (!scopedWallet.wallet) {
+          return withCors(
+            json({ ok: false, error: "user-wallet-missing" }, { status: 503 }),
+            env,
+          );
+        }
+        if (scopedWallet.forbidden) {
+          return withCors(
+            json(
+              { ok: false, error: "wallet-not-authorized" },
+              { status: 403 },
+            ),
+            env,
+          );
+        }
+        const persona = parseLoopCPersonaOverride(
+          payload.persona,
+          payload.riskMode,
+        );
+        const view = await requestLoopCRecommendations(env, {
+          userId: user.id,
+          wallet: scopedWallet.wallet,
+          limit: toBoundedInt(payload.limit, 10, 1, 50),
+          observedAt:
+            typeof payload.observedAt === "string" &&
+            payload.observedAt.trim().length > 0
+              ? payload.observedAt.trim()
+              : undefined,
+          ...(persona ? { persona } : {}),
+        });
+        if (!view) {
+          return withCors(
+            json(
+              { ok: false, error: "recommendations-unavailable" },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+
+        return withCors(
+          json({
+            ok: true,
+            view,
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/recommendations/feedback"
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        const payload = await readPayload(request);
+        const scopedWallet = resolveScopedWallet({
+          requestedWallet: payload.wallet,
+          userWallet: user.walletAddress,
+        });
+        if (!scopedWallet.ok) {
+          return withCors(
+            json({ ok: false, error: scopedWallet.error }, { status: 400 }),
+            env,
+          );
+        }
+        if (!scopedWallet.wallet) {
+          return withCors(
+            json({ ok: false, error: "user-wallet-missing" }, { status: 503 }),
+            env,
+          );
+        }
+        if (scopedWallet.forbidden) {
+          return withCors(
+            json(
+              { ok: false, error: "wallet-not-authorized" },
+              { status: 403 },
+            ),
+            env,
+          );
+        }
+
+        const decision = String(payload.decision ?? "")
+          .trim()
+          .toLowerCase();
+        if (decision !== "yes" && decision !== "no") {
+          return withCors(
+            json({ ok: false, error: "invalid-decision" }, { status: 400 }),
+            env,
+          );
+        }
+
+        const recommendationId =
+          typeof payload.recommendationId === "string"
+            ? payload.recommendationId.trim()
+            : "";
+        const pairId =
+          typeof payload.pairId === "string" ? payload.pairId.trim() : "";
+        if (!recommendationId && !pairId) {
+          return withCors(
+            json(
+              { ok: false, error: "missing-recommendation-target" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        const update = await submitLoopCRecommendationFeedback(env, {
+          userId: user.id,
+          wallet: scopedWallet.wallet,
+          ...(recommendationId ? { recommendationId } : {}),
+          ...(pairId ? { pairId } : {}),
+          decision,
+          reason:
+            typeof payload.reason === "string"
+              ? payload.reason.trim()
+              : undefined,
+          decidedAt:
+            typeof payload.decidedAt === "string" &&
+            payload.decidedAt.trim().length > 0
+              ? payload.decidedAt.trim()
+              : undefined,
+        });
+
+        if (!update) {
+          return withCors(
+            json(
+              { ok: false, error: "recommendations-unavailable" },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+
+        return withCors(
+          json({
+            ok: true,
+            ack: {
+              decision,
+              ...(recommendationId ? { recommendationId } : {}),
+              ...(pairId ? { pairId } : {}),
+            },
+            signalState: update,
+          }),
+          env,
+        );
+      }
+
       if (request.method === "PATCH" && url.pathname === "/api/me/profile") {
         const user = await requireOnboardedUser(request, env);
         const payload = await readPayload(request);
@@ -1648,6 +1819,94 @@ function toUniqueStrings(value: unknown, maxItems: number): string[] {
     if (out.length >= maxItems) break;
   }
   return out;
+}
+
+function parseRiskMode(
+  value: unknown,
+): "conservative" | "balanced" | "aggressive" | null {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "conservative") return "conservative";
+  if (normalized === "balanced") return "balanced";
+  if (normalized === "aggressive") return "aggressive";
+  return null;
+}
+
+function parseLoopCPersonaOverride(
+  value: unknown,
+  riskModeRaw: unknown,
+): UserPersonaInput | undefined {
+  const persona = isRecord(value) ? value : {};
+  const fromRiskMode = parseRiskMode(riskModeRaw);
+  const riskBudgetRaw = persona.riskBudget;
+  let riskBudget: UserPersonaInput["riskBudget"] | undefined;
+  if (
+    riskBudgetRaw === "low" ||
+    riskBudgetRaw === "medium" ||
+    riskBudgetRaw === "high"
+  ) {
+    riskBudget = riskBudgetRaw;
+  } else if (
+    typeof riskBudgetRaw === "number" &&
+    Number.isFinite(riskBudgetRaw) &&
+    riskBudgetRaw >= 0
+  ) {
+    riskBudget = riskBudgetRaw;
+  }
+
+  if (fromRiskMode === "conservative") riskBudget = "low";
+  if (fromRiskMode === "balanced") riskBudget = "medium";
+  if (fromRiskMode === "aggressive") riskBudget = "high";
+
+  const horizonRaw = String(persona.horizon ?? "")
+    .trim()
+    .toLowerCase();
+  const horizon: UserPersonaInput["horizon"] =
+    horizonRaw === "short" || horizonRaw === "medium" || horizonRaw === "long"
+      ? horizonRaw
+      : undefined;
+  const sectorPreferences = toUniqueStrings(persona.sectorPreferences, 20);
+  const excludedAssets = toUniqueStrings(persona.excludedAssets, 200);
+  const excludedProtocols = toUniqueStrings(persona.excludedProtocols, 50);
+
+  const parsed: UserPersonaInput = {
+    ...(riskBudget !== undefined ? { riskBudget } : {}),
+    ...(horizon ? { horizon } : {}),
+    ...(sectorPreferences.length > 0 ? { sectorPreferences } : {}),
+    ...(excludedAssets.length > 0 ? { excludedAssets } : {}),
+    ...(excludedProtocols.length > 0 ? { excludedProtocols } : {}),
+  };
+
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function resolveScopedWallet(input: {
+  requestedWallet: unknown;
+  userWallet: string | null;
+}):
+  | { ok: true; wallet: string | null; forbidden: false }
+  | { ok: true; wallet: string | null; forbidden: true }
+  | { ok: false; error: string } {
+  const userWallet = String(input.userWallet ?? "").trim();
+  if (!userWallet) {
+    return { ok: true, wallet: null, forbidden: false };
+  }
+
+  if (input.requestedWallet === undefined || input.requestedWallet === null) {
+    return { ok: true, wallet: userWallet, forbidden: false };
+  }
+  if (typeof input.requestedWallet !== "string") {
+    return { ok: false, error: "invalid-wallet" };
+  }
+  const requestedWallet = input.requestedWallet.trim();
+  if (!requestedWallet) {
+    return { ok: true, wallet: userWallet, forbidden: false };
+  }
+  if (requestedWallet !== userWallet) {
+    return { ok: true, wallet: userWallet, forbidden: true };
+  }
+  return { ok: true, wallet: requestedWallet, forbidden: false };
 }
 
 function summarizeJupiterQuote(

@@ -48,6 +48,8 @@ It is intentionally written as something you can hand to an implementation agent
   - feedback writes invalidate minute cache and shift acceptance probability predictably for subsequent rankings,
   - hard guardrails suppress candidates by liquidity floor, staleness cutoff, excluded assets, and excluded protocols,
   - ranking includes explicit risk/stability tags and surfaces rejection reason tags for suppressed candidates,
+  - Worker now exposes auth-only recommendation APIs at `/api/recommendations/latest` and `/api/recommendations/feedback` with user wallet scoping,
+  - personalized recommendation payloads remain unavailable through public x402 routes (`/api/x402/read/*`),
   - persists per-user wallet-scoped latest recommendations to Cloudflare Key-Value store and Cloudflare R2 object storage.
 
 ### Execution routing already exists (v0)
