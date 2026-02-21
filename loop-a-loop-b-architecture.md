@@ -34,6 +34,10 @@ It is intentionally written as something you can hand to an implementation agent
   - writes Loop A health artifacts to `loopA:v1:health` in Cloudflare Key-Value store on every tick (success/failure),
   - writes latest tick latency telemetry to `loopA:v1:latency:latest`,
   - persists per-tick health and latency snapshots to Cloudflare R2 object storage when bound.
+- Loop B MinuteAccumulator (current):
+  - Durable Object ingests Loop A marks incrementally and tracks per-minute revisions in stateful storage,
+  - finalizes minute snapshots to hot Cloudflare Key-Value store views (`top_movers`, `liquidity_stress`, per-pair latest scores, health),
+  - re-finalizes corrected minutes when late/corrected marks arrive, and writes minute snapshots to Cloudflare R2 object storage.
 
 ### Execution routing already exists (v0)
 

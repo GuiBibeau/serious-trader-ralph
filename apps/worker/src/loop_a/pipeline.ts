@@ -1,3 +1,4 @@
+import { publishMarksToMinuteAccumulator } from "../loop_b/minute_accumulator";
 import type { Env } from "../types";
 import { createDefaultDecoderRegistry } from "./adapters";
 import { runLoopABackfillResolverTick } from "./backfill_resolver";
@@ -171,6 +172,20 @@ export async function runLoopATickPipeline(
       commitment: markCommitment,
     });
     console.log("loop_a.mark_engine.tick", markResult);
+
+    try {
+      const loopBIngestResult = await publishMarksToMinuteAccumulator(env, {
+        marks: markResult.marks,
+      });
+      if (loopBIngestResult) {
+        console.log("loop_b.minute_accumulator.ingest", loopBIngestResult);
+      }
+    } catch (error) {
+      console.error("loop_b.minute_accumulator.ingest.error", {
+        message: error instanceof Error ? error.message : "unknown-error",
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
   }
 
   const stateCommitment = resolveStateCommitment(env.LOOP_A_STATE_COMMITMENT);
