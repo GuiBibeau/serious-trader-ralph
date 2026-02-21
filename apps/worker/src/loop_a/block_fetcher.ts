@@ -18,6 +18,12 @@ type BlockFetchTarget = {
   commitment: SlotCommitment;
 };
 
+export type FetchedBlock = {
+  slot: number;
+  commitment: SlotCommitment;
+  block: Record<string, unknown>;
+};
+
 export type BlockMissingTask = {
   schemaVersion: "v1";
   commitment: SlotCommitment;
@@ -42,6 +48,7 @@ export type BlockFetcherTickResult = {
   failed: number;
   missingTasksEmitted: number;
   maxObservedConcurrency: number;
+  onFetchedBlockErrors: number;
 };
 
 function isSlotCommitment(value: string): value is SlotCommitment {
@@ -199,6 +206,7 @@ async function runTargetWithRetry(
 ): Promise<{
   status: BlockFetchStatus;
   reason?: BlockMissingTask["reason"];
+  block?: Record<string, unknown>;
 }> {
   let attempt = 0;
   while (attempt <= options.maxRetries) {
@@ -211,7 +219,7 @@ async function runTargetWithRetry(
       if (block === null) {
         return { status: "missing", reason: "rpc-null" };
       }
-      return { status: "fetched" };
+      return { status: "fetched", block };
     } catch (error) {
       if (isMissingBlockError(error)) {
         return { status: "missing", reason: "rpc-missing" };
@@ -246,18 +254,24 @@ async function processTargetsWithConcurrency(
   processor: (target: BlockFetchTarget) => Promise<{
     status: BlockFetchStatus;
     reason?: BlockMissingTask["reason"];
+    block?: Record<string, unknown>;
   }>,
+  options?: {
+    onFetchedBlock?: (input: FetchedBlock) => Promise<void> | void;
+  },
 ): Promise<{
   fetched: number;
   missingTasks: BlockMissingTask[];
   failed: number;
   maxObservedConcurrency: number;
+  onFetchedBlockErrors: number;
 }> {
   let index = 0;
   let active = 0;
   let maxObservedConcurrency = 0;
   let fetched = 0;
   let failed = 0;
+  let onFetchedBlockErrors = 0;
   const missingTasks: BlockMissingTask[] = [];
 
   async function workerLoop(): Promise<void> {
@@ -274,6 +288,17 @@ async function processTargetsWithConcurrency(
         const result = await processor(target);
         if (result.status === "fetched") {
           fetched += 1;
+          if (result.block && options?.onFetchedBlock) {
+            try {
+              await options.onFetchedBlock({
+                slot: target.slot,
+                commitment: target.commitment,
+                block: result.block,
+              });
+            } catch {
+              onFetchedBlockErrors += 1;
+            }
+          }
         } else if (result.reason) {
           if (result.status === "failed") failed += 1;
           missingTasks.push({
@@ -303,6 +328,7 @@ async function processTargetsWithConcurrency(
     missingTasks,
     failed,
     maxObservedConcurrency,
+    onFetchedBlockErrors,
   };
 }
 
@@ -315,6 +341,7 @@ export async function runLoopABlockFetcherTick(
   options?: {
     config?: BlockFetcherConfig;
     rpc?: Pick<SolanaRpc, "getBlock">;
+    onFetchedBlock?: (input: FetchedBlock) => Promise<void> | void;
   },
 ): Promise<BlockFetcherTickResult> {
   if (!env.CONFIG_KV) {
@@ -337,6 +364,7 @@ export async function runLoopABlockFetcherTick(
       failed: 0,
       missingTasksEmitted: 0,
       maxObservedConcurrency: 0,
+      onFetchedBlockErrors: 0,
     };
   }
 
@@ -349,6 +377,9 @@ export async function runLoopABlockFetcherTick(
         maxRetries: config.maxRetries,
         baseBackoffMs: config.baseBackoffMs,
       }),
+    {
+      onFetchedBlock: options?.onFetchedBlock,
+    },
   );
 
   const missingTasksEmitted = await emitBlockMissingTasksToKv(
@@ -363,5 +394,6 @@ export async function runLoopABlockFetcherTick(
     failed: runResult.failed,
     missingTasksEmitted,
     maxObservedConcurrency: runResult.maxObservedConcurrency,
+    onFetchedBlockErrors: runResult.onFetchedBlockErrors,
   };
 }

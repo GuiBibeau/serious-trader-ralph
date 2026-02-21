@@ -14,7 +14,9 @@ import {
 } from "./experience";
 import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
 import { JupiterClient } from "./jupiter";
+import { createDefaultDecoderRegistry } from "./loop_a/adapters";
 import { runLoopABlockFetcherTick } from "./loop_a/block_fetcher";
+import { decodeProtocolEventsFromBlock } from "./loop_a/decoder_registry";
 import { runLoopASlotSourceTick } from "./loop_a/slot_source";
 import {
   fetchMacroEtfFlows,
@@ -1452,11 +1454,37 @@ export default {
         return;
       }
 
-      const blockFetchResult = await runLoopABlockFetcherTick(env, {
-        cursorBefore: result.cursorBefore,
-        cursorAfter: result.cursorAfter,
+      const decoderEnabled =
+        String(env.LOOP_A_DECODER_ENABLED ?? "0").trim() === "1";
+      const decoderRegistry = decoderEnabled
+        ? createDefaultDecoderRegistry()
+        : null;
+      let decodedEvents = 0;
+
+      const blockFetchResult = await runLoopABlockFetcherTick(
+        env,
+        {
+          cursorBefore: result.cursorBefore,
+          cursorAfter: result.cursorAfter,
+        },
+        {
+          onFetchedBlock: decoderRegistry
+            ? async (fetched) => {
+                const events = decodeProtocolEventsFromBlock({
+                  slot: fetched.slot,
+                  commitment: fetched.commitment,
+                  block: fetched.block,
+                  registry: decoderRegistry,
+                });
+                decodedEvents += events.length;
+              }
+            : undefined,
+        },
+      );
+      console.log("loop_a.block_fetcher.tick", {
+        ...blockFetchResult,
+        decodedEvents,
       });
-      console.log("loop_a.block_fetcher.tick", blockFetchResult);
     } catch (error) {
       console.error("loop_a.scheduled.error", {
         message: error instanceof Error ? error.message : "unknown-error",
