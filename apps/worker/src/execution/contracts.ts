@@ -270,10 +270,40 @@ export function applyExecutionResultToTrace(input: {
   settledAt: string;
 }): ExecutionLatencyTrace {
   const settledAt = toIsoOrFallback(input.settledAt, new Date().toISOString());
+  const resultTrace = input.result.executionMeta?.trace;
+  const txBuiltAt = resultTrace?.txBuiltAt
+    ? toIsoOrFallback(resultTrace.txBuiltAt, settledAt)
+    : input.trace.txBuiltAt;
+  const simulatedAt = resultTrace?.simulatedAt
+    ? toIsoOrFallback(resultTrace.simulatedAt, settledAt)
+    : input.trace.simulatedAt;
+  const sentAtFromMeta = resultTrace?.sentAt
+    ? toIsoOrFallback(resultTrace.sentAt, settledAt)
+    : null;
+  const landedAtFromMeta = resultTrace?.landedAt
+    ? toIsoOrFallback(resultTrace.landedAt, settledAt)
+    : null;
+  const confirmedAtFromMeta = resultTrace?.confirmedAt
+    ? toIsoOrFallback(resultTrace.confirmedAt, settledAt)
+    : null;
+  const finalizedAtFromMeta = resultTrace?.finalizedAt
+    ? toIsoOrFallback(resultTrace.finalizedAt, settledAt)
+    : null;
+  const failedAtFromMeta = resultTrace?.failedAt
+    ? toIsoOrFallback(resultTrace.failedAt, settledAt)
+    : null;
+
   const next: ExecutionLatencyTrace = {
     ...input.trace,
+    txBuiltAt,
+    simulatedAt,
+    ...(sentAtFromMeta ? { sentAt: sentAtFromMeta } : {}),
+    ...(landedAtFromMeta ? { landedAt: landedAtFromMeta } : {}),
+    ...(confirmedAtFromMeta ? { confirmedAt: confirmedAtFromMeta } : {}),
+    ...(finalizedAtFromMeta ? { finalizedAt: finalizedAtFromMeta } : {}),
+    ...(failedAtFromMeta ? { failedAt: failedAtFromMeta } : {}),
     ...(input.result.signature
-      ? { sentAt: input.trace.sentAt ?? settledAt }
+      ? { sentAt: input.trace.sentAt ?? sentAtFromMeta ?? settledAt }
       : {}),
   };
 
@@ -288,18 +318,18 @@ export function applyExecutionResultToTrace(input: {
   }
   if (input.result.status === "confirmed") {
     next.landedAt = next.landedAt ?? settledAt;
-    next.confirmedAt = settledAt;
+    next.confirmedAt = next.confirmedAt ?? settledAt;
   }
   if (input.result.status === "finalized") {
     next.landedAt = next.landedAt ?? settledAt;
     next.confirmedAt = next.confirmedAt ?? settledAt;
-    next.finalizedAt = settledAt;
+    next.finalizedAt = next.finalizedAt ?? settledAt;
   }
   if (
     input.result.status === "simulate_error" ||
     input.result.status === "error"
   ) {
-    next.failedAt = settledAt;
+    next.failedAt = next.failedAt ?? settledAt;
   }
 
   return next;

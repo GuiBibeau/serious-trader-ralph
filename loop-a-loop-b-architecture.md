@@ -60,6 +60,7 @@ There is already an execution router with adapters for:
 - "Jito bundle" ([GitHub][6])
 - execution contract artifacts now include versioned `ExecutionIntent`, `ExecutionDecision`, `ExecutionLatencyTrace`, and `ExecutionReceipt` records persisted to content-addressed keys in Cloudflare R2 object storage during swap attempts.
 - a new `ExecutionCoordinator` Durable Object is available (flag-gated) for deterministic queue ordering and route decisions with explicit rejection reasons.
+- Jito execution adapter now supports block engine submission flow (`sendBundle` + tip-account discovery + bundle status classification) and emits route-level execution metadata for latency tracing.
 
 ---
 

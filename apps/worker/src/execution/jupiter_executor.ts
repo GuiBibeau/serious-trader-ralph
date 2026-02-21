@@ -2,6 +2,10 @@ import { signTransactionWithPrivyById } from "../privy";
 import { swapWithRetry } from "../swap";
 import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
 
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
 function normalizeConfirmationStatus(
   status: string | undefined,
 ): Extract<
@@ -21,6 +25,7 @@ function normalizeConfirmationStatus(
 export async function executeJupiterSwap(
   input: ExecuteSwapInput,
 ): Promise<ExecuteSwapResult> {
+  const route = "jupiter";
   const {
     env,
     policy,
@@ -40,6 +45,10 @@ export async function executeJupiterSwap(
       usedQuote: quoteResponse,
       refreshed: false,
       lastValidBlockHeight: null,
+      executionMeta: {
+        route,
+        classification: "dry_run",
+      },
     };
   }
 
@@ -50,6 +59,7 @@ export async function executeJupiterSwap(
     quoteResponse: usedQuote,
     refreshed,
   } = await swapWithRetry(jupiter, quoteResponse, userPublicKey, policy);
+  const txBuiltAt = nowIso();
 
   if (!privyWalletId) {
     throw new Error("missing-privy-wallet-id");
@@ -68,6 +78,7 @@ export async function executeJupiterSwap(
       commitment: policy.commitment,
       sigVerify: true,
     });
+    const simulatedAt = nowIso();
     const ok = !sim.err;
     log(ok ? "info" : "warn", "tx simulated", {
       ok,
@@ -81,6 +92,15 @@ export async function executeJupiterSwap(
       refreshed,
       lastValidBlockHeight: swap.lastValidBlockHeight,
       err: sim.err ?? null,
+      executionMeta: {
+        route,
+        classification: ok ? "simulated" : "error",
+        trace: {
+          txBuiltAt,
+          simulatedAt,
+          ...(ok ? {} : { failedAt: simulatedAt }),
+        },
+      },
     };
   }
 
@@ -90,6 +110,7 @@ export async function executeJupiterSwap(
     skipPreflight: policy.skipPreflight,
     preflightCommitment: policy.commitment,
   });
+  const sentAt = nowIso();
 
   log("info", "tx submitted", {
     signature,
@@ -99,6 +120,7 @@ export async function executeJupiterSwap(
   const confirmation = await rpc.confirmSignature(signature, {
     commitment: policy.commitment,
   });
+  const finalizedOrConfirmedAt = nowIso();
   const status = confirmation.ok
     ? normalizeConfirmationStatus(confirmation.status)
     : "error";
@@ -115,5 +137,35 @@ export async function executeJupiterSwap(
     refreshed,
     lastValidBlockHeight: swap.lastValidBlockHeight,
     err: confirmation.err ?? null,
+    executionMeta: {
+      route,
+      classification:
+        status === "processed"
+          ? "landed"
+          : status === "confirmed"
+            ? "confirmed"
+            : status === "finalized"
+              ? "finalized"
+              : "error",
+      trace: {
+        txBuiltAt,
+        sentAt,
+        ...(status === "processed" ? { landedAt: finalizedOrConfirmedAt } : {}),
+        ...(status === "confirmed"
+          ? {
+              landedAt: finalizedOrConfirmedAt,
+              confirmedAt: finalizedOrConfirmedAt,
+            }
+          : {}),
+        ...(status === "finalized"
+          ? {
+              landedAt: finalizedOrConfirmedAt,
+              confirmedAt: finalizedOrConfirmedAt,
+              finalizedAt: finalizedOrConfirmedAt,
+            }
+          : {}),
+        ...(status === "error" ? { failedAt: finalizedOrConfirmedAt } : {}),
+      },
+    },
   };
 }

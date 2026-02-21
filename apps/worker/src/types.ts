@@ -63,6 +63,7 @@ export type Env = {
   BALANCE_RPC_ENDPOINT?: string;
   JUPITER_BASE_URL?: string;
   JUPITER_API_KEY?: string;
+  JITO_BLOCK_ENGINE_URL?: string;
   BILLING_MERCHANT_WALLET?: string;
   BILLING_STABLE_MINT?: string;
   BILLING_RPC_ENDPOINT?: string;
