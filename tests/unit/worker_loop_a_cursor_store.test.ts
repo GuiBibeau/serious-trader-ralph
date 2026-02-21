@@ -3,11 +3,14 @@ import {
   emitBackfillTasksToKv,
   loopABackfillTaskKey,
   readLoopACursorFromKv,
+  readLoopACursorStateFromKv,
+  writeLoopACursorStateToKv,
   writeLoopACursorToKv,
 } from "../../apps/worker/src/loop_a/cursor_store_kv";
 import type {
   BackfillTask,
   LoopACursor,
+  LoopACursorState,
 } from "../../apps/worker/src/loop_a/types";
 import type { Env } from "../../apps/worker/src/types";
 
@@ -74,6 +77,24 @@ describe("worker loop A cursor store", () => {
 
     const loaded = await readLoopACursorFromKv(env);
     expect(loaded).toEqual(cursor);
+  });
+
+  test("writes and reads cursor-state payload", async () => {
+    const { env } = createEnv(true);
+    const cursorState: LoopACursorState = {
+      schemaVersion: "v1",
+      updatedAt: "2026-02-21T03:00:00Z",
+      headCursor: { processed: 120, confirmed: 119, finalized: 118 },
+      fetchedCursor: { processed: 118, confirmed: 118, finalized: 117 },
+      ingestionCursor: { processed: 117, confirmed: 117, finalized: 116 },
+      stateCursor: { processed: 117, confirmed: 117, finalized: 116 },
+    };
+
+    const wrote = await writeLoopACursorStateToKv(env, cursorState);
+    expect(wrote).toBe(true);
+
+    const loaded = await readLoopACursorStateFromKv(env);
+    expect(loaded).toEqual(cursorState);
   });
 
   test("emits idempotent backfill task keys", async () => {

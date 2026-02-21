@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  createEmptyMarkerBatch,
   type LoopAEventBatch,
   type LoopAStateSnapshot,
   loopAEventBatchKey,
   loopAStateLatestKey,
   loopAStateSnapshotKey,
+  resolveContiguousIngestionSlot,
   runLoopACanonicalStateTick,
 } from "../../apps/worker/src/loop_a/canonical_state";
 import type { LoopACursor } from "../../apps/worker/src/loop_a/types";
@@ -242,5 +244,55 @@ describe("worker loop A canonical state", () => {
     const snapshot = readSnapshot(store, loopAStateLatestKey("confirmed"));
     expect(snapshot?.slot).toBe(12);
     expect(snapshot?.trackedState.totalEvents).toBe(2);
+  });
+
+  test("continues replay through explicit empty-batch markers", async () => {
+    const { env, store } = createEnv();
+
+    await runLoopACanonicalStateTick(env, {
+      cursorAfter: cursor(300, 300, 299),
+      decodedBatches: [batch(300, [transferEvent(300, "sig-300")])],
+      commitment: "confirmed",
+      snapshotEverySlots: 100,
+      observedAt: "2026-02-21T04:37:00.000Z",
+    });
+
+    store.set(
+      loopAEventBatchKey("confirmed", 301),
+      JSON.stringify(
+        createEmptyMarkerBatch({
+          commitment: "confirmed",
+          slot: 301,
+          generatedAt: "2026-02-21T04:38:00.000Z",
+          reason: "missing_in_storage",
+          source: "backfill_resolver",
+        }),
+      ),
+    );
+    store.set(
+      loopAEventBatchKey("confirmed", 302),
+      JSON.stringify(batch(302, [swapEvent(302, "sig-302")], "confirmed")),
+    );
+
+    const result = await runLoopACanonicalStateTick(env, {
+      cursorAfter: cursor(302, 302, 299),
+      decodedBatches: [],
+      commitment: "confirmed",
+      snapshotEverySlots: 100,
+      observedAt: "2026-02-21T04:39:00.000Z",
+    });
+
+    expect(result.replayMissingSlots).toEqual([]);
+    expect(result.snapshotAfterSlot).toBe(302);
+    expect(result.appliedEvents).toBe(1);
+
+    const contiguous = await resolveContiguousIngestionSlot({
+      env,
+      commitment: "confirmed",
+      fromSlot: 300,
+      targetSlot: 302,
+    });
+    expect(contiguous.ingestionSlot).toBe(302);
+    expect(contiguous.missingSlot).toBeNull();
   });
 });

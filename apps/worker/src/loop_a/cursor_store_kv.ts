@@ -2,8 +2,11 @@ import type { Env } from "../types";
 import {
   type BackfillTask,
   LOOP_A_CURSOR_KEY,
+  LOOP_A_CURSOR_STATE_KEY,
   LOOP_A_SCHEMA_VERSION,
   type LoopACursor,
+  type LoopACursorHeads,
+  type LoopACursorState,
 } from "./types";
 
 function isFiniteSlot(value: unknown): value is number {
@@ -46,6 +49,75 @@ export function parseLoopACursor(input: unknown): LoopACursor | null {
   };
 }
 
+function parseLoopACursorHeads(input: unknown): LoopACursorHeads | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+  const processed = record.processed;
+  const confirmed = record.confirmed;
+  const finalized = record.finalized;
+  if (
+    !isFiniteSlot(processed) ||
+    !isFiniteSlot(confirmed) ||
+    !isFiniteSlot(finalized)
+  ) {
+    return null;
+  }
+  return {
+    processed,
+    confirmed,
+    finalized,
+  };
+}
+
+export function headsFromLoopACursor(cursor: LoopACursor): LoopACursorHeads {
+  return {
+    processed: cursor.processed,
+    confirmed: cursor.confirmed,
+    finalized: cursor.finalized,
+  };
+}
+
+export function toLoopACursor(input: {
+  heads: LoopACursorHeads;
+  updatedAt: string;
+}): LoopACursor {
+  return {
+    schemaVersion: LOOP_A_SCHEMA_VERSION,
+    processed: input.heads.processed,
+    confirmed: input.heads.confirmed,
+    finalized: input.heads.finalized,
+    updatedAt: input.updatedAt,
+  };
+}
+
+export function parseLoopACursorState(input: unknown): LoopACursorState | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+  const schemaVersion = record.schemaVersion;
+  const updatedAt = record.updatedAt;
+  const headCursor = parseLoopACursorHeads(record.headCursor);
+  const fetchedCursor = parseLoopACursorHeads(record.fetchedCursor);
+  const ingestionCursor = parseLoopACursorHeads(record.ingestionCursor);
+  const stateCursor = parseLoopACursorHeads(record.stateCursor);
+
+  if (schemaVersion !== LOOP_A_SCHEMA_VERSION) return null;
+  if (typeof updatedAt !== "string" || Number.isNaN(Date.parse(updatedAt))) {
+    return null;
+  }
+  if (!headCursor || !fetchedCursor || !ingestionCursor || !stateCursor) {
+    return null;
+  }
+
+  return {
+    schemaVersion,
+    updatedAt,
+    headCursor,
+    fetchedCursor,
+    ingestionCursor,
+    stateCursor,
+  };
+}
+
 export async function readLoopACursorFromKv(
   env: Env,
 ): Promise<LoopACursor | null> {
@@ -61,12 +133,36 @@ export async function readLoopACursorFromKv(
   }
 }
 
+export async function readLoopACursorStateFromKv(
+  env: Env,
+): Promise<LoopACursorState | null> {
+  if (!env.CONFIG_KV) return null;
+  const raw = await env.CONFIG_KV.get(LOOP_A_CURSOR_STATE_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    return parseLoopACursorState(parsed);
+  } catch {
+    return null;
+  }
+}
+
 export async function writeLoopACursorToKv(
   env: Env,
   cursor: LoopACursor,
 ): Promise<boolean> {
   if (!env.CONFIG_KV) return false;
   await env.CONFIG_KV.put(LOOP_A_CURSOR_KEY, JSON.stringify(cursor));
+  return true;
+}
+
+export async function writeLoopACursorStateToKv(
+  env: Env,
+  cursorState: LoopACursorState,
+): Promise<boolean> {
+  if (!env.CONFIG_KV) return false;
+  await env.CONFIG_KV.put(LOOP_A_CURSOR_STATE_KEY, JSON.stringify(cursorState));
   return true;
 }
 
