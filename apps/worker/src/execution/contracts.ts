@@ -25,28 +25,6 @@ export type ExecutionLatencyEntry = {
   };
 };
 
-export type ExecutionLatencyLast100View = {
-  schemaVersion: typeof EXECUTION_SCHEMA_VERSION;
-  updatedAt: string;
-  entries: ExecutionLatencyEntry[];
-};
-
-export type ExecutionLatencyMinuteView = {
-  schemaVersion: typeof EXECUTION_SCHEMA_VERSION;
-  minute: MinuteId;
-  updatedAt: string;
-  count: number;
-  routes: Record<
-    string,
-    {
-      count: number;
-      successCount: number;
-      errorCount: number;
-      latenciesMs: number[];
-    }
-  >;
-};
-
 export type ExecutionIntent = {
   schemaVersion: typeof EXECUTION_SCHEMA_VERSION;
   intentId: string;
@@ -243,85 +221,18 @@ function toLatencyEntry(
   };
 }
 
-function parseLast100View(raw: string | null): ExecutionLatencyLast100View {
-  if (!raw) {
-    return {
-      schemaVersion: EXECUTION_SCHEMA_VERSION,
-      updatedAt: new Date().toISOString(),
-      entries: [],
-    };
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<ExecutionLatencyLast100View>;
-    const entries = Array.isArray(parsed.entries)
-      ? parsed.entries.filter(
-          (entry): entry is ExecutionLatencyEntry =>
-            Boolean(entry) &&
-            typeof entry === "object" &&
-            typeof (entry as ExecutionLatencyEntry).receiptId === "string" &&
-            typeof (entry as ExecutionLatencyEntry).generatedAt === "string",
-        )
-      : [];
-    return {
-      schemaVersion: EXECUTION_SCHEMA_VERSION,
-      updatedAt:
-        typeof parsed.updatedAt === "string"
-          ? parsed.updatedAt
-          : new Date().toISOString(),
-      entries,
-    };
-  } catch {
-    return {
-      schemaVersion: EXECUTION_SCHEMA_VERSION,
-      updatedAt: new Date().toISOString(),
-      entries: [],
-    };
-  }
+function sanitizeKeyToken(input: string): string {
+  return input.replace(/[^a-zA-Z0-9._:-]/g, "_");
 }
 
-function parseMinuteView(
-  raw: string | null,
-  minute: MinuteId,
-): ExecutionLatencyMinuteView {
-  if (!raw) {
-    return {
-      schemaVersion: EXECUTION_SCHEMA_VERSION,
-      minute,
-      updatedAt: new Date().toISOString(),
-      count: 0,
-      routes: {},
-    };
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<ExecutionLatencyMinuteView>;
-    const routes =
-      parsed.routes &&
-      typeof parsed.routes === "object" &&
-      !Array.isArray(parsed.routes)
-        ? (parsed.routes as ExecutionLatencyMinuteView["routes"])
-        : {};
-    return {
-      schemaVersion: EXECUTION_SCHEMA_VERSION,
-      minute,
-      updatedAt:
-        typeof parsed.updatedAt === "string"
-          ? parsed.updatedAt
-          : new Date().toISOString(),
-      count:
-        typeof parsed.count === "number" && parsed.count >= 0
-          ? Math.floor(parsed.count)
-          : 0,
-      routes,
-    };
-  } catch {
-    return {
-      schemaVersion: EXECUTION_SCHEMA_VERSION,
-      minute,
-      updatedAt: new Date().toISOString(),
-      count: 0,
-      routes: {},
-    };
-  }
+function executionLatencyLast100ItemKey(entry: ExecutionLatencyEntry): string {
+  const tsToken = sanitizeKeyToken(entry.generatedAt);
+  return `${EXEC_LATENCY_LAST_100_KEY}:ts=${tsToken}:receipt=${entry.receiptId}`;
+}
+
+function executionLatencyMinuteItemKey(entry: ExecutionLatencyEntry): string {
+  const routeToken = sanitizeKeyToken(entry.route);
+  return `${executionLatencyMinuteKey(entry.minute)}:route=${routeToken}:receipt=${entry.receiptId}`;
 }
 
 async function updateLatencyKv(
@@ -330,48 +241,17 @@ async function updateLatencyKv(
 ): Promise<void> {
   const entry = toLatencyEntry(receipt);
   if (!entry) return;
-  const [last100Raw, minuteRaw] = await Promise.all([
-    kv.get(EXEC_LATENCY_LAST_100_KEY),
-    kv.get(executionLatencyMinuteKey(entry.minute)),
-  ]);
-  const last100 = parseLast100View(last100Raw);
-  const minuteView = parseMinuteView(minuteRaw, entry.minute);
-
-  const deduped = last100.entries.filter(
-    (existing) => existing.receiptId !== entry.receiptId,
-  );
-  last100.entries = [entry, ...deduped].slice(0, 100);
-  last100.updatedAt = receipt.generatedAt;
-
-  minuteView.updatedAt = receipt.generatedAt;
-  minuteView.count += 1;
-  const bucket = minuteView.routes[entry.route] ?? {
-    count: 0,
-    successCount: 0,
-    errorCount: 0,
-    latenciesMs: [],
-  };
-  bucket.count += 1;
-  if (
-    entry.status === "confirmed" ||
-    entry.status === "finalized" ||
-    entry.status === "processed"
-  ) {
-    bucket.successCount += 1;
-  } else {
-    bucket.errorCount += 1;
-  }
-  if (typeof entry.latencyMs.toTerminal === "number") {
-    bucket.latenciesMs = [
-      ...bucket.latenciesMs,
-      entry.latencyMs.toTerminal,
-    ].slice(-500);
-  }
-  minuteView.routes[entry.route] = bucket;
-
   await Promise.all([
-    kv.put(EXEC_LATENCY_LAST_100_KEY, JSON.stringify(last100)),
-    kv.put(executionLatencyMinuteKey(entry.minute), JSON.stringify(minuteView)),
+    kv.put(executionLatencyLast100ItemKey(entry), JSON.stringify(entry)),
+    kv.put(
+      executionLatencyMinuteItemKey(entry),
+      JSON.stringify({
+        generatedAt: entry.generatedAt,
+        route: entry.route,
+        status: entry.status,
+        latencyMs: entry.latencyMs,
+      }),
+    ),
   ]);
 }
 

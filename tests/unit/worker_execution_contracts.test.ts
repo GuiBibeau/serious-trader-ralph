@@ -155,9 +155,16 @@ describe("worker execution contracts", () => {
           | undefined
       )?.contentSha256,
     ).toBe(receipt.storage.contentSha256);
-    expect(kvWrites.has(EXEC_LATENCY_LAST_100_KEY)).toBe(true);
+    const kvKeys = Array.from(kvWrites.keys());
     expect(
-      kvWrites.has(executionLatencyMinuteKey("2026-02-21T20:10:00.000Z")),
+      kvKeys.some((key) => key.startsWith(`${EXEC_LATENCY_LAST_100_KEY}:`)),
+    ).toBe(true);
+    expect(
+      kvKeys.some((key) =>
+        key.startsWith(
+          `${executionLatencyMinuteKey("2026-02-21T20:10:00.000Z")}:`,
+        ),
+      ),
     ).toBe(true);
   });
 
