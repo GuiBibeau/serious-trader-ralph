@@ -31,6 +31,11 @@ export type LoopAEventBatch = {
   slot: number;
   generatedAt: string;
   events: ProtocolEvent[];
+  marker?: {
+    kind: "empty_batch";
+    reason: "skipped" | "missing_in_storage";
+    source?: "block_fetcher" | "backfill_resolver";
+  };
 };
 
 export type LoopAStateSnapshot = {
@@ -327,12 +332,35 @@ export function parseLoopAEventBatch(input: unknown): LoopAEventBatch | null {
     return null;
   }
 
+  let marker: LoopAEventBatch["marker"];
+  const markerRecord = asRecord(record.marker);
+  if (markerRecord) {
+    const markerKind = asString(markerRecord.kind);
+    const markerReason = asString(markerRecord.reason);
+    const markerSource = asString(markerRecord.source);
+    if (
+      markerKind === "empty_batch" &&
+      (markerReason === "skipped" || markerReason === "missing_in_storage")
+    ) {
+      marker = {
+        kind: markerKind,
+        reason: markerReason,
+        source:
+          markerSource === "block_fetcher" ||
+          markerSource === "backfill_resolver"
+            ? markerSource
+            : undefined,
+      };
+    }
+  }
+
   return {
     schemaVersion,
     commitment,
     slot,
     generatedAt,
     events: parseProtocolEventArray(record.events),
+    marker,
   };
 }
 
@@ -422,6 +450,34 @@ async function readJson(env: Env, key: string): Promise<unknown | null> {
   }
 }
 
+export async function writeLoopAEventBatchToKv(
+  env: Env,
+  batch: LoopAEventBatch,
+): Promise<void> {
+  await writeJson(env, loopAEventBatchKey(batch.commitment, batch.slot), batch);
+}
+
+export function createEmptyMarkerBatch(input: {
+  commitment: SlotCommitment;
+  slot: number;
+  generatedAt: string;
+  reason: "skipped" | "missing_in_storage";
+  source?: "block_fetcher" | "backfill_resolver";
+}): LoopAEventBatch {
+  return {
+    schemaVersion: LOOP_A_SCHEMA_VERSION,
+    commitment: input.commitment,
+    slot: input.slot,
+    generatedAt: input.generatedAt,
+    events: [],
+    marker: {
+      kind: "empty_batch",
+      reason: input.reason,
+      source: input.source,
+    },
+  };
+}
+
 export async function readLoopAStateSnapshotFromKv(
   env: Env,
   commitment: SlotCommitment,
@@ -439,7 +495,35 @@ export async function readLoopAEventBatchFromKv(
   return parseLoopAEventBatch(parsed);
 }
 
-async function persistLoopAEventBatchesToKv(
+export async function resolveContiguousIngestionSlot(input: {
+  env: Env;
+  commitment: SlotCommitment;
+  fromSlot: number;
+  targetSlot: number;
+}): Promise<{ ingestionSlot: number; missingSlot: number | null }> {
+  let ingestionSlot = Math.min(input.fromSlot, input.targetSlot);
+  for (let slot = ingestionSlot + 1; slot <= input.targetSlot; slot += 1) {
+    const batch = await readLoopAEventBatchFromKv(
+      input.env,
+      input.commitment,
+      slot,
+    );
+    if (!batch) {
+      return {
+        ingestionSlot,
+        missingSlot: slot,
+      };
+    }
+    ingestionSlot = slot;
+  }
+
+  return {
+    ingestionSlot,
+    missingSlot: null,
+  };
+}
+
+export async function persistLoopAEventBatchesToKv(
   env: Env,
   batches: LoopAEventBatch[],
 ): Promise<number> {
@@ -449,11 +533,7 @@ async function persistLoopAEventBatchesToKv(
   );
 
   for (const batch of deduped) {
-    await writeJson(
-      env,
-      loopAEventBatchKey(batch.commitment, batch.slot),
-      batch,
-    );
+    await writeLoopAEventBatchToKv(env, batch);
   }
 
   return deduped.length;
@@ -515,6 +595,7 @@ export async function runLoopACanonicalStateTick(
   env: Env,
   input: {
     cursorAfter: LoopACursor;
+    targetSlot?: number;
     decodedBatches: LoopAEventBatch[];
     commitment: SlotCommitment;
     snapshotEverySlots: number;
@@ -526,7 +607,10 @@ export async function runLoopACanonicalStateTick(
   }
 
   const observedAt = input.observedAt ?? new Date().toISOString();
-  const targetSlot = input.cursorAfter[input.commitment];
+  const targetSlot =
+    input.targetSlot === undefined
+      ? input.cursorAfter[input.commitment]
+      : Math.min(input.targetSlot, input.cursorAfter[input.commitment]);
 
   const persistedBatches = await persistLoopAEventBatchesToKv(
     env,

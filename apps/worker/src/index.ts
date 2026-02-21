@@ -15,13 +15,20 @@ import {
 import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
 import { JupiterClient } from "./jupiter";
 import { createDefaultDecoderRegistry } from "./loop_a/adapters";
+import { runLoopABackfillResolverTick } from "./loop_a/backfill_resolver";
 import { runLoopABlockFetcherTick } from "./loop_a/block_fetcher";
 import {
+  createEmptyMarkerBatch,
   type LoopAEventBatch,
+  resolveContiguousIngestionSlot,
   resolveSnapshotEverySlots,
   resolveStateCommitment,
   runLoopACanonicalStateTick,
 } from "./loop_a/canonical_state";
+import {
+  readLoopACursorStateFromKv,
+  writeLoopACursorStateToKv,
+} from "./loop_a/cursor_store_kv";
 import { decodeProtocolEventsFromBlock } from "./loop_a/decoder_registry";
 import { runLoopASlotSourceTick } from "./loop_a/slot_source";
 import {
@@ -1451,17 +1458,17 @@ export default {
       console.log("loop_a.slot_source.tick", {
         cursorBefore: result.cursorBefore,
         cursorAfter: result.cursorAfter,
+        cursorStateBefore: result.cursorStateBefore,
+        cursorStateAfter: result.cursorStateAfter,
         tasksEmitted: result.tasksEmitted,
       });
 
       const blockFetchEnabled =
         String(env.LOOP_A_BLOCK_FETCH_ENABLED ?? "0").trim() === "1";
-      if (!blockFetchEnabled) {
-        return;
-      }
-
       const stateStoreEnabled =
         String(env.LOOP_A_STATE_STORE_ENABLED ?? "0").trim() === "1";
+      const backfillResolverEnabled =
+        String(env.LOOP_A_BACKFILL_RESOLVER_ENABLED ?? "0").trim() === "1";
       const decoderEnabled =
         String(env.LOOP_A_DECODER_ENABLED ?? "0").trim() === "1" ||
         stateStoreEnabled;
@@ -1469,50 +1476,128 @@ export default {
         ? createDefaultDecoderRegistry()
         : null;
       let decodedEvents = 0;
+      let markerBatches = 0;
       const decodedBatches: LoopAEventBatch[] = [];
+      let cursorState = result.cursorStateAfter;
 
-      const blockFetchResult = await runLoopABlockFetcherTick(
-        env,
-        {
-          cursorBefore: result.cursorBefore,
-          cursorAfter: result.cursorAfter,
-        },
-        {
-          onFetchedBlock: decoderRegistry
-            ? async (fetched) => {
-                const events = decodeProtocolEventsFromBlock({
-                  slot: fetched.slot,
-                  commitment: fetched.commitment,
-                  block: fetched.block,
-                  registry: decoderRegistry,
-                });
-                decodedBatches.push({
-                  schemaVersion: "v1",
-                  commitment: fetched.commitment,
-                  slot: fetched.slot,
-                  generatedAt: new Date().toISOString(),
-                  events,
-                });
-                decodedEvents += events.length;
-              }
-            : undefined,
-        },
-      );
-      console.log("loop_a.block_fetcher.tick", {
-        ...blockFetchResult,
-        decodedEvents,
-        decodedBatches: decodedBatches.length,
-      });
+      if (blockFetchEnabled) {
+        const blockFetchResult = await runLoopABlockFetcherTick(
+          env,
+          {
+            cursorBefore: result.cursorBefore,
+            cursorAfter: result.cursorAfter,
+          },
+          {
+            onFetchedBlock: decoderRegistry
+              ? async (fetched) => {
+                  const events = decodeProtocolEventsFromBlock({
+                    slot: fetched.slot,
+                    commitment: fetched.commitment,
+                    block: fetched.block,
+                    registry: decoderRegistry,
+                  });
+                  decodedBatches.push({
+                    schemaVersion: "v1",
+                    commitment: fetched.commitment,
+                    slot: fetched.slot,
+                    generatedAt: new Date().toISOString(),
+                    events,
+                  });
+                  decodedEvents += events.length;
+                }
+              : undefined,
+          },
+        );
+
+        for (const task of blockFetchResult.missingTasks) {
+          if (task.reason === "fetch-failed") continue;
+          decodedBatches.push(
+            createEmptyMarkerBatch({
+              commitment: task.commitment,
+              slot: task.slot,
+              generatedAt: new Date().toISOString(),
+              reason:
+                task.reason === "rpc-null" ? "skipped" : "missing_in_storage",
+              source: "block_fetcher",
+            }),
+          );
+          markerBatches += 1;
+        }
+
+        cursorState = {
+          ...cursorState,
+          updatedAt: new Date().toISOString(),
+          fetchedCursor: {
+            processed: Math.max(
+              cursorState.fetchedCursor.processed,
+              blockFetchResult.attemptedThrough.processed,
+            ),
+            confirmed: Math.max(
+              cursorState.fetchedCursor.confirmed,
+              blockFetchResult.attemptedThrough.confirmed,
+            ),
+            finalized: Math.max(
+              cursorState.fetchedCursor.finalized,
+              blockFetchResult.attemptedThrough.finalized,
+            ),
+          },
+        };
+        await writeLoopACursorStateToKv(env, cursorState);
+
+        console.log("loop_a.block_fetcher.tick", {
+          ...blockFetchResult,
+          decodedEvents,
+          decodedBatches: decodedBatches.length,
+          markerBatches,
+        });
+      }
+
+      if (backfillResolverEnabled) {
+        const resolverResult = await runLoopABackfillResolverTick(env);
+        console.log("loop_a.backfill_resolver.tick", resolverResult);
+      }
 
       if (stateStoreEnabled) {
+        const cursorStateLatest =
+          (await readLoopACursorStateFromKv(env)) ?? cursorState;
+        const missingSlotsByCommitment: Record<string, number | null> = {};
+        for (const commitment of [
+          "processed",
+          "confirmed",
+          "finalized",
+        ] as const) {
+          const resolved = await resolveContiguousIngestionSlot({
+            env,
+            commitment,
+            fromSlot: cursorStateLatest.ingestionCursor[commitment],
+            targetSlot: cursorStateLatest.headCursor[commitment],
+          });
+          cursorStateLatest.ingestionCursor[commitment] =
+            resolved.ingestionSlot;
+          missingSlotsByCommitment[commitment] = resolved.missingSlot;
+        }
+        cursorStateLatest.updatedAt = new Date().toISOString();
+        await writeLoopACursorStateToKv(env, cursorStateLatest);
+        console.log("loop_a.ingestion_cursor.update", {
+          headCursor: cursorStateLatest.headCursor,
+          ingestionCursor: cursorStateLatest.ingestionCursor,
+          missingSlotsByCommitment,
+        });
+
+        const commitment = resolveStateCommitment(env.LOOP_A_STATE_COMMITMENT);
         const stateTickResult = await runLoopACanonicalStateTick(env, {
           cursorAfter: result.cursorAfter,
+          targetSlot: cursorStateLatest.ingestionCursor[commitment],
           decodedBatches,
-          commitment: resolveStateCommitment(env.LOOP_A_STATE_COMMITMENT),
+          commitment,
           snapshotEverySlots: resolveSnapshotEverySlots(
             env.LOOP_A_SNAPSHOT_EVERY_SLOTS,
           ),
         });
+        cursorStateLatest.stateCursor[commitment] =
+          stateTickResult.snapshotAfterSlot;
+        cursorStateLatest.updatedAt = new Date().toISOString();
+        await writeLoopACursorStateToKv(env, cursorStateLatest);
         console.log("loop_a.state_store.tick", stateTickResult);
       }
     } catch (error) {

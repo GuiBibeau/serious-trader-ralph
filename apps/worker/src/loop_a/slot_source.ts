@@ -2,7 +2,11 @@ import { SolanaRpc } from "../solana_rpc";
 import type { Env } from "../types";
 import {
   emitBackfillTasksToKv,
+  headsFromLoopACursor,
   readLoopACursorFromKv,
+  readLoopACursorStateFromKv,
+  toLoopACursor,
+  writeLoopACursorStateToKv,
   writeLoopACursorToKv,
 } from "./cursor_store_kv";
 import {
@@ -10,6 +14,8 @@ import {
   isSlotCommitment,
   LOOP_A_SCHEMA_VERSION,
   type LoopACursor,
+  type LoopACursorHeads,
+  type LoopACursorState,
   type SlotCommitment,
   type SlotHeads,
   type SlotSourceTickResult,
@@ -62,6 +68,50 @@ function buildNextCursor(
     confirmed: Math.max(cursorBefore.confirmed, heads.confirmed),
     finalized: Math.max(cursorBefore.finalized, heads.finalized),
     updatedAt: observedAt,
+  };
+}
+
+function maxHeads(a: LoopACursorHeads, b: LoopACursorHeads): LoopACursorHeads {
+  return {
+    processed: Math.max(a.processed, b.processed),
+    confirmed: Math.max(a.confirmed, b.confirmed),
+    finalized: Math.max(a.finalized, b.finalized),
+  };
+}
+
+function headsFromSlots(input: SlotHeads): LoopACursorHeads {
+  return {
+    processed: input.processed,
+    confirmed: input.confirmed,
+    finalized: input.finalized,
+  };
+}
+
+function initializeCursorState(input: {
+  observedAt: string;
+  headCursor: LoopACursorHeads;
+  previousCursor: LoopACursor | null;
+  previousState: LoopACursorState | null;
+}): LoopACursorState {
+  const previousHeads = input.previousState
+    ? input.previousState.headCursor
+    : input.previousCursor
+      ? headsFromLoopACursor(input.previousCursor)
+      : input.headCursor;
+
+  const fallbackProgress = input.previousState
+    ? input.previousState.ingestionCursor
+    : input.previousCursor
+      ? headsFromLoopACursor(input.previousCursor)
+      : input.headCursor;
+
+  return {
+    schemaVersion: LOOP_A_SCHEMA_VERSION,
+    updatedAt: input.observedAt,
+    headCursor: maxHeads(previousHeads, input.headCursor),
+    fetchedCursor: input.previousState?.fetchedCursor ?? fallbackProgress,
+    ingestionCursor: input.previousState?.ingestionCursor ?? fallbackProgress,
+    stateCursor: input.previousState?.stateCursor ?? fallbackProgress,
   };
 }
 
@@ -126,7 +176,15 @@ export async function runLoopASlotSourceTick(
     throw new Error("loop-a-config-kv-missing");
   }
 
-  const cursorBefore = await readLoopACursorFromKv(env);
+  const cursorStateBefore = await readLoopACursorStateFromKv(env);
+  const legacyCursorBefore = await readLoopACursorFromKv(env);
+  const cursorBefore =
+    cursorStateBefore === null
+      ? legacyCursorBefore
+      : toLoopACursor({
+          heads: cursorStateBefore.headCursor,
+          updatedAt: cursorStateBefore.updatedAt,
+        });
   const observedAt = options?.observedAt ?? new Date().toISOString();
   const rpc = options?.rpc ?? new SolanaRpc(resolveRpcEndpoint(env));
   const commitments =
@@ -144,21 +202,28 @@ export async function runLoopASlotSourceTick(
   );
   const tasksEmitted = await emitBackfillTasksToKv(env, tasks);
 
+  const cursorStateLatest = await readLoopACursorStateFromKv(env);
   const cursorLatest = await readLoopACursorFromKv(env);
-  const cursorAfter = buildNextCursor(
-    cursorLatest,
-    {
-      processed: cursorCandidate.processed,
-      confirmed: cursorCandidate.confirmed,
-      finalized: cursorCandidate.finalized,
-    },
+  const cursorAfter = buildNextCursor(cursorLatest, heads, observedAt);
+  const cursorStateAfter = initializeCursorState({
     observedAt,
-  );
+    headCursor: headsFromSlots({
+      processed: cursorAfter.processed,
+      confirmed: cursorAfter.confirmed,
+      finalized: cursorAfter.finalized,
+    }),
+    previousCursor: cursorLatest,
+    previousState: cursorStateLatest,
+  });
+
+  await writeLoopACursorStateToKv(env, cursorStateAfter);
   await writeLoopACursorToKv(env, cursorAfter);
 
   return {
     cursorBefore,
     cursorAfter,
+    cursorStateBefore,
+    cursorStateAfter,
     tasksEmitted,
   };
 }

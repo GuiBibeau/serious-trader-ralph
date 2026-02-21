@@ -120,6 +120,12 @@ describe("worker loop A block fetcher", () => {
     expect(result.targetsTotal).toBe(0);
     expect(result.fetched).toBe(0);
     expect(result.missingTasksEmitted).toBe(0);
+    expect(result.missingTasks).toEqual([]);
+    expect(result.attemptedThrough).toEqual({
+      processed: 0,
+      confirmed: 0,
+      finalized: 0,
+    });
   });
 
   test("fetches with bounded concurrency, retries, and missing task emission", async () => {
@@ -183,6 +189,8 @@ describe("worker loop A block fetcher", () => {
     expect(maxActive).toBeLessThanOrEqual(2);
     expect(attempts.get("processed:2")).toBe(2);
     expect(store.has("loopA:v1:block_missing:pending:processed:4")).toBe(true);
+    expect(result.missingTasks[0]?.slot).toBe(4);
+    expect(result.attemptedThrough.processed).toBe(5);
   });
 
   test("emits fetch-failed missing task when retries are exhausted", async () => {
@@ -217,6 +225,7 @@ describe("worker loop A block fetcher", () => {
     expect(result.missing).toBe(1);
     expect(result.failed).toBe(1);
     expect(result.missingTasksEmitted).toBe(1);
+    expect(result.missingTasks[0]?.reason).toBe("fetch-failed");
 
     const raw = store.get("loopA:v1:block_missing:pending:processed:1");
     expect(raw).toBeTruthy();

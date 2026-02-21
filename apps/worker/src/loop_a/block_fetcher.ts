@@ -1,6 +1,6 @@
 import { SolanaRpc } from "../solana_rpc";
 import type { Env } from "../types";
-import type { LoopACursor, SlotCommitment } from "./types";
+import type { LoopACursor, LoopACursorHeads, SlotCommitment } from "./types";
 
 const DEFAULT_BLOCK_FETCH_COMMITMENTS: SlotCommitment[] = [
   "confirmed",
@@ -13,7 +13,7 @@ const DEFAULT_MAX_SLOTS_PER_TICK = 256;
 
 type BlockFetchStatus = "fetched" | "missing" | "failed";
 
-type BlockFetchTarget = {
+export type BlockFetchTarget = {
   slot: number;
   commitment: SlotCommitment;
 };
@@ -47,6 +47,8 @@ export type BlockFetcherTickResult = {
   missing: number;
   failed: number;
   missingTasksEmitted: number;
+  missingTasks: BlockMissingTask[];
+  attemptedThrough: LoopACursorHeads;
   maxObservedConcurrency: number;
   onFetchedBlockErrors: number;
 };
@@ -141,6 +143,26 @@ export function buildBlockFetchTargets(
   }
 
   return targets;
+}
+
+function resolveAttemptedThrough(
+  cursorBefore: LoopACursor | null,
+  targets: BlockFetchTarget[],
+): LoopACursorHeads {
+  const attempted: LoopACursorHeads = {
+    processed: cursorBefore?.processed ?? 0,
+    confirmed: cursorBefore?.confirmed ?? 0,
+    finalized: cursorBefore?.finalized ?? 0,
+  };
+
+  for (const target of targets) {
+    attempted[target.commitment] = Math.max(
+      attempted[target.commitment],
+      target.slot,
+    );
+  }
+
+  return attempted;
 }
 
 function getBlockMissingTaskKey(
@@ -355,6 +377,7 @@ export async function runLoopABlockFetcherTick(
     config.commitments,
     config.maxSlotsPerTick,
   );
+  const attemptedThrough = resolveAttemptedThrough(input.cursorBefore, targets);
 
   if (targets.length === 0) {
     return {
@@ -363,6 +386,8 @@ export async function runLoopABlockFetcherTick(
       missing: 0,
       failed: 0,
       missingTasksEmitted: 0,
+      missingTasks: [],
+      attemptedThrough,
       maxObservedConcurrency: 0,
       onFetchedBlockErrors: 0,
     };
@@ -393,6 +418,8 @@ export async function runLoopABlockFetcherTick(
     missing: runResult.missingTasks.length,
     failed: runResult.failed,
     missingTasksEmitted,
+    missingTasks: runResult.missingTasks,
+    attemptedThrough,
     maxObservedConcurrency: runResult.maxObservedConcurrency,
     onFetchedBlockErrors: runResult.onFetchedBlockErrors,
   };
