@@ -33,7 +33,7 @@ describe("worker execution router", () => {
       executeSwapViaRouter({
         env: {} as never,
         execution: { adapter: "jito_bundle" },
-        policy: normalizePolicy({ dryRun: true }),
+        policy: normalizePolicy({}),
         rpc: {} as never,
         jupiter: {} as never,
         quoteResponse: {
@@ -45,7 +45,7 @@ describe("worker execution router", () => {
         userPublicKey: "11111111111111111111111111111111",
         log: () => {},
       }),
-    ).rejects.toThrow(/jito-bundle-not-configured/);
+    ).rejects.toThrow(/jito-block-engine-url-missing/);
   });
 
   test("custom execution adapters can be registered for new venues", async () => {

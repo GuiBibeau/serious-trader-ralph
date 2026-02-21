@@ -171,6 +171,38 @@ describe("worker execution contracts", () => {
     expect(next.failedAt).toBeNull();
   });
 
+  test("uses executionMeta trace timestamps when provided", () => {
+    const trace = newExecutionLatencyTrace("2026-02-21T20:21:00.000Z");
+    const result = {
+      status: "confirmed",
+      signature: null,
+      usedQuote: BASE_QUOTE,
+      refreshed: false,
+      lastValidBlockHeight: 1001,
+      err: null,
+      executionMeta: {
+        route: "jito_bundle",
+        classification: "confirmed",
+        trace: {
+          txBuiltAt: "2026-02-21T20:21:00.500Z",
+          sentAt: "2026-02-21T20:21:01.000Z",
+          landedAt: "2026-02-21T20:21:01.200Z",
+          confirmedAt: "2026-02-21T20:21:01.400Z",
+        },
+      },
+    } satisfies ExecuteSwapResult;
+
+    const next = applyExecutionResultToTrace({
+      trace,
+      result,
+      settledAt: "2026-02-21T20:21:02.000Z",
+    });
+    expect(next.txBuiltAt).toBe("2026-02-21T20:21:00.500Z");
+    expect(next.sentAt).toBe("2026-02-21T20:21:01.000Z");
+    expect(next.landedAt).toBe("2026-02-21T20:21:01.200Z");
+    expect(next.confirmedAt).toBe("2026-02-21T20:21:01.400Z");
+  });
+
   test("normalizes execution outcomes from result and thrown errors", () => {
     const fromResult = buildExecutionOutcomeFromResult({
       status: "simulate_error",

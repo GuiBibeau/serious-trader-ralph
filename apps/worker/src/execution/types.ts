@@ -36,4 +36,26 @@ export type ExecuteSwapResult = {
   refreshed: boolean;
   lastValidBlockHeight: number | null;
   err?: unknown;
+  executionMeta?: {
+    route: string;
+    classification:
+      | "dry_run"
+      | "simulated"
+      | "submitted"
+      | "landed"
+      | "confirmed"
+      | "finalized"
+      | "error";
+    bundleId?: string | null;
+    tipAccount?: string | null;
+    trace?: {
+      txBuiltAt?: string;
+      simulatedAt?: string;
+      sentAt?: string;
+      landedAt?: string;
+      confirmedAt?: string;
+      finalizedAt?: string;
+      failedAt?: string;
+    };
+  };
 };
