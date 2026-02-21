@@ -44,6 +44,8 @@ It is intentionally written as something you can hand to an implementation agent
   - Durable Object provides request-time personalized ranking with per-minute cache hits for repeated requests,
   - reads bounded candidate pools derived from Loop B minute scores (with score fallback), applies deterministic persona/risk adjustments, and returns ranked recommendation views,
   - candidate pools are published each finalized minute at `loopC:v1:candidates:latest` with Loop B feature/score evidence references,
+  - deterministic acceptance model blends cold-start priors with per-pair yes/no feedback and global user feedback state,
+  - feedback writes invalidate minute cache and shift acceptance probability predictably for subsequent rankings,
   - persists per-user wallet-scoped latest recommendations to Cloudflare Key-Value store and Cloudflare R2 object storage.
 
 ### Execution routing already exists (v0)

@@ -11,6 +11,8 @@ import {
 const LOOP_C_SCHEMA_VERSION = "v1" as const;
 const STATE_KEY = "loop_c:recommender_state:v1";
 const DEFAULT_LIMIT = 10;
+const ACCEPTANCE_WEIGHT = 4;
+const MAX_PAIR_FEEDBACK_TRACKED = 512;
 
 export const LOOP_C_RECOMMENDER_NAME = "loop-c-recommender-v1";
 
@@ -21,6 +23,8 @@ export type UserPersonaInput = {
   excludedAssets?: string[];
 };
 
+export type RecommendationFeedbackDecision = "yes" | "no";
+
 export type RecommendationRow = {
   recommendationId: string;
   pairId: string;
@@ -30,6 +34,8 @@ export type RecommendationRow = {
   baseSignal: number;
   riskPenalty: number;
   personaBoost: number;
+  acceptProb: number;
+  acceptBoost: number;
   modelVersion: typeof LOOP_C_SCHEMA_VERSION;
   explain: string[];
 };
@@ -52,12 +58,36 @@ type RecommendationRequest = {
   persona?: UserPersonaInput;
 };
 
+type FeedbackRequest = {
+  pairId?: string;
+  recommendationId?: string;
+  decision?: RecommendationFeedbackDecision;
+  reason?: string;
+  decidedAt?: string;
+};
+
+type PairFeedbackState = {
+  yes: number;
+  no: number;
+  updatedAt: string;
+  lastDecisionAt: string;
+  lastReason: string | null;
+};
+
+type FeedbackState = {
+  yes: number;
+  no: number;
+  updatedAt: string;
+  byPair: Record<string, PairFeedbackState>;
+};
+
 type RecommenderState = {
   schemaVersion: typeof LOOP_C_SCHEMA_VERSION;
   updatedAt: string;
   lastMinute: string | null;
   lastRequestKey: string | null;
   cachedView: RecommendationView | null;
+  feedback: FeedbackState;
 };
 
 type RecommendationInputRow = {
@@ -66,12 +96,46 @@ type RecommendationInputRow = {
   quoteMint: string;
   baseSignal: number;
   riskPenalty: number;
+  acceptProbPrior: number;
   explain: string[];
+};
+
+type FeedbackUpdateResult = {
+  pairId: string;
+  decision: RecommendationFeedbackDecision;
+  pair: {
+    yes: number;
+    no: number;
+  };
+  global: {
+    yes: number;
+    no: number;
+  };
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function round(value: number, digits = 8): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function clamp01(value: number): number {
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
+  return value;
+}
+
+function priorFromBaseSignal(baseSignal: number): number {
+  return clamp01(1 / (1 + Math.exp(-baseSignal / 10)));
+}
+
+function normalizePrior(input: number): number {
+  if (!Number.isFinite(input)) return 0.5;
+  return clamp01(input);
 }
 
 function parseDefaultLimit(raw: string | undefined): number {
@@ -161,6 +225,7 @@ function fromScoreRows(rows: LoopBScoreRow[]): RecommendationInputRow[] {
     quoteMint: row.quoteMint,
     baseSignal: row.finalScore,
     riskPenalty: row.contributions.stabilityPenalty,
+    acceptProbPrior: priorFromBaseSignal(row.finalScore),
     explain: row.explain,
   }));
 }
@@ -172,6 +237,7 @@ function fromCandidatePoolRows(raw: string | null): RecommendationInputRow[] {
     quoteMint: row.quoteMint,
     baseSignal: row.baseSignal,
     riskPenalty: row.riskPenalty,
+    acceptProbPrior: normalizePrior(row.acceptProbPrior),
     explain: row.explain,
   }));
 }
@@ -247,6 +313,176 @@ function recommendationR2Key(input: {
   return `loopC/${LOOP_C_SCHEMA_VERSION}/recommendations/date=${yyyy}-${mm}-${dd}/hour=${hh}/minute=${yyyy}-${mm}-${dd}T${hh}:${minute}:00Z/user=${sanitizeToken(input.userId)}/wallet=${sanitizeToken(input.wallet)}/at=${at}.json`;
 }
 
+function defaultPairFeedback(now: string): PairFeedbackState {
+  return {
+    yes: 0,
+    no: 0,
+    updatedAt: now,
+    lastDecisionAt: now,
+    lastReason: null,
+  };
+}
+
+function defaultFeedback(now: string): FeedbackState {
+  return {
+    yes: 0,
+    no: 0,
+    updatedAt: now,
+    byPair: {},
+  };
+}
+
+function parseFeedbackState(input: unknown): FeedbackState {
+  const now = new Date().toISOString();
+  const record = asRecord(input);
+  if (!record) return defaultFeedback(now);
+
+  const byPairRaw = asRecord(record.byPair);
+  const byPair: Record<string, PairFeedbackState> = {};
+  if (byPairRaw) {
+    for (const [pairId, value] of Object.entries(byPairRaw)) {
+      const row = asRecord(value);
+      if (!row) continue;
+      const yes =
+        typeof row.yes === "number" && Number.isInteger(row.yes) && row.yes >= 0
+          ? row.yes
+          : 0;
+      const no =
+        typeof row.no === "number" && Number.isInteger(row.no) && row.no >= 0
+          ? row.no
+          : 0;
+      byPair[pairId] = {
+        yes,
+        no,
+        updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : now,
+        lastDecisionAt:
+          typeof row.lastDecisionAt === "string" ? row.lastDecisionAt : now,
+        lastReason: typeof row.lastReason === "string" ? row.lastReason : null,
+      };
+    }
+  }
+
+  return {
+    yes:
+      typeof record.yes === "number" && Number.isInteger(record.yes)
+        ? Math.max(0, record.yes)
+        : 0,
+    no:
+      typeof record.no === "number" && Number.isInteger(record.no)
+        ? Math.max(0, record.no)
+        : 0,
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : now,
+    byPair,
+  };
+}
+
+function resolvePairId(input: {
+  pairId?: string;
+  recommendationId?: string;
+}): string | null {
+  const direct = String(input.pairId ?? "").trim();
+  if (direct) return direct;
+
+  const recommendationId = String(input.recommendationId ?? "").trim();
+  if (!recommendationId) return null;
+  const marker = "Z:";
+  const markerIndex = recommendationId.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const pairId = recommendationId.slice(markerIndex + marker.length).trim();
+  return pairId.length > 0 ? pairId : null;
+}
+
+function pruneFeedbackPairs(feedback: FeedbackState): void {
+  const entries = Object.entries(feedback.byPair);
+  if (entries.length <= MAX_PAIR_FEEDBACK_TRACKED) return;
+
+  entries.sort((a, b) => {
+    const aTime = Date.parse(a[1].updatedAt);
+    const bTime = Date.parse(b[1].updatedAt);
+    if (!Number.isFinite(aTime) && !Number.isFinite(bTime)) return 0;
+    if (!Number.isFinite(aTime)) return 1;
+    if (!Number.isFinite(bTime)) return -1;
+    return bTime - aTime;
+  });
+
+  feedback.byPair = Object.fromEntries(
+    entries.slice(0, MAX_PAIR_FEEDBACK_TRACKED),
+  );
+}
+
+function computeAcceptanceProb(input: {
+  pairId: string;
+  prior: number;
+  feedback: FeedbackState;
+}): number {
+  const pair = input.feedback.byPair[input.pairId] ?? null;
+  const pairYes = pair?.yes ?? 0;
+  const pairNo = pair?.no ?? 0;
+  const pairDecisions = pairYes + pairNo;
+  const globalYes = input.feedback.yes;
+  const globalNo = input.feedback.no;
+  const globalDecisions = globalYes + globalNo;
+
+  const pairPosterior = (pairYes + 1) / (pairDecisions + 2);
+  const globalPosterior = (globalYes + 2) / (globalDecisions + 4);
+
+  const pairWeight = pairDecisions > 0 ? 0.35 : 0.15;
+  const globalWeight = globalDecisions > 0 ? 0.2 : 0.1;
+  const priorWeight = 1 - pairWeight - globalWeight;
+
+  return round(
+    clamp01(
+      normalizePrior(input.prior) * priorWeight +
+        pairPosterior * pairWeight +
+        globalPosterior * globalWeight,
+    ),
+  );
+}
+
+function applyFeedbackDecision(input: {
+  state: RecommenderState;
+  pairId: string;
+  decision: RecommendationFeedbackDecision;
+  decidedAt: string;
+  reason?: string;
+}): FeedbackUpdateResult {
+  const current =
+    input.state.feedback.byPair[input.pairId] ??
+    defaultPairFeedback(input.decidedAt);
+
+  const nextPair: PairFeedbackState = {
+    yes: current.yes + (input.decision === "yes" ? 1 : 0),
+    no: current.no + (input.decision === "no" ? 1 : 0),
+    updatedAt: input.decidedAt,
+    lastDecisionAt: input.decidedAt,
+    lastReason: input.reason?.trim() ? input.reason.trim() : current.lastReason,
+  };
+
+  input.state.feedback.byPair[input.pairId] = nextPair;
+  input.state.feedback.yes += input.decision === "yes" ? 1 : 0;
+  input.state.feedback.no += input.decision === "no" ? 1 : 0;
+  input.state.feedback.updatedAt = input.decidedAt;
+  pruneFeedbackPairs(input.state.feedback);
+
+  // Force recompute after feedback even within the same minute.
+  input.state.lastMinute = null;
+  input.state.lastRequestKey = null;
+  input.state.cachedView = null;
+
+  return {
+    pairId: input.pairId,
+    decision: input.decision,
+    pair: {
+      yes: nextPair.yes,
+      no: nextPair.no,
+    },
+    global: {
+      yes: input.state.feedback.yes,
+      no: input.state.feedback.no,
+    },
+  };
+}
+
 function buildRecommendations(input: {
   rows: RecommendationInputRow[];
   userId: string;
@@ -254,6 +490,7 @@ function buildRecommendations(input: {
   limit: number;
   minute: string;
   generatedAt: string;
+  feedback: FeedbackState;
   persona?: UserPersonaInput;
 }): RecommendationView {
   const preferred = normalizeSet(input.persona?.sectorPreferences);
@@ -267,20 +504,31 @@ function buildRecommendations(input: {
     const personaBoost =
       preferred.has(row.baseMint) || preferred.has(row.quoteMint) ? 2.5 : 0;
     const riskPenalty = row.riskPenalty * risk;
-    const finalScore = row.baseSignal + personaBoost - riskPenalty;
+    const acceptProb = computeAcceptanceProb({
+      pairId: row.pairId,
+      prior: row.acceptProbPrior,
+      feedback: input.feedback,
+    });
+    const acceptBoost = round((acceptProb - 0.5) * ACCEPTANCE_WEIGHT);
+    const finalScore =
+      row.baseSignal + personaBoost + acceptBoost - riskPenalty;
 
     recommendations.push({
       recommendationId: `${input.minute}:${row.pairId}`,
       pairId: row.pairId,
       baseMint: row.baseMint,
       quoteMint: row.quoteMint,
-      finalScore: Math.round(finalScore * 1e8) / 1e8,
-      baseSignal: row.baseSignal,
-      riskPenalty: Math.round(riskPenalty * 1e8) / 1e8,
-      personaBoost,
+      finalScore: round(finalScore),
+      baseSignal: round(row.baseSignal),
+      riskPenalty: round(riskPenalty),
+      personaBoost: round(personaBoost),
+      acceptProb,
+      acceptBoost,
       modelVersion: LOOP_C_SCHEMA_VERSION,
       explain: [
         `base_signal=${row.baseSignal.toFixed(4)}`,
+        `accept_prob=${acceptProb.toFixed(4)}`,
+        `accept_boost=${acceptBoost.toFixed(4)}`,
         `persona_boost=${personaBoost.toFixed(4)}`,
         `risk_penalty=${riskPenalty.toFixed(4)}`,
         ...row.explain.slice(0, 2),
@@ -310,14 +558,16 @@ function buildRecommendations(input: {
 }
 
 function parseState(input: unknown): RecommenderState {
+  const now = new Date().toISOString();
   const record = asRecord(input);
   if (!record || record.schemaVersion !== LOOP_C_SCHEMA_VERSION) {
     return {
       schemaVersion: LOOP_C_SCHEMA_VERSION,
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
       lastMinute: null,
       lastRequestKey: null,
       cachedView: null,
+      feedback: defaultFeedback(now),
     };
   }
 
@@ -352,6 +602,11 @@ function parseState(input: unknown): RecommenderState {
         baseSignal: row.baseSignal,
         riskPenalty: row.riskPenalty,
         personaBoost: row.personaBoost,
+        acceptProb:
+          typeof row.acceptProb === "number"
+            ? normalizePrior(row.acceptProb)
+            : 0.5,
+        acceptBoost: typeof row.acceptBoost === "number" ? row.acceptBoost : 0,
         modelVersion:
           row.modelVersion === LOOP_C_SCHEMA_VERSION
             ? LOOP_C_SCHEMA_VERSION
@@ -385,15 +640,13 @@ function parseState(input: unknown): RecommenderState {
 
   return {
     schemaVersion: LOOP_C_SCHEMA_VERSION,
-    updatedAt:
-      typeof record.updatedAt === "string"
-        ? record.updatedAt
-        : new Date().toISOString(),
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : now,
     lastMinute:
       typeof record.lastMinute === "string" ? record.lastMinute : null,
     lastRequestKey:
       typeof record.lastRequestKey === "string" ? record.lastRequestKey : null,
     cachedView,
+    feedback: parseFeedbackState(record.feedback),
   };
 }
 
@@ -496,10 +749,12 @@ export class Recommender {
       limit,
       minute,
       generatedAt: observedAt,
+      feedback: state.feedback,
       persona: payload.persona,
     });
 
     const nextState: RecommenderState = {
+      ...state,
       schemaVersion: LOOP_C_SCHEMA_VERSION,
       updatedAt: observedAt,
       lastMinute: minute,
@@ -532,6 +787,59 @@ export class Recommender {
     });
   }
 
+  private async handleFeedback(request: Request): Promise<Response> {
+    const payload = (await request.json()) as FeedbackRequest;
+    const decision = payload.decision;
+    if (decision !== "yes" && decision !== "no") {
+      return new Response(
+        JSON.stringify({ ok: false, error: "invalid-decision" }),
+        {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+
+    const pairId = resolvePairId(payload);
+    if (!pairId) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "missing-pairId" }),
+        {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+
+    const decidedAtRaw = payload.decidedAt ?? this.now();
+    const decidedAt = new Date(decidedAtRaw);
+    if (Number.isNaN(decidedAt.getTime())) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "invalid-decidedAt" }),
+        {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+
+    const state = await this.readState();
+    const update = applyFeedbackDecision({
+      state,
+      pairId,
+      decision,
+      decidedAt: decidedAt.toISOString(),
+      reason: payload.reason,
+    });
+    state.updatedAt = decidedAt.toISOString();
+    await this.writeState(state);
+
+    return new Response(JSON.stringify({ ok: true, update }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (
@@ -540,6 +848,14 @@ export class Recommender {
         url.pathname === "/internal/loop-c/recommend")
     ) {
       return await this.handleRecommend(request);
+    }
+
+    if (
+      request.method === "POST" &&
+      (url.pathname === "/loop-c/feedback" ||
+        url.pathname === "/internal/loop-c/feedback")
+    ) {
+      return await this.handleFeedback(request);
     }
 
     if (
@@ -594,4 +910,49 @@ export async function requestLoopCRecommendations(
     view?: RecommendationView;
   };
   return payload.ok && payload.view ? payload.view : null;
+}
+
+export async function submitLoopCRecommendationFeedback(
+  env: Env,
+  input: {
+    userId: string;
+    wallet: string;
+    pairId?: string;
+    recommendationId?: string;
+    decision: RecommendationFeedbackDecision;
+    reason?: string;
+    decidedAt?: string;
+  },
+): Promise<FeedbackUpdateResult | null> {
+  if (!env.LOOP_C_RECOMMENDER_DO) return null;
+  const enabled = String(env.LOOP_C_RECOMMENDER_ENABLED ?? "0").trim() === "1";
+  if (!enabled) return null;
+
+  const id = env.LOOP_C_RECOMMENDER_DO.idFromName(
+    `${input.userId.trim()}:${input.wallet.trim()}`,
+  );
+  const stub = env.LOOP_C_RECOMMENDER_DO.get(id);
+  const response = await stub.fetch("https://internal/loop-c/feedback", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      pairId: input.pairId,
+      recommendationId: input.recommendationId,
+      decision: input.decision,
+      reason: input.reason,
+      decidedAt: input.decidedAt,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`loop-c-feedback-submit-failed:${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    ok: boolean;
+    update?: FeedbackUpdateResult;
+  };
+  return payload.ok && payload.update ? payload.update : null;
 }
