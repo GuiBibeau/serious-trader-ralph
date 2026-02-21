@@ -275,6 +275,9 @@ describe("worker loop B minute accumulator", () => {
     expect(anomalyFeedView.anomalies[0]?.reasonTags.length).toBeGreaterThan(0);
 
     expect(r2Store.size).toBeGreaterThan(0);
+    expect(
+      [...r2Store.keys()].some((key) => key.includes("/views/date=")),
+    ).toBe(true);
   });
 
   test("late correction re-finalizes the minute with updated scores", async () => {
