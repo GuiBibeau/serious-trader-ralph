@@ -75,6 +75,28 @@ export class SolanaRpc {
     return await this.request<number>("getSlot", [{ commitment }]);
   }
 
+  async getBlock(
+    slot: number,
+    opts?: {
+      commitment?: "processed" | "confirmed" | "finalized";
+      maxSupportedTransactionVersion?: number;
+      transactionDetails?: "full" | "accounts" | "signatures" | "none";
+      rewards?: boolean;
+    },
+  ): Promise<Record<string, unknown> | null> {
+    const config = {
+      commitment: opts?.commitment ?? "confirmed",
+      maxSupportedTransactionVersion: opts?.maxSupportedTransactionVersion ?? 0,
+      transactionDetails: opts?.transactionDetails ?? "full",
+      rewards: opts?.rewards ?? false,
+      encoding: "json",
+    };
+    return await this.request<Record<string, unknown> | null>("getBlock", [
+      slot,
+      config,
+    ]);
+  }
+
   async getTokenBalanceAtomic(owner: string, mint: string): Promise<bigint> {
     const result = await this.request<{
       value: Array<{
