@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 import {
+  LOOP_A_SCHEMA_REGISTRY,
   parseHealth,
   parseMark,
   parseProtocolEvent,
   parseStateSnapshot,
+  safeParseHealth,
   safeParseMark,
   safeParseProtocolEvent,
+  safeParseStateSnapshot,
 } from "../../src/loops/contracts/loop_a.js";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -119,6 +123,33 @@ describe("loop A contracts", () => {
     ).toThrow();
   });
 
+  test("rejects state snapshot when generatedAt is missing", () => {
+    const result = safeParseStateSnapshot({
+      schemaVersion: "v1",
+      slot: 220,
+      commitment: "confirmed",
+      cursor: {
+        processed: 222,
+        confirmed: 220,
+        finalized: 218,
+      },
+      stateHash: "state_abc123",
+      trackedState: {
+        [POOL]: {
+          liquidityUsd: "1240000",
+        },
+      },
+      appliedEventCount: 42,
+      inputs: {
+        eventRefs: [
+          "loopA/v1/events/date=2026-02-21/hour=00/slot=220.jsonl.gz",
+        ],
+      },
+      version: "v1",
+    });
+    expect(result.success).toBe(false);
+  });
+
   test("parses valid state snapshot", () => {
     const snapshot = parseStateSnapshot({
       ...META,
@@ -147,6 +178,31 @@ describe("loop A contracts", () => {
     expect(snapshot.cursor.confirmed).toBe(220);
   });
 
+  test("rejects health payload when schemaVersion is missing", () => {
+    const result = safeParseHealth({
+      generatedAt: "2026-02-21T00:04:00Z",
+      component: "loopA",
+      status: "ok",
+      updatedAt: "2026-02-21T00:04:00Z",
+      cursors: {
+        processed: 300,
+        confirmed: 298,
+        finalized: 296,
+      },
+      lagSlots: {
+        processedLag: 0,
+        confirmedLag: 2,
+        finalizedLag: 4,
+      },
+      lastSuccessfulSlot: 298,
+      lastSuccessfulAt: "2026-02-21T00:04:00Z",
+      errorCount: 0,
+      warnings: [],
+      version: "v1",
+    });
+    expect(result.success).toBe(false);
+  });
+
   test("parses valid health payload", () => {
     const health = parseHealth({
       ...META,
@@ -171,5 +227,13 @@ describe("loop A contracts", () => {
     });
 
     expect(health.status).toBe("ok");
+  });
+
+  test("generates deterministic JSON schema documents", () => {
+    for (const entry of Object.values(LOOP_A_SCHEMA_REGISTRY)) {
+      const schemaA = z.toJSONSchema(entry.schema);
+      const schemaB = z.toJSONSchema(entry.schema);
+      expect(schemaA).toEqual(schemaB);
+    }
   });
 });
