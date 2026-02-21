@@ -71,6 +71,11 @@ export type CanonicalStateTickResult = {
   checkpointsWritten: number;
 };
 
+type LoopAEventBatchRead = {
+  batch: LoopAEventBatch;
+  ref: string;
+};
+
 const DEFAULT_STATE_COMMITMENT: SlotCommitment = "confirmed";
 const DEFAULT_SNAPSHOT_EVERY_SLOTS = 100;
 const LOOP_A_EVENT_BATCH_R2_PREFIX = `loopA/${LOOP_A_SCHEMA_VERSION}/events`;
@@ -486,17 +491,16 @@ async function readJsonFromR2(env: Env, key: string): Promise<unknown | null> {
 export async function writeLoopAEventBatchToKv(
   env: Env,
   batch: LoopAEventBatch,
-): Promise<void> {
+): Promise<string> {
   const r2Key = loopAEventBatchR2Key(batch.commitment, batch.slot);
   const wroteToR2 = await writeJsonToR2(env, r2Key, batch);
   if (!wroteToR2) {
     // Legacy fallback when R2 binding is unavailable.
-    await writeJson(
-      env,
-      loopAEventBatchKey(batch.commitment, batch.slot),
-      batch,
-    );
+    const kvKey = loopAEventBatchKey(batch.commitment, batch.slot);
+    await writeJson(env, kvKey, batch);
+    return kvKey;
   }
+  return r2Key;
 }
 
 export function createEmptyMarkerBatch(input: {
@@ -528,26 +532,52 @@ export async function readLoopAStateSnapshotFromKv(
   return parseLoopAStateSnapshot(parsed);
 }
 
+async function readLoopAEventBatchWithRef(
+  env: Env,
+  commitment: SlotCommitment,
+  slot: number,
+): Promise<LoopAEventBatchRead | null> {
+  const r2Key = loopAEventBatchR2Key(commitment, slot);
+  const parsedFromR2 = await readJsonFromR2(env, r2Key);
+  const batchFromR2 = parseLoopAEventBatch(parsedFromR2);
+  if (batchFromR2) {
+    return {
+      batch: batchFromR2,
+      ref: r2Key,
+    };
+  }
+
+  const kvKey = loopAEventBatchKey(commitment, slot);
+  const parsedFromKv = await readJson(env, kvKey);
+  const batchFromKv = parseLoopAEventBatch(parsedFromKv);
+  if (!batchFromKv) return null;
+
+  // Opportunistic migration path so old KV-only rows become available in R2.
+  try {
+    const migrated = await writeJsonToR2(env, r2Key, batchFromKv);
+    if (migrated) {
+      return {
+        batch: batchFromKv,
+        ref: r2Key,
+      };
+    }
+  } catch {
+    // Best-effort migration should never block loop progression.
+  }
+
+  return {
+    batch: batchFromKv,
+    ref: kvKey,
+  };
+}
+
 export async function readLoopAEventBatchFromKv(
   env: Env,
   commitment: SlotCommitment,
   slot: number,
 ): Promise<LoopAEventBatch | null> {
-  const r2Key = loopAEventBatchR2Key(commitment, slot);
-  const parsedFromR2 = await readJsonFromR2(env, r2Key);
-  const batchFromR2 = parseLoopAEventBatch(parsedFromR2);
-  if (batchFromR2) return batchFromR2;
-
-  const parsedFromKv = await readJson(
-    env,
-    loopAEventBatchKey(commitment, slot),
-  );
-  const batchFromKv = parseLoopAEventBatch(parsedFromKv);
-  if (!batchFromKv) return null;
-
-  // Opportunistic migration path so old KV-only rows become available in R2.
-  await writeJsonToR2(env, r2Key, batchFromKv);
-  return batchFromKv;
+  const read = await readLoopAEventBatchWithRef(env, commitment, slot);
+  return read?.batch ?? null;
 }
 
 export async function resolveContiguousIngestionSlot(input: {
@@ -581,17 +611,22 @@ export async function resolveContiguousIngestionSlot(input: {
 export async function persistLoopAEventBatchesToKv(
   env: Env,
   batches: LoopAEventBatch[],
-): Promise<number> {
+): Promise<{ count: number; refsBySlot: Map<string, string> }> {
   const deduped = dedupeByKey(
     batches,
     (entry) => `${entry.commitment}:${entry.slot}`,
   );
+  const refsBySlot = new Map<string, string>();
 
   for (const batch of deduped) {
-    await writeLoopAEventBatchToKv(env, batch);
+    const ref = await writeLoopAEventBatchToKv(env, batch);
+    refsBySlot.set(`${batch.commitment}:${batch.slot}`, ref);
   }
 
-  return deduped.length;
+  return {
+    count: deduped.length,
+    refsBySlot,
+  };
 }
 
 function determineBootstrapSlot(
@@ -667,10 +702,11 @@ export async function runLoopACanonicalStateTick(
       ? input.cursorAfter[input.commitment]
       : Math.min(input.targetSlot, input.cursorAfter[input.commitment]);
 
-  const persistedBatches = await persistLoopAEventBatchesToKv(
+  const persisted = await persistLoopAEventBatchesToKv(
     env,
     input.decodedBatches,
   );
+  const persistedBatches = persisted.count;
 
   const snapshotBefore = await readLoopAStateSnapshotFromKv(
     env,
@@ -699,8 +735,15 @@ export async function runLoopACanonicalStateTick(
 
   for (let slot = currentSlot + 1; slot <= targetSlot; slot += 1) {
     let batch = decodedBySlot.get(slot) ?? null;
+    let eventRef = persisted.refsBySlot.get(`${input.commitment}:${slot}`);
     if (!batch) {
-      batch = await readLoopAEventBatchFromKv(env, input.commitment, slot);
+      const read = await readLoopAEventBatchWithRef(
+        env,
+        input.commitment,
+        slot,
+      );
+      batch = read?.batch ?? null;
+      eventRef = read?.ref;
     }
 
     if (!batch) {
@@ -712,7 +755,9 @@ export async function runLoopACanonicalStateTick(
     appliedEvents += batch.events.length;
     replayedSlots += 1;
     currentSlot = slot;
-    eventRefs.push(loopAEventBatchR2Key(input.commitment, slot));
+    if (eventRef) {
+      eventRefs.push(eventRef);
+    }
   }
 
   const snapshotAfter = buildSnapshot({

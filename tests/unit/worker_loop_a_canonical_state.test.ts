@@ -83,6 +83,16 @@ function createEnv(): {
   return { env, store, r2Store };
 }
 
+function createEnvWithoutR2(): { env: Env; store: Map<string, string> } {
+  const { kv, store } = createMockKv();
+  const env = {
+    WAITLIST_DB: createMockDb() as never,
+    CONFIG_KV: kv as never,
+    RPC_ENDPOINT: "https://rpc.example",
+  } as Env;
+  return { env, store };
+}
+
 function cursor(
   processed: number,
   confirmed: number,
@@ -343,5 +353,53 @@ describe("worker loop A canonical state", () => {
     expect(contiguous.ingestionSlot).toBe(451);
     expect(contiguous.missingSlot).toBeNull();
     expect(r2Store.has(loopAEventBatchR2Key("confirmed", 451))).toBe(true);
+  });
+
+  test("continues replay when KV-to-R2 migration write fails", async () => {
+    const { kv, store } = createMockKv();
+    const env = {
+      WAITLIST_DB: createMockDb() as never,
+      CONFIG_KV: kv as never,
+      LOGS_BUCKET: {
+        put: async () => {
+          throw new Error("r2-put-failed");
+        },
+        get: async () => null,
+      } as never,
+      RPC_ENDPOINT: "https://rpc.example",
+    } as Env;
+
+    store.set(
+      loopAEventBatchKey("confirmed", 552),
+      JSON.stringify(batch(552, [transferEvent(552, "sig-552")], "confirmed")),
+    );
+
+    const contiguous = await resolveContiguousIngestionSlot({
+      env,
+      commitment: "confirmed",
+      fromSlot: 551,
+      targetSlot: 552,
+    });
+
+    expect(contiguous.ingestionSlot).toBe(552);
+    expect(contiguous.missingSlot).toBeNull();
+  });
+
+  test("records KV event refs when R2 is unavailable", async () => {
+    const { env, store } = createEnvWithoutR2();
+
+    await runLoopACanonicalStateTick(env, {
+      cursorAfter: cursor(701, 701, 700),
+      decodedBatches: [batch(701, [transferEvent(701, "sig-701")])],
+      commitment: "confirmed",
+      snapshotEverySlots: 100,
+      observedAt: "2026-02-21T04:45:00.000Z",
+    });
+
+    const snapshot = readSnapshot(store, loopAStateLatestKey("confirmed"));
+    expect(snapshot?.inputs.eventRefs).toEqual([
+      loopAEventBatchKey("confirmed", 701),
+    ]);
+    expect(store.has(loopAEventBatchKey("confirmed", 701))).toBe(true);
   });
 });
