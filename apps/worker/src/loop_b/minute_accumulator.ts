@@ -667,6 +667,21 @@ function scoreSnapshotR2Key(input: {
   return `loopB/${LOOP_B_SCHEMA_VERSION}/scores/date=${yyyy}-${mm}-${dd}/hour=${hh}/minute=${yyyy}-${mm}-${dd}T${hh}:${minute}:00Z/revision=${input.revision}/at=${token}.json`;
 }
 
+function viewSnapshotR2Key(input: {
+  minute: MinuteId;
+  generatedAt: string;
+  revision: number;
+}): string {
+  const date = new Date(input.minute);
+  const yyyy = date.getUTCFullYear().toString().padStart(4, "0");
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  const token = input.generatedAt.replaceAll(":", "-");
+  return `loopB/${LOOP_B_SCHEMA_VERSION}/views/date=${yyyy}-${mm}-${dd}/hour=${hh}/minute=${yyyy}-${mm}-${dd}T${hh}:${minute}:00Z/revision=${input.revision}/at=${token}.json`;
+}
+
 async function putKvJson(
   env: Env,
   key: string,
@@ -772,6 +787,24 @@ async function publishFinalizedMinute(input: {
           revision: input.minuteRecord.revision,
         }),
         JSON.stringify(scoreSet),
+      ),
+      input.env.LOGS_BUCKET.put(
+        viewSnapshotR2Key({
+          minute: input.minute,
+          generatedAt: input.generatedAt,
+          revision: input.minuteRecord.revision,
+        }),
+        JSON.stringify({
+          schemaVersion: LOOP_B_SCHEMA_VERSION,
+          generatedAt: input.generatedAt,
+          minute: input.minute,
+          revision: input.minuteRecord.revision,
+          views: {
+            topMovers,
+            liquidityStress,
+            anomalyFeed,
+          },
+        }),
       ),
     ]);
   }
