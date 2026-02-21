@@ -16,6 +16,12 @@ import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
 import { JupiterClient } from "./jupiter";
 import { createDefaultDecoderRegistry } from "./loop_a/adapters";
 import { runLoopABlockFetcherTick } from "./loop_a/block_fetcher";
+import {
+  type LoopAEventBatch,
+  resolveSnapshotEverySlots,
+  resolveStateCommitment,
+  runLoopACanonicalStateTick,
+} from "./loop_a/canonical_state";
 import { decodeProtocolEventsFromBlock } from "./loop_a/decoder_registry";
 import { runLoopASlotSourceTick } from "./loop_a/slot_source";
 import {
@@ -1454,12 +1460,16 @@ export default {
         return;
       }
 
+      const stateStoreEnabled =
+        String(env.LOOP_A_STATE_STORE_ENABLED ?? "0").trim() === "1";
       const decoderEnabled =
-        String(env.LOOP_A_DECODER_ENABLED ?? "0").trim() === "1";
+        String(env.LOOP_A_DECODER_ENABLED ?? "0").trim() === "1" ||
+        stateStoreEnabled;
       const decoderRegistry = decoderEnabled
         ? createDefaultDecoderRegistry()
         : null;
       let decodedEvents = 0;
+      const decodedBatches: LoopAEventBatch[] = [];
 
       const blockFetchResult = await runLoopABlockFetcherTick(
         env,
@@ -1476,6 +1486,13 @@ export default {
                   block: fetched.block,
                   registry: decoderRegistry,
                 });
+                decodedBatches.push({
+                  schemaVersion: "v1",
+                  commitment: fetched.commitment,
+                  slot: fetched.slot,
+                  generatedAt: new Date().toISOString(),
+                  events,
+                });
                 decodedEvents += events.length;
               }
             : undefined,
@@ -1484,7 +1501,20 @@ export default {
       console.log("loop_a.block_fetcher.tick", {
         ...blockFetchResult,
         decodedEvents,
+        decodedBatches: decodedBatches.length,
       });
+
+      if (stateStoreEnabled) {
+        const stateTickResult = await runLoopACanonicalStateTick(env, {
+          cursorAfter: result.cursorAfter,
+          decodedBatches,
+          commitment: resolveStateCommitment(env.LOOP_A_STATE_COMMITMENT),
+          snapshotEverySlots: resolveSnapshotEverySlots(
+            env.LOOP_A_SNAPSHOT_EVERY_SLOTS,
+          ),
+        });
+        console.log("loop_a.state_store.tick", stateTickResult);
+      }
     } catch (error) {
       console.error("loop_a.scheduled.error", {
         message: error instanceof Error ? error.message : "unknown-error",
