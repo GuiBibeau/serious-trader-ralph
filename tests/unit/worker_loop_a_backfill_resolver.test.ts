@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { runLoopABackfillResolverTick } from "../../apps/worker/src/loop_a/backfill_resolver";
 import {
   loopAEventBatchKey,
+  loopAEventBatchR2Key,
   parseLoopAEventBatch,
 } from "../../apps/worker/src/loop_a/canonical_state";
 import type { Env } from "../../apps/worker/src/types";
@@ -51,21 +52,48 @@ function createMockKv() {
   };
 }
 
-function createEnv(): { env: Env; store: Map<string, string> } {
+function createMockR2() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    bucket: {
+      put: async (key: string, value: string) => {
+        store.set(key, value);
+      },
+      get: async (key: string) => {
+        const value = store.get(key);
+        if (!value) return null;
+        return {
+          text: async () => value,
+        };
+      },
+      head: async (key: string) => (store.has(key) ? { key } : null),
+    },
+  };
+}
+
+function createEnv(): {
+  env: Env;
+  store: Map<string, string>;
+  r2Store: Map<string, string>;
+} {
   const { kv, store } = createMockKv();
+  const { bucket, store: r2Store } = createMockR2();
   return {
     env: {
       WAITLIST_DB: createMockDb() as never,
       CONFIG_KV: kv as never,
+      LOGS_BUCKET: bucket as never,
       RPC_ENDPOINT: "https://rpc.example",
     } as Env,
     store,
+    r2Store,
   };
 }
 
 describe("worker loop A backfill resolver", () => {
   test("resolves range backfill tasks and persists empty marker batches", async () => {
-    const { env, store } = createEnv();
+    const { env, store, r2Store } = createEnv();
     store.set(
       "loopA:v1:backfill:pending:confirmed:100-101",
       JSON.stringify({
@@ -102,10 +130,10 @@ describe("worker loop A backfill resolver", () => {
     );
 
     const batch100 = parseLoopAEventBatch(
-      JSON.parse(store.get(loopAEventBatchKey("confirmed", 100)) ?? "null"),
+      JSON.parse(r2Store.get(loopAEventBatchR2Key("confirmed", 100)) ?? "null"),
     );
     const batch101 = parseLoopAEventBatch(
-      JSON.parse(store.get(loopAEventBatchKey("confirmed", 101)) ?? "null"),
+      JSON.parse(r2Store.get(loopAEventBatchR2Key("confirmed", 101)) ?? "null"),
     );
 
     expect(batch100?.events.length).toBe(0);
@@ -115,7 +143,7 @@ describe("worker loop A backfill resolver", () => {
   });
 
   test("converts rpc-missing task into empty marker and clears task", async () => {
-    const { env, store } = createEnv();
+    const { env, store, r2Store } = createEnv();
     store.set(
       "loopA:v1:block_missing:pending:confirmed:222",
       JSON.stringify({
@@ -148,13 +176,13 @@ describe("worker loop A backfill resolver", () => {
     );
 
     const batch = parseLoopAEventBatch(
-      JSON.parse(store.get(loopAEventBatchKey("confirmed", 222)) ?? "null"),
+      JSON.parse(r2Store.get(loopAEventBatchR2Key("confirmed", 222)) ?? "null"),
     );
     expect(batch?.marker?.reason).toBe("missing_in_storage");
   });
 
   test("retains unresolved task on hard rpc failure", async () => {
-    const { env, store } = createEnv();
+    const { env, store, r2Store } = createEnv();
     const taskKey = "loopA:v1:backfill:pending:confirmed:333-333";
     store.set(
       taskKey,
@@ -186,5 +214,6 @@ describe("worker loop A backfill resolver", () => {
     expect(result.hardFailures).toBe(1);
     expect(store.has(taskKey)).toBe(true);
     expect(store.has(loopAEventBatchKey("confirmed", 333))).toBe(false);
+    expect(r2Store.has(loopAEventBatchR2Key("confirmed", 333))).toBe(false);
   });
 });

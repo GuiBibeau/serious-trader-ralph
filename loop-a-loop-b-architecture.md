@@ -25,7 +25,7 @@ It is intentionally written as something you can hand to an implementation agent
   - fetches blocks with bounded concurrency + retry,
   - emits "block missing" tasks into Cloudflare Key-Value store. ([GitHub][4])
 - CanonicalState (current):
-  - persists decoded batches to Cloudflare Key-Value store,
+  - persists decoded batches to Cloudflare R2 object storage (with legacy Cloudflare Key-Value store fallback reads during migration),
   - attempts to replay slot-by-slot until it hits a missing slot (then stops). ([GitHub][5])
 
 ### Execution routing already exists (v0)
@@ -170,7 +170,7 @@ Loop A currently runs in the Worker `scheduled()` handler with this sequence:
 1. SlotSource tick updates cursor and emits backfill tasks. ([GitHub][1])
 2. BlockFetcher tick fetches blocks between cursorBefore and cursorAfter, with bounded concurrency/retries, emitting missing tasks. ([GitHub][1])
 3. DecoderRegistry decodes events (SPL token transfer adapter, Jupiter swap adapter). ([GitHub][9])
-4. Canonical state tick persists batches to Cloudflare Key-Value store and replays contiguously until missing slot. ([GitHub][1])
+4. Canonical state tick persists batches to Cloudflare R2 object storage and replays contiguously until missing slot. ([GitHub][1])
 
 ## Loop A v0 latency/reliability bottlenecks (fix list)
 
