@@ -5,6 +5,14 @@ export const LOOP_C_CANDIDATE_POOL_LATEST_KEY = "loopC:v1:candidates:latest";
 export const LOOP_C_CANDIDATE_POOL_DEFAULT_LIMIT = 24;
 export const LOOP_C_CANDIDATE_POOL_MAX_LIMIT = 200;
 
+const KNOWN_PROTOCOLS = ["jupiter", "raydium", "orca", "meteora"] as const;
+
+export type LoopCCandidateFeatureHints = {
+  markCount: number;
+  volatilityPct: number;
+  confidenceAvg: number;
+};
+
 export type LoopCCandidateRow = {
   schemaVersion: typeof LOOP_C_SCHEMA_VERSION;
   generatedAt: string;
@@ -22,6 +30,14 @@ export type LoopCCandidateRow = {
   featuresRef: string;
   scoreRef: string;
   evidenceRefs: string[];
+  sourceProtocols: string[];
+  freshnessMs: number;
+  liquidityScore: number;
+  markCount: number;
+  volatilityPct: number;
+  confidenceAvg: number;
+  riskTags: string[];
+  stabilityTags: string[];
   revision: number;
   explain: string[];
 };
@@ -63,9 +79,68 @@ function normalizeEvidenceRefs(input: string[] | undefined): string[] {
   return [...new Set((input ?? []).filter((value) => value.length > 0))].sort();
 }
 
+function normalizeStringList(input: string[] | undefined): string[] {
+  return [
+    ...new Set((input ?? []).map((value) => value.trim()).filter(Boolean)),
+  ].sort();
+}
+
 function acceptancePriorFromScore(finalScore: number): number {
   const scaled = finalScore / 10;
   return clamp01(1 / (1 + Math.exp(-scaled)));
+}
+
+function inferProtocolsFromEvidenceRefs(input: string[]): string[] {
+  const lower = input.join(" ").toLowerCase();
+  const protocols = KNOWN_PROTOCOLS.filter((protocol) =>
+    lower.includes(protocol),
+  );
+  return protocols.length > 0 ? [...protocols] : [];
+}
+
+function parseFeatureHints(input: LoopCCandidateFeatureHints | undefined): {
+  markCount: number;
+  volatilityPct: number;
+  confidenceAvg: number;
+} {
+  const markCount = Number.isFinite(input?.markCount)
+    ? Math.max(0, input?.markCount ?? 0)
+    : 0;
+  const volatilityPct = Number.isFinite(input?.volatilityPct)
+    ? Math.max(0, input?.volatilityPct ?? 0)
+    : 0;
+  const confidenceAvg = Number.isFinite(input?.confidenceAvg)
+    ? clamp01(input?.confidenceAvg ?? 0)
+    : 0;
+  return {
+    markCount,
+    volatilityPct,
+    confidenceAvg,
+  };
+}
+
+function deriveRiskTags(input: {
+  volatilityPct: number;
+  confidenceAvg: number;
+  markCount: number;
+}): string[] {
+  const tags: string[] = [];
+  if (input.volatilityPct >= 3) tags.push("high_volatility");
+  if (input.confidenceAvg <= 0.7) tags.push("low_confidence");
+  if (input.markCount <= 1) tags.push("thin_liquidity");
+  return tags;
+}
+
+function deriveStabilityTags(input: {
+  volatilityPct: number;
+  confidenceAvg: number;
+  markCount: number;
+}): string[] {
+  const tags: string[] = [];
+  if (input.volatilityPct <= 1) tags.push("low_volatility");
+  if (input.confidenceAvg >= 0.9) tags.push("high_confidence");
+  if (input.markCount >= 3) tags.push("multi_sample");
+  return tags;
 }
 
 export function parseLoopCCandidatePoolLimit(raw: string | undefined): number {
@@ -86,8 +161,13 @@ export function buildLoopCCandidatePool(input: {
   maxCandidates: number;
   scoreRows: LoopBScoreRow[];
   evidenceRefsByPair: Map<string, string[]>;
+  featureHintsByPair: Map<string, LoopCCandidateFeatureHints>;
 }): LoopCCandidatePool {
   const minute = minuteIdFrom(input.minute);
+  const freshnessMs = Math.max(
+    0,
+    Date.parse(input.generatedAt) - Date.parse(minute),
+  );
   const sorted = [...input.scoreRows].sort((a, b) => {
     if (a.finalScore !== b.finalScore) return b.finalScore - a.finalScore;
     if (a.pairId < b.pairId) return -1;
@@ -100,10 +180,17 @@ export function buildLoopCCandidatePool(input: {
     const evidenceRefs = normalizeEvidenceRefs(
       input.evidenceRefsByPair.get(row.pairId),
     );
+    const sourceProtocols = inferProtocolsFromEvidenceRefs(evidenceRefs);
+    const hints = parseFeatureHints(input.featureHintsByPair.get(row.pairId));
+
     const curiosity =
       Math.abs(row.contributions.momentum) + row.contributions.activity * 0.2;
     const riskPenalty = Math.max(0, row.contributions.stabilityPenalty);
     const stabilityBonus = Math.max(0, row.contributions.confidence);
+    const liquidityScore = hints.markCount * hints.confidenceAvg;
+    const riskTags = deriveRiskTags(hints);
+    const stabilityTags = deriveStabilityTags(hints);
+
     const candidate: LoopCCandidateRow = {
       schemaVersion: LOOP_C_SCHEMA_VERSION,
       generatedAt: input.generatedAt,
@@ -121,11 +208,21 @@ export function buildLoopCCandidatePool(input: {
       featuresRef: row.featuresRef,
       scoreRef: `loopB:v1:scores:latest:pair:${row.pairId}`,
       evidenceRefs,
+      sourceProtocols,
+      freshnessMs,
+      liquidityScore: round(liquidityScore),
+      markCount: hints.markCount,
+      volatilityPct: round(hints.volatilityPct),
+      confidenceAvg: round(hints.confidenceAvg),
+      riskTags,
+      stabilityTags,
       revision: row.revision,
       explain: [
         `source=loopB`,
         `score_ref=loopB:v1:scores:latest:pair:${row.pairId}`,
         `evidence_refs=${evidenceRefs.length}`,
+        `risk_tags=${riskTags.join("|") || "none"}`,
+        `stability_tags=${stabilityTags.join("|") || "none"}`,
       ],
     };
     rows.push(candidate);
@@ -184,6 +281,50 @@ function parseLoopCCandidateRow(raw: unknown): LoopCCandidateRow | null {
     evidenceRefs: Array.isArray(row.evidenceRefs)
       ? row.evidenceRefs.filter(
           (entry): entry is string => typeof entry === "string",
+        )
+      : [],
+    sourceProtocols: Array.isArray(row.sourceProtocols)
+      ? normalizeStringList(
+          row.sourceProtocols.filter(
+            (entry): entry is string => typeof entry === "string",
+          ),
+        )
+      : [],
+    freshnessMs:
+      typeof row.freshnessMs === "number" && Number.isFinite(row.freshnessMs)
+        ? Math.max(0, row.freshnessMs)
+        : 0,
+    liquidityScore:
+      typeof row.liquidityScore === "number" &&
+      Number.isFinite(row.liquidityScore)
+        ? Math.max(0, row.liquidityScore)
+        : 1,
+    markCount:
+      typeof row.markCount === "number" && Number.isFinite(row.markCount)
+        ? Math.max(0, Math.floor(row.markCount))
+        : 0,
+    volatilityPct:
+      typeof row.volatilityPct === "number" &&
+      Number.isFinite(row.volatilityPct)
+        ? Math.max(0, row.volatilityPct)
+        : 0,
+    confidenceAvg:
+      typeof row.confidenceAvg === "number" &&
+      Number.isFinite(row.confidenceAvg)
+        ? clamp01(row.confidenceAvg)
+        : 0,
+    riskTags: Array.isArray(row.riskTags)
+      ? normalizeStringList(
+          row.riskTags.filter(
+            (entry): entry is string => typeof entry === "string",
+          ),
+        )
+      : [],
+    stabilityTags: Array.isArray(row.stabilityTags)
+      ? normalizeStringList(
+          row.stabilityTags.filter(
+            (entry): entry is string => typeof entry === "string",
+          ),
         )
       : [],
     revision: Math.max(0, Math.floor(row.revision)),

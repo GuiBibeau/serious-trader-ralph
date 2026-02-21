@@ -21,6 +21,7 @@ export type UserPersonaInput = {
   horizon?: "short" | "medium" | "long";
   sectorPreferences?: string[];
   excludedAssets?: string[];
+  excludedProtocols?: string[];
 };
 
 export type RecommendationFeedbackDecision = "yes" | "no";
@@ -48,6 +49,12 @@ export type RecommendationView = {
   wallet: string;
   freshnessMs: number;
   recommendations: RecommendationRow[];
+  rejections: Array<{
+    pairId: string;
+    baseMint: string;
+    quoteMint: string;
+    reasonTags: string[];
+  }>;
 };
 
 type RecommendationRequest = {
@@ -96,8 +103,21 @@ type RecommendationInputRow = {
   quoteMint: string;
   baseSignal: number;
   riskPenalty: number;
+  stabilityBonus: number;
+  sourceProtocols: string[];
+  freshnessMs: number;
+  liquidityScore: number;
+  riskTags: string[];
+  stabilityTags: string[];
   acceptProbPrior: number;
   explain: string[];
+};
+
+type GuardConfig = {
+  minLiquidityScore: number;
+  maxStalenessMs: number;
+  excludedAssets: Set<string>;
+  excludedProtocols: Set<string>;
 };
 
 type FeedbackUpdateResult = {
@@ -142,6 +162,24 @@ function parseDefaultLimit(raw: string | undefined): number {
   const parsed = Number.parseInt(String(raw ?? "").trim(), 10);
   if (Number.isFinite(parsed) && parsed > 0 && parsed <= 100) return parsed;
   return DEFAULT_LIMIT;
+}
+
+function parsePositiveNumber(
+  raw: string | undefined,
+  fallback: number,
+): number {
+  const parsed = Number(String(raw ?? "").trim());
+  if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  return fallback;
+}
+
+function parseCsvSet(raw: string | undefined): Set<string> {
+  return new Set(
+    String(raw ?? "")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter((value) => value.length > 0),
+  );
 }
 
 function toMinuteId(input: string): string | null {
@@ -225,6 +263,15 @@ function fromScoreRows(rows: LoopBScoreRow[]): RecommendationInputRow[] {
     quoteMint: row.quoteMint,
     baseSignal: row.finalScore,
     riskPenalty: row.contributions.stabilityPenalty,
+    stabilityBonus: row.contributions.confidence,
+    sourceProtocols: [],
+    freshnessMs: Math.max(
+      0,
+      Date.parse(row.generatedAt) - Date.parse(row.minute),
+    ),
+    liquidityScore: 1,
+    riskTags: [],
+    stabilityTags: [],
     acceptProbPrior: priorFromBaseSignal(row.finalScore),
     explain: row.explain,
   }));
@@ -237,6 +284,12 @@ function fromCandidatePoolRows(raw: string | null): RecommendationInputRow[] {
     quoteMint: row.quoteMint,
     baseSignal: row.baseSignal,
     riskPenalty: row.riskPenalty,
+    stabilityBonus: row.stabilityBonus,
+    sourceProtocols: row.sourceProtocols,
+    freshnessMs: row.freshnessMs,
+    liquidityScore: row.liquidityScore,
+    riskTags: row.riskTags,
+    stabilityTags: row.stabilityTags,
     acceptProbPrior: normalizePrior(row.acceptProbPrior),
     explain: row.explain,
   }));
@@ -263,15 +316,18 @@ function normalizePersona(input: UserPersonaInput | undefined): {
   horizon: UserPersonaInput["horizon"] | null;
   sectorPreferences: string[];
   excludedAssets: string[];
+  excludedProtocols: string[];
 } {
   const sectorPreferences = [...normalizeSet(input?.sectorPreferences)].sort();
   const excludedAssets = [...normalizeSet(input?.excludedAssets)].sort();
+  const excludedProtocols = [...normalizeSet(input?.excludedProtocols)].sort();
 
   return {
     riskBudget: input?.riskBudget ?? null,
     horizon: input?.horizon ?? null,
     sectorPreferences,
     excludedAssets,
+    excludedProtocols,
   };
 }
 
@@ -311,6 +367,39 @@ function recommendationR2Key(input: {
   const minute = String(date.getUTCMinutes()).padStart(2, "0");
   const at = input.generatedAt.replaceAll(":", "-");
   return `loopC/${LOOP_C_SCHEMA_VERSION}/recommendations/date=${yyyy}-${mm}-${dd}/hour=${hh}/minute=${yyyy}-${mm}-${dd}T${hh}:${minute}:00Z/user=${sanitizeToken(input.userId)}/wallet=${sanitizeToken(input.wallet)}/at=${at}.json`;
+}
+
+function normalizeLowerSet(values: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const value of values) {
+    const normalized = value.trim().toLowerCase();
+    if (normalized.length > 0) out.add(normalized);
+  }
+  return out;
+}
+
+function resolveGuardConfig(
+  env: Env,
+  persona: UserPersonaInput | undefined,
+): GuardConfig {
+  const personaExcludedAssets = normalizeLowerSet(
+    persona?.excludedAssets ?? [],
+  );
+  const personaExcludedProtocols = normalizeLowerSet(
+    persona?.excludedProtocols ?? [],
+  );
+  const envExcludedAssets = parseCsvSet(env.LOOP_C_EXCLUDED_ASSETS);
+  const envExcludedProtocols = parseCsvSet(env.LOOP_C_EXCLUDED_PROTOCOLS);
+
+  return {
+    minLiquidityScore: parsePositiveNumber(env.LOOP_C_MIN_LIQUIDITY_SCORE, 0.5),
+    maxStalenessMs: parsePositiveNumber(env.LOOP_C_MAX_STALENESS_MS, 180000),
+    excludedAssets: new Set([...envExcludedAssets, ...personaExcludedAssets]),
+    excludedProtocols: new Set([
+      ...envExcludedProtocols,
+      ...personaExcludedProtocols,
+    ]),
+  };
 }
 
 function defaultPairFeedback(now: string): PairFeedbackState {
@@ -491,19 +580,63 @@ function buildRecommendations(input: {
   minute: string;
   generatedAt: string;
   feedback: FeedbackState;
+  guardConfig: GuardConfig;
   persona?: UserPersonaInput;
 }): RecommendationView {
   const preferred = normalizeSet(input.persona?.sectorPreferences);
-  const excluded = normalizeSet(input.persona?.excludedAssets);
   const risk = riskMultiplier(input.persona);
 
   const recommendations: RecommendationRow[] = [];
+  const rejections: RecommendationView["rejections"] = [];
   for (const row of input.rows) {
-    if (excluded.has(row.baseMint) || excluded.has(row.quoteMint)) continue;
+    const reasonTags: string[] = [];
+    const baseLower = row.baseMint.toLowerCase();
+    const quoteLower = row.quoteMint.toLowerCase();
+    const protocolsLower = row.sourceProtocols.map((item) =>
+      item.toLowerCase(),
+    );
+    if (
+      input.guardConfig.excludedAssets.has(baseLower) ||
+      input.guardConfig.excludedAssets.has(quoteLower)
+    ) {
+      reasonTags.push("excluded_asset");
+    }
+    if (
+      protocolsLower.some((protocol) =>
+        input.guardConfig.excludedProtocols.has(protocol),
+      )
+    ) {
+      reasonTags.push("excluded_protocol");
+    }
+    if (row.freshnessMs > input.guardConfig.maxStalenessMs) {
+      reasonTags.push("stale_data");
+    }
+    if (row.liquidityScore < input.guardConfig.minLiquidityScore) {
+      reasonTags.push("low_liquidity");
+    }
+    if (reasonTags.length > 0) {
+      rejections.push({
+        pairId: row.pairId,
+        baseMint: row.baseMint,
+        quoteMint: row.quoteMint,
+        reasonTags,
+      });
+      continue;
+    }
 
     const personaBoost =
       preferred.has(row.baseMint) || preferred.has(row.quoteMint) ? 2.5 : 0;
-    const riskPenalty = row.riskPenalty * risk;
+    const baseRiskPenalty = row.riskPenalty * risk;
+    const riskTagPenalty =
+      (row.riskTags.includes("high_volatility") ? 0.8 : 0) +
+      (row.riskTags.includes("low_confidence") ? 0.4 : 0) +
+      (row.riskTags.includes("thin_liquidity") ? 0.5 : 0);
+    const riskPenalty = baseRiskPenalty + riskTagPenalty;
+    const stabilityBoost =
+      row.stabilityBonus * 0.05 +
+      (row.stabilityTags.includes("low_volatility") ? 0.2 : 0) +
+      (row.stabilityTags.includes("high_confidence") ? 0.25 : 0) +
+      (row.stabilityTags.includes("multi_sample") ? 0.15 : 0);
     const acceptProb = computeAcceptanceProb({
       pairId: row.pairId,
       prior: row.acceptProbPrior,
@@ -511,7 +644,11 @@ function buildRecommendations(input: {
     });
     const acceptBoost = round((acceptProb - 0.5) * ACCEPTANCE_WEIGHT);
     const finalScore =
-      row.baseSignal + personaBoost + acceptBoost - riskPenalty;
+      row.baseSignal +
+      personaBoost +
+      acceptBoost +
+      stabilityBoost -
+      riskPenalty;
 
     recommendations.push({
       recommendationId: `${input.minute}:${row.pairId}`,
@@ -530,7 +667,10 @@ function buildRecommendations(input: {
         `accept_prob=${acceptProb.toFixed(4)}`,
         `accept_boost=${acceptBoost.toFixed(4)}`,
         `persona_boost=${personaBoost.toFixed(4)}`,
+        `stability_boost=${stabilityBoost.toFixed(4)}`,
         `risk_penalty=${riskPenalty.toFixed(4)}`,
+        `risk_tags=${row.riskTags.join("|") || "none"}`,
+        `stability_tags=${row.stabilityTags.join("|") || "none"}`,
         ...row.explain.slice(0, 2),
       ],
     });
@@ -554,6 +694,7 @@ function buildRecommendations(input: {
       Date.parse(input.generatedAt) - Date.parse(input.minute),
     ),
     recommendations: recommendations.slice(0, input.limit),
+    rejections,
   };
 }
 
@@ -577,7 +718,11 @@ function parseState(input: unknown): RecommenderState {
     const recommendationsRaw = Array.isArray(cachedViewRecord.recommendations)
       ? cachedViewRecord.recommendations
       : [];
+    const rejectionsRaw = Array.isArray(cachedViewRecord.rejections)
+      ? cachedViewRecord.rejections
+      : [];
     const recommendations: RecommendationRow[] = [];
+    const rejections: RecommendationView["rejections"] = [];
     for (const item of recommendationsRaw) {
       const row = asRecord(item);
       if (!row) continue;
@@ -618,6 +763,27 @@ function parseState(input: unknown): RecommenderState {
           : [],
       });
     }
+    for (const item of rejectionsRaw) {
+      const row = asRecord(item);
+      if (!row) continue;
+      if (
+        typeof row.pairId !== "string" ||
+        typeof row.baseMint !== "string" ||
+        typeof row.quoteMint !== "string"
+      ) {
+        continue;
+      }
+      rejections.push({
+        pairId: row.pairId,
+        baseMint: row.baseMint,
+        quoteMint: row.quoteMint,
+        reasonTags: Array.isArray(row.reasonTags)
+          ? row.reasonTags.filter(
+              (entry): entry is string => typeof entry === "string",
+            )
+          : [],
+      });
+    }
 
     if (
       typeof cachedViewRecord.generatedAt === "string" &&
@@ -634,6 +800,7 @@ function parseState(input: unknown): RecommenderState {
         wallet: cachedViewRecord.wallet,
         freshnessMs: cachedViewRecord.freshnessMs,
         recommendations,
+        rejections,
       };
     }
   }
@@ -742,6 +909,7 @@ export class Recommender {
                 : null,
             ),
           );
+    const guardConfig = resolveGuardConfig(this.env, payload.persona);
     const view = buildRecommendations({
       rows: scoreRows,
       userId,
@@ -750,6 +918,7 @@ export class Recommender {
       minute,
       generatedAt: observedAt,
       feedback: state.feedback,
+      guardConfig,
       persona: payload.persona,
     });
 

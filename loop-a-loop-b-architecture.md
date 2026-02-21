@@ -46,6 +46,8 @@ It is intentionally written as something you can hand to an implementation agent
   - candidate pools are published each finalized minute at `loopC:v1:candidates:latest` with Loop B feature/score evidence references,
   - deterministic acceptance model blends cold-start priors with per-pair yes/no feedback and global user feedback state,
   - feedback writes invalidate minute cache and shift acceptance probability predictably for subsequent rankings,
+  - hard guardrails suppress candidates by liquidity floor, staleness cutoff, excluded assets, and excluded protocols,
+  - ranking includes explicit risk/stability tags and surfaces rejection reason tags for suppressed candidates,
   - persists per-user wallet-scoped latest recommendations to Cloudflare Key-Value store and Cloudflare R2 object storage.
 
 ### Execution routing already exists (v0)

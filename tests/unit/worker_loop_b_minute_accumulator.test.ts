@@ -263,12 +263,24 @@ describe("worker loop B minute accumulator", () => {
         evidenceRefs: string[];
         featuresRef: string;
         scoreRef: string;
+        sourceProtocols: string[];
+        freshnessMs: number;
+        liquidityScore: number;
+        riskTags: string[];
+        stabilityTags: string[];
       }>;
     };
     expect(candidatePool.rows.length).toBe(2);
     expect(candidatePool.rows[0]?.evidenceRefs.length).toBeGreaterThan(0);
     expect(candidatePool.rows[0]?.featuresRef).toContain("loopB:v1:features");
     expect(candidatePool.rows[0]?.scoreRef).toContain("loopB:v1:scores");
+    expect(candidatePool.rows[0]?.freshnessMs).toBe(60000);
+    expect(candidatePool.rows[0]?.liquidityScore).toBeGreaterThanOrEqual(0);
+    expect(candidatePool.rows[0]?.sourceProtocols).toEqual([]);
+    expect(candidatePool.rows[0]?.riskTags.length).toBeGreaterThanOrEqual(0);
+    expect(candidatePool.rows[0]?.stabilityTags.length).toBeGreaterThanOrEqual(
+      0,
+    );
     const topMoversView = JSON.parse(
       kvStore.get(LOOP_B_TOP_MOVERS_KEY) ?? "{}",
     ) as {
