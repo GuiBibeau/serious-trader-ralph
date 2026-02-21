@@ -11,6 +11,9 @@ const EXPECTED_X402_PATHS = [
   "/api/x402/read/market_jupiter_quote_batch",
   "/api/x402/read/market_ohlcv",
   "/api/x402/read/market_indicators",
+  "/api/x402/read/solana_marks_latest",
+  "/api/x402/read/solana_scores_latest",
+  "/api/x402/read/solana_views_top",
   "/api/x402/read/macro_signals",
   "/api/x402/read/macro_fred_indicators",
   "/api/x402/read/macro_etf_flows",
@@ -38,7 +41,7 @@ describe("portal x402 api catalog routes", () => {
     const endpointsRaw = Array.isArray(payloadRecord?.endpoints)
       ? payloadRecord.endpoints
       : [];
-    expect(endpointsRaw.length).toBe(12);
+    expect(endpointsRaw.length).toBe(15);
 
     const endpointRecords = endpointsRaw
       .map((item) => toRecord(item))
