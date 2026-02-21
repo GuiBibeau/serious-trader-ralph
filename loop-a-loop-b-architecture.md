@@ -58,6 +58,7 @@ There is already an execution router with adapters for:
 
 - "Jupiter"
 - "Jito bundle" ([GitHub][6])
+- execution contract artifacts now include versioned `ExecutionIntent`, `ExecutionDecision`, `ExecutionLatencyTrace`, and `ExecutionReceipt` records persisted to content-addressed keys in Cloudflare R2 object storage during swap attempts.
 
 ---
 
