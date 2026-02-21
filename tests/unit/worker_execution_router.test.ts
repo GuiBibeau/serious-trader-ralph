@@ -48,6 +48,26 @@ describe("worker execution router", () => {
     ).rejects.toThrow(/jito-block-engine-url-missing/);
   });
 
+  test("magicblock adapter is present but not configured", async () => {
+    await expect(
+      executeSwapViaRouter({
+        env: {} as never,
+        execution: { adapter: "magicblock_ephemeral_rollup" },
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      }),
+    ).rejects.toThrow(/magicblock-ephemeral-rollup-url-missing/);
+  });
+
   test("custom execution adapters can be registered for new venues", async () => {
     registerExecutionAdapter("venue_x", async (input) => ({
       status: "simulated",
