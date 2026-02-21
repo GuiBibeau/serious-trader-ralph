@@ -134,16 +134,27 @@ export async function runLoopASlotSourceTick(
     parseBackfillCommitments(env.LOOP_A_SLOT_SOURCE_BACKFILL_COMMITMENTS);
 
   const heads = await fetchSlotHeads(rpc);
-  const cursorAfter = buildNextCursor(cursorBefore, heads, observedAt);
-  await writeLoopACursorToKv(env, cursorAfter);
+  const cursorCandidate = buildNextCursor(cursorBefore, heads, observedAt);
 
   const tasks = detectGapTasks(
     cursorBefore,
-    cursorAfter,
+    cursorCandidate,
     commitments,
     observedAt,
   );
   const tasksEmitted = await emitBackfillTasksToKv(env, tasks);
+
+  const cursorLatest = await readLoopACursorFromKv(env);
+  const cursorAfter = buildNextCursor(
+    cursorLatest,
+    {
+      processed: cursorCandidate.processed,
+      confirmed: cursorCandidate.confirmed,
+      finalized: cursorCandidate.finalized,
+    },
+    observedAt,
+  );
+  await writeLoopACursorToKv(env, cursorAfter);
 
   return {
     cursorBefore,

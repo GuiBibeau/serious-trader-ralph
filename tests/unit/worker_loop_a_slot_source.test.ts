@@ -9,6 +9,7 @@ import type { SlotCommitment } from "../../apps/worker/src/loop_a/types";
 import type { Env } from "../../apps/worker/src/types";
 
 const originalFetch = globalThis.fetch;
+const CURSOR_KEY = "loopA:v1:cursor";
 
 function createMockDb() {
   return {
@@ -143,6 +144,88 @@ describe("worker loop A slot source", () => {
     expect(result.cursorAfter.confirmed).toBe(498);
     expect(result.cursorAfter.finalized).toBe(496);
     expect(result.tasksEmitted).toBe(0);
+  });
+
+  test("does not advance cursor when backfill task emission fails", async () => {
+    const { env } = createEnv(true);
+
+    await runLoopASlotSourceTick(env, {
+      observedAt: "2026-02-21T03:30:00Z",
+      rpc: createRpc({ processed: 100, confirmed: 100, finalized: 100 }),
+    });
+    const cursorBefore = await readLoopACursorFromKv(env);
+    expect(cursorBefore).not.toBeNull();
+
+    const kv = env.CONFIG_KV as {
+      put: (key: string, value: string) => Promise<void>;
+    };
+    const originalPut = kv.put.bind(kv);
+    kv.put = async (key: string, value: string) => {
+      if (key.includes(":backfill:pending:")) {
+        throw new Error("kv-backfill-put-failed");
+      }
+      await originalPut(key, value);
+    };
+
+    await expect(
+      runLoopASlotSourceTick(env, {
+        observedAt: "2026-02-21T03:31:00Z",
+        rpc: createRpc({ processed: 110, confirmed: 106, finalized: 105 }),
+      }),
+    ).rejects.toThrow(/kv-backfill-put-failed/);
+
+    const cursorAfter = await readLoopACursorFromKv(env);
+    expect(cursorAfter).toEqual(cursorBefore);
+  });
+
+  test("merges with latest cursor before persisting state", async () => {
+    const { kv, store } = createMockKv();
+    const initialCursor = {
+      schemaVersion: "v1",
+      processed: 100,
+      confirmed: 99,
+      finalized: 98,
+      updatedAt: "2026-02-21T03:39:00Z",
+    };
+    const newerCursor = {
+      schemaVersion: "v1",
+      processed: 150,
+      confirmed: 149,
+      finalized: 148,
+      updatedAt: "2026-02-21T03:39:30Z",
+    };
+    store.set(CURSOR_KEY, JSON.stringify(initialCursor));
+
+    let cursorReads = 0;
+    const originalGet = kv.get.bind(kv);
+    kv.get = async (key: string) => {
+      if (key === CURSOR_KEY) {
+        cursorReads += 1;
+        if (cursorReads === 1) return JSON.stringify(initialCursor);
+        if (cursorReads === 2) {
+          store.set(CURSOR_KEY, JSON.stringify(newerCursor));
+          return JSON.stringify(newerCursor);
+        }
+      }
+      return originalGet(key);
+    };
+
+    const env = {
+      WAITLIST_DB: createMockDb() as never,
+      CONFIG_KV: kv as never,
+      RPC_ENDPOINT: "https://rpc.example",
+      LOOP_A_SLOT_SOURCE_ENABLED: "1",
+    } as Env;
+
+    const result = await runLoopASlotSourceTick(env, {
+      observedAt: "2026-02-21T03:40:00Z",
+      backfillCommitments: [],
+      rpc: createRpc({ processed: 120, confirmed: 119, finalized: 118 }),
+    });
+
+    expect(result.cursorAfter.processed).toBe(150);
+    expect(result.cursorAfter.confirmed).toBe(149);
+    expect(result.cursorAfter.finalized).toBe(148);
   });
 
   test("scheduled no-ops when LOOP_A_SLOT_SOURCE_ENABLED is not 1", async () => {
