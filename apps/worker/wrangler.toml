@@ -53,6 +53,8 @@ LOOP_C_MIN_LIQUIDITY_SCORE = "0.5"
 LOOP_C_MAX_STALENESS_MS = "180000"
 LOOP_C_EXCLUDED_ASSETS = ""
 LOOP_C_EXCLUDED_PROTOCOLS = ""
+EXECUTION_COORDINATOR_ENABLED = "0"
+EXECUTION_AUCTION_WINDOW_MS = "250"
 
 [[durable_objects.bindings]]
 name = "LOOP_A_COORDINATOR_DO"
@@ -65,6 +67,10 @@ class_name = "MinuteAccumulator"
 [[durable_objects.bindings]]
 name = "LOOP_C_RECOMMENDER_DO"
 class_name = "Recommender"
+
+[[durable_objects.bindings]]
+name = "EXECUTION_COORDINATOR_DO"
+class_name = "ExecutionCoordinator"
 
 [[kv_namespaces]]
 binding = "CONFIG_KV"
@@ -137,6 +143,8 @@ LOOP_C_MIN_LIQUIDITY_SCORE = "0.5"
 LOOP_C_MAX_STALENESS_MS = "180000"
 LOOP_C_EXCLUDED_ASSETS = ""
 LOOP_C_EXCLUDED_PROTOCOLS = ""
+EXECUTION_COORDINATOR_ENABLED = "0"
+EXECUTION_AUCTION_WINDOW_MS = "250"
 
 [[env.staging.kv_namespaces]]
 binding = "CONFIG_KV"
@@ -209,6 +217,8 @@ LOOP_C_MIN_LIQUIDITY_SCORE = "0.5"
 LOOP_C_MAX_STALENESS_MS = "180000"
 LOOP_C_EXCLUDED_ASSETS = ""
 LOOP_C_EXCLUDED_PROTOCOLS = ""
+EXECUTION_COORDINATOR_ENABLED = "0"
+EXECUTION_AUCTION_WINDOW_MS = "250"
 
 [[migrations]]
 tag = "v2-loop-a-coordinator"
@@ -221,6 +231,10 @@ new_sqlite_classes = ["MinuteAccumulator"]
 [[migrations]]
 tag = "v4-loop-c-recommender"
 new_sqlite_classes = ["Recommender"]
+
+[[migrations]]
+tag = "v5-execution-coordinator"
+new_sqlite_classes = ["ExecutionCoordinator"]
 
 [[env.production.kv_namespaces]]
 binding = "CONFIG_KV"

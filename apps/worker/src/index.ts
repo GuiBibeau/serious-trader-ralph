@@ -11,6 +11,10 @@ import {
   newExecutionLatencyTrace,
   recordExecutionReceipt,
 } from "./execution/contracts";
+import {
+  ExecutionCoordinator,
+  requestExecutionCoordinatorDecision,
+} from "./execution/coordinator";
 import { executeSwapViaRouter } from "./execution/router";
 import {
   type ExperienceLevel,
@@ -85,7 +89,12 @@ const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
   "terminal_opened_from_consumer",
 ]);
 
-export { LoopACoordinator, MinuteAccumulator, Recommender };
+export {
+  ExecutionCoordinator,
+  LoopACoordinator,
+  MinuteAccumulator,
+  Recommender,
+};
 
 function resolveX402ReadRpcEndpoint(env: Env): string {
   const balanceRpc = String(env.BALANCE_RPC_ENDPOINT ?? "").trim();
@@ -1073,10 +1082,13 @@ export default {
           source: source || "TERMINAL",
           reason: reason || undefined,
           execution,
+          simulateOnly: policy.simulateOnly,
+          dryRun: policy.dryRun,
+          commitment: policy.commitment,
         });
-        const executionRoute =
+        let executionRoute =
           String(execution?.adapter ?? "jupiter").trim() || "jupiter";
-        const decision = createExecutionDecision({
+        let decision = createExecutionDecision({
           intentId: intent.intentId,
           decidedAt: trace.decisionAt,
           route: executionRoute,
@@ -1084,12 +1096,75 @@ export default {
           dryRun: policy.dryRun,
           commitment: policy.commitment,
         });
+        try {
+          const coordinator = await requestExecutionCoordinatorDecision(env, {
+            intent,
+          });
+          if (coordinator && !coordinator.accepted) {
+            const rejectedAt = new Date().toISOString();
+            trace.failedAt = rejectedAt;
+            try {
+              await recordExecutionReceipt(env, {
+                generatedAt: rejectedAt,
+                intent,
+                decision,
+                trace,
+                outcome: {
+                  status: "rejected",
+                  signature: null,
+                  refreshed: false,
+                  lastValidBlockHeight: null,
+                  error: coordinator.reason ?? "execution-rejected",
+                },
+                quote: quoteResponse,
+              });
+            } catch (receiptError) {
+              console.error("trade.swap.receipt.error", {
+                userId: user.id,
+                route: executionRoute,
+                message:
+                  receiptError instanceof Error
+                    ? receiptError.message
+                    : String(receiptError),
+              });
+            }
+            return withCors(
+              json(
+                {
+                  ok: false,
+                  error: "execution-rejected",
+                  reason: coordinator.reason,
+                  queueDepth: coordinator.queueDepth,
+                  queuePosition: coordinator.queuePosition,
+                },
+                { status: 409 },
+              ),
+              env,
+            );
+          }
+          if (coordinator?.accepted && coordinator.decision) {
+            decision = coordinator.decision;
+            executionRoute = coordinator.decision.route;
+          }
+        } catch (coordinatorError) {
+          console.warn("trade.swap.coordinator.fallback", {
+            userId: user.id,
+            message:
+              coordinatorError instanceof Error
+                ? coordinatorError.message
+                : String(coordinatorError),
+          });
+        }
+        const routedExecution: ExecutionConfig | undefined = {
+          ...(execution ?? {}),
+          adapter: executionRoute,
+        };
 
         let result: Awaited<ReturnType<typeof executeSwapViaRouter>>;
         try {
           result = await executeSwapViaRouter({
             env,
-            execution,
+            execution: routedExecution,
             policy,
             rpc,
             jupiter,

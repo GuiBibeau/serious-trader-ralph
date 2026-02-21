@@ -33,6 +33,9 @@ describe("worker execution contracts", () => {
       slippageBps: 50,
       source: "TERMINAL",
       execution: { adapter: "jupiter" },
+      simulateOnly: false,
+      dryRun: false,
+      commitment: "confirmed",
     });
     const decision = createExecutionDecision({
       intentId: intent.intentId,
@@ -97,6 +100,9 @@ describe("worker execution contracts", () => {
       slippageBps: 25,
       source: "TERMINAL",
       execution: { adapter: "jupiter" },
+      simulateOnly: false,
+      dryRun: false,
+      commitment: "confirmed",
     });
     const decision = createExecutionDecision({
       intentId: intent.intentId,

@@ -52,6 +52,7 @@ export type Env = {
   LOOP_A_COORDINATOR_DO?: DurableObjectNamespace;
   LOOP_B_MINUTE_ACCUMULATOR_DO?: DurableObjectNamespace;
   LOOP_C_RECOMMENDER_DO?: DurableObjectNamespace;
+  EXECUTION_COORDINATOR_DO?: DurableObjectNamespace;
   ALLOWED_ORIGINS?: string;
   ADMIN_TOKEN?: string;
   PRIVY_APP_ID?: string;
@@ -116,4 +117,6 @@ export type Env = {
   LOOP_C_MAX_STALENESS_MS?: string;
   LOOP_C_EXCLUDED_ASSETS?: string;
   LOOP_C_EXCLUDED_PROTOCOLS?: string;
+  EXECUTION_COORDINATOR_ENABLED?: string;
+  EXECUTION_AUCTION_WINDOW_MS?: string;
 };
