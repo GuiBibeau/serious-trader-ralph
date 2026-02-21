@@ -61,6 +61,7 @@ There is already an execution router with adapters for:
 - execution contract artifacts now include versioned `ExecutionIntent`, `ExecutionDecision`, `ExecutionLatencyTrace`, and `ExecutionReceipt` records persisted to content-addressed keys in Cloudflare R2 object storage during swap attempts.
 - a new `ExecutionCoordinator` Durable Object is available (flag-gated) for deterministic queue ordering and route decisions with explicit rejection reasons.
 - Jito execution adapter now supports block engine submission flow (`sendBundle` + tip-account discovery + bundle status classification) and emits route-level execution metadata for latency tracing.
+- execution latency telemetry now writes rolling summaries into Cloudflare Key-Value store (`exec:v1:latency:last_100` + per-minute route aggregates) to support P50/P95 analysis without scanning Cloudflare R2 object storage on hot paths.
 
 ---
 

@@ -6,6 +6,8 @@ import {
   buildExecutionReceipt,
   createExecutionDecision,
   createExecutionIntent,
+  EXEC_LATENCY_LAST_100_KEY,
+  executionLatencyMinuteKey,
   newExecutionLatencyTrace,
   recordExecutionReceipt,
 } from "../../apps/worker/src/execution/contracts";
@@ -83,10 +85,17 @@ describe("worker execution contracts", () => {
 
   test("records receipt to content-addressed R2 key", async () => {
     const r2Writes = new Map<string, string>();
+    const kvWrites = new Map<string, string>();
     const env = {
       LOGS_BUCKET: {
         put: async (key: string, value: string) => {
           r2Writes.set(key, value);
+        },
+      },
+      CONFIG_KV: {
+        get: async (key: string) => kvWrites.get(key) ?? null,
+        put: async (key: string, value: string) => {
+          kvWrites.set(key, value);
         },
       },
     } as Env;
@@ -146,6 +155,10 @@ describe("worker execution contracts", () => {
           | undefined
       )?.contentSha256,
     ).toBe(receipt.storage.contentSha256);
+    expect(kvWrites.has(EXEC_LATENCY_LAST_100_KEY)).toBe(true);
+    expect(
+      kvWrites.has(executionLatencyMinuteKey("2026-02-21T20:10:00.000Z")),
+    ).toBe(true);
   });
 
   test("maps execution status to latency stages", () => {
