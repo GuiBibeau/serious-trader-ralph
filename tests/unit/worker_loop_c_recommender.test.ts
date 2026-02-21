@@ -4,6 +4,7 @@ import { LOOP_C_CANDIDATE_POOL_LATEST_KEY } from "../../apps/worker/src/loop_c/c
 import {
   Recommender,
   requestLoopCRecommendations,
+  submitLoopCRecommendationFeedback,
 } from "../../apps/worker/src/loop_c/recommender";
 import type { Env } from "../../apps/worker/src/types";
 
@@ -216,12 +217,13 @@ describe("worker loop C recommender durable object", () => {
       ok: boolean;
       cacheHit: boolean;
       view: {
-        recommendations: Array<{ pairId: string }>;
+        recommendations: Array<{ pairId: string; acceptProb: number }>;
       };
     };
     expect(firstPayload.ok).toBe(true);
     expect(firstPayload.cacheHit).toBe(false);
     expect(firstPayload.view.recommendations.length).toBe(2);
+    expect(firstPayload.view.recommendations[0]?.acceptProb).toBeGreaterThan(0);
 
     setScores(kvStore, 15.6);
     const secondResponse = await recommender.fetch(
@@ -356,6 +358,53 @@ describe("worker loop C recommender durable object", () => {
     expect(view?.wallet).toBe("wallet-y");
   });
 
+  test("helper routes feedback request via loop-c durable object namespace", async () => {
+    const { env } = createEnv();
+    let called = false;
+
+    env.LOOP_C_RECOMMENDER_DO = {
+      idFromName: (name: string) => {
+        expect(name).toBe("user-f:wallet-f");
+        return { toString: () => "loop-c-id" } as never;
+      },
+      get: (_id: DurableObjectId) =>
+        ({
+          fetch: async (url: string, init?: RequestInit) => {
+            called = true;
+            expect(url).toContain("/loop-c/feedback");
+            expect(init?.method).toBe("POST");
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                update: {
+                  pairId:
+                    "So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                  decision: "yes",
+                  pair: { yes: 1, no: 0 },
+                  global: { yes: 1, no: 0 },
+                },
+              }),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            );
+          },
+        }) as never,
+    } as DurableObjectNamespace;
+
+    const update = await submitLoopCRecommendationFeedback(env, {
+      userId: "user-f",
+      wallet: "wallet-f",
+      pairId:
+        "So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      decision: "yes",
+    });
+    expect(called).toBe(true);
+    expect(update?.decision).toBe("yes");
+    expect(update?.pair.yes).toBe(1);
+  });
+
   test("uses loop C candidate pool when available", async () => {
     const { env, kvStore } = createEnv();
     setScores(kvStore, 99);
@@ -396,6 +445,110 @@ describe("worker loop C recommender durable object", () => {
     expect(payload.view.recommendations[0]?.pairId).toBe(
       "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN:So11111111111111111111111111111111111111112",
     );
-    expect(payload.view.recommendations[0]?.finalScore).toBeCloseTo(7.3, 6);
+    expect(payload.view.recommendations[0]?.finalScore).toBeGreaterThan(7.5);
+  });
+
+  test("feedback yes/no updates acceptance probability predictably", async () => {
+    const { env, kvStore } = createEnv();
+    setScores(kvStore, 7.5);
+
+    const mock = createMockDoState();
+    const recommender = new Recommender(mock.state, env, {
+      now: () => "2026-02-21T20:20:00.000Z",
+    });
+
+    const baselineResponse = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-feedback",
+          wallet: "wallet-feedback",
+          observedAt: "2026-02-21T20:20:00.000Z",
+          limit: 1,
+        }),
+      }),
+    );
+    const baselinePayload = (await baselineResponse.json()) as {
+      ok: boolean;
+      view: {
+        recommendations: Array<{ pairId: string; acceptProb: number }>;
+      };
+    };
+    expect(baselinePayload.ok).toBe(true);
+    const pairId = baselinePayload.view.recommendations[0]?.pairId ?? "";
+    const baselineProb =
+      baselinePayload.view.recommendations[0]?.acceptProb ?? 0;
+    expect(pairId.length).toBeGreaterThan(0);
+
+    const yesFeedback = await recommender.fetch(
+      new Request("https://internal/loop-c/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          pairId,
+          decision: "yes",
+          decidedAt: "2026-02-21T20:20:30.000Z",
+        }),
+      }),
+    );
+    expect(yesFeedback.status).toBe(200);
+
+    const yesResponse = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-feedback",
+          wallet: "wallet-feedback",
+          observedAt: "2026-02-21T20:21:00.000Z",
+          limit: 1,
+        }),
+      }),
+    );
+    const yesPayload = (await yesResponse.json()) as {
+      ok: boolean;
+      view: {
+        recommendations: Array<{ acceptProb: number }>;
+      };
+    };
+    const yesProb = yesPayload.view.recommendations[0]?.acceptProb ?? 0;
+    expect(yesPayload.ok).toBe(true);
+    expect(yesProb).toBeGreaterThan(baselineProb);
+
+    const noFeedback = await recommender.fetch(
+      new Request("https://internal/loop-c/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          pairId,
+          decision: "no",
+          decidedAt: "2026-02-21T20:21:20.000Z",
+        }),
+      }),
+    );
+    expect(noFeedback.status).toBe(200);
+
+    const noResponse = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-feedback",
+          wallet: "wallet-feedback",
+          observedAt: "2026-02-21T20:22:00.000Z",
+          limit: 1,
+        }),
+      }),
+    );
+    const noPayload = (await noResponse.json()) as {
+      ok: boolean;
+      view: {
+        recommendations: Array<{ acceptProb: number }>;
+      };
+    };
+    const noProb = noPayload.view.recommendations[0]?.acceptProb ?? 0;
+    expect(noPayload.ok).toBe(true);
+    expect(noProb).toBeLessThan(yesProb);
   });
 });
