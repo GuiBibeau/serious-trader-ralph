@@ -14,6 +14,7 @@ import {
 } from "./experience";
 import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
 import { JupiterClient } from "./jupiter";
+import { runLoopABlockFetcherTick } from "./loop_a/block_fetcher";
 import { runLoopASlotSourceTick } from "./loop_a/slot_source";
 import {
   fetchMacroEtfFlows,
@@ -1426,9 +1427,9 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
-    const enabled =
+    const slotSourceEnabled =
       String(env.LOOP_A_SLOT_SOURCE_ENABLED ?? "0").trim() === "1";
-    if (!enabled) return;
+    if (!slotSourceEnabled) return;
 
     if (!env.CONFIG_KV) {
       console.warn("loop_a.slot_source.skipped", {
@@ -1444,8 +1445,20 @@ export default {
         cursorAfter: result.cursorAfter,
         tasksEmitted: result.tasksEmitted,
       });
+
+      const blockFetchEnabled =
+        String(env.LOOP_A_BLOCK_FETCH_ENABLED ?? "0").trim() === "1";
+      if (!blockFetchEnabled) {
+        return;
+      }
+
+      const blockFetchResult = await runLoopABlockFetcherTick(env, {
+        cursorBefore: result.cursorBefore,
+        cursorAfter: result.cursorAfter,
+      });
+      console.log("loop_a.block_fetcher.tick", blockFetchResult);
     } catch (error) {
-      console.error("loop_a.slot_source.error", {
+      console.error("loop_a.scheduled.error", {
         message: error instanceof Error ? error.message : "unknown-error",
         stack: error instanceof Error ? error.stack : undefined,
       });
