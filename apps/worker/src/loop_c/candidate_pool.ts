@@ -298,7 +298,7 @@ function parseLoopCCandidateRow(raw: unknown): LoopCCandidateRow | null {
       typeof row.liquidityScore === "number" &&
       Number.isFinite(row.liquidityScore)
         ? Math.max(0, row.liquidityScore)
-        : 0,
+        : 1,
     markCount:
       typeof row.markCount === "number" && Number.isFinite(row.markCount)
         ? Math.max(0, Math.floor(row.markCount))
