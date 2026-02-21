@@ -1,862 +1,1364 @@
-# Loop A + Loop B + Loop C + Execution Venue Architecture (Latency-First, 2026-02-21)
+# Loop A + Loop B + Loop C Architecture: Solana Intelligence Pipelines (Trader Ralph)
 
-This is an updated version of the Loop architecture document, rewritten with the assumption that **Loop A (v0)** is already implemented **inside the Cloudflare Worker** (cron-triggered), and the next work is to evolve it into a **latency-first pipeline** that supports **Loop B (minute scoring)**, **Loop C (personalized recommendations)**, and an **optional low-latency execution venue** (with MagicBlock Ephemeral Rollups + Jito bundles as the "fast path" options).
+This document defines how to implement **Loop A (per-slot truth)**, **Loop B (minute scoring)**, and **Loop C (personalized recommendations)** as *agentic, automated processes* that produce **sellable Solana intelligence** while **keeping the existing Worker/x402 endpoints intact**.
 
-It is intentionally written as something you can hand to an implementation agent.
-
----
-
-## Status summary (what is already true in the code)
-
-### Loop A is already wired into the Worker cron
-
-- The Worker has a `scheduled()` handler that runs Loop A ticks when `LOOP_A_SLOT_SOURCE_ENABLED=1`, and conditionally runs block fetch + decode + canonical state based on env toggles (`LOOP_A_BLOCK_FETCH_ENABLED`, `LOOP_A_DECODER_ENABLED`, `LOOP_A_STATE_STORE_ENABLED`). ([GitHub][1])
-- The Worker is cron-triggered every minute in Wrangler config (`crons = ["*/1 * * * *"]`). ([GitHub][2])
-
-### Loop A mechanics (v0)
-
-- SlotSource:
-  - reads existing cursor from Cloudflare Key-Value store,
-  - fetches Solana heads for processed/confirmed/finalized,
-  - writes cursor back,
-  - emits backfill tasks for gaps. ([GitHub][3])
-- BlockFetcher:
-  - builds fetch targets from cursorBefore→cursorAfter,
-  - fetches blocks with bounded concurrency + retry,
-  - emits "block missing" tasks into Cloudflare Key-Value store. ([GitHub][4])
-- CanonicalState (current):
-  - persists decoded batches to Cloudflare R2 object storage (with legacy Cloudflare Key-Value store fallback reads during migration),
-  - attempts to replay slot-by-slot until it hits a missing slot (then stops). ([GitHub][5])
-- MarkEngine v1 (current):
-  - computes swap-derived marks from decoded batches,
-  - publishes hot keys for `loopA:v1:marks:confirmed:latest` and per-pair latest marks in Cloudflare Key-Value store.
-- Health + latency telemetry (current):
-  - writes Loop A health artifacts to `loopA:v1:health` in Cloudflare Key-Value store on every tick (success/failure),
-  - writes latest tick latency telemetry to `loopA:v1:latency:latest`,
-  - persists per-tick health and latency snapshots to Cloudflare R2 object storage when bound.
-- Loop B MinuteAccumulator (current):
-  - Durable Object ingests Loop A marks incrementally and tracks per-minute revisions in stateful storage,
-  - finalizes deterministic minute feature rows with provenance (slot range + input refs) and publishes them to hot Cloudflare Key-Value store,
-  - finalizes deterministic, explainable score rows (`loopB:v1:scores:latest` + per-pair score keys) using weighted contribution components,
-  - finalizes minute snapshots to hot Cloudflare Key-Value store views (`top_movers`, `liquidity_stress`, `anomaly_feed`, per-pair latest scores, health) with freshness metadata,
-  - re-finalizes corrected minutes when late/corrected marks arrive, and writes minute/features/scores/view bundles to Cloudflare R2 object storage.
-- Loop C Recommender (current):
-  - Durable Object provides request-time personalized ranking with per-minute cache hits for repeated requests,
-  - reads bounded candidate pools derived from Loop B minute scores (with score fallback), applies deterministic persona/risk adjustments, and returns ranked recommendation views,
-  - candidate pools are published each finalized minute at `loopC:v1:candidates:latest` with Loop B feature/score evidence references,
-  - deterministic acceptance model blends cold-start priors with per-pair yes/no feedback and global user feedback state,
-  - feedback writes invalidate minute cache and shift acceptance probability predictably for subsequent rankings,
-  - hard guardrails suppress candidates by liquidity floor, staleness cutoff, excluded assets, and excluded protocols,
-  - ranking includes explicit risk/stability tags and surfaces rejection reason tags for suppressed candidates,
-  - Worker now exposes auth-only recommendation APIs at `/api/recommendations/latest` and `/api/recommendations/feedback` with user wallet scoping,
-  - personalized recommendation payloads remain unavailable through public x402 routes (`/api/x402/read/*`),
-  - persists per-user wallet-scoped latest recommendations to Cloudflare Key-Value store and Cloudflare R2 object storage.
-
-### Execution routing already exists (v0)
-
-There is already an execution router with adapters for:
-
-- "Jupiter"
-- "Jito bundle" ([GitHub][6])
-- "MagicBlock Ephemeral Rollup" (execution adapter PoC with match->commit flow and settlement-reference capture)
-- execution contract artifacts now include versioned `ExecutionIntent`, `ExecutionDecision`, `ExecutionLatencyTrace`, and `ExecutionReceipt` records persisted to content-addressed keys in Cloudflare R2 object storage during swap attempts.
-- a new `ExecutionCoordinator` Durable Object is available (flag-gated) for deterministic queue ordering and route decisions with explicit rejection reasons.
-- Jito execution adapter now supports block engine submission flow (`sendBundle` + tip-account discovery + bundle status classification) and emits route-level execution metadata for latency tracing.
-- execution latency telemetry now writes rolling summaries into Cloudflare Key-Value store (`exec:v1:latency:last_100` + per-minute route aggregates) to support P50/P95 analysis without scanning Cloudflare R2 object storage on hot paths.
+It is stored locally at the repo root so it can evolve with implementation decisions.
 
 ---
 
-## What this updated document changes
+## Context
 
-The original doc assumed loops run as long-lived off-Worker services. That is still a valid deployment topology, but for **ultra low latency inside Cloudflare**, the “tight loop” design should be:
+Trader Ralph already exposes **x402-gated read endpoints** via the Cloudflare Worker (`apps/worker`) and a user-facing terminal (`apps/portal`). Internally, we want three automation tracks:
 
-- **Cloudflare Worker** stays the public edge boundary (x402 gating + reads).
-- **Cloudflare Durable Objects** become the **single-writer coordination layer** and the **hot aggregation layer** (stateful, in-memory, low-latency).
-- **Cloudflare Key-Value store** becomes "latest pointers + small denormalized views" only.
-- **Cloudflare R2 object storage** becomes "immutable history + evidence bundles".
-- **Cloudflare D1 database** remains "relational metadata, users, auth-only data".
+- **Loop A (per-slot truth):** decode on-chain events → maintain canonical state → emit marks
+- **Loop B (minute scoring):** feature extraction → scoring → cacheable views
+- **Loop C (personalized recommendations):** rank small investments per user/persona/wallet using behavior + risk + stability controls
 
-This is not "move everything to Durable Objects." It is:
-
-- **Move the stateful coordination + incremental aggregation to Durable Objects.**
-- Keep bulk artifacts and history out of Durable Objects (R2 is the correct surface).
-
-Durable Objects are a good fit here because:
-
-- they give you **single-threaded, ordered execution per object** (critical for correct aggregation),
-- they can run background jobs via **alarms** (at-least-once semantics). ([Cloudflare Docs][7])
-- they have configurable CPU limits per invocation (default 30 seconds, configurable via Wrangler). ([Cloudflare Docs][8])
+The product thesis is: **everything we ingest or can compute can be monetized as x402 endpoints**, as long as it is:
+- stable (well-versioned),
+- explainable (provenance + “why”),
+- fast to serve (KV/R2-backed caches),
+- and safe (no secrets, no privileged user data leakage).
 
 ---
 
-## Latency targets (explicit)
+## Goals
 
-These are engineering targets, not marketing promises.
+### Primary goals
+- Build **slot-level truth** that is robust to RPC hiccups and Solana reorg/finality changes.
+- Build **minute-level scoring** that produces *cheap-to-serve* derived artifacts.
+- Build **continuous per-user recommendations** for small investments, refreshed on minute cadence and retrievable on-demand.
+- Publish artifacts into **Cloudflare KV + R2** so the Worker can serve them behind x402 with low latency.
+- Provide a **plugin architecture** so new Solana protocols can be added incrementally.
+- Make outputs **first-class data products** (versioned schemas, metadata, provenance).
 
-### Read path targets (Worker)
-
-- **Worker x402 read endpoint** should do:
-  1. authenticate/payment gate,
-  2. 1–3 reads from Cloudflare Key-Value store (or a single R2 GET only for "evidence" endpoints),
-  3. return JSON.
-- Avoid any "scan" patterns (no listing keys, no walking R2 prefixes in request path).
-
-### Compute path targets (Loops)
-
-- **Loop B**: publish "latest minute views" within ~1–2 seconds of the minute boundary (assuming inputs are available).
-- **Loop C**: serve "latest recommendations" in a single-digit millisecond CPU budget in Durable Objects (deterministic rules, small candidate set).
-- **Execution venue**: provide a fast "decision → submit" path, instrumented end-to-end (see Execution latency section).
+### Non-goals (for the first iteration)
+- Replacing existing live providers used by current endpoints (OHLCV, macro sources) on day 1.
+- Full Solana “index everything” coverage immediately. We’ll build a framework + a small set of protocol adapters, then expand.
 
 ---
 
-## Constraints: existing surfaces we must preserve
+## Constraints and existing surfaces we must preserve
 
-### Existing API boundary (must not break)
-
-- The Cloudflare Worker (`apps/worker/src/index.ts`) is the public API boundary and contains the existing x402 endpoints. ([GitHub][1])
+### Existing API boundary
+- The **Cloudflare Worker** (`apps/worker/src/index.ts`) is the public API boundary and contains the existing x402 endpoints.
 - Existing endpoints must remain unchanged (paths + payloads + semantics).
 
 ### Existing x402 behavior (must not break)
+- Each x402 route is a `POST` under `/api/x402/read/*`.
+- x402 gating is implemented by:
+  - returning `402` + `payment-required` header if no `payment-signature` is present,
+  - and attaching a settlement `payment-response` header on success.
 
-- Each x402 route is `POST` under `/api/x402/read/*`.
-- x402 gating behavior stays identical.
+### Existing endpoint list (keep as-is)
+All are `POST` under `/api/x402/read/*`:
+
+**Market**
+- `market_snapshot`
+- `market_snapshot_v2`
+- `market_token_balance`
+- `market_jupiter_quote`
+- `market_jupiter_quote_batch`
+- `market_ohlcv`
+- `market_indicators`
+
+**Macro**
+- `macro_signals`
+- `macro_fred_indicators`
+- `macro_etf_flows`
+- `macro_stablecoin_health`
+- `macro_oil_analytics`
+
+### Important note: bot runtime endpoints are currently removed
+The Worker currently returns `410` for `/api/loop/*` and other bot-runtime routes. Loop A/B should be implemented **outside** of the Worker (or in a separate worker), and the existing Worker should primarily remain a **read-serving + payment-gating edge**.
 
 ---
 
-## Updated high-level system design (latency-first)
+## High-level system design
 
 ### Architectural shape
 
-- **Loop A v0** continues running (already implemented) but we add a **Loop A coordinator Durable Object** to make it robust + low latency.
-- **Loop B** becomes an **incremental minute accumulator** (Durable Object) rather than a "read a minute of data, compute, write" batch job.
-- **Loop C** becomes an **on-demand + cached ranking service** (Durable Object) with strict privacy boundaries.
-- **Execution venue** is a separate component with a Cloudflare intake path and optional MagicBlock + Jito fast paths.
+- **Loop A**, **Loop B**, and **Loop C** run as **long-lived services** (Bun/Node processes) close to Solana data sources.
+- They publish outputs into **Cloudflare KV** (hot / latest / small windows) and **Cloudflare R2** (immutable history, larger payloads).
+- The **Worker** reads KV/R2 and exposes the artifacts as **x402 endpoints**.
+- Personalized Loop C recommendations are **auth-only** in MVP and are not exposed on public x402 endpoints.
 
-### Conceptual data flow diagram
+### Data flow diagram (conceptual)
 
 ```mermaid
 flowchart LR
-  subgraph Solana["Solana Mainnet Data Sources"]
-    RPC["Solana Remote Procedure Call (HTTP)"]
-    WS["Solana Remote Procedure Call (WebSocket) - optional"]
-    Jito["Jito Block Engine (bundles)"]
+  subgraph Solana["Solana Mainnet Data"]
+    RPC["RPC / WSS (slot + block)"]
+    Geyser["(Optional) Geyser gRPC / Yellowstone"]
   end
 
-  subgraph CF["Cloudflare"]
-    Worker["Cloudflare Worker (x402 gate + read serve)"]
-    DOA["Durable Object: LoopA Coordinator"]
-    DOB["Durable Object: Minute Accumulator (Loop B)"]
-    DOC["Durable Object: Recommender (Loop C)"]
-    KV["Cloudflare Key-Value store (hot views)"]
-    R2["Cloudflare R2 object storage (immutable history)"]
-    D1["Cloudflare D1 database (metadata + auth-only state)"]
+  subgraph LoopA["Loop A: Per-slot truth (indexer)"]
+    SlotSource["SlotSource"]
+    BlockFetch["BlockFetcher"]
+    Decode["DecoderRegistry + ProtocolAdapters"]
+    Reduce["StateReducer (canonical state)"]
+    Marks["MarkEngine"]
+    AWrite["ArtifactWriter"]
   end
 
-  subgraph MagicBlock["MagicBlock Ephemeral Rollup (optional execution venue)"]
-    ER["Ephemeral Rollup runtime"]
+  subgraph LoopB["Loop B: Minute scoring (features + signals)"]
+    MinuteTick["MinuteScheduler"]
+    Feat["FeatureExtractor"]
+    Score["ScoringEngine"]
+    Views["ViewBuilder"]
+    BWrite["ArtifactWriter"]
   end
 
-  Client["Clients / Terminal / Agents"]
+  subgraph LoopC["Loop C: Personalized recommendations"]
+    CIn["Candidate + User Input Join"]
+    Accept["AcceptanceModel (yes/no history)"]
+    Guard["Risk/Stability Guardrails"]
+    Rank["RecommenderEngine"]
+    CWrite["RecommendationPublisher"]
+  end
 
-  RPC --> DOA
-  WS --> DOA
+  subgraph Storage["Publishing surfaces"]
+    KV["Cloudflare KV (hot views)"]
+    R2["Cloudflare R2 (history, evidence)"]
+    D1["D1 (small indexes/metadata)"]
+  end
 
-  DOA --> KV
-  DOA --> R2
+  subgraph Edge["Cloudflare APIs"]
+    X402["x402 gate + serve"]
+    AuthAPI["Auth Recommendation API"]
+  end
 
-  DOA --> DOB
-  DOB --> KV
-  DOB --> R2
+  Client["Clients / Agents / Terminal"]
 
-  DOB --> DOC
-  D1 --> DOC
-  DOC --> KV
-  DOC --> R2
+  RPC --> SlotSource
+  Geyser --> SlotSource
+  SlotSource --> BlockFetch --> Decode --> Reduce --> Marks --> AWrite
+  AWrite --> KV
+  AWrite --> R2
+  AWrite --> D1
 
-  KV --> Worker
-  R2 --> Worker
-  D1 --> Worker
+  KV --> MinuteTick
+  R2 --> MinuteTick
+  MinuteTick --> Feat --> Score --> Views --> BWrite
+  BWrite --> KV
+  BWrite --> R2
+  BWrite --> D1
 
-  Client --> Worker
-  Worker --> Client
+  KV --> CIn
+  R2 --> CIn
+  D1 --> CIn
+  CIn --> Accept --> Guard --> Rank --> CWrite
+  CWrite --> KV
+  CWrite --> R2
+  CWrite --> D1
 
-  %% execution venue (optional)
-  Client --> Worker
-  Worker --> DOC
-  DOC --> ER
-  ER --> Jito
-  Jito --> RPC
+  KV --> X402
+  R2 --> X402
+  D1 --> X402
+  KV --> AuthAPI
+  R2 --> AuthAPI
+  D1 --> AuthAPI
+
+  X402 --> Client
+  AuthAPI --> Client
 ```
 
 ---
 
-# Loop A (Per-slot truth) — UPDATED
+## Data products (shared x402 + auth-only personalized APIs)
 
-## Loop A v0 (already implemented)
+Think in terms of **datasets** and **views**:
 
-Loop A currently runs in the Worker `scheduled()` handler with this sequence:
+### Loop A datasets
+- **Protocol events:** normalized swaps, deposits, borrows, liquidations, mints/burns, fee transfers.
+- **Marks:** per-slot marks for assets/pairs (mid, bid/ask, confidence, venue, liquidity).
+- **Canonical state snapshots:** tracked pool/market state sufficient to recompute marks and features.
 
-1. SlotSource tick updates cursor and emits backfill tasks. ([GitHub][1])
-2. BlockFetcher tick fetches blocks between cursorBefore and cursorAfter, with bounded concurrency/retries, emitting missing tasks. ([GitHub][1])
-3. DecoderRegistry decodes events (SPL token transfer adapter, Jupiter swap adapter). ([GitHub][9])
-4. Canonical state tick persists batches to Cloudflare R2 object storage and replays contiguously until missing slot. ([GitHub][1])
+### Loop B datasets
+- **Minute bars:** per-asset/pair OHLCV derived from marks/events.
+- **Minute features:** per-asset/pair and per-protocol feature vectors.
+- **Minute scores:** signal scores with explanations + confidence.
+- **Views:** “top movers”, “liquidity stress”, “protocol heatmap”, “anomaly feed”.
 
-## Loop A v0 latency/reliability bottlenecks (fix list)
+### Loop C datasets
+- **Candidate investments:** rankable opportunities derived from Loop B scores/features.
+- **User preference state:** persona + wallet-scoped recommendation profile and constraints.
+- **Recommendation rankings:** per-user/per-wallet scored recommendations with explanations.
+- **Recommendation receipts:** pointers to inputs and decision path used to produce each recommendation.
 
-### A. Cursor "head" vs "ingestion progress" are conflated
+Loop C outputs are served via authenticated APIs in MVP and are not public x402 products.
 
-SlotSource sets cursor to heads (max of previous vs new heads). ([GitHub][3])
-But canonical replay requires contiguous event batches; if any slot batch is missing, it stops. ([GitHub][5])
-
-**Result:** a single missing slot can stall state advancement even if newer slots are available.
-
-### B. "Missing block" tasks exist but no resolver consumes them
-
-BlockFetcher emits missing tasks, but canonical replay still stalls when missing. ([GitHub][4])
-
-### C. Minute cron scheduling is fundamentally coarse
-
-Cron triggers are great for periodic jobs, but their minimum practical cadence is minutes (your config is 1-minute). ([GitHub][2])
-If you want "per-slot truth" that behaves like a real indexer, you need a more responsive trigger mechanism than a minute cron.
-
----
-
-## Loop A v1 (Latency-first upgrade)
-
-### Principle: separate "observed heads" from "contiguous ingestion cursor"
-
-Define 3 distinct cursor concepts:
-
-- **Observed head cursor:** what Solana reports as processed/confirmed/finalized *right now*.
-- **Fetched cursor:** highest slot where we have attempted a block fetch (success or recorded missing).
-- **Ingestion cursor:** highest slot where the "event batch exists" (including explicit "empty batch marker" for skipped/missing-in-storage slots) for the chosen commitment.
-- **State cursor:** highest slot applied into canonical state snapshot.
-
-You should never publish "state cursor" beyond "ingestion cursor".
-
-### Durable Object: LoopA Coordinator (single-writer)
-
-Create a Durable Object (call it `LoopACoordinator`) that owns the authoritative state machine:
-
-- Stores watermarks in Durable Object storage (not Cloudflare Key-Value store).
-- Leases work to stateless tick invocations (Worker scheduled, or explicit HTTP triggers).
-- Sets Durable Object alarms to run again **only when there is backlog** (avoid always-on alarms to reduce cost). Cloudflare explicitly recommends not waking up Durable Objects on short intervals unless necessary. ([Cloudflare Docs][10])
-
-> Cloudflare Durable Object alarms provide at-least-once execution and retry behavior. ([Cloudflare Docs][7])
-
-### Explicit "missing slot resolution" policy
-
-When `getBlock` returns null or "skipped / missing in storage," you must be able to advance contiguously *by writing an explicit marker*:
-
-- `loopA:v1:events:<commitment>:slot:<slot>` should be one of:
-  - a normal decoded batch, OR
-  - an explicit `{ kind: "empty_batch", reason: "skipped" | "missing_in_storage" }`
-
-Then canonical replay can proceed without stalling.
-
-### Move bulk artifacts to Cloudflare R2 object storage
-
-Cloudflare Key-Value store should not be your long-term append log for slot-sized payloads.
-
-**New rule:**
-
-- Cloudflare Key-Value store is "hot pointers + last-N small objects"
-- Cloudflare R2 object storage is "immutable history"
-
-A workable pattern:
-
-- Write decoded event batches to Cloudflare R2 object storage, keyed by date/hour/slot.
-- Write a small pointer to Cloudflare Key-Value store for "latest confirmed slot", "latest markset", etc.
-
-### Mark computation (needed for Loop B)
-
-Right now Loop A decodes events; to power Loop B you want a "marks stream" that is:
-
-- small,
-- frequent,
-- easy to aggregate.
-
-At minimum, for swaps you can derive:
-
-- price mark for inMint/outMint,
-- confidence based on:
-  - whether the swap is Jupiter-routed or direct,
-  - size thresholds,
-  - data freshness,
-  - number of corroborating events.
-
-You already have a `Mark` contract schema in `src/loops/contracts/loop_a.ts`. ([GitHub][11])
+### Provenance / “receipts”
+For any sellable view, we can optionally publish:
+- the exact slot/minute range used,
+- hashes of input artifacts,
+- and a pointer to an R2 “evidence bundle”.
 
 ---
 
-# Loop B (Minute scoring) — ULTRA LOW LATENCY DESIGN
+## Loop A: Per-slot truth
 
-## Core design change: incremental aggregation, not batch scans
+### Responsibilities
+Loop A is an **event-sourced indexer**.
 
-Loop B should not "read the last minute from storage" if you want low latency.
+It must:
+1. Track a **slot cursor** (processed/confirmed/finalized).
+2. Fetch the **block + transaction meta** for slots we care about.
+3. Decode tx instructions/logs into **normalized events**.
+4. Apply events into **canonical state** (for tracked entities).
+5. Compute **marks** (price marks + liquidity marks).
+6. Persist outputs + publish hot caches.
 
-Instead:
+### Inputs
+Minimum viable:
+- `slotSubscribe` (or polling `getSlot`) for new slots
+- `getBlock(slot, { transactionDetails: "full", rewards: false, ... })` (or similar) per slot
+- token metadata (mint decimals, symbols) from a small registry
 
-- Loop A publishes **stream-like updates** (marks/events) into a Durable Object accumulator.
-- The accumulator maintains rolling state in memory (and periodically snapshots).
-- On minute boundary, the accumulator finalizes the minute and writes outputs.
+Upgrade path:
+- Geyser stream for tx/account deltas to reduce RPC load and improve latency.
 
-### Durable Object: MinuteAccumulator
+### Loop A stages and agentic processes
 
-You can choose keying strategy:
+#### A1. SlotSource (continuous, ~400ms cadence)
+- Consumes slot notifications (processed + confirmed/finalized updates).
+- Produces a stream of `SlotNotification`:
 
-- 1 Durable Object per "pair group" (for example: SOL/USDC, plus a few majors), or
-- 1 Durable Object per "protocol", or
-- 1 Durable Object for "global top movers + top liquidity stress" (small tracked set)
+```ts
+type SlotNotification = {
+  slot: number
+  parent?: number
+  commitment: "processed" | "confirmed" | "finalized"
+  observedAt: string // ISO
+}
+```
 
-Do not shard too aggressively early; each Durable Object is operational overhead.
+**Frequency:** event-driven, every slot.
 
-### Minute boundary finalization
+#### A2. BlockFetcher (continuous, bounded concurrency)
+- Ensures each “target slot” is fetched exactly once per commitment tier.
+- Handles retries, backoff, and gap detection.
 
-MinuteScheduler becomes a logical concept inside the Durable Object:
+Key behavior:
+- Maintain a **slot queue** with watermarks:
+  - `headProcessed` (fast)
+  - `headConfirmed` (more stable)
+  - `headFinalized` (authoritative)
+- Don’t attempt to fully “finalize” a slot until the chain reports it finalized.
 
-- Determine `minuteId = YYYY-MM-DDTHH:MM:00Z`
-- Maintain `currentMinuteState`
-- On minute transition:
-  - finalize features,
-  - compute scores,
-  - publish denormalized views to Cloudflare Key-Value store,
-  - persist full minute rows to Cloudflare R2 object storage.
+**Frequency:** event-driven, usually one fetch per slot (sometimes multiple if you want both processed and confirmed copies).
 
-### Output surfaces (strictly optimized for reads)
+#### A3. DecoderRegistry + ProtocolAdapters (continuous)
+- For each transaction:
+  - parse instructions + logs,
+  - route to protocol adapters by program id(s),
+  - emit `ProtocolEvent[]`.
 
-Write these keys to Cloudflare Key-Value store:
+##### Protocol adapter interface
+Adapters are the unit of extensibility.
 
-- `loopB:v1:views:top_movers:latest`
-- `loopB:v1:views:liquidity_stress:latest`
-- `loopB:v1:scores:latest:pair:<pairId>`
-- `loopB:v1:health`
+```ts
+type ProtocolEvent =
+  | { kind: "swap"; protocol: string; slot: number; sig: string; user?: string; inMint: string; outMint: string; inAmount: string; outAmount: string; venue?: string; ts: string; meta?: Record<string, unknown> }
+  | { kind: "liquidity_add"; protocol: string; /* ... */ }
+  | { kind: "liquidity_remove"; protocol: string; /* ... */ }
+  | { kind: "borrow" | "repay" | "liquidation"; protocol: string; /* ... */ }
+  | { kind: "mint" | "burn"; protocol: string; /* ... */ }
+  | { kind: "fee_transfer"; protocol: string; /* ... */ }
+  | { kind: "unknown"; protocol: string; /* ... */ };
 
-Then Worker read endpoints become trivial:
+interface ProtocolAdapter {
+  id: string
+  programIds: string[]              // on-chain program IDs
+  decode(tx: DecodingContext): ProtocolEvent[]
+  reduce?(state: CanonicalState, ev: ProtocolEvent): CanonicalState
+  marks?(state: CanonicalState, slot: number): Mark[]
+}
+```
 
-- 1 Cloudflare Key-Value store get
-- return payload
+**MVP adapter set (suggested):**
+- SPL Token transfers (net flows)
+- Jupiter aggregator routed swaps (flow + price evidence)
+- One major AMM pool type (Orca Whirlpools OR Raydium CLMM) for pool-derived marks
 
----
+**Frequency:** per transaction.
 
-# Loop C (Personalized recommendations) — ULTRA LOW LATENCY DESIGN
+#### A4. StateReducer (continuous)
+- Applies events to canonical state.
+- Keeps:
+  - finalized state
+  - a small unfinalized window (ring buffer) for rollback
 
-## Core design change: on-demand ranking + minute cache
+**State strategy:**
+- Event-sourced with checkpointing:
+  - Apply events into in-memory state
+  - Every N slots, write snapshot
+  - On restart: load snapshot + replay events
 
-If you try to compute recommendations for every user every minute, you either:
+#### A5. MarkEngine (continuous)
+Marks are *opinions about price + liquidity* at a given slot.
 
-- spend too much compute, or
-- introduce large queues and delays.
+```ts
+type Mark = {
+  slot: number
+  ts: string
+  baseMint: string
+  quoteMint: string
+  px: string                 // decimal string (base in quote)
+  bid?: string
+  ask?: string
+  confidence: number         // 0..1
+  venue: string              // "orca" | "raydium" | "jupiter" | ...
+  liquidityUsd?: string
+  evidence?: {
+    sigs?: string[]
+    pools?: string[]
+    inputs?: string[]        // references to stored artifacts
+  }
+  version: string            // schema version
+}
+```
 
-Latency-first approach:
+**Design principle:** marks should always include enough metadata to trace their origin.
 
-- Build a **small global candidate set** each minute (from Loop B).
-- On request, rank candidates for the user/wallet in a Durable Object.
-- Cache the result per minute in Cloudflare Key-Value store for fast repeat reads.
-
-### Durable Object: Recommender
-
-Keying:
-
-- Durable Object id by `userId:wallet` (strong privacy boundary, clean state isolation), OR
-- Durable Object id by `userId` (wallet inside), if you want fewer objects.
-
-The Durable Object does:
-
-- Load persona + constraints from Cloudflare D1 database (or Cloudflare Key-Value store cache).
-- Pull candidate set (from Cloudflare Key-Value store).
-- Apply deterministic acceptance model + risk/stability guardrails.
-- Return ranked list.
-- Write latest view to Cloudflare Key-Value store.
-
-### Strict privacy boundary
-
-Personalized recommendations remain **authenticated-only** (not x402 public reads) in MVP.
-
----
-
-# Execution venue (Low-latency) — OPTIONAL BUT SUPPORTED
-
-This section is new and comes **after Loop C** as requested. It defines a **low-latency execution venue** that can be used by your quant strategies (and later monetized, if desired).
-
-## Fast paths you can support
-
-### Path 1: Solana mainnet execution with Jito bundles
-
-- Jito bundles provide ordered, atomic execution "all or nothing" via Jito Block Engine. ([Helius][12])
-- Jito provides low-latency transaction send tooling and stable tip account discovery in their documentation. ([Jito Labs][13])
-
-This path is appropriate when:
-
-- you want priority inclusion / ordering guarantees,
-- you are executing real Solana transactions immediately.
-
-### Path 2: MagicBlock Ephemeral Rollup as the execution venue
-
-MagicBlock describes Ephemeral Rollups as a specialized runtime to enhance throughput and enable faster block times and real-time interactions. ([MagicBlock Documentation][14])
-
-This path is appropriate when:
-
-- you want a **very fast internal matching / decision venue**,
-- you can accept a "commit back to Solana" settlement model,
-- you are building a venue-like mechanism (auction, intent matching, internal order matching).
-
-## Execution venue architecture (conceptual)
-
-- **Worker intake endpoint (authenticated)**:
-  - accepts "execution intents" or "strategy orders"
-  - validates policy/risk constraints
-  - forwards to `ExecutionCoordinator` Durable Object
-
-- **Durable Object: ExecutionCoordinator**
-  - maintains per-market auctions (for example: 200 millisecond tick auctions)
-  - performs deterministic selection and ordering
-  - chooses execution route:
-    - "Jito bundle on Solana"
-    - "MagicBlock Ephemeral Rollup then commit"
-
-- **Receipts + telemetry**
-  - every execution produces an execution receipt persisted to Cloudflare R2 object storage
-  - latest receipts and metrics in Cloudflare Key-Value store
-
----
-
-# Execution latency (instrumentation + optimization plan)
-
-This is the explicit "execution latency section" to implement after Loop C.
-
-## What to measure (minimum viable)
-
-Emit a trace object for every execution attempt:
-
-- `receivedAt` (Worker intake)
-- `validatedAt` (policy/risk checks)
-- `decisionAt` (strategy decision complete)
-- `txBuiltAt`
-- `simulatedAt` (if simulation used)
-- `sentAt`
-- `landedAt` (first observed landing)
-- `confirmedAt`
-- `finalizedAt`
-
-Also record:
-
-- route used ("Jupiter", "Jito bundle", "MagicBlock Ephemeral Rollup")
-- Solana Remote Procedure Call endpoint used
-- tip amount (if using Jito)
-- error classification
-
-## Where to store
-
-- Cloudflare Key-Value store:
-  - `exec:v1:latency:last_100` (bounded ring)
-  - `exec:v1:latency:minute:<minuteId>` (aggregates)
-- Cloudflare R2 object storage:
-  - immutable per-execution receipts
-
-## How to use it
-
-- build internal dashboards
-- later monetize: "execution quality analytics" x402 endpoint (optional)
+#### A6. ArtifactWriter + Publisher (continuous + periodic)
+Persist:
+- raw normalized events (immutable)
+- marks per slot (immutable)
+- periodic snapshots of canonical state (immutable)
+Publish (hot caches):
+- latest slot, latest marks, small rolling windows
 
 ---
 
-# Updated ticket breakdown (Latency-first)
+### Finality and reorg handling (critical)
 
-Below are GitHub-issue-sized tickets. Loop A "old part" is treated as implemented; tickets focus on upgrading it and building B/C/Execution.
+Solana can have short-lived forks at `processed` and sometimes `confirmed`. Loop A must:
+
+- Treat `finalized` as the only fully authoritative state.
+- Keep an **unfinalized buffer** (e.g., last 256 slots):
+  - store per-slot event lists
+  - store per-slot state diffs (or recompute via replay)
+- If a slot is superseded, **rollback** that window and rebuild from last finalized snapshot.
+
+Practical approach (simple and robust):
+1. Only *publish* marks as “authoritative” after `confirmed` (or `finalized`).
+2. Still ingest `processed` for low-latency previews, but tag them clearly (`commitment` field).
+3. Maintain two caches:
+   - `latest_processed`
+   - `latest_confirmed` (preferred for sale)
 
 ---
 
-## Loop A upgrade tickets (Latency-first)
+### Persistence + storage layout
 
-### LA-13 — Durable Object LoopA Coordinator (authoritative watermarks + leasing)
+#### KV (hot / latest / small payloads)
+Key naming should be stable and versioned.
 
+Examples:
+- `loopA:v1:cursor` → `{ processed: 123, confirmed: 120, finalized: 118, updatedAt: ... }`
+- `loopA:v1:marks:confirmed:latest` → `{ slot, ts, marks: Mark[] }`
+- `loopA:v1:marks:confirmed:byMint:<mint>` → last mark for a mint
+- `loopA:v1:health` → lag, errors, last successful slot, etc.
+
+TTL guidelines:
+- “latest” keys: short TTL (1–5 minutes) but continuously refreshed
+- rolling windows (e.g., last 60 minutes): longer TTL (1–6 hours)
+
+#### R2 (immutable history + evidence bundles)
+Object naming should support partitioned retrieval and lifecycle policies.
+
+Examples:
+- `loopA/v1/events/date=YYYY-MM-DD/hour=HH/slot=<slot>.jsonl.gz`
+- `loopA/v1/marks/date=YYYY-MM-DD/hour=HH/slot=<slot>.json.gz`
+- `loopA/v1/snapshots/slot=<slot>.json.gz`
+- `loopA/v1/evidence/slot=<slot>/markset=<hash>.json.gz`
+
+Compression:
+- JSONL + gzip works well for append-heavy event logs.
+
+---
+
+### Loop A frequencies (target)
+
+| Subprocess | Trigger | Typical cadence | Notes |
+|---|---:|---:|---|
+| SlotSource | WSS/Geyser | ~400ms/slot | mainnet slots vary |
+| BlockFetcher | slot arrival | ~1 block fetch/slot | bounded concurrency + retry |
+| Decode + Reduce | per block | per slot | depends on tx volume |
+| MarkEngine | per slot | per slot | produce markset |
+| Snapshot | slot counter | every ~100–300 slots | choose by cost |
+| Publish hot caches | on new confirmed slot | per slot | tiny payloads only |
+| Backfill worker | gaps detected | continuous until caught up | rate-limited |
+
+---
+
+## Loop B: Minute scoring
+
+Loop B turns raw truth into **structured, cacheable intelligence**.
+
+### Responsibilities
+1. Read Loop A marks/events over a minute window.
+2. Build per-entity **feature vectors**.
+3. Compute **scores/signals** + **explanations**.
+4. Publish **views** optimized for API reads.
+5. Persist outputs for replay/backtest.
+
+### Inputs
+- Loop A “confirmed” marks stream
+- Loop A event stream (swaps, transfers, protocol actions)
+- Optional macro + off-chain feeds (later)
+
+### Loop B stages and agentic processes
+
+#### B1. MinuteScheduler (every minute, aligned)
+- Trigger exactly on the minute boundary (or with small delay).
+- Define `minuteStart`, `minuteEnd` and a watermark.
+
+```ts
+type MinuteWindow = {
+  minute: string // ISO minute "2026-02-20T04:37:00Z"
+  startTs: string
+  endTs: string
+  sourceFinality: "confirmed" | "finalized"
+}
+```
+
+**Frequency:** every 60 seconds.
+
+#### B2. FeatureExtractor (per minute)
+Compute features for tracked entities.
+
+Entity types:
+- token mint (SOL, USDC, etc)
+- pair (SOL/USDC)
+- protocol (jupiter/orca/…)
+- pool/market (specific address)
+
+Feature families (MVP):
+- price returns (1m, 5m, 1h)
+- realized volatility (rolling)
+- volume and trade count
+- buy/sell imbalance
+- net flow (token transfers)
+- liquidity proxy (pool depth / spread proxy)
+- “staleness” / missing data flags
+
+Output schema:
+
+```ts
+type FeatureRow = {
+  minute: string
+  entityType: "mint" | "pair" | "protocol" | "market"
+  entityId: string
+  features: Record<string, number>
+  featureVersion: string
+  inputs: {
+    slotRange?: [number, number]
+    artifactRefs?: string[]
+  }
+}
+```
+
+#### B3. ScoringEngine (per minute)
+A scoring engine turns features into signals.
+
+Design constraints:
+- deterministic (for reproducibility)
+- versioned
+- explainable
+
+Output schema:
+
+```ts
+type ScoreRow = {
+  minute: string
+  entityType: FeatureRow["entityType"]
+  entityId: string
+  scores: Record<string, number> // e.g. momentum, meanrev, risk, liquidity
+  confidence: number
+  explain: Array<{ name: string; contribution: number; note?: string }>
+  scoreVersion: string
+}
+```
+
+#### B4. ViewBuilder (per minute)
+Views are denormalized objects optimized for endpoints.
+
+Examples:
+- “top movers” for last minute / last hour
+- “top protocol volume changes”
+- “liquidity stress dashboard”
+- “anomaly feed” (feature thresholds)
+
+Views should include:
+- `generatedAt`
+- `minute`
+- `dataFreshness`
+- references to inputs (for provenance)
+
+#### B5. ArtifactWriter + Publisher
+Persist:
+- features (immutable)
+- scores (immutable)
+- views (immutable)
+
+Publish:
+- latest views and per-entity last score into KV.
+
+---
+
+### Loop B persistence layout
+
+#### KV (hot views)
+Examples:
+- `loopB:v1:scores:latest:pair:So111..../USDC...` → last `ScoreRow`
+- `loopB:v1:views:top_movers:latest` → top N movers
+- `loopB:v1:views:protocol_heatmap:latest`
+
+TTL:
+- latest: 5–30 minutes
+- rolling views: 1–6 hours
+
+#### R2 (history)
+Examples:
+- `loopB/v1/features/date=YYYY-MM-DD/hour=HH/minute=<minute>.jsonl.gz`
+- `loopB/v1/scores/date=YYYY-MM-DD/hour=HH/minute=<minute>.jsonl.gz`
+- `loopB/v1/views/date=YYYY-MM-DD/hour=HH/minute=<minute>.json.gz`
+
+---
+
+### Loop B frequencies (target)
+
+| Subprocess | Trigger | Cadence | Notes |
+|---|---:|---:|---|
+| MinuteScheduler | wall clock | 60s | align to minute boundary |
+| Feature extraction | scheduler | 60s | compute for tracked entities |
+| Scoring + views | scheduler | 60s | deterministic + versioned |
+| Publish KV | after compute | 60s | keep payloads small |
+| Backfill minutes | gaps detected | every 5–15 min | rate-limited |
+| Recompute (version bump) | manual | ad-hoc | uses history in R2 |
+
+---
+
+## Loop C: Personalized recommender
+
+Loop C turns market intelligence into **continuous, per-user small-investment recommendations**.
+
+### Responsibilities
+1. Join Loop B outputs with user persona, wallet context, and acceptance history.
+2. Generate candidate investments and size suggestions within risk bounds.
+3. Compute recommendation scores + explanations using deterministic rules.
+4. Apply hard risk/stability guardrails before ranking.
+5. Publish per-user recommendation views for authenticated API consumption.
+6. Ingest feedback (`yes`/`no`) to continuously adapt acceptance estimates.
+
+### Inputs
+- Loop B scores/views/features
+- user persona profile
+- wallet holdings + constraints
+- historical recommendation feedback (`yes`/`no`)
+- curiosity/risk/stability feature inputs
+
+### Outputs
+- ranked recommendations per user + wallet
+- confidence + explanation factors
+- freshness metadata + evidence pointers
+
+### Loop C data contracts (MVP)
+
+```ts
+type UserPersona = {
+  userId: string
+  wallet: string
+  riskBudget: "low" | "medium" | "high"
+  horizon: "intraday" | "swing" | "position"
+  sectorPreferences: string[]
+  excludedAssets: string[]
+}
+
+type AcceptanceEvent = {
+  userId: string
+  recommendationId: string
+  decision: "yes" | "no"
+  decidedAt: string // ISO
+  reason?: string
+}
+
+type CandidateInvestment = {
+  candidateId: string
+  assetOrPair: string
+  suggestedAction: "buy" | "reduce" | "hold"
+  sizeUsd: number
+  inputsRef: string[]
+  riskFlags: string[]
+  stabilityFlags: string[]
+}
+
+type RecommendationScoreRow = {
+  userId: string
+  wallet: string
+  minute: string
+  candidateId: string
+  baseSignal: number
+  acceptProb: number
+  curiosity: number
+  riskPenalty: number
+  stabilityBonus: number
+  finalScore: number
+  explain: Array<{ name: string; contribution: number; note?: string }>
+  modelVersion: string
+}
+
+type RecommendationView = {
+  generatedAt: string
+  minute: string
+  userId: string
+  wallet: string
+  recommendations: Array<{
+    candidateId: string
+    assetOrPair: string
+    suggestedAction: "buy" | "reduce" | "hold"
+    sizeUsd: number
+    finalScore: number
+    confidence: number
+    explain: RecommendationScoreRow["explain"]
+  }>
+  freshnessMs: number
+}
+```
+
+### Simple recommender formula (deterministic)
+
+`finalScore = w1*baseSignal + w2*acceptProb + w3*curiosity + w4*stabilityBonus - w5*riskPenalty`
+
+Hard pre-filters before ranking:
+- max position size (wallet and risk-budget aware)
+- min liquidity threshold
+- excluded asset/protocol filters from persona/policy
+- stale-data cutoff for Loop B inputs
+
+### Loop C stages and agentic processes
+
+#### C1. CandidateAssembler (per minute)
+- Builds candidate list from Loop B top signals and eligible assets/pairs.
+- Computes preliminary size suggestions from persona risk budget + wallet constraints.
+
+#### C2. UserStateLoader (per minute + on-demand)
+- Loads user persona, wallet profile, and rolling behavior features.
+- Supports optional request-time persona overrides for simulation/re-ranking.
+
+#### C3. AcceptanceModel (per minute)
+- Estimates `acceptProb` from past `yes`/`no` outcomes.
+- MVP: deterministic Bayesian/logit-style estimator with global priors for cold-start users.
+
+#### C4. Risk/StabilityGuard (per minute)
+- Applies hard constraints and penalties:
+  - risk concentration checks
+  - liquidity/stability requirements
+  - data freshness checks
+- Rejected candidates are excluded with explanation tags.
+
+#### C5. RecommenderEngine (per minute)
+- Computes `finalScore` and ranked list.
+- Emits explainability contributions for each recommendation.
+
+#### C6. ViewPublisher + FeedbackIngest (continuous)
+- Publishes latest recommendations to hot caches and immutable history.
+- Ingests `/feedback` decisions and updates user behavior state.
+
+### Loop C API contract (auth-only MVP)
+
+Loop C personalized outputs are not public x402 endpoints in MVP.
+
+#### `POST /api/recommendations/latest`
+- auth required
+- Request body:
+
+```json
+{
+  "wallet": "<wallet>",
+  "limit": 5,
+  "riskMode": "balanced",
+  "personaOverride": {
+    "riskBudget": "medium",
+    "excludedAssets": ["BONK"]
+  }
+}
+```
+
+- Response body:
+
+```json
+{
+  "ok": true,
+  "view": {
+    "generatedAt": "2026-02-20T04:37:00Z",
+    "minute": "2026-02-20T04:37:00Z",
+    "userId": "usr_123",
+    "wallet": "<wallet>",
+    "recommendations": [
+      {
+        "candidateId": "rec_abc",
+        "assetOrPair": "SOL/USDC",
+        "suggestedAction": "buy",
+        "sizeUsd": 120,
+        "finalScore": 0.84,
+        "confidence": 0.78,
+        "explain": [
+          { "name": "baseSignal", "contribution": 0.36 },
+          { "name": "acceptProb", "contribution": 0.22 }
+        ]
+      }
+    ],
+    "freshnessMs": 2300
+  }
+}
+```
+
+#### `POST /api/recommendations/feedback`
+- auth required
+- Request body:
+
+```json
+{
+  "wallet": "<wallet>",
+  "recommendationId": "rec_abc",
+  "decision": "yes",
+  "reason": "Fits my current risk budget"
+}
+```
+
+- Response body:
+
+```json
+{
+  "ok": true,
+  "feedbackAccepted": true,
+  "updatedModelVersion": "loopC-v1"
+}
+```
+
+### Loop C persistence layout
+
+#### KV (hot per-user latest)
+Examples:
+- `loopC:v1:recs:latest:user:<userId>:wallet:<wallet>`
+- `loopC:v1:recs:latest_ptr:user:<userId>:wallet:<wallet>`
+
+TTL:
+- latest recommendation views: 1–15 minutes
+- latest pointers: 1–5 minutes
+
+#### R2 (history + evidence)
+Examples:
+- `loopC/v1/recommendations/date=YYYY-MM-DD/hour=HH/minute=<minute>/user=<userId>.json.gz`
+- `loopC/v1/feedback/date=YYYY-MM-DD/hour=HH/user=<userId>.jsonl.gz`
+- `loopC/v1/evidence/minute=<minute>/user=<userId>/recset=<hash>.json.gz`
+
+#### D1 (authoritative metadata)
+Suggested tables:
+- `loop_c_recommendations`
+- `loop_c_feedback`
+- `loop_c_user_state`
+- `loop_c_pointers`
+
+### Loop C frequencies (target)
+
+| Subprocess | Trigger | Cadence | Notes |
+|---|---:|---:|---|
+| CandidateAssembler | Loop B minute close | 60s | builds candidate pool |
+| UserStateLoader | scheduler + API request | 60s + on-demand | supports persona overrides |
+| AcceptanceModel | scheduler | 60s | updates `acceptProb` |
+| Risk/StabilityGuard | scheduler | 60s | hard pre-filters + penalties |
+| RecommenderEngine | scheduler | 60s | deterministic ranking |
+| ViewPublisher | scheduler | 60s | writes per-user views |
+| FeedbackIngest | API calls | event-driven | updates behavior state |
+
+---
+
+## Worker + x402 integration strategy
+
+### Principle
+- **Worker remains the monetization/edge layer.**
+- **Loop services write artifacts into KV/R2.**
+- **Worker reads artifacts and wraps them with x402 payment gating.**
+- **Loop C personalized recommendations are served via authenticated endpoints only (MVP).**
+
+### How to add new x402 endpoints without breaking existing ones
+1. Add a new route handler in `apps/worker/src/index.ts` under `/api/x402/read/...`.
+2. Add a new `X402RouteKey` in `apps/worker/src/x402.ts`.
+3. Add an env var for pricing in `apps/worker/wrangler.toml` (and prod secrets).
+4. Write tests similar to the existing x402 integration tests.
+
+### Endpoint design options
+
+#### Option A: “Named endpoints” (recommended for MVP)
+Create a small set of stable endpoints:
+
+- `/api/x402/read/solana_marks_latest`
+- `/api/x402/read/solana_events_recent`
+- `/api/x402/read/solana_scores_latest`
+- `/api/x402/read/solana_views_top`
+
+Pros:
+- simple pricing and caching
+- stable contracts
+- easy to market
+
+Cons:
+- lots of endpoints as catalog grows
+
+#### Option B: “Generic dataset endpoint” (good for long-tail)
+A single endpoint:
+
+`/api/x402/read/dataset`
+
+Body:
+```json
+{
+  "dataset": "loopB.views.top_movers",
+  "version": "v1",
+  "params": { "window": "1h" }
+}
+```
+
+Pros:
+- scales to many datasets
+- fewer worker changes
+
+Cons:
+- needs pricing tiers and abuse controls
+
+You can do **both**: named endpoints for flagship products + generic endpoint for long tail.
+
+### Suggested response envelope for loop-derived endpoints
+Keep `{ ok: true }` and add a standard `meta` object:
+
+```json
+{
+  "ok": true,
+  "data": { /* view payload */ },
+  "meta": {
+    "schemaVersion": "v1",
+    "generatedAt": "2026-02-20T04:37:00Z",
+    "finality": "confirmed",
+    "slotRange": [123, 456],
+    "cache": { "layer": "kv", "hit": true },
+    "evidence": { "r2Key": "loopB/v1/views/..." }
+  }
+}
+```
+
+---
+
+### Authenticated recommendation serving (Loop C)
+
+Loop C endpoints are not public x402 routes in MVP:
+- `/api/recommendations/latest`
+- `/api/recommendations/feedback`
+
+Rules:
+- require authenticated user context for every request
+- enforce user/wallet ownership checks
+- never expose user-specific recommendation payloads through `/api/x402/read/*`
+- include freshness and provenance metadata in the auth response body
+
+---
+
+## Operational model
+
+### Deployment topology
+- **Loop A/B/C runners:** long-lived process (container/VM). Needs:
+  - Solana RPC/WSS (or Geyser) access
+  - Cloudflare API token (write to KV/R2)
+  - auth-aware data store access for Loop C user state and feedback
+- **Worker:** unchanged deployment via Wrangler.
+
+### Configuration
+- Store loop configs in `CONFIG_KV`:
+  - tracked mints/pairs
+  - protocol adapters enabled
+  - snapshot cadence
+  - scoring parameters and model versions
+  - Loop C weight set (`w1..w5`)
+  - Loop C policy thresholds (max size, min liquidity, stale cutoff)
+
+### Observability
+- KV health keys (`loopA:v1:health`, `loopB:v1:health`, `loopC:v1:health`)
+- R2 log bundles for:
+  - decoder errors
+  - missing slot gaps
+  - scoring anomalies
+  - recommendation reject reasons + feedback ingestion errors
+
+### Privacy and security controls (must-have for Loop C)
+- user data isolation by `userId + wallet` keyspace
+- audit log for recommendation reads and feedback writes
+- strict boundary: no user-specific payloads to public x402 endpoints
+- redact sensitive user metadata from R2 evidence bundles
+
+### Data integrity checks (must-have)
+- Slot continuity checks (no gaps) for confirmed/finalized cursors
+- “mark freshness” checks
+- schema version compatibility checks between producer and Worker
+- recommendation determinism checks (same inputs => same ranking order)
+- feedback ingestion idempotency checks (duplicate event handling)
+
+---
+
+# Ticket breakdown
+
+Below are implementation tickets sized to be GitHub issues. IDs are suggestions.
+
+---
+
+## Loop A tickets (per-slot truth)
+
+### LA-01 — Define Loop A data contracts + versioning
 **Deliverables**
-
-- New Durable Object `LoopACoordinator`
-- Stores watermarks:
-  - observed heads
-  - fetched cursor
-  - ingestion cursor
-  - state cursor
-- Provides `POST /internal/loop-a/tick` entrypoint callable by cron
+- `ProtocolEvent`, `Mark`, `StateSnapshot`, `Health` schemas (TS + JSON schema)
+- Versioning plan (`v1`, `v1.1` etc)
 
 **Acceptance criteria**
-
-- Only one coordinator instance decides cursor movement (single-writer)
-- Cursor advancement is monotonic and consistent across restarts
-- Uses alarms only when backlog exists (no constant wake-ups) ([Cloudflare Docs][10])
+- Can serialize/deserialize contracts with runtime validation
+- Each artifact includes `schemaVersion` and `generatedAt`
 
 ---
 
-### LA-14 — Split "head cursor" from "ingestion cursor" + contiguity gate
-
+### LA-02 — SlotSource + cursor store
 **Deliverables**
-
-- New cursor schema:
-  - `headCursor`
-  - `ingestionCursor`
-  - `stateCursor`
-- Contiguity rules:
-  - `ingestionCursor` advances only when a batch exists for every slot in range (including explicit empty markers)
+- Slot subscription adapter (WSS or polling)
+- Cursor state persisted (so restart resumes safely)
 
 **Acceptance criteria**
+- Maintains processed/confirmed/finalized cursors
+- Detects gaps (missed slot numbers) and emits backfill tasks
 
-- Canonical state never targets a slot beyond contiguous ingestion
-- One missing slot no longer stalls forever (it either resolves or becomes an explicit empty marker)
+**Frequency**
+- event-driven (~every slot)
 
 ---
 
-### LA-15 — Missing slot resolution: explicit empty markers + skip policy
-
+### LA-03 — BlockFetcher with bounded concurrency + retries
 **Deliverables**
-
-- When `getBlock(slot)` returns null or "skipped," persist an explicit empty batch marker
-- Extend replay logic to treat empty marker as present and continue
+- Block fetch pipeline for slots
+- Retry policy + backoff + error classification
 
 **Acceptance criteria**
-
-- Canonical replay progresses through skipped slots without breaking
-- Missing slots become visible artifacts (auditable)
+- Fetches blocks for targeted commitment level(s)
+- Does not overload RPC (configurable concurrency)
+- Emits “block missing” events to backfill worker
 
 ---
 
-### LA-16 — Move event batch history to Cloudflare R2 object storage, keep Cloudflare Key-Value store hot-only
-
+### LA-04 — DecoderRegistry + ProtocolAdapter plugin system
 **Deliverables**
-
-- R2 layout for Loop A events (by date/hour/slot)
-- Cloudflare Key-Value store keys become:
-  - `latest pointers`
-  - last-N batches (optional)
+- Registry keyed by `programId`
+- Adapter interface + loader
+- MVP adapters:
+  - SPL token transfer flow decoder
+  - Jupiter routed swap decoder (or minimal “swap inferred from logs” decoder)
 
 **Acceptance criteria**
-
-- Loop A does not permanently store all batches in Cloudflare Key-Value store
-- Worker read endpoints never need to scan Cloudflare R2 object storage
+- Adding a new protocol adapter is a single new module + registration
+- Emits normalized `ProtocolEvent[]` for real blocks
 
 ---
 
-### LA-17 — MarkEngine v1 (swap-derived marks) + hot caches
-
+### LA-05 — CanonicalStateStore (event-sourced) + snapshotting
 **Deliverables**
-
-- Compute marks from decoded swap events
-- Publish:
-  - `loopA:v1:marks:confirmed:latest`
-  - per-pair latest mark keys
+- In-memory canonical state store
+- Snapshot writer every N slots
+- Snapshot loader on startup + replay events since snapshot
 
 **Acceptance criteria**
-
-- Marks are small, versioned, and explainable (include evidence pointers)
-- Marks can be read in one Cloudflare Key-Value store read
+- Restart recovers state to last known cursor
+- Snapshots are versioned and reference their input slot
 
 ---
 
-### LA-18 — Backfill consumer (actually consumes emitted tasks)
-
+### LA-06 — MarkEngine v1 (slot marks)
 **Deliverables**
-
-- Consumer that reads:
-  - backfill tasks emitted by SlotSource ([GitHub][3])
-  - block missing tasks emitted by BlockFetcher ([GitHub][4])
-- Re-fetch + decode + persist results to close gaps
+- Mark computation pipeline using state + events
+- Confidence scoring + evidence pointers
 
 **Acceptance criteria**
+- Produces marks for configured mint/pairs each slot
+- Marks include `confidence`, `venue`, and `evidence` references
 
-- After downtime, system catches up and becomes contiguous again
-- Backfill is rate-limited and safe to run continuously
+**Frequency**
+- per slot (confirmed preferred)
 
 ---
 
-### LA-19 — Loop A health + latency telemetry (write once per tick)
-
+### LA-07 — Finality + rollback handling
 **Deliverables**
-
-- Health artifact including lag, error counts, last successful slot/time
-- Store in Cloudflare Key-Value store + Cloudflare R2 object storage
+- Unfinalized ring buffer for last N slots
+- Rollback + rebuild logic when fork detected
 
 **Acceptance criteria**
-
-- Worker `/api/health` can expose loop health without heavy computation
+- If parent mismatch is detected in the unfinalized window, system rolls back to last finalized snapshot and replays
+- Published KV “confirmed latest” never regresses
 
 ---
 
-## Loop B tickets (Latency-first)
-
-### LB-01 — Durable Object MinuteAccumulator (incremental aggregation)
-
+### LA-08 — ArtifactWriter to KV + R2 (Loop A)
 **Deliverables**
-
-- Durable Object that ingests marks/events continuously
-- Maintains rolling minute state in memory + snapshots when needed
+- R2 object layout for events/marks/snapshots
+- KV keys for hot caches
 
 **Acceptance criteria**
-
-- Does not scan storage to compute each minute
-- Handles reorg-like corrections by versioning inputs and re-finalizing minute if necessary
+- Writes compressed JSON/JSONL to R2 with deterministic keys
+- KV contains `latest` pointers and last marksets
 
 ---
 
-### LB-02 — FeatureExtractor v1 (incremental)
-
+### LA-09 — Backfill worker for missing slots
 **Deliverables**
-
-- Compute minute features for tracked entities as updates arrive
-- Finalize FeatureRows on minute boundary
+- Backfill queue + worker
+- Reprocess missing slots and publish artifacts
 
 **Acceptance criteria**
-
-- Features are deterministic and reproducible
-- Provenance includes slot range + input references
+- Closing a gap results in contiguous confirmed slots for the window
+- Backfill is rate limited and safe to run continuously
 
 ---
 
-### LB-03 — ScoringEngine v1 (deterministic + explainable)
-
+### LA-10 — Loop A “published views” for Worker consumption
 **Deliverables**
-
-- Rule-based scoring
-- Explanation contributions array
+- Small, denormalized JSON views written to KV (e.g., latest marks, per-mint last mark)
 
 **Acceptance criteria**
-
-- Scores are stable for same inputs
-- "why" is always present in output
+- Worker can serve “latest marks” without scanning R2
+- View payloads are < 128KB (KV-friendly)
 
 ---
 
-### LB-04 — ViewBuilder v1 (Cloudflare Key-Value store optimized views)
-
+### LA-11 — CLI / process runner integration
 **Deliverables**
-
-- `top movers`
-- `liquidity stress`
-- `anomaly feed`
+- `ralph loop-a start|stop|status` command (or equivalent)
+- Health reporting
 
 **Acceptance criteria**
+- Can run Loop A locally and see cursor advance
+- Status includes lag and last error
 
-- Each view is small enough to be served instantly from Cloudflare Key-Value store
+---
+
+### LA-12 — Loop A tests (fixtures + regression)
+**Deliverables**
+- Fixture blocks / slots (recorded)
+- Decoder + rollback tests
+
+**Acceptance criteria**
+- Deterministic replay matches expected events + marks
+- Reorg simulation test passes
+
+---
+
+## Loop B tickets (minute scoring)
+
+### LB-01 — Define Loop B contracts + versioning
+**Deliverables**
+- `FeatureRow`, `ScoreRow`, `View` schemas
+- Versioning plan
+
+**Acceptance criteria**
+- Runtime validation; forward-compatible
+
+---
+
+### LB-02 — MinuteScheduler + watermark logic
+**Deliverables**
+- Minute boundary scheduler
+- Watermark definition (minute start/end + finality requirement)
+
+**Acceptance criteria**
+- Runs exactly once per minute (idempotent)
+- Can recover after downtime by detecting missing minutes
+
+---
+
+### LB-03 — FeatureExtractor v1 (bars + flows)
+**Deliverables**
+- Build minute OHLCV from marks
+- Compute flow/volume features from events
+
+**Acceptance criteria**
+- Produces FeatureRows for configured entities each minute
+- Includes provenance: slot range + artifact refs
+
+---
+
+### LB-04 — ScoringEngine v1 (deterministic + explainable)
+**Deliverables**
+- Rules-based scoring functions + explanation contributions
+- Confidence computation
+
+**Acceptance criteria**
+- Produces ScoreRows with `explain[]`
+- Score version bump changes are traceable
+
+---
+
+### LB-05 — ViewBuilder v1 (cacheable views)
+**Deliverables**
+- Build “top movers” and “signal dashboard” views
+- Store views in KV for latest and short windows
+
+**Acceptance criteria**
+- Views are small and serve quickly
 - Includes freshness metadata
 
 ---
 
-### LB-05 — History persistence to Cloudflare R2 object storage
-
+### LB-06 — ArtifactWriter to KV + R2 (Loop B)
 **Deliverables**
-
-- Minute features/scores/views stored in Cloudflare R2 object storage
+- R2 layout for features/scores/views
+- KV keys for latest results
 
 **Acceptance criteria**
-
-- Backtests and recomputes can be powered from immutable history
+- Backfill/recompute can rely on R2 history
+- KV always holds latest minute outputs
 
 ---
 
-## Loop C tickets (Latency-first)
-
-### LC-01 — Durable Object Recommender (on-demand rank + per-minute cache)
-
+### LB-07 — Backfill + recompute pipeline
 **Deliverables**
-
-- Durable Object keyed by `userId:wallet` (or `userId`)
-- On request:
-  - load persona + constraints
-  - pull candidate pool
-  - compute ranked recommendations
-  - write latest to Cloudflare Key-Value store
+- Detect missing minutes and compute them
+- “Recompute from history” mode for version bumps
 
 **Acceptance criteria**
-
-- Request-time ranking is fast and deterministic
-- Cached per-minute view prevents repeated recompute
+- Given an outage window, Loop B fills it on restart
+- Given a new `scoreVersion`, can recompute a day of history
 
 ---
 
-### LC-02 — Candidate pool producer (from Loop B outputs)
-
+### LB-08 — Loop B runner + tests
 **Deliverables**
-
-- Each minute, derive a small candidate set (top N opportunities)
-- Store candidate pool in Cloudflare Key-Value store
+- Runner command `ralph loop-b start|status`
+- Tests for minute aggregation and scoring determinism
 
 **Acceptance criteria**
-
-- Candidate pool size is bounded and stable
-- Candidates include references to Loop B evidence
+- Can run Loop B locally against fixture Loop A artifacts
+- Produces stable outputs for same inputs
 
 ---
 
-### LC-03 — Acceptance model v1 (deterministic)
+## Loop C tickets (personalized recommendations)
 
+### LC-01 — Define Loop C contracts + versioning
 **Deliverables**
-
-- Simple Bayesian/logit-like deterministic estimator using yes/no feedback
+- `UserPersona`, `AcceptanceEvent`, `CandidateInvestment`, `RecommendationScoreRow`, `RecommendationView` schemas
+- model versioning policy (`loopC-v1`, `loopC-v1.1`, etc.)
 
 **Acceptance criteria**
-
-- Cold start works with global priors
-- Feedback shifts accept probability predictably
+- Runtime validation for all Loop C read/write payloads
+- Every recommendation artifact includes `modelVersion` + `generatedAt`
 
 ---
 
-### LC-04 — Risk/Stability guardrails (hard filters + penalties)
-
+### LC-02 — User state + wallet context store
 **Deliverables**
-
-- Hard filters:
-  - liquidity minimums
-  - stale cutoff
-  - excluded assets/protocols
-- Penalties/bonuses included in explainability
+- Persona and wallet context loader
+- user/wallet-scoped recommendation state
 
 **Acceptance criteria**
-
-- Risk filters cannot be bypassed
-- Rejections include explanation tags
+- Supports per-user wallet binding and policy filters
+- Cold-start users are supported with deterministic default priors
 
 ---
 
-### LC-05 — Auth-only APIs (not x402)
-
+### LC-03 — CandidateAssembler from Loop B outputs
 **Deliverables**
-
-- `/api/recommendations/latest`
-- `/api/recommendations/feedback`
+- candidate generation from Loop B scores/views
+- size suggestion baseline for “small investment” recommendations
 
 **Acceptance criteria**
-
-- Strong user/wallet authorization
-- No personalized payload exposure through `/api/x402/read/*`
+- Produces candidate set each minute for active users
+- Candidates include traceable references to Loop B inputs
 
 ---
 
-## Execution venue tickets (Low-latency)
-
-### EX-01 — Execution contracts + receipt schema (versioned)
-
+### LC-04 — AcceptanceModel (yes/no behavior)
 **Deliverables**
-
-- `ExecutionIntent`
-- `ExecutionDecision`
-- `ExecutionReceipt`
-- `ExecutionLatencyTrace`
+- deterministic `acceptProb` model from historical yes/no feedback
+- global prior + user-specific adaptation
 
 **Acceptance criteria**
-
-- Every execution attempt yields a receipt (success or failure)
-- Receipt is immutable and content-addressable in Cloudflare R2 object storage
+- Feedback history measurably adjusts acceptance probability
+- Model output is deterministic for same history/input set
 
 ---
 
-### EX-02 — Durable Object ExecutionCoordinator (auction + routing)
-
+### LC-05 — Curiosity + risk + stability feature layer
 **Deliverables**
-
-- Intake from Worker
-- Optional auction tick (for example: fixed cadence)
-- Routing:
-  - Solana Jito bundle path
-  - MagicBlock Ephemeral Rollup path
+- curiosity score feature
+- risk penalties
+- stability bonuses
+- hard pre-filter policy evaluation
 
 **Acceptance criteria**
-
-- Deterministic selection/ordering given same inputs
-- Clear rejection reasons
+- Hard filters can reject candidates before ranking
+- Feature values are surfaced in recommendation explanations
 
 ---
 
-### EX-03 — Jito bundle execution adapter hardening + metrics
-
+### LC-06 — RecommenderEngine v1 (ranking + explanation)
 **Deliverables**
-
-- Integrate with existing "Jito bundle" adapter route ([GitHub][6])
-- Emit latency stages and success/failure classification
-- Tip account discovery wired per Jito docs ([Jito Labs][13])
+- deterministic ranking with formula:
+  - `finalScore = w1*baseSignal + w2*acceptProb + w3*curiosity + w4*stabilityBonus - w5*riskPenalty`
+- explanation contribution output
 
 **Acceptance criteria**
-
-- Bundles can be submitted with trace metadata
-- "Sent → landed → confirmed" timeline is recorded
+- Same inputs/persona/history produce identical ranking order
+- Output includes score decomposition in `explain[]`
 
 ---
 
-### EX-04 — MagicBlock Ephemeral Rollup proof-of-concept venue
-
+### LC-07 — Auth recommendation APIs (non-x402)
 **Deliverables**
-
-- Minimal program/session flow compatible with Ephemeral Rollups
-- Demonstrate one "intent match → commit" loop
+- `POST /api/recommendations/latest`
+- `POST /api/recommendations/feedback`
+- auth + user/wallet authorization checks
 
 **Acceptance criteria**
-
-- Demonstrates the Ephemeral Rollup fast execution concept described in MagicBlock docs ([MagicBlock Documentation][14])
-- Produces a receipt and settlement reference
+- Unauthorized requests are rejected
+- Authorized requests return persona/wallet-scoped recommendations only
+- No user-specific payload leakage to public x402 routes
 
 ---
 
-### EX-05 — Execution latency telemetry pipeline (storage + dashboards)
-
+### LC-08 — ArtifactWriter + storage layout (Loop C)
 **Deliverables**
-
-- Write per-execution receipts to Cloudflare R2 object storage
-- Write rolling aggregates to Cloudflare Key-Value store
-- Optional: internal dashboard endpoint
+- KV hot latest view per user/wallet
+- R2 recommendation/feedback history bundles
+- D1 metadata tables + pointers
 
 **Acceptance criteria**
-
-- You can compute percentiles (P50/P95) by route and by minute
-- Data is queryable without scanning Cloudflare R2 object storage in the hot path
+- Recommendation history is replayable from persisted artifacts
+- Latest per-user view is retrievable with low latency
 
 ---
 
-## Shared / x402 serving tickets (additive only)
-
-### XS-05 — Add Loop-derived x402 read endpoints (additive)
-
+### LC-09 — Feedback ingest + adaptation pipeline
 **Deliverables**
-
-- `/api/x402/read/solana_marks_latest`
-- `/api/x402/read/solana_scores_latest`
-- `/api/x402/read/solana_views_top`
+- feedback event ingestion path
+- idempotent upsert logic
+- model update trigger
 
 **Acceptance criteria**
-
-- Existing endpoints unchanged
-- New endpoints are Cloudflare Key-Value store backed, low-latency, and x402-gated like existing ones
-
----
-
-## Final note: Cron vs Durable Object alarms
-
-- Cron triggers are ideal for periodic jobs (you are using them today at 1-minute cadence). ([Cloudflare Docs][15])
-- Durable Object alarms give you a mechanism to "run again soon when there is work," but Cloudflare explicitly warns that waking objects every few seconds can create unnecessary cost if you do it broadly, so you should design it as **one coordinator object** that wakes only when backlog exists. ([Cloudflare Docs][10])
+- Duplicate feedback events do not corrupt user state
+- Recommendation adaptation reflects accepted/rejected outcomes
 
 ---
 
-## Implementation sequencing note (current delivery)
+### LC-10 — Loop C tests + rollout gates
+**Deliverables**
+- test suite for cold start, adaptation, risk filtering, determinism, privacy boundary
+- staged rollout checklist (shadow mode -> auth API GA)
 
-To keep risk and rollout controlled, implementation is sequenced as:
+**Acceptance criteria**
+- all Loop C scenario tests pass
+- privacy boundary validated in integration tests
 
-1. Loop A reliability/latency upgrades (LA-13 through LA-19)
-2. Loop B incremental minute engine (LB-01 through LB-05)
-3. Loop C recommender + auth APIs (LC-01 through LC-05)
-4. Execution venue hardening (EX-01 through EX-05)
+---
 
-MagicBlock-specific implementation (`EX-04`) is now delivered as a Worker-side execution adapter PoC (intent match -> commit) with settlement-reference capture in execution metadata and receipts. Production venue hardening and deeper runtime integration remain iterative follow-on work.
+## Shared / x402 tickets (serving + monetization)
 
-[1]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/src/index.ts "raw.githubusercontent.com"
-[2]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/wrangler.toml "raw.githubusercontent.com"
-[3]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/src/loop_a/slot_source.ts "raw.githubusercontent.com"
-[4]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/src/loop_a/block_fetcher.ts "raw.githubusercontent.com"
-[5]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/src/loop_a/canonical_state.ts "raw.githubusercontent.com"
-[6]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/src/execution/router.ts "raw.githubusercontent.com"
-[7]: https://developers.cloudflare.com/durable-objects/api/alarms/?utm_source=chatgpt.com "Alarms - Durable Objects"
-[8]: https://developers.cloudflare.com/durable-objects/platform/limits/?utm_source=chatgpt.com "Limits · Cloudflare Durable Objects docs"
-[9]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/src/loop_a/decoder_registry.ts "raw.githubusercontent.com"
-[10]: https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/?utm_source=chatgpt.com "Rules of Durable Objects"
-[11]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/src/loops/contracts/loop_a.ts "raw.githubusercontent.com"
-[12]: https://www.helius.dev/blog/solana-mev-an-introduction?utm_source=chatgpt.com "Solana MEV: An Introduction"
-[13]: https://docs.jito.wtf/lowlatencytxnsend/?utm_source=chatgpt.com "Low Latency Transaction Send — Jito Labs Documentation"
-[14]: https://docs.magicblock.gg/pages/get-started/introduction/ephemeral-rollup?utm_source=chatgpt.com "Ephemeral Rollup - MagicBlock Documentation"
-[15]: https://developers.cloudflare.com/workers/configuration/cron-triggers/?utm_source=chatgpt.com "Cron Triggers · Cloudflare Workers docs"
+### XS-01 — Add Loop-derived x402 endpoints (new, additive)
+**Deliverables**
+- Add new Worker routes (additive):
+  - `/api/x402/read/solana_marks_latest`
+  - `/api/x402/read/solana_scores_latest`
+  - `/api/x402/read/solana_views_top` (optional)
+
+**Acceptance criteria**
+- Endpoints are gated with x402 exactly like existing ones
+- Responses include `meta` and are KV-backed
+
+---
+
+### XS-02 — Extend `X402RouteKey` + pricing env vars for new endpoints
+**Deliverables**
+- Update `apps/worker/src/x402.ts` with new keys + env mapping
+- Update Wrangler env vars (dev/staging/prod)
+
+**Acceptance criteria**
+- Missing env config returns `503` route-config error like existing routes
+- Integration tests validate `payment-required` header content
+
+---
+
+### XS-03 — Evidence bundles in `LOGS_BUCKET`
+**Deliverables**
+- Write per-view evidence bundles to R2
+- Return `evidence.r2Key` in response meta
+
+**Acceptance criteria**
+- Evidence objects are immutable and content-addressed (hash in key)
+- No secrets or user private data stored
+
+---
+
+### XS-04 — Add integration tests for loop endpoints (live + local fixtures)
+**Deliverables**
+- Test that new endpoints:
+  - emit 402 requirements when no signature
+  - return 200 with data when signature is present (fixture mode or live)
+
+**Acceptance criteria**
+- Test suite parallels existing `worker_x402_live` behavior
+
+---
+
+## Notes on sequencing (practical MVP order)
+If you want a fast path to something sellable **and** continuously useful for personalized recommendations:
+
+1) LA-01 → LA-04 (contracts + ingest + decode framework)  
+2) LA-06 → LA-10 (marks + publish + Worker-ready views)  
+3) XS-01 → XS-02 (serve `marks_latest` via x402)  
+4) LB-01 → LB-06 (minute features + scoring + views)  
+5) XS-01 (add score/view x402 endpoints)  
+6) LC-01 → LC-06 (contracts + candidate assembly + acceptance/risk/stability + ranking)  
+7) LC-07 → LC-09 (auth endpoints + persistence + feedback adaptation)  
+8) LC-10 (shadow mode + rollout gates)  
+
+This sequencing preserves monetizable shared datasets (x402) while adding private user-personalized recommendations on top.
+
+---
+
+## Test cases and scenarios (Loop C must-have)
+
+1) **Cold start user**
+- No feedback history: persona + global priors should still produce a recommendation list.
+
+2) **Feedback adaptation**
+- Repeated `yes`/`no` decisions change `acceptProb` and ranking order predictably.
+
+3) **Risk guard enforcement**
+- A high-score candidate must be rejected when max size/liquidity/policy filters fail.
+
+4) **Staleness handling**
+- Stale Loop B inputs reduce confidence or suppress output for affected candidates.
+
+5) **Determinism**
+- Same persona/history/wallet and same Loop B artifacts produce identical ranking order and scores.
+
+6) **Privacy boundary**
+- Personalized recommendations are unavailable on `/api/x402/read/*` and only available on auth routes.
+
+7) **API continuity**
+- Minute refresh + on-demand auth reads produce monotonic freshness metadata.
+
+---
+
+## Assumptions and defaults
+
+- “Small investments” means recommendation sizing guidance only; no automatic execution in MVP.
+- Personalized recommendations are **auth-only** initially (non-x402).
+- Loop C runs minute-aligned with Loop B and supports on-demand API refresh.
+- Wallet is a first-class key in recommendation context and authorization checks.
+- Recommender is deterministic, rules/weights-based in v1; ML models are future work.
+- Existing Loop A/B contracts remain backward compatible; Loop C is additive.
