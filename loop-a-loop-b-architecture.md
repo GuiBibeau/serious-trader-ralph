@@ -30,6 +30,10 @@ It is intentionally written as something you can hand to an implementation agent
 - MarkEngine v1 (current):
   - computes swap-derived marks from decoded batches,
   - publishes hot keys for `loopA:v1:marks:confirmed:latest` and per-pair latest marks in Cloudflare Key-Value store.
+- Health + latency telemetry (current):
+  - writes Loop A health artifacts to `loopA:v1:health` in Cloudflare Key-Value store on every tick (success/failure),
+  - writes latest tick latency telemetry to `loopA:v1:latency:latest`,
+  - persists per-tick health and latency snapshots to Cloudflare R2 object storage when bound.
 
 ### Execution routing already exists (v0)
 
