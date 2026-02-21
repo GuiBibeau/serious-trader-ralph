@@ -211,6 +211,70 @@ describe("worker loop A decoder registry", () => {
     expect(swapEvent?.outAmount).toBe("400000");
   });
 
+  test("skips failed transactions when meta.err is present", () => {
+    const sourceTokenAccount =
+      "FailSrcToken111111111111111111111111111111111111";
+    const destinationTokenAccount =
+      "FailDstToken111111111111111111111111111111111111";
+    const user = "FailUser111111111111111111111111111111111111111";
+
+    const block = {
+      blockTime: 1_708_480_050,
+      transactions: [
+        {
+          transaction: {
+            signatures: ["failed-signature"],
+            message: {
+              accountKeys: [
+                sourceTokenAccount,
+                destinationTokenAccount,
+                user,
+                SPL_TOKEN_PROGRAM_ID,
+              ],
+              instructions: [
+                {
+                  programIdIndex: 3,
+                  accounts: [0, 1, 2],
+                  data: encodeU64Transfer(999n),
+                },
+              ],
+            },
+          },
+          meta: {
+            err: { InstructionError: [0, "Custom"] },
+            preTokenBalances: [
+              {
+                accountIndex: 0,
+                mint: USDC_MINT,
+                owner: user,
+                uiTokenAmount: { amount: "1000" },
+              },
+            ],
+            postTokenBalances: [
+              {
+                accountIndex: 0,
+                mint: USDC_MINT,
+                owner: user,
+                uiTokenAmount: { amount: "1" },
+              },
+            ],
+          },
+        },
+      ],
+    } as Record<string, unknown>;
+
+    const registry = createDefaultDecoderRegistry();
+    const events = decodeProtocolEventsFromBlock({
+      slot: 400,
+      commitment: "confirmed",
+      block,
+      registry,
+      observedAt: "2026-02-21T04:10:00.000Z",
+    });
+
+    expect(events).toEqual([]);
+  });
+
   test("ignores transactions with no supported programs", () => {
     const block = {
       blockTime: 1_708_480_100,

@@ -342,6 +342,9 @@ export function decodeProtocolEventsFromBlock(
     if (!messageRecord) continue;
 
     const metaRecord = asRecord(txEnvelope.meta);
+    if (metaRecord && metaRecord.err !== null && metaRecord.err !== undefined) {
+      continue;
+    }
     const accountKeys = parseAccountKeys(messageRecord, metaRecord);
     if (accountKeys.length === 0) continue;
 
