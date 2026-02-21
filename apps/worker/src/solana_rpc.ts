@@ -66,6 +66,15 @@ export class SolanaRpc {
     return BigInt(result.value ?? 0);
   }
 
+  async getSlot(
+    commitment?: "processed" | "confirmed" | "finalized",
+  ): Promise<number> {
+    if (!commitment) {
+      return await this.request<number>("getSlot", []);
+    }
+    return await this.request<number>("getSlot", [{ commitment }]);
+  }
+
   async getTokenBalanceAtomic(owner: string, mint: string): Promise<bigint> {
     const result = await this.request<{
       value: Array<{

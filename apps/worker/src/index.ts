@@ -14,6 +14,7 @@ import {
 } from "./experience";
 import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
 import { JupiterClient } from "./jupiter";
+import { runLoopASlotSourceTick } from "./loop_a/slot_source";
 import {
   fetchMacroEtfFlows,
   fetchMacroFredIndicators,
@@ -1424,8 +1425,31 @@ export default {
     }
   },
 
-  async scheduled(_event: ScheduledEvent, _env: Env, _ctx: ExecutionContext) {
-    // Bot runtime has been removed; cron is intentionally a no-op.
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+    const enabled =
+      String(env.LOOP_A_SLOT_SOURCE_ENABLED ?? "0").trim() === "1";
+    if (!enabled) return;
+
+    if (!env.CONFIG_KV) {
+      console.warn("loop_a.slot_source.skipped", {
+        reason: "loop-a-config-kv-missing",
+      });
+      return;
+    }
+
+    try {
+      const result = await runLoopASlotSourceTick(env);
+      console.log("loop_a.slot_source.tick", {
+        cursorBefore: result.cursorBefore,
+        cursorAfter: result.cursorAfter,
+        tasksEmitted: result.tasksEmitted,
+      });
+    } catch (error) {
+      console.error("loop_a.slot_source.error", {
+        message: error instanceof Error ? error.message : "unknown-error",
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
   },
 };
 
