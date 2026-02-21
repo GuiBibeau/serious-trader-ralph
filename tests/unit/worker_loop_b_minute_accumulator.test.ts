@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  LOOP_B_FEATURES_LATEST_KEY,
   LOOP_B_HEALTH_KEY,
   LOOP_B_LIQUIDITY_STRESS_KEY,
   LOOP_B_MINUTE_ACCUMULATOR_NAME,
@@ -88,20 +89,25 @@ function createMark(input: {
   ts: string;
   px: string;
   sig: string;
+  baseMint?: string;
+  quoteMint?: string;
+  confidence?: number;
+  inputRef?: string;
 }): Mark {
   return {
     schemaVersion: "v1",
     generatedAt: "2026-02-21T18:00:00.000Z",
     slot: input.slot,
     ts: input.ts,
-    baseMint: "So11111111111111111111111111111111111111112",
-    quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    baseMint: input.baseMint ?? "So11111111111111111111111111111111111111112",
+    quoteMint:
+      input.quoteMint ?? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     px: input.px,
-    confidence: 0.8,
+    confidence: input.confidence ?? 0.8,
     venue: "jupiter",
     evidence: {
       sigs: [input.sig],
-      inputs: [`loopA/v1/events/slot=${input.slot}`],
+      inputs: [input.inputRef ?? `loopA/v1/events/slot=${input.slot}`],
     },
     version: "v1",
   };
@@ -153,6 +159,16 @@ describe("worker loop B minute accumulator", () => {
               px: "5.2",
               sig: "sig-b",
             }),
+            createMark({
+              slot: 702,
+              ts: "2026-02-21T18:01:45.000Z",
+              px: "160",
+              sig: "sig-c",
+              baseMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              quoteMint: "So11111111111111111111111111111111111111112",
+              confidence: 0.7,
+              inputRef: "loopA/v1/events/slot=702#sig=sig-c",
+            }),
           ],
         }),
       }),
@@ -167,18 +183,49 @@ describe("worker loop B minute accumulator", () => {
       };
     };
     expect(payload.ok).toBe(true);
-    expect(payload.result.marksAccepted).toBe(2);
+    expect(payload.result.marksAccepted).toBe(3);
     expect(payload.result.finalizedMinutes).toBe(1);
     expect(mock.getAlarm()).not.toBeNull();
 
     expect(kvStore.has(LOOP_B_TOP_MOVERS_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_LIQUIDITY_STRESS_KEY)).toBe(true);
+    expect(kvStore.has(LOOP_B_FEATURES_LATEST_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_HEALTH_KEY)).toBe(true);
     expect(
       kvStore.has(
         "loopB:v1:scores:latest:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       ),
     ).toBe(true);
+    expect(
+      kvStore.has(
+        "loopB:v1:features:latest:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      ),
+    ).toBe(true);
+
+    const featureSet = JSON.parse(
+      kvStore.get(LOOP_B_FEATURES_LATEST_KEY) ?? "{}",
+    ) as {
+      rows: Array<{
+        pairId: string;
+        slotRange: { fromSlot: number; toSlot: number };
+        inputRefs: string[];
+      }>;
+    };
+    expect(featureSet.rows.length).toBe(2);
+    expect(
+      (featureSet.rows[0]?.pairId ?? "") < (featureSet.rows[1]?.pairId ?? ""),
+    ).toBe(true);
+    const solUsdc = featureSet.rows.find((row) =>
+      row.pairId.startsWith("So11111111111111111111111111111111111111112:"),
+    );
+    expect(solUsdc?.slotRange).toEqual({
+      fromSlot: 700,
+      toSlot: 701,
+    });
+    expect(solUsdc?.inputRefs).toEqual([
+      "loopA/v1/events/slot=700",
+      "loopA/v1/events/slot=701",
+    ]);
 
     expect(r2Store.size).toBeGreaterThan(0);
   });
@@ -223,6 +270,14 @@ describe("worker loop B minute accumulator", () => {
     expect(firstTopMovers.minute).toBe("2026-02-21T18:02:00.000Z");
     const firstChange = firstTopMovers.movers[0]?.pctChange ?? 0;
     const firstRevision = firstTopMovers.movers[0]?.revision ?? 0;
+    const firstFeatureRow = JSON.parse(
+      kvStore.get(
+        "loopB:v1:features:latest:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      ) ?? "{}",
+    ) as {
+      returnPct: number;
+      revision: number;
+    };
 
     await accumulator.fetch(
       new Request("https://internal/loop-b/ingest", {
@@ -250,10 +305,22 @@ describe("worker loop B minute accumulator", () => {
     };
     const secondChange = secondTopMovers.movers[0]?.pctChange ?? 0;
     const secondRevision = secondTopMovers.movers[0]?.revision ?? 0;
+    const secondFeatureRow = JSON.parse(
+      kvStore.get(
+        "loopB:v1:features:latest:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      ) ?? "{}",
+    ) as {
+      returnPct: number;
+      revision: number;
+    };
 
     expect(secondTopMovers.minute).toBe("2026-02-21T18:02:00.000Z");
     expect(secondChange).toBeGreaterThan(firstChange);
     expect(secondRevision).toBeGreaterThan(firstRevision);
+    expect(secondFeatureRow.returnPct).toBeGreaterThan(
+      firstFeatureRow.returnPct,
+    );
+    expect(secondFeatureRow.revision).toBeGreaterThan(firstFeatureRow.revision);
   });
 
   test("publish helper sends marks into minute accumulator durable object", async () => {

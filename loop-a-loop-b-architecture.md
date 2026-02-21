@@ -36,6 +36,7 @@ It is intentionally written as something you can hand to an implementation agent
   - persists per-tick health and latency snapshots to Cloudflare R2 object storage when bound.
 - Loop B MinuteAccumulator (current):
   - Durable Object ingests Loop A marks incrementally and tracks per-minute revisions in stateful storage,
+  - finalizes deterministic minute feature rows with provenance (slot range + input refs) and publishes them to hot Cloudflare Key-Value store,
   - finalizes minute snapshots to hot Cloudflare Key-Value store views (`top_movers`, `liquidity_stress`, per-pair latest scores, health),
   - re-finalizes corrected minutes when late/corrected marks arrive, and writes minute snapshots to Cloudflare R2 object storage.
 
