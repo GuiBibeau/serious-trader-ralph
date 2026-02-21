@@ -58,6 +58,7 @@ There is already an execution router with adapters for:
 
 - "Jupiter"
 - "Jito bundle" ([GitHub][6])
+- "MagicBlock Ephemeral Rollup" (execution adapter PoC with match->commit flow and settlement-reference capture)
 - execution contract artifacts now include versioned `ExecutionIntent`, `ExecutionDecision`, `ExecutionLatencyTrace`, and `ExecutionReceipt` records persisted to content-addressed keys in Cloudflare R2 object storage during swap attempts.
 - a new `ExecutionCoordinator` Durable Object is available (flag-gated) for deterministic queue ordering and route decisions with explicit rejection reasons.
 - Jito execution adapter now supports block engine submission flow (`sendBundle` + tip-account discovery + bundle status classification) and emits route-level execution metadata for latency tracing.
@@ -842,7 +843,7 @@ To keep risk and rollout controlled, implementation is sequenced as:
 3. Loop C recommender + auth APIs (LC-01 through LC-05)
 4. Execution venue hardening (EX-01 through EX-05)
 
-MagicBlock-specific implementation (`EX-04`) is explicitly deferred until the preceding Loop A/B/C and execution tracing foundations are shipped and stable.
+MagicBlock-specific implementation (`EX-04`) is now delivered as a Worker-side execution adapter PoC (intent match -> commit) with settlement-reference capture in execution metadata and receipts. Production venue hardening and deeper runtime integration remain iterative follow-on work.
 
 [1]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/src/index.ts "raw.githubusercontent.com"
 [2]: https://raw.githubusercontent.com/GuiBibeau/serious-trader-ralph/main/apps/worker/wrangler.toml "raw.githubusercontent.com"

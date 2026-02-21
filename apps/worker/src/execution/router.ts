@@ -1,5 +1,6 @@
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
 import { executeJupiterSwap } from "./jupiter_executor";
+import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
 import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
 
 export type ExecutionAdapterFn = (
@@ -9,6 +10,7 @@ export type ExecutionAdapterFn = (
 const ADAPTERS = new Map<string, ExecutionAdapterFn>([
   ["jupiter", executeJupiterSwap],
   ["jito_bundle", executeJitoBundleSwap],
+  ["magicblock_ephemeral_rollup", executeMagicBlockEphemeralRollupSwap],
 ]);
 
 export function registerExecutionAdapter(

@@ -175,6 +175,36 @@ describe("worker execution coordinator durable object", () => {
     expect(payload.result.reason).toBe("unsupported-route:unsupported_venue");
   });
 
+  test("accepts magicblock route for execution decisions", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(mock.state, {} as Env, {
+      now: () => "2026-02-21T21:05:00.000Z",
+    });
+
+    const response = await coordinator.fetch(
+      new Request("https://internal/execution/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: intent({
+            intentId: "intent-magicblock",
+            receivedAt: "2026-02-21T21:04:59.000Z",
+            adapter: "magicblock_ephemeral_rollup",
+          }),
+          mode: "inline",
+        }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.result.accepted).toBe(true);
+    expect(payload.result.decision?.route).toBe("magicblock_ephemeral_rollup");
+  });
+
   test("helper uses namespace only when coordinator is enabled", async () => {
     const disabled = await requestExecutionCoordinatorDecision(
       { EXECUTION_COORDINATOR_ENABLED: "0" } as Env,

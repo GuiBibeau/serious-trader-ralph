@@ -64,6 +64,8 @@ export type Env = {
   JUPITER_BASE_URL?: string;
   JUPITER_API_KEY?: string;
   JITO_BLOCK_ENGINE_URL?: string;
+  MAGICBLOCK_EPHEMERAL_ROLLUP_URL?: string;
+  MAGICBLOCK_API_KEY?: string;
   BILLING_MERCHANT_WALLET?: string;
   BILLING_STABLE_MINT?: string;
   BILLING_RPC_ENDPOINT?: string;

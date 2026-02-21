@@ -48,6 +48,9 @@ export type ExecuteSwapResult = {
       | "error";
     bundleId?: string | null;
     tipAccount?: string | null;
+    intentId?: string | null;
+    venueSessionId?: string | null;
+    settlementRef?: string | null;
     trace?: {
       txBuiltAt?: string;
       simulatedAt?: string;
