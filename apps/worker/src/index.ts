@@ -1220,15 +1220,22 @@ export default {
           payload.persona,
           payload.riskMode,
         );
+        const observedAt =
+          typeof payload.observedAt === "string" &&
+          payload.observedAt.trim().length > 0
+            ? payload.observedAt.trim()
+            : undefined;
+        if (observedAt && Number.isNaN(Date.parse(observedAt))) {
+          return withCors(
+            json({ ok: false, error: "invalid-observedAt" }, { status: 400 }),
+            env,
+          );
+        }
         const view = await requestLoopCRecommendations(env, {
           userId: user.id,
           wallet: scopedWallet.wallet,
           limit: toBoundedInt(payload.limit, 10, 1, 50),
-          observedAt:
-            typeof payload.observedAt === "string" &&
-            payload.observedAt.trim().length > 0
-              ? payload.observedAt.trim()
-              : undefined,
+          observedAt,
           ...(persona ? { persona } : {}),
         });
         if (!view) {
@@ -1308,12 +1315,23 @@ export default {
             env,
           );
         }
+        const resolvedPairId =
+          pairId || parsePairIdFromRecommendationId(recommendationId);
+        if (!resolvedPairId) {
+          return withCors(
+            json(
+              { ok: false, error: "invalid-recommendationId" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
 
         const update = await submitLoopCRecommendationFeedback(env, {
           userId: user.id,
           wallet: scopedWallet.wallet,
           ...(recommendationId ? { recommendationId } : {}),
-          ...(pairId ? { pairId } : {}),
+          pairId: resolvedPairId,
           decision,
           reason:
             typeof payload.reason === "string"
@@ -1879,6 +1897,17 @@ function parseLoopCPersonaOverride(
   };
 
   return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function parsePairIdFromRecommendationId(
+  recommendationId: string | undefined,
+): string | null {
+  const raw = String(recommendationId ?? "").trim();
+  if (!raw) return null;
+  const markerIndex = raw.indexOf(":");
+  if (markerIndex < 0) return null;
+  const pairId = raw.slice(markerIndex + 1).trim();
+  return pairId ? pairId : null;
 }
 
 function resolveScopedWallet(input: {
