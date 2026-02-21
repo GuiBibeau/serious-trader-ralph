@@ -13,6 +13,7 @@ export const LOOP_B_MINUTE_ACCUMULATOR_NAME = "loop-b-minute-accumulator-v1";
 export const LOOP_B_TOP_MOVERS_KEY = "loopB:v1:views:top_movers:latest";
 export const LOOP_B_LIQUIDITY_STRESS_KEY =
   "loopB:v1:views:liquidity_stress:latest";
+export const LOOP_B_ANOMALY_FEED_KEY = "loopB:v1:views:anomaly_feed:latest";
 export const LOOP_B_FEATURES_LATEST_KEY = "loopB:v1:features:latest";
 export const LOOP_B_SCORES_LATEST_KEY = "loopB:v1:scores:latest";
 export const LOOP_B_HEALTH_KEY = "loopB:v1:health";
@@ -71,6 +72,7 @@ type LoopBTopMoversView = {
   schemaVersion: typeof LOOP_B_SCHEMA_VERSION;
   generatedAt: string;
   minute: MinuteId;
+  freshnessMs: number;
   count: number;
   movers: PairAggregate[];
 };
@@ -79,10 +81,25 @@ type LoopBLiquidityStressView = {
   schemaVersion: typeof LOOP_B_SCHEMA_VERSION;
   generatedAt: string;
   minute: MinuteId;
+  freshnessMs: number;
   count: number;
   pairs: Array<
     PairAggregate & {
       stressScore: number;
+    }
+  >;
+};
+
+type LoopBAnomalyFeedView = {
+  schemaVersion: typeof LOOP_B_SCHEMA_VERSION;
+  generatedAt: string;
+  minute: MinuteId;
+  freshnessMs: number;
+  count: number;
+  anomalies: Array<
+    PairAggregate & {
+      anomalyScore: number;
+      reasonTags: string[];
     }
   >;
 };
@@ -409,10 +426,15 @@ function buildTopMoversView(input: {
   pairs: PairAggregate[];
   limit: number;
 }): LoopBTopMoversView {
+  const freshnessMs = Math.max(
+    0,
+    Date.parse(input.generatedAt) - Date.parse(input.minute),
+  );
   return {
     schemaVersion: LOOP_B_SCHEMA_VERSION,
     generatedAt: input.generatedAt,
     minute: input.minute,
+    freshnessMs,
     count: Math.min(input.limit, input.pairs.length),
     movers: input.pairs.slice(0, input.limit),
   };
@@ -424,6 +446,10 @@ function buildLiquidityStressView(input: {
   pairs: PairAggregate[];
   limit: number;
 }): LoopBLiquidityStressView {
+  const freshnessMs = Math.max(
+    0,
+    Date.parse(input.generatedAt) - Date.parse(input.minute),
+  );
   const stressed = input.pairs
     .map((pair) => ({
       ...pair,
@@ -437,8 +463,48 @@ function buildLiquidityStressView(input: {
     schemaVersion: LOOP_B_SCHEMA_VERSION,
     generatedAt: input.generatedAt,
     minute: input.minute,
+    freshnessMs,
     count: Math.min(input.limit, stressed.length),
     pairs: stressed.slice(0, input.limit),
+  };
+}
+
+function buildAnomalyFeedView(input: {
+  minute: MinuteId;
+  generatedAt: string;
+  pairs: PairAggregate[];
+  limit: number;
+}): LoopBAnomalyFeedView {
+  const freshnessMs = Math.max(
+    0,
+    Date.parse(input.generatedAt) - Date.parse(input.minute),
+  );
+  const anomalies = input.pairs
+    .map((pair) => {
+      const reasons: string[] = [];
+      if (Math.abs(pair.pctChange) >= 5) reasons.push("large_move");
+      if (pair.avgConfidence <= 0.75) reasons.push("low_confidence");
+      if (pair.volatility >= 3) reasons.push("high_volatility");
+      if (pair.markCount <= 1) reasons.push("thin_sample");
+      const anomalyScore =
+        Math.abs(pair.pctChange) * (1 + (1 - pair.avgConfidence)) +
+        pair.volatility * 0.75 +
+        (pair.markCount <= 1 ? 3 : 0);
+      return {
+        ...pair,
+        anomalyScore: round(anomalyScore, 8),
+        reasonTags: reasons,
+      };
+    })
+    .sort((a, b) => b.anomalyScore - a.anomalyScore);
+
+  return {
+    schemaVersion: LOOP_B_SCHEMA_VERSION,
+    generatedAt: input.generatedAt,
+    minute: input.minute,
+    freshnessMs,
+    count: Math.min(input.limit, anomalies.length),
+    anomalies: anomalies.slice(0, input.limit),
   };
 }
 
@@ -644,9 +710,16 @@ async function publishFinalizedMinute(input: {
     pairs,
     limit: input.topLimit,
   });
+  const anomalyFeed = buildAnomalyFeedView({
+    minute: input.minute,
+    generatedAt: input.generatedAt,
+    pairs,
+    limit: input.topLimit,
+  });
 
   await putKvJson(input.env, LOOP_B_TOP_MOVERS_KEY, topMovers);
   await putKvJson(input.env, LOOP_B_LIQUIDITY_STRESS_KEY, liquidityStress);
+  await putKvJson(input.env, LOOP_B_ANOMALY_FEED_KEY, anomalyFeed);
   await putKvJson(input.env, LOOP_B_FEATURES_LATEST_KEY, featureSet);
   await putKvJson(input.env, LOOP_B_SCORES_LATEST_KEY, scoreSet);
   const featureRowsByPair = new Map(

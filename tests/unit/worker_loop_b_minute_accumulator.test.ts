@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  LOOP_B_ANOMALY_FEED_KEY,
   LOOP_B_FEATURES_LATEST_KEY,
   LOOP_B_HEALTH_KEY,
   LOOP_B_LIQUIDITY_STRESS_KEY,
@@ -190,6 +191,7 @@ describe("worker loop B minute accumulator", () => {
 
     expect(kvStore.has(LOOP_B_TOP_MOVERS_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_LIQUIDITY_STRESS_KEY)).toBe(true);
+    expect(kvStore.has(LOOP_B_ANOMALY_FEED_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_FEATURES_LATEST_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_SCORES_LATEST_KEY)).toBe(true);
     expect(kvStore.has(LOOP_B_HEALTH_KEY)).toBe(true);
@@ -247,6 +249,30 @@ describe("worker loop B minute accumulator", () => {
     expect(scoreSet.rows[0]?.finalScore).toBeGreaterThan(0);
     expect(scoreSet.rows[0]?.contributions.confidence).toBeGreaterThan(0);
     expect(scoreSet.rows[0]?.explain[0]).toContain("score=momentum");
+    const topMoversView = JSON.parse(
+      kvStore.get(LOOP_B_TOP_MOVERS_KEY) ?? "{}",
+    ) as {
+      freshnessMs: number;
+    };
+    const liquidityStressView = JSON.parse(
+      kvStore.get(LOOP_B_LIQUIDITY_STRESS_KEY) ?? "{}",
+    ) as {
+      freshnessMs: number;
+    };
+    const anomalyFeedView = JSON.parse(
+      kvStore.get(LOOP_B_ANOMALY_FEED_KEY) ?? "{}",
+    ) as {
+      freshnessMs: number;
+      anomalies: Array<{
+        anomalyScore: number;
+        reasonTags: string[];
+      }>;
+    };
+    expect(topMoversView.freshnessMs).toBe(60000);
+    expect(liquidityStressView.freshnessMs).toBe(60000);
+    expect(anomalyFeedView.freshnessMs).toBe(60000);
+    expect(anomalyFeedView.anomalies[0]?.anomalyScore).toBeGreaterThan(0);
+    expect(anomalyFeedView.anomalies[0]?.reasonTags.length).toBeGreaterThan(0);
 
     expect(r2Store.size).toBeGreaterThan(0);
   });

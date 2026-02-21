@@ -38,7 +38,7 @@ It is intentionally written as something you can hand to an implementation agent
   - Durable Object ingests Loop A marks incrementally and tracks per-minute revisions in stateful storage,
   - finalizes deterministic minute feature rows with provenance (slot range + input refs) and publishes them to hot Cloudflare Key-Value store,
   - finalizes deterministic, explainable score rows (`loopB:v1:scores:latest` + per-pair score keys) using weighted contribution components,
-  - finalizes minute snapshots to hot Cloudflare Key-Value store views (`top_movers`, `liquidity_stress`, per-pair latest scores, health),
+  - finalizes minute snapshots to hot Cloudflare Key-Value store views (`top_movers`, `liquidity_stress`, `anomaly_feed`, per-pair latest scores, health) with freshness metadata,
   - re-finalizes corrected minutes when late/corrected marks arrive, and writes minute snapshots to Cloudflare R2 object storage.
 
 ### Execution routing already exists (v0)
