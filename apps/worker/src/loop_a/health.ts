@@ -149,18 +149,24 @@ function resolveLagSlots(
   };
 }
 
+function lagForCommitment(
+  lagSlots: Health["lagSlots"],
+  commitment: "processed" | "confirmed" | "finalized",
+): number {
+  if (commitment === "processed") return lagSlots.processedLag;
+  if (commitment === "confirmed") return lagSlots.confirmedLag;
+  return lagSlots.finalizedLag;
+}
+
 function resolveStatus(input: {
   ok: boolean;
   lagSlots: Health["lagSlots"];
+  primaryCommitment: "processed" | "confirmed" | "finalized";
   warnings: string[];
 }): Health["status"] {
   if (!input.ok) return "error";
-  const maxLag = Math.max(
-    input.lagSlots.processedLag,
-    input.lagSlots.confirmedLag,
-    input.lagSlots.finalizedLag,
-  );
-  if (maxLag > 64 || input.warnings.length > 0) return "degraded";
+  const primaryLag = lagForCommitment(input.lagSlots, input.primaryCommitment);
+  if (primaryLag > 64 || input.warnings.length > 0) return "degraded";
   return "ok";
 }
 
@@ -224,15 +230,12 @@ function buildHealthArtifact(input: {
   const heads = resolveHeadsFromState(input.cursorState, input.previous);
   const cursors = resolveStateCursor(input.cursorState, input.previous);
   const lagSlots = resolveLagSlots(heads, cursors);
+  const primaryCommitment = input.tickResult?.stateCommitment ?? "confirmed";
+  const primaryLag = lagForCommitment(lagSlots, primaryCommitment);
 
   const warnings: string[] = [];
-  const maxLag = Math.max(
-    lagSlots.processedLag,
-    lagSlots.confirmedLag,
-    lagSlots.finalizedLag,
-  );
-  if (maxLag > 0) {
-    warnings.push(`state-lag-slots=${maxLag}`);
+  if (primaryLag > 0) {
+    warnings.push(`state-lag-slots=${primaryLag}`);
   }
   if (input.tickResult?.stateAppliedSlot === null) {
     warnings.push("state-store-disabled-or-no-snapshot");
@@ -259,8 +262,11 @@ function buildHealthArtifact(input: {
     status: resolveStatus({
       ok: input.ok,
       lagSlots,
+      primaryCommitment,
       warnings:
-        maxLag > 64 || !input.ok || input.tickResult?.stateAppliedSlot === null
+        primaryLag > 64 ||
+        !input.ok ||
+        input.tickResult?.stateAppliedSlot === null
           ? warnings
           : [],
     }),

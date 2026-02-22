@@ -7,6 +7,7 @@ import {
   type LoopAEventBatch,
   writeLoopAEventBatchToKv,
 } from "./canonical_state";
+import { loopABackfillTaskKey } from "./cursor_store_kv";
 import {
   type DecoderRegistry,
   decodeProtocolEventsFromBlock,
@@ -252,6 +253,20 @@ async function resolveRangeTask(input: {
     };
   }
 
+  const retainRemainingRange = async (fromSlot: number): Promise<void> => {
+    if (!input.env.CONFIG_KV) return;
+    if (fromSlot <= input.task.fromSlot || fromSlot > input.task.toSlot) return;
+    const nextTask: BackfillTask = {
+      ...input.task,
+      fromSlot,
+    };
+    const nextKey = loopABackfillTaskKey(nextTask);
+    await input.env.CONFIG_KV.put(nextKey, JSON.stringify(nextTask));
+    if (nextKey !== input.taskKey) {
+      await input.env.CONFIG_KV.delete(input.taskKey);
+    }
+  };
+
   const cap = Math.min(
     input.task.toSlot,
     input.task.fromSlot + input.maxSlotsPerTask - 1,
@@ -260,6 +275,7 @@ async function resolveRangeTask(input: {
 
   let slotsResolved = 0;
   let batchesWritten = 0;
+  let nextFromSlot = input.task.fromSlot;
   for (let slot = input.task.fromSlot; slot <= cap; slot += 1) {
     const batch = await fetchBatchForSlot({
       rpc: input.rpc,
@@ -269,6 +285,7 @@ async function resolveRangeTask(input: {
       generatedAt: input.nowIso,
     });
     if (!batch) {
+      await retainRemainingRange(nextFromSlot);
       return {
         slotsResolved,
         batchesWritten,
@@ -280,11 +297,14 @@ async function resolveRangeTask(input: {
     await writeLoopAEventBatchToKv(input.env, batch);
     slotsResolved += 1;
     batchesWritten += 1;
+    nextFromSlot = slot + 1;
   }
 
-  const fullyResolved = cap >= input.task.toSlot;
+  const fullyResolved = nextFromSlot > input.task.toSlot;
   if (fullyResolved) {
     await input.env.CONFIG_KV.delete(input.taskKey);
+  } else {
+    await retainRemainingRange(nextFromSlot);
   }
 
   return {

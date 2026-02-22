@@ -176,6 +176,51 @@ describe("worker loop A health + latency telemetry", () => {
     expect(r2Store.has(loopALatencyR2Key(observedAt))).toBe(true);
   });
 
+  test("health status follows the state commitment lag, not inactive tiers", async () => {
+    const { env } = createEnv({ withR2: false });
+    const observedAt = "2026-02-21T12:05:00.000Z";
+    const cursorState: LoopACursorState = {
+      schemaVersion: "v1",
+      updatedAt: observedAt,
+      headCursor: {
+        processed: 50_000,
+        confirmed: 9_000,
+        finalized: 8_000,
+      },
+      fetchedCursor: {
+        processed: 10,
+        confirmed: 9_000,
+        finalized: 8_000,
+      },
+      ingestionCursor: {
+        processed: 10,
+        confirmed: 9_000,
+        finalized: 8_000,
+      },
+      stateCursor: {
+        processed: 10,
+        confirmed: 9_000,
+        finalized: 8_000,
+      },
+    };
+    const tickResult = createTickResult(cursorState, 9_000);
+
+    await recordLoopAHealthTick(env, {
+      ok: true,
+      trigger: "coordinator_fetch",
+      startedAtMs: Date.parse("2026-02-21T12:04:59.000Z"),
+      nowMs: Date.parse(observedAt),
+      observedAt,
+      tickResult,
+    });
+
+    const health = await readLoopAHealthFromKv(env);
+    expect(health?.status).toBe("ok");
+    expect(health?.lagSlots.processedLag).toBeGreaterThan(0);
+    expect(health?.lagSlots.confirmedLag).toBe(0);
+    expect(health?.warnings ?? []).toHaveLength(0);
+  });
+
   test("records failures without losing the last successful checkpoint", async () => {
     const { env } = createEnv({ withR2: false });
     const successObservedAt = "2026-02-21T12:10:00.000Z";

@@ -181,6 +181,46 @@ describe("worker loop A backfill resolver", () => {
     expect(batch?.marker?.reason).toBe("missing_in_storage");
   });
 
+  test("advances range task window when partially resolved", async () => {
+    const { env, store, r2Store } = createEnv();
+    const initialTaskKey = "loopA:v1:backfill:pending:confirmed:500-505";
+    store.set(
+      initialTaskKey,
+      JSON.stringify({
+        schemaVersion: "v1",
+        commitment: "confirmed",
+        fromSlot: 500,
+        toSlot: 505,
+        detectedAt: "2026-02-21T04:01:30.000Z",
+        status: "pending",
+      }),
+    );
+
+    const result = await runLoopABackfillResolverTick(env, {
+      config: {
+        maxTasksPerTick: 1,
+        maxSlotsPerTask: 2,
+        maxTotalSlotsPerTick: 2,
+      },
+      rpc: {
+        getBlock: async () => ({ transactions: [] }),
+      },
+    });
+
+    expect(result.tasksScanned).toBe(1);
+    expect(result.tasksResolved).toBe(0);
+    expect(result.tasksRetained).toBe(1);
+    expect(result.slotsResolved).toBe(2);
+    expect(result.batchesWritten).toBe(2);
+
+    expect(store.has(initialTaskKey)).toBe(false);
+    const retainedTaskKey = "loopA:v1:backfill:pending:confirmed:502-505";
+    expect(store.has(retainedTaskKey)).toBe(true);
+    expect(r2Store.has(loopAEventBatchR2Key("confirmed", 500))).toBe(true);
+    expect(r2Store.has(loopAEventBatchR2Key("confirmed", 501))).toBe(true);
+    expect(r2Store.has(loopAEventBatchR2Key("confirmed", 502))).toBe(false);
+  });
+
   test("retains unresolved task on hard rpc failure", async () => {
     const { env, store, r2Store } = createEnv();
     const taskKey = "loopA:v1:backfill:pending:confirmed:333-333";
