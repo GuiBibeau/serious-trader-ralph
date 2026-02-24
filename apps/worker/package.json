@@ -7,6 +7,8 @@
     "dev:remote": "wrangler dev",
     "dev:local": "wrangler dev --local --persist-to .wrangler/state --test-scheduled --port 8888",
     "db:migrate:local": "printf 'y\\n' | wrangler d1 migrations apply WAITLIST_DB --local --persist-to .wrangler/state",
+    "secrets:set-mainnet-rpc": "./scripts/set-mainnet-rpc-secrets.sh",
+    "soak:loopb:mainnet": "./scripts/soak-loopb-mainnet.sh",
     "wallet:migrate:users": "bun run scripts/migrate-bot-wallets-to-users.ts",
     "test:integration:live": "RUN_INTEGRATION_TESTS=1 RUN_WORKER_LIVE_TESTS=1 bun test ../../tests/integration/worker_x402_live.integration.test.ts",
     "access:grant": "./scripts/mark-paid.sh",

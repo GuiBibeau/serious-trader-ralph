@@ -93,25 +93,36 @@ function initializeCursorState(input: {
   previousCursor: LoopACursor | null;
   previousState: LoopACursorState | null;
 }): LoopACursorState {
+  const previousCursorHeads = input.previousCursor
+    ? headsFromLoopACursor(input.previousCursor)
+    : input.headCursor;
+
   const previousHeads = input.previousState
-    ? input.previousState.headCursor
-    : input.previousCursor
-      ? headsFromLoopACursor(input.previousCursor)
-      : input.headCursor;
+    ? maxHeads(input.previousState.headCursor, previousCursorHeads)
+    : previousCursorHeads;
 
   const fallbackProgress = input.previousState
-    ? input.previousState.ingestionCursor
-    : input.previousCursor
-      ? headsFromLoopACursor(input.previousCursor)
-      : input.headCursor;
+    ? maxHeads(input.previousState.ingestionCursor, previousCursorHeads)
+    : previousCursorHeads;
 
   return {
     schemaVersion: LOOP_A_SCHEMA_VERSION,
     updatedAt: input.observedAt,
     headCursor: maxHeads(previousHeads, input.headCursor),
-    fetchedCursor: input.previousState?.fetchedCursor ?? fallbackProgress,
-    ingestionCursor: input.previousState?.ingestionCursor ?? fallbackProgress,
-    stateCursor: input.previousState?.stateCursor ?? fallbackProgress,
+    // Guard against stale cursor_state reads from KV propagation lag by never
+    // allowing progress cursors to fall behind the latest observed cursor.
+    fetchedCursor: maxHeads(
+      input.previousState?.fetchedCursor ?? fallbackProgress,
+      fallbackProgress,
+    ),
+    ingestionCursor: maxHeads(
+      input.previousState?.ingestionCursor ?? fallbackProgress,
+      fallbackProgress,
+    ),
+    stateCursor: maxHeads(
+      input.previousState?.stateCursor ?? fallbackProgress,
+      fallbackProgress,
+    ),
   };
 }
 

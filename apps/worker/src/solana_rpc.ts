@@ -13,12 +13,49 @@ type RpcResponse<T> = {
   error?: RpcError;
 };
 
+const DEFAULT_RPC_TIMEOUT_MS = 10_000;
+const DEFAULT_READ_RETRIES = 2;
+const DEFAULT_RETRY_BASE_BACKOFF_MS = 150;
+
+type RequestOptions = {
+  timeoutMs?: number;
+  retries?: number;
+  retryBackoffMs?: number;
+  retryable?: boolean;
+};
+
 function safeJsonString(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
     return String(value);
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableRpcRequestError(error: unknown): boolean {
+  const message = String(
+    error instanceof Error ? error.message : error,
+  ).toLowerCase();
+  return (
+    message.includes("rpc-http-error: 429") ||
+    message.includes("rpc-http-error: 500") ||
+    message.includes("rpc-http-error: 502") ||
+    message.includes("rpc-http-error: 503") ||
+    message.includes("rpc-http-error: 504") ||
+    message.includes("rpc-timeout") ||
+    message.includes("timed out") ||
+    message.includes("abort") ||
+    message.includes("fetch failed") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout") ||
+    message.includes("temporar") ||
+    message.includes("-32603") ||
+    message.includes("internal error")
+  );
 }
 
 export class SolanaRpc {
@@ -30,39 +67,92 @@ export class SolanaRpc {
     return new SolanaRpc(endpoint);
   }
 
-  async request<T>(method: string, params: unknown[] = []): Promise<T> {
-    const response = await fetch(this.endpoint, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: crypto.randomUUID(),
-        method,
-        params,
-      }),
-    });
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(`rpc-http-error: ${response.status} ${text}`);
+  async request<T>(
+    method: string,
+    params: unknown[] = [],
+    options: RequestOptions = {},
+  ): Promise<T> {
+    const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS);
+    const retries = Math.max(0, options.retries ?? 0);
+    const retryBackoffMs = Math.max(
+      0,
+      options.retryBackoffMs ?? DEFAULT_RETRY_BASE_BACKOFF_MS,
+    );
+    const maxAttempts = retries + 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, timeoutMs);
+
+        let response: Response;
+        try {
+          response = await fetch(this.endpoint, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: crypto.randomUUID(),
+              method,
+              params,
+            }),
+          });
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") {
+            throw new Error(`rpc-timeout: ${timeoutMs}ms`);
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(`rpc-http-error: ${response.status} ${text}`);
+        }
+        const payload = (await response.json()) as RpcResponse<T>;
+        if (payload.error) {
+          throw new Error(
+            `rpc-error: ${payload.error.code ?? "?"} ${payload.error.message ?? safeJsonString(payload.error)}`,
+          );
+        }
+        if (!("result" in payload)) {
+          throw new Error("rpc-missing-result");
+        }
+        return payload.result as T;
+      } catch (error) {
+        const shouldRetry =
+          options.retryable === true &&
+          attempt < maxAttempts &&
+          isRetryableRpcRequestError(error);
+        if (!shouldRetry) {
+          throw error;
+        }
+
+        const delayMs = retryBackoffMs * 2 ** (attempt - 1);
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+      }
     }
-    const payload = (await response.json()) as RpcResponse<T>;
-    if (payload.error) {
-      throw new Error(
-        `rpc-error: ${payload.error.code ?? "?"} ${payload.error.message ?? safeJsonString(payload.error)}`,
-      );
-    }
-    if (!("result" in payload)) {
-      throw new Error("rpc-missing-result");
-    }
-    return payload.result as T;
+
+    throw new Error("rpc-unreachable");
   }
 
   async getBalanceLamports(pubkey: string): Promise<bigint> {
-    const result = await this.request<{ value: number }>("getBalance", [
-      pubkey,
-    ]);
+    const result = await this.request<{ value: number }>(
+      "getBalance",
+      [pubkey],
+      {
+        retryable: true,
+        retries: DEFAULT_READ_RETRIES,
+      },
+    );
     return BigInt(result.value ?? 0);
   }
 
@@ -70,9 +160,15 @@ export class SolanaRpc {
     commitment?: "processed" | "confirmed" | "finalized",
   ): Promise<number> {
     if (!commitment) {
-      return await this.request<number>("getSlot", []);
+      return await this.request<number>("getSlot", [], {
+        retryable: true,
+        retries: DEFAULT_READ_RETRIES,
+      });
     }
-    return await this.request<number>("getSlot", [{ commitment }]);
+    return await this.request<number>("getSlot", [{ commitment }], {
+      retryable: true,
+      retries: DEFAULT_READ_RETRIES,
+    });
   }
 
   async getBlock(
@@ -91,10 +187,16 @@ export class SolanaRpc {
       rewards: opts?.rewards ?? false,
       encoding: "json",
     };
-    return await this.request<Record<string, unknown> | null>("getBlock", [
-      slot,
-      config,
-    ]);
+    return await this.request<Record<string, unknown> | null>(
+      "getBlock",
+      [slot, config],
+      {
+        retryable: true,
+        // Block fetcher already retries at the target level; avoid nested
+        // retries multiplying worst-case latency per tick.
+        retries: 0,
+      },
+    );
   }
 
   async getTokenBalanceAtomic(owner: string, mint: string): Promise<bigint> {
@@ -110,11 +212,14 @@ export class SolanaRpc {
           };
         };
       }>;
-    }>("getTokenAccountsByOwner", [
-      owner,
-      { mint },
-      { encoding: "jsonParsed" },
-    ]);
+    }>(
+      "getTokenAccountsByOwner",
+      [owner, { mint }, { encoding: "jsonParsed" }],
+      {
+        retryable: true,
+        retries: DEFAULT_READ_RETRIES,
+      },
+    );
 
     let total = 0n;
     for (const item of result.value ?? []) {
@@ -187,10 +292,14 @@ export class SolanaRpc {
         confirmationStatus?: string;
         err?: unknown;
       } | null>;
-    }>("getSignatureStatuses", [
-      [signature],
-      { searchTransactionHistory: true },
-    ]);
+    }>(
+      "getSignatureStatuses",
+      [[signature], { searchTransactionHistory: true }],
+      {
+        retryable: true,
+        retries: DEFAULT_READ_RETRIES,
+      },
+    );
     return result.value?.[0] || null;
   }
 

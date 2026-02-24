@@ -29,6 +29,18 @@ wrangler secret put EIA_API_KEY
 
 x402 route pricing/network vars are configured in `wrangler.toml` via `X402_*` values.
 
+### Mainnet Helius RPC Secrets
+
+Loop A/B runtime should use mainnet Helius via Worker secrets (not committed vars).
+
+```bash
+cd apps/worker
+export HELIUS_MAINNET_RPC_URL="https://mainnet.helius-rpc.com/?api-key=<key>"
+bun run secrets:set-mainnet-rpc
+```
+
+This updates `RPC_ENDPOINT` and `BALANCE_RPC_ENDPOINT` for `dev`, `staging`, and `production`.
+
 ## Local Quick Start
 
 ```bash
@@ -37,6 +49,16 @@ npm install
 npm run db:migrate:local
 npm run dev:local
 ```
+
+## Loop B Mainnet Soak (Strict Quality Gate)
+
+```bash
+cd apps/worker
+export HELIUS_MAINNET_RPC_URL="https://mainnet.helius-rpc.com/?api-key=<key>"
+bun run soak:loopb:mainnet
+```
+
+The soak runs 10 minutes by default (2 checks × 5 ticks × 60s) and fails if Loop B does not publish non-empty, fresh, explainable views/scores.
 
 ## API
 

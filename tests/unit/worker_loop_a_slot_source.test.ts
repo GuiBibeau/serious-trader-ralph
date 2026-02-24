@@ -10,6 +10,7 @@ import type { Env } from "../../apps/worker/src/types";
 
 const originalFetch = globalThis.fetch;
 const CURSOR_KEY = "loopA:v1:cursor";
+const CURSOR_STATE_KEY = "loopA:v1:cursor_state";
 
 function createMockDb() {
   return {
@@ -226,6 +227,48 @@ describe("worker loop A slot source", () => {
     expect(result.cursorAfter.processed).toBe(150);
     expect(result.cursorAfter.confirmed).toBe(149);
     expect(result.cursorAfter.finalized).toBe(148);
+  });
+
+  test("keeps progress cursors aligned with latest cursor when cursor_state is stale", async () => {
+    const { kv, store } = createMockKv();
+    const staleState = {
+      schemaVersion: "v1",
+      updatedAt: "2026-02-21T03:41:00Z",
+      headCursor: { processed: 100, confirmed: 99, finalized: 98 },
+      fetchedCursor: { processed: 90, confirmed: 89, finalized: 88 },
+      ingestionCursor: { processed: 90, confirmed: 89, finalized: 88 },
+      stateCursor: { processed: 90, confirmed: 89, finalized: 88 },
+    };
+    const newerCursor = {
+      schemaVersion: "v1",
+      processed: 150,
+      confirmed: 149,
+      finalized: 148,
+      updatedAt: "2026-02-21T03:41:30Z",
+    };
+
+    store.set(CURSOR_STATE_KEY, JSON.stringify(staleState));
+    store.set(CURSOR_KEY, JSON.stringify(newerCursor));
+
+    const env = {
+      WAITLIST_DB: createMockDb() as never,
+      CONFIG_KV: kv as never,
+      RPC_ENDPOINT: "https://rpc.example",
+      LOOP_A_SLOT_SOURCE_ENABLED: "1",
+    } as Env;
+
+    const result = await runLoopASlotSourceTick(env, {
+      observedAt: "2026-02-21T03:42:00Z",
+      backfillCommitments: [],
+      rpc: createRpc({ processed: 151, confirmed: 150, finalized: 149 }),
+    });
+
+    expect(result.cursorAfter.processed).toBe(151);
+    expect(result.cursorAfter.confirmed).toBe(150);
+    expect(result.cursorAfter.finalized).toBe(149);
+    expect(result.cursorStateAfter.fetchedCursor.confirmed).toBe(149);
+    expect(result.cursorStateAfter.ingestionCursor.confirmed).toBe(149);
+    expect(result.cursorStateAfter.stateCursor.confirmed).toBe(149);
   });
 
   test("scheduled no-ops when LOOP_A_SLOT_SOURCE_ENABLED is not 1", async () => {

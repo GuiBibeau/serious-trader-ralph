@@ -10,6 +10,7 @@ const DEFAULT_MAX_CONCURRENCY = 4;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_BACKOFF_MS = 200;
 const DEFAULT_MAX_SLOTS_PER_TICK = 256;
+const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
 
 type BlockFetchStatus = "fetched" | "missing" | "failed";
 
@@ -39,6 +40,7 @@ export type BlockFetcherConfig = {
   maxRetries: number;
   baseBackoffMs: number;
   maxSlotsPerTick: number;
+  requestTimeoutMs: number;
 };
 
 export type BlockFetcherTickResult = {
@@ -116,6 +118,12 @@ export function resolveBlockFetcherConfig(env: Env): BlockFetcherConfig {
       DEFAULT_MAX_SLOTS_PER_TICK,
       1,
       10_000,
+    ),
+    requestTimeoutMs: parseInteger(
+      env.LOOP_A_BLOCK_FETCH_REQUEST_TIMEOUT_MS,
+      DEFAULT_REQUEST_TIMEOUT_MS,
+      250,
+      120_000,
     ),
   };
 }
@@ -218,12 +226,32 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`rpc-timeout: ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function runTargetWithRetry(
   rpc: Pick<SolanaRpc, "getBlock">,
   target: BlockFetchTarget,
   options: {
     maxRetries: number;
     baseBackoffMs: number;
+    requestTimeoutMs: number;
   },
 ): Promise<{
   status: BlockFetchStatus;
@@ -235,9 +263,12 @@ async function runTargetWithRetry(
     attempt += 1;
 
     try {
-      const block = await rpc.getBlock(target.slot, {
-        commitment: target.commitment,
-      });
+      const block = await withTimeout(
+        rpc.getBlock(target.slot, {
+          commitment: target.commitment,
+        }),
+        options.requestTimeoutMs,
+      );
       if (block === null) {
         return { status: "missing", reason: "rpc-null" };
       }
@@ -401,6 +432,7 @@ export async function runLoopABlockFetcherTick(
       await runTargetWithRetry(rpc, target, {
         maxRetries: config.maxRetries,
         baseBackoffMs: config.baseBackoffMs,
+        requestTimeoutMs: config.requestTimeoutMs,
       }),
     {
       onFetchedBlock: options?.onFetchedBlock,

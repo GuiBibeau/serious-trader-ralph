@@ -70,6 +70,22 @@ function createEnv(): Env {
 }
 
 describe("worker loop A coordinator durable object", () => {
+  test("queues an alarm tick via trigger endpoint", async () => {
+    const mock = createMockDoState();
+    const coordinator = new LoopACoordinator(mock.state, createEnv(), {
+      now: () => "2026-02-21T01:00:00.000Z",
+    });
+
+    const response = await coordinator.fetch(
+      new Request("https://internal/loop-a/trigger", { method: "POST" }),
+    );
+
+    expect(response.status).toBe(202);
+    const body = await response.json();
+    expect(body).toEqual({ ok: true, queued: true });
+    expect(mock.getAlarm()).not.toBeNull();
+  });
+
   test("persists tick state and schedules alarm when backlog exists", async () => {
     const mock = createMockDoState();
     const cursorState = createCursorState(100);

@@ -6,6 +6,8 @@ import type { LoopACursorHeads, LoopACursorState } from "./types";
 
 const COORDINATOR_STORAGE_KEY = "loop_a:coordinator_state:v1";
 export const LOOP_A_COORDINATOR_NAME = "loop-a-coordinator-v1";
+const BACKLOG_ALARM_DELAY_MS = 30_000;
+const ERROR_RETRY_ALARM_DELAY_MS = 60_000;
 
 export type LoopACoordinatorStorageState = {
   schemaVersion: "v1";
@@ -82,7 +84,7 @@ async function setBacklogAlarm(
   backlog: boolean,
 ): Promise<void> {
   if (backlog) {
-    await state.storage.setAlarm(Date.now() + 15_000);
+    await state.storage.setAlarm(Date.now() + BACKLOG_ALARM_DELAY_MS);
     return;
   }
   await state.storage.deleteAlarm();
@@ -202,7 +204,9 @@ export class LoopACoordinator {
         cursorState: prevState.cursorState,
       };
       await this.persistState(nextState);
-      await this.state.storage.setAlarm(Date.now() + 60_000);
+      await this.state.storage.setAlarm(
+        Date.now() + ERROR_RETRY_ALARM_DELAY_MS,
+      );
       try {
         await recordLoopAHealthTick(this.env, {
           ok: false,
@@ -236,6 +240,18 @@ export class LoopACoordinator {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (
+      request.method === "POST" &&
+      (url.pathname === "/loop-a/trigger" ||
+        url.pathname === "/internal/loop-a/trigger")
+    ) {
+      await this.state.storage.setAlarm(Date.now());
+      return new Response(JSON.stringify({ ok: true, queued: true }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
     if (
       request.method === "POST" &&
       (url.pathname === "/loop-a/tick" ||

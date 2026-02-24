@@ -504,6 +504,7 @@ function computeAcceptanceProb(input: {
   prior: number;
   feedback: FeedbackState;
 }): number {
+  const prior = normalizePrior(input.prior);
   const pair = input.feedback.byPair[input.pairId] ?? null;
   const pairYes = pair?.yes ?? 0;
   const pairNo = pair?.no ?? 0;
@@ -512,20 +513,20 @@ function computeAcceptanceProb(input: {
   const globalNo = input.feedback.no;
   const globalDecisions = globalYes + globalNo;
 
-  const pairPosterior = (pairYes + 1) / (pairDecisions + 2);
-  const globalPosterior = (globalYes + 2) / (globalDecisions + 4);
+  // Keep the model deterministic and monotonic: positive feedback should never
+  // pull acceptance below the prior, and negative feedback should decrease it.
+  const pairSignal =
+    pairDecisions > 0 ? (pairYes - pairNo) / (pairDecisions + 2) : 0;
+  const globalSignal =
+    globalDecisions > 0 ? (globalYes - globalNo) / (globalDecisions + 4) : 0;
 
-  const pairWeight = pairDecisions > 0 ? 0.35 : 0.15;
-  const globalWeight = globalDecisions > 0 ? 0.2 : 0.1;
-  const priorWeight = 1 - pairWeight - globalWeight;
+  const pairStrength = Math.min(0.22, 0.06 + pairDecisions * 0.03);
+  const globalStrength = Math.min(0.1, 0.03 + globalDecisions * 0.01);
 
-  return round(
-    clamp01(
-      normalizePrior(input.prior) * priorWeight +
-        pairPosterior * pairWeight +
-        globalPosterior * globalWeight,
-    ),
-  );
+  const adjusted =
+    prior + pairSignal * pairStrength + globalSignal * globalStrength;
+
+  return round(clamp01(adjusted));
 }
 
 function applyFeedbackDecision(input: {

@@ -565,6 +565,75 @@ describe("worker loop C recommender durable object", () => {
     expect(noProb).toBeLessThan(yesProb);
   });
 
+  test("yes feedback is monotonic for high-prior candidates", async () => {
+    const { env, kvStore } = createEnv();
+    setScores(kvStore, 18.5);
+
+    const mock = createMockDoState();
+    const recommender = new Recommender(mock.state, env, {
+      now: () => "2026-02-21T20:40:00.000Z",
+    });
+
+    const baselineResponse = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-feedback-high-prior",
+          wallet: "wallet-feedback-high-prior",
+          observedAt: "2026-02-21T20:40:00.000Z",
+          limit: 1,
+        }),
+      }),
+    );
+    const baselinePayload = (await baselineResponse.json()) as {
+      ok: boolean;
+      view: {
+        recommendations: Array<{ pairId: string; acceptProb: number }>;
+      };
+    };
+    expect(baselinePayload.ok).toBe(true);
+    const pairId = baselinePayload.view.recommendations[0]?.pairId ?? "";
+    const baselineProb =
+      baselinePayload.view.recommendations[0]?.acceptProb ?? 0;
+    expect(pairId.length).toBeGreaterThan(0);
+
+    const yesFeedback = await recommender.fetch(
+      new Request("https://internal/loop-c/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          pairId,
+          decision: "yes",
+          decidedAt: "2026-02-21T20:40:30.000Z",
+        }),
+      }),
+    );
+    expect(yesFeedback.status).toBe(200);
+
+    const yesResponse = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-feedback-high-prior",
+          wallet: "wallet-feedback-high-prior",
+          observedAt: "2026-02-21T20:41:00.000Z",
+          limit: 1,
+        }),
+      }),
+    );
+    const yesPayload = (await yesResponse.json()) as {
+      ok: boolean;
+      view: {
+        recommendations: Array<{ acceptProb: number }>;
+      };
+    };
+    const yesProb = yesPayload.view.recommendations[0]?.acceptProb ?? 0;
+    expect(yesPayload.ok).toBe(true);
+    expect(yesProb).toBeGreaterThanOrEqual(baselineProb);
+  });
+
   test("risk/stability guardrails suppress stale, low-liquidity, and excluded protocol candidates", async () => {
     const { env, kvStore } = createEnv({
       LOOP_C_MIN_LIQUIDITY_SCORE: "3.5",

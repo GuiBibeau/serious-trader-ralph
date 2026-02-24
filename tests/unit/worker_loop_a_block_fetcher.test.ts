@@ -83,6 +83,7 @@ describe("worker loop A block fetcher", () => {
     expect(config.commitments).toEqual(["confirmed", "finalized"]);
     expect(config.maxConcurrency).toBe(4);
     expect(config.maxRetries).toBe(3);
+    expect(config.requestTimeoutMs).toBe(12000);
   });
 
   test("builds slot targets from cursor delta and max slot cap", () => {
@@ -98,6 +99,32 @@ describe("worker loop A block fetcher", () => {
       { slot: 12, commitment: "processed" },
       { slot: 13, commitment: "processed" },
       { slot: 14, commitment: "processed" },
+    ]);
+  });
+
+  test("continues from fetched progress across capped ticks", () => {
+    const firstTick = buildBlockFetchTargets(
+      cursor(100, 100, 100),
+      cursor(200, 200, 200),
+      ["confirmed"],
+      3,
+    );
+    expect(firstTick).toEqual([
+      { slot: 101, commitment: "confirmed" },
+      { slot: 102, commitment: "confirmed" },
+      { slot: 103, commitment: "confirmed" },
+    ]);
+
+    const secondTick = buildBlockFetchTargets(
+      cursor(100, 103, 100),
+      cursor(200, 200, 200),
+      ["confirmed"],
+      3,
+    );
+    expect(secondTick).toEqual([
+      { slot: 104, commitment: "confirmed" },
+      { slot: 105, commitment: "confirmed" },
+      { slot: 106, commitment: "confirmed" },
     ]);
   });
 
@@ -175,6 +202,7 @@ describe("worker loop A block fetcher", () => {
           maxRetries: 2,
           baseBackoffMs: 0,
           maxSlotsPerTick: 100,
+          requestTimeoutMs: 1000,
         },
         rpc,
       },
@@ -215,6 +243,7 @@ describe("worker loop A block fetcher", () => {
           maxRetries: 1,
           baseBackoffMs: 0,
           maxSlotsPerTick: 100,
+          requestTimeoutMs: 1000,
         },
         rpc,
       },

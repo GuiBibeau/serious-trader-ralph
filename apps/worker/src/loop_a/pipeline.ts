@@ -18,7 +18,12 @@ import {
 import { decodeProtocolEventsFromBlock } from "./decoder_registry";
 import { resolveMarkCommitment, runLoopAMarkEngineTick } from "./mark_engine";
 import { runLoopASlotSourceTick } from "./slot_source";
-import type { LoopACursorState, SlotCommitment } from "./types";
+import {
+  LOOP_A_SCHEMA_VERSION,
+  type LoopACursor,
+  type LoopACursorState,
+  type SlotCommitment,
+} from "./types";
 
 export type LoopAPipelineTickResult = {
   cursorState: LoopACursorState;
@@ -56,6 +61,30 @@ function resolveActiveCommitments(input: {
   // state commitment. Including additional fetch-only commitments here causes
   // perpetual backlog and coordinator alarm thrash.
   return [input.stateCommitment];
+}
+
+export function buildFetchWindowFromCursorState(
+  cursorState: LoopACursorState,
+): {
+  cursorBefore: LoopACursor;
+  cursorAfter: LoopACursor;
+} {
+  return {
+    cursorBefore: {
+      schemaVersion: LOOP_A_SCHEMA_VERSION,
+      processed: cursorState.fetchedCursor.processed,
+      confirmed: cursorState.fetchedCursor.confirmed,
+      finalized: cursorState.fetchedCursor.finalized,
+      updatedAt: cursorState.updatedAt,
+    },
+    cursorAfter: {
+      schemaVersion: LOOP_A_SCHEMA_VERSION,
+      processed: cursorState.headCursor.processed,
+      confirmed: cursorState.headCursor.confirmed,
+      finalized: cursorState.headCursor.finalized,
+      updatedAt: cursorState.updatedAt,
+    },
+  };
 }
 
 export async function runLoopATickPipeline(
@@ -110,11 +139,12 @@ export async function runLoopATickPipeline(
   let cursorState = result.cursorStateAfter;
 
   if (blockFetchEnabled) {
+    const fetchWindow = buildFetchWindowFromCursorState(cursorState);
     const blockFetchResult = await runLoopABlockFetcherTick(
       env,
       {
-        cursorBefore: result.cursorBefore,
-        cursorAfter: result.cursorAfter,
+        cursorBefore: fetchWindow.cursorBefore,
+        cursorAfter: fetchWindow.cursorAfter,
       },
       {
         onFetchedBlock: decoderRegistry

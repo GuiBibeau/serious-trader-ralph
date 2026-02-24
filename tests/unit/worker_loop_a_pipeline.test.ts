@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { hasLoopABacklog } from "../../apps/worker/src/loop_a/pipeline";
+import {
+  buildFetchWindowFromCursorState,
+  hasLoopABacklog,
+} from "../../apps/worker/src/loop_a/pipeline";
 import type { LoopACursorState } from "../../apps/worker/src/loop_a/types";
 
 function buildCursorState(): LoopACursorState {
@@ -40,5 +43,25 @@ describe("worker loop A pipeline backlog checks", () => {
     expect(hasLoopABacklog(cursorState, ["confirmed"])).toBe(false);
     expect(hasLoopABacklog(cursorState, ["finalized"])).toBe(true);
     expect(hasLoopABacklog(cursorState, ["confirmed", "finalized"])).toBe(true);
+  });
+
+  test("builds block fetch window from fetched cursor to head cursor", () => {
+    const cursorState = buildCursorState();
+    const { cursorBefore, cursorAfter } =
+      buildFetchWindowFromCursorState(cursorState);
+
+    expect(cursorBefore).toMatchObject({
+      processed: cursorState.fetchedCursor.processed,
+      confirmed: cursorState.fetchedCursor.confirmed,
+      finalized: cursorState.fetchedCursor.finalized,
+    });
+    expect(cursorAfter).toMatchObject({
+      processed: cursorState.headCursor.processed,
+      confirmed: cursorState.headCursor.confirmed,
+      finalized: cursorState.headCursor.finalized,
+    });
+    expect(cursorAfter.confirmed).toBeGreaterThanOrEqual(
+      cursorBefore.confirmed,
+    );
   });
 });

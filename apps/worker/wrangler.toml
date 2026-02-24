@@ -34,11 +34,12 @@ X402_MACRO_OIL_ANALYTICS_PRICE_USD = "0.01"
 LOOP_A_SLOT_SOURCE_ENABLED = "0"
 LOOP_A_SLOT_SOURCE_BACKFILL_COMMITMENTS = "confirmed,finalized"
 LOOP_A_BLOCK_FETCH_ENABLED = "0"
-LOOP_A_BLOCK_FETCH_COMMITMENTS = "confirmed,finalized"
-LOOP_A_BLOCK_FETCH_MAX_CONCURRENCY = "4"
-LOOP_A_BLOCK_FETCH_MAX_RETRIES = "3"
+LOOP_A_BLOCK_FETCH_COMMITMENTS = "confirmed"
+LOOP_A_BLOCK_FETCH_MAX_CONCURRENCY = "2"
+LOOP_A_BLOCK_FETCH_MAX_RETRIES = "1"
 LOOP_A_BLOCK_FETCH_BASE_BACKOFF_MS = "200"
-LOOP_A_BLOCK_FETCH_MAX_SLOTS_PER_TICK = "256"
+LOOP_A_BLOCK_FETCH_MAX_SLOTS_PER_TICK = "96"
+LOOP_A_BLOCK_FETCH_REQUEST_TIMEOUT_MS = "20000"
 LOOP_A_DECODER_ENABLED = "0"
 LOOP_A_STATE_STORE_ENABLED = "0"
 LOOP_A_STATE_COMMITMENT = "confirmed"
@@ -100,6 +101,22 @@ crons = ["*/1 * * * *"]
 [env.staging]
 name = "ralph-edge-staging"
 
+[[env.staging.durable_objects.bindings]]
+name = "LOOP_A_COORDINATOR_DO"
+class_name = "LoopACoordinator"
+
+[[env.staging.durable_objects.bindings]]
+name = "LOOP_B_MINUTE_ACCUMULATOR_DO"
+class_name = "MinuteAccumulator"
+
+[[env.staging.durable_objects.bindings]]
+name = "LOOP_C_RECOMMENDER_DO"
+class_name = "Recommender"
+
+[[env.staging.durable_objects.bindings]]
+name = "EXECUTION_COORDINATOR_DO"
+class_name = "ExecutionCoordinator"
+
 [env.staging.vars]
 ALLOWED_ORIGINS = "*"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
@@ -130,11 +147,12 @@ X402_MACRO_OIL_ANALYTICS_PRICE_USD = "0.01"
 LOOP_A_SLOT_SOURCE_ENABLED = "0"
 LOOP_A_SLOT_SOURCE_BACKFILL_COMMITMENTS = "confirmed,finalized"
 LOOP_A_BLOCK_FETCH_ENABLED = "0"
-LOOP_A_BLOCK_FETCH_COMMITMENTS = "confirmed,finalized"
-LOOP_A_BLOCK_FETCH_MAX_CONCURRENCY = "4"
-LOOP_A_BLOCK_FETCH_MAX_RETRIES = "3"
+LOOP_A_BLOCK_FETCH_COMMITMENTS = "confirmed"
+LOOP_A_BLOCK_FETCH_MAX_CONCURRENCY = "2"
+LOOP_A_BLOCK_FETCH_MAX_RETRIES = "1"
 LOOP_A_BLOCK_FETCH_BASE_BACKOFF_MS = "200"
-LOOP_A_BLOCK_FETCH_MAX_SLOTS_PER_TICK = "256"
+LOOP_A_BLOCK_FETCH_MAX_SLOTS_PER_TICK = "96"
+LOOP_A_BLOCK_FETCH_REQUEST_TIMEOUT_MS = "20000"
 LOOP_A_DECODER_ENABLED = "0"
 LOOP_A_STATE_STORE_ENABLED = "0"
 LOOP_A_STATE_COMMITMENT = "confirmed"
@@ -180,6 +198,22 @@ crons = ["*/1 * * * *"]
 [env.production]
 name = "ralph-edge"
 
+[[env.production.durable_objects.bindings]]
+name = "LOOP_A_COORDINATOR_DO"
+class_name = "LoopACoordinator"
+
+[[env.production.durable_objects.bindings]]
+name = "LOOP_B_MINUTE_ACCUMULATOR_DO"
+class_name = "MinuteAccumulator"
+
+[[env.production.durable_objects.bindings]]
+name = "LOOP_C_RECOMMENDER_DO"
+class_name = "Recommender"
+
+[[env.production.durable_objects.bindings]]
+name = "EXECUTION_COORDINATOR_DO"
+class_name = "ExecutionCoordinator"
+
 [env.production.vars]
 ALLOWED_ORIGINS = "*"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
@@ -210,11 +244,12 @@ X402_MACRO_OIL_ANALYTICS_PRICE_USD = "0.01"
 LOOP_A_SLOT_SOURCE_ENABLED = "0"
 LOOP_A_SLOT_SOURCE_BACKFILL_COMMITMENTS = "confirmed,finalized"
 LOOP_A_BLOCK_FETCH_ENABLED = "0"
-LOOP_A_BLOCK_FETCH_COMMITMENTS = "confirmed,finalized"
-LOOP_A_BLOCK_FETCH_MAX_CONCURRENCY = "4"
-LOOP_A_BLOCK_FETCH_MAX_RETRIES = "3"
+LOOP_A_BLOCK_FETCH_COMMITMENTS = "confirmed"
+LOOP_A_BLOCK_FETCH_MAX_CONCURRENCY = "2"
+LOOP_A_BLOCK_FETCH_MAX_RETRIES = "1"
 LOOP_A_BLOCK_FETCH_BASE_BACKOFF_MS = "200"
-LOOP_A_BLOCK_FETCH_MAX_SLOTS_PER_TICK = "256"
+LOOP_A_BLOCK_FETCH_MAX_SLOTS_PER_TICK = "96"
+LOOP_A_BLOCK_FETCH_REQUEST_TIMEOUT_MS = "20000"
 LOOP_A_DECODER_ENABLED = "0"
 LOOP_A_STATE_STORE_ENABLED = "0"
 LOOP_A_STATE_COMMITMENT = "confirmed"
