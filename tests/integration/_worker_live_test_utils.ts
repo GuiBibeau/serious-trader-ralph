@@ -225,6 +225,18 @@ export function createWorkerLiveEnv(options?: {
       "X402_MACRO_OIL_ANALYTICS_PRICE_USD",
       "0.01",
     ),
+    X402_PERPS_FUNDING_SURFACE_PRICE_USD: readLiveEnv(
+      "X402_PERPS_FUNDING_SURFACE_PRICE_USD",
+      "0.01",
+    ),
+    X402_PERPS_OPEN_INTEREST_SURFACE_PRICE_USD: readLiveEnv(
+      "X402_PERPS_OPEN_INTEREST_SURFACE_PRICE_USD",
+      "0.01",
+    ),
+    X402_PERPS_VENUE_SCORE_PRICE_USD: readLiveEnv(
+      "X402_PERPS_VENUE_SCORE_PRICE_USD",
+      "0.01",
+    ),
     RPC_ENDPOINT: readLiveEnv("RPC_ENDPOINT", rpcEndpoint),
     BALANCE_RPC_ENDPOINT: rpcEndpoint,
     JUPITER_BASE_URL: readLiveEnv(

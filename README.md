@@ -81,6 +81,9 @@ All are `POST` under `/api/x402/read/*`:
 - `macro_etf_flows`
 - `macro_stablecoin_health`
 - `macro_oil_analytics`
+- `perps_funding_surface`
+- `perps_open_interest_surface`
+- `perps_venue_score`
 
 ### Supported Trading Pairs (Terminal + Trade APIs)
 
