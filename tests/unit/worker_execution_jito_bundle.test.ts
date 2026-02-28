@@ -3,6 +3,14 @@ import { normalizePolicy } from "../../apps/worker/src/policy";
 import type { Env } from "../../apps/worker/src/types";
 
 const signTransactionWithPrivyByIdMock = mock(async () => "signed-base64");
+const createPrivySolanaWalletMock = mock(async () => ({
+  walletId: "mock-wallet-id",
+  address: "mock-wallet-address",
+}));
+const getPrivyWalletAddressByIdMock = mock(
+  async () => "mock-wallet-address-by-id",
+);
+const getPrivyWalletAddressMock = mock(async () => "mock-wallet-address");
 const swapWithRetryMock = mock(async () => ({
   swap: {
     swapTransaction: "unsigned-base64",
@@ -18,6 +26,9 @@ const swapWithRetryMock = mock(async () => ({
 }));
 
 mock.module("../../apps/worker/src/privy", () => ({
+  createPrivySolanaWallet: createPrivySolanaWalletMock,
+  getPrivyWalletAddress: getPrivyWalletAddressMock,
+  getPrivyWalletAddressById: getPrivyWalletAddressByIdMock,
   signTransactionWithPrivyById: signTransactionWithPrivyByIdMock,
 }));
 mock.module("../../apps/worker/src/swap", () => ({
@@ -32,6 +43,9 @@ const ORIGINAL_FETCH = globalThis.fetch;
 
 describe("worker jito bundle execution adapter", () => {
   beforeEach(() => {
+    createPrivySolanaWalletMock.mockClear();
+    getPrivyWalletAddressByIdMock.mockClear();
+    getPrivyWalletAddressMock.mockClear();
     signTransactionWithPrivyByIdMock.mockClear();
     swapWithRetryMock.mockClear();
     globalThis.fetch = ORIGINAL_FETCH;
