@@ -194,6 +194,27 @@ export class SolanaRpc {
     return result.value?.[0] || null;
   }
 
+  async getTransactionParsed(
+    signature: string,
+    opts?: {
+      commitment?: "processed" | "confirmed" | "finalized";
+      maxSupportedTransactionVersion?: number;
+    },
+  ): Promise<Record<string, unknown> | null> {
+    return await this.request<Record<string, unknown> | null>(
+      "getTransaction",
+      [
+        signature,
+        {
+          encoding: "jsonParsed",
+          commitment: opts?.commitment ?? "confirmed",
+          maxSupportedTransactionVersion:
+            opts?.maxSupportedTransactionVersion ?? 0,
+        },
+      ],
+    );
+  }
+
   async confirmSignature(
     signature: string,
     opts?: {
