@@ -1,4 +1,7 @@
-import { SUPPORTED_PAIRS, TOKEN_CONFIGS } from "../terminal/components/trade-pairs";
+import {
+  SUPPORTED_PAIRS,
+  TOKEN_CONFIGS,
+} from "../terminal/components/trade-pairs";
 
 export type FieldSpec = {
   name: string;

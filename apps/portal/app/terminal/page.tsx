@@ -28,10 +28,7 @@ import {
   type MarketState,
   useMarketFeed,
 } from "./components/sol-market-feed";
-import {
-  createTradeIntent,
-  type TradeIntent,
-} from "./components/trade-intent";
+import { createTradeIntent, type TradeIntent } from "./components/trade-intent";
 import {
   DEFAULT_PAIR_ID,
   getPairConfig,
@@ -61,17 +58,14 @@ const MarketChart = dynamic<{
   className?: string;
   market: MarketState;
   pairLabel: string;
-}>(
-  () => import("./components/market-chart").then((mod) => mod.MarketChart),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex h-full items-center justify-center">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-500/30 border-t-emerald-500" />
-      </div>
-    ),
-  },
-);
+}>(() => import("./components/market-chart").then((mod) => mod.MarketChart), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-500/30 border-t-emerald-500" />
+    </div>
+  ),
+});
 
 function toNumericString(value: unknown): string | null {
   if (typeof value === "string" && value.trim() !== "") return value;

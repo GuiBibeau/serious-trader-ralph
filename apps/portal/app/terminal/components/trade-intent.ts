@@ -45,7 +45,8 @@ export function createTradeIntent(
   return {
     pairId: pair.id,
     source,
-    reason: opts?.reason ?? (buy ? `Buy ${outputSymbol}` : `Sell ${inputSymbol}`),
+    reason:
+      opts?.reason ?? (buy ? `Buy ${outputSymbol}` : `Sell ${inputSymbol}`),
     direction,
     inputMint: inputToken.mint,
     outputMint: outputToken.mint,
