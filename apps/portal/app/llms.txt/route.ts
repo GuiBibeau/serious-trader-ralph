@@ -13,6 +13,8 @@ export function GET(request: Request): Response {
     `API catalog TXT: ${origin}/api/endpoints.txt`,
     "",
     "Catalog scope: public x402 read endpoints only.",
+    "Catalog includes market snapshots/quotes, loop views, macro analytics, and cross-venue perps intelligence.",
+    "Perps endpoints: /api/x402/read/perps_funding_surface, /api/x402/read/perps_open_interest_surface, /api/x402/read/perps_venue_score.",
     "Supported trading tokens/pairs are published in the catalog under supportedTrading.",
     "Authenticated account/trading routes are not listed here.",
     "",
