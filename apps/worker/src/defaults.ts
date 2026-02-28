@@ -7,6 +7,14 @@ export type SupportedTradingToken = {
   decimals: number;
 };
 
+export type SupportedTradingPair = {
+  id: string;
+  baseSymbol: string;
+  quoteSymbol: string;
+  baseMint: string;
+  quoteMint: string;
+};
+
 export const SUPPORTED_TRADING_TOKENS: SupportedTradingToken[] = [
   {
     symbol: "SOL",
@@ -84,6 +92,57 @@ export const SUPPORTED_TRADING_TOKENS: SupportedTradingToken[] = [
     decimals: 6,
   },
 ];
+
+const TRADING_TOKEN_BY_SYMBOL: Record<string, SupportedTradingToken> =
+  SUPPORTED_TRADING_TOKENS.reduce<Record<string, SupportedTradingToken>>(
+    (acc, token) => {
+      acc[token.symbol] = token;
+      return acc;
+    },
+    {},
+  );
+
+const SUPPORTED_TRADING_PAIR_SYMBOLS: Array<{
+  id: string;
+  baseSymbol: string;
+  quoteSymbol: string;
+}> = [
+  { id: "SOL/USDC", baseSymbol: "SOL", quoteSymbol: "USDC" },
+  { id: "SOL/USDT", baseSymbol: "SOL", quoteSymbol: "USDT" },
+  { id: "USDC/USDT", baseSymbol: "USDC", quoteSymbol: "USDT" },
+  { id: "USDC/PYUSD", baseSymbol: "USDC", quoteSymbol: "PYUSD" },
+  { id: "USDC/USD1", baseSymbol: "USDC", quoteSymbol: "USD1" },
+  { id: "USDC/USDG", baseSymbol: "USDC", quoteSymbol: "USDG" },
+  { id: "SOL/JITOSOL", baseSymbol: "SOL", quoteSymbol: "JITOSOL" },
+  { id: "SOL/MSOL", baseSymbol: "SOL", quoteSymbol: "MSOL" },
+  { id: "SOL/JUPSOL", baseSymbol: "SOL", quoteSymbol: "JUPSOL" },
+  { id: "RAY/USDC", baseSymbol: "RAY", quoteSymbol: "USDC" },
+  { id: "WIF/USDC", baseSymbol: "WIF", quoteSymbol: "USDC" },
+  { id: "JUP/USDC", baseSymbol: "JUP", quoteSymbol: "USDC" },
+  { id: "BONK/USDC", baseSymbol: "BONK", quoteSymbol: "USDC" },
+  { id: "JTO/USDC", baseSymbol: "JTO", quoteSymbol: "USDC" },
+  { id: "PYTH/USDC", baseSymbol: "PYTH", quoteSymbol: "USDC" },
+];
+
+export const SUPPORTED_TRADING_PAIRS: SupportedTradingPair[] =
+  SUPPORTED_TRADING_PAIR_SYMBOLS.map((pair) => {
+    const base = TRADING_TOKEN_BY_SYMBOL[pair.baseSymbol];
+    const quote = TRADING_TOKEN_BY_SYMBOL[pair.quoteSymbol];
+    if (!base || !quote) {
+      throw new Error(`invalid-supported-trading-pair:${pair.id}`);
+    }
+    return {
+      id: pair.id,
+      baseSymbol: pair.baseSymbol,
+      quoteSymbol: pair.quoteSymbol,
+      baseMint: base.mint,
+      quoteMint: quote.mint,
+    };
+  });
+
+export const SUPPORTED_TRADING_PAIR_IDS = SUPPORTED_TRADING_PAIRS.map(
+  (pair) => pair.id,
+);
 
 export const SUPPORTED_TRADING_MINTS = SUPPORTED_TRADING_TOKENS.map(
   (token) => token.mint,

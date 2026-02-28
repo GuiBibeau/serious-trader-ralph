@@ -3,6 +3,7 @@ import {
   X402_ENDPOINTS,
   X402_OVERVIEW,
   X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
+  X402_SUPPORTED_TRADING,
   type X402EndpointSpec,
 } from "../_catalog";
 
@@ -45,6 +46,9 @@ export function GET(request: Request): Response {
     "response: payment-required, payment-response",
     "",
     `example 402 response: ${JSON.stringify(X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE)}`,
+    "",
+    `supported trading tokens: ${X402_SUPPORTED_TRADING.tokens.map((token) => token.symbol).join(", ")}`,
+    `supported trading pairs: ${X402_SUPPORTED_TRADING.pairs.map((pair) => pair.id).join(", ")}`,
     "",
     "discovery:",
     `html: ${origin}/api`,

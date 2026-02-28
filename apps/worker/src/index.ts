@@ -4,6 +4,8 @@ import { getUserSubscription, toSubscriptionView } from "./billing";
 import {
   SOL_MINT,
   SUPPORTED_TRADING_MINTS,
+  SUPPORTED_TRADING_PAIR_IDS,
+  SUPPORTED_TRADING_PAIRS,
   SUPPORTED_WALLET_TOKEN_BALANCES,
   USDC_MINT,
 } from "./defaults";
@@ -85,6 +87,12 @@ const X402_READ_JUPITER_BASE_URL = "https://lite-api.jup.ag";
 const X402_SOL_MINT = SOL_MINT;
 const MAX_EXPERIENCE_EVENTS = 200;
 const SUPPORTED_TRADING_MINT_SET = new Set(SUPPORTED_TRADING_MINTS);
+const SUPPORTED_TRADING_PAIR_MINT_SET = new Set(
+  SUPPORTED_TRADING_PAIRS.flatMap((pair) => [
+    `${pair.baseMint}:${pair.quoteMint}`,
+    `${pair.quoteMint}:${pair.baseMint}`,
+  ]),
+);
 
 type ExperienceEventName =
   | "onboarding_started"
@@ -111,6 +119,19 @@ export {
   MinuteAccumulator,
   Recommender,
 };
+
+function isSupportedTradingPairByMint(inputMint: string, outputMint: string) {
+  return SUPPORTED_TRADING_PAIR_MINT_SET.has(`${inputMint}:${outputMint}`);
+}
+
+function unsupportedTradePairPayload() {
+  return {
+    ok: false,
+    error: "unsupported-trade-pair",
+    supportedMints: SUPPORTED_TRADING_MINTS,
+    supportedPairs: SUPPORTED_TRADING_PAIR_IDS,
+  } as const;
+}
 
 function resolveX402ReadRpcEndpoint(env: Env): string {
   const balanceRpc = String(env.BALANCE_RPC_ENDPOINT ?? "").trim();
@@ -424,6 +445,13 @@ export default {
             env,
           );
         }
+        if (
+          !SUPPORTED_TRADING_MINT_SET.has(inputMint) ||
+          !SUPPORTED_TRADING_MINT_SET.has(outputMint) ||
+          !isSupportedTradingPairByMint(inputMint, outputMint)
+        ) {
+          return withCors(json(unsupportedTradePairPayload(), { status: 400 }), env);
+        }
 
         // Public x402 read routes always serve mainnet market data.
         const jupiter = new JupiterClient(
@@ -437,7 +465,12 @@ export default {
           slippageBps,
           swapMode: "ExactIn",
         });
-        const base = json({ ok: true, quote });
+        const base = json({
+          ok: true,
+          quote,
+          supportedMints: SUPPORTED_TRADING_MINTS,
+          supportedPairs: SUPPORTED_TRADING_PAIR_IDS,
+        });
         const settled = withX402SettlementHeader(
           base,
           request,
@@ -507,6 +540,20 @@ export default {
             results.push({ ok: false, index, error: "invalid-quote-request" });
             continue;
           }
+          if (
+            !SUPPORTED_TRADING_MINT_SET.has(inputMint) ||
+            !SUPPORTED_TRADING_MINT_SET.has(outputMint) ||
+            !isSupportedTradingPairByMint(inputMint, outputMint)
+          ) {
+            results.push({
+              ok: false,
+              index,
+              error: "unsupported-trade-pair",
+              supportedMints: SUPPORTED_TRADING_MINTS,
+              supportedPairs: SUPPORTED_TRADING_PAIR_IDS,
+            });
+            continue;
+          }
 
           try {
             const quote = await jupiter.quote({
@@ -548,6 +595,8 @@ export default {
           successCount,
           errorCount: requests.length - successCount,
           results,
+          supportedMints: SUPPORTED_TRADING_MINTS,
+          supportedPairs: SUPPORTED_TRADING_PAIR_IDS,
         });
         const settled = withX402SettlementHeader(
           base,
@@ -584,6 +633,11 @@ export default {
         if (paymentRequired) return withCors(paymentRequired, env);
 
         const payload = await readPayload(request);
+        const baseMint = String(payload.baseMint ?? "").trim();
+        const quoteMint = String(payload.quoteMint ?? "").trim();
+        if (baseMint && quoteMint && !isSupportedTradingPairByMint(baseMint, quoteMint)) {
+          return withCors(json(unsupportedTradePairPayload(), { status: 400 }), env);
+        }
         let ohlcv: Awaited<ReturnType<typeof fetchHistoricalOhlcvRuntime>>;
         try {
           ohlcv = await fetchHistoricalOhlcvRuntime(env, payload, {
@@ -613,7 +667,12 @@ export default {
           );
         }
 
-        const base = json({ ok: true, ohlcv });
+        const base = json({
+          ok: true,
+          ohlcv,
+          supportedMints: SUPPORTED_TRADING_MINTS,
+          supportedPairs: SUPPORTED_TRADING_PAIR_IDS,
+        });
         const settled = withX402SettlementHeader(
           base,
           request,
@@ -649,6 +708,11 @@ export default {
         if (paymentRequired) return withCors(paymentRequired, env);
 
         const payload = await readPayload(request);
+        const baseMint = String(payload.baseMint ?? "").trim();
+        const quoteMint = String(payload.quoteMint ?? "").trim();
+        if (baseMint && quoteMint && !isSupportedTradingPairByMint(baseMint, quoteMint)) {
+          return withCors(json(unsupportedTradePairPayload(), { status: 400 }), env);
+        }
         let ohlcv: Awaited<ReturnType<typeof fetchHistoricalOhlcvRuntime>>;
         try {
           ohlcv = await fetchHistoricalOhlcvRuntime(env, payload, {
@@ -682,7 +746,13 @@ export default {
         }
 
         const indicators = computeMarketIndicators(ohlcv.bars);
-        const base = json({ ok: true, ohlcv, indicators });
+        const base = json({
+          ok: true,
+          ohlcv,
+          indicators,
+          supportedMints: SUPPORTED_TRADING_MINTS,
+          supportedPairs: SUPPORTED_TRADING_PAIR_IDS,
+        });
         const settled = withX402SettlementHeader(
           base,
           request,
@@ -1216,17 +1286,11 @@ export default {
 
         if (
           !SUPPORTED_TRADING_MINT_SET.has(inputMint) ||
-          !SUPPORTED_TRADING_MINT_SET.has(outputMint)
+          !SUPPORTED_TRADING_MINT_SET.has(outputMint) ||
+          !isSupportedTradingPairByMint(inputMint, outputMint)
         ) {
           return withCors(
-            json(
-              {
-                ok: false,
-                error: "unsupported-trade-pair",
-                supportedMints: SUPPORTED_TRADING_MINTS,
-              },
-              { status: 400 },
-            ),
+            json(unsupportedTradePairPayload(), { status: 400 }),
             env,
           );
         }

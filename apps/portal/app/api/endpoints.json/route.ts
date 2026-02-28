@@ -4,6 +4,7 @@ import {
   X402_ENDPOINTS,
   X402_OVERVIEW,
   X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
+  X402_SUPPORTED_TRADING,
 } from "../_catalog";
 
 const CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=600";
@@ -25,6 +26,7 @@ export function GET(request: Request): Response {
     name: "Trader Ralph x402 API Catalog",
     version: X402_CATALOG_VERSION,
     basePath: "/api/x402/read",
+    supportedTrading: X402_SUPPORTED_TRADING,
     auth: {
       type: "x402",
       requestHeader: "payment-signature",

@@ -4,6 +4,11 @@ import {
   requireX402Payment,
   withX402SettlementHeader,
 } from "../../apps/worker/src/x402";
+import {
+  createExecutionContextStub,
+  createWorkerLiveEnv,
+  SOL_MINT,
+} from "../integration/_worker_live_test_utils";
 
 function createEnv(overrides?: Partial<Env>): Env {
   return {
@@ -148,5 +153,43 @@ describe("worker x402 helpers", () => {
         "/api/x402/read/macro_signals",
       ),
     ).toThrow(/x402-route-config-missing/);
+  });
+
+  test("market_jupiter_quote rejects supported mints when pair is not in trading universe", async () => {
+    const worker = (await import("../../apps/worker/src/index")).default;
+    const env = createWorkerLiveEnv();
+    const ctx = createExecutionContextStub();
+
+    const response = await worker.fetch(
+      new Request("http://localhost/api/x402/read/market_jupiter_quote", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "payment-signature": "unit-signed-payment",
+        },
+        body: JSON.stringify({
+          inputMint: SOL_MINT,
+          outputMint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", // BONK
+          amount: "1000000",
+          slippageBps: 50,
+        }),
+      }),
+      env,
+      ctx,
+    );
+
+    expect(response.status).toBe(400);
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      error?: string;
+      supportedMints?: string[];
+      supportedPairs?: string[];
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toBe("unsupported-trade-pair");
+    expect(Array.isArray(payload.supportedMints)).toBe(true);
+    expect(Array.isArray(payload.supportedPairs)).toBe(true);
+    expect(payload.supportedPairs?.includes("SOL/USDT")).toBe(true);
+    expect(payload.supportedPairs?.includes("BONK/USDC")).toBe(true);
   });
 });

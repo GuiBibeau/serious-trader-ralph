@@ -46,7 +46,7 @@ npm run dev:local
 - `PUT /api/onboarding/complete` (auth required; validates onboarding answers and assigns level)
 - `PATCH /api/me/experience-level` (auth required; manual experience override, degen requires acknowledgement)
 - `PATCH /api/me/profile` (auth required)
-- `GET /api/wallet/balance` (auth required; account wallet SOL/USDC)
+- `GET /api/wallet/balance` (auth required; account wallet balances for tracked trading tokens)
 
 ### Billing / Access
 - `GET /api/billing/plans` (manual onboarding mode)
@@ -62,11 +62,32 @@ All `POST` under `/api/x402/read/*`:
 - `market_jupiter_quote_batch`
 - `market_ohlcv`
 - `market_indicators`
+- `solana_marks_latest`
+- `solana_scores_latest`
+- `solana_views_top`
 - `macro_signals`
 - `macro_fred_indicators`
 - `macro_etf_flows`
 - `macro_stablecoin_health`
 - `macro_oil_analytics`
+
+### Supported Trading Pairs (Terminal + Trade APIs)
+
+- `SOL/USDC`
+- `SOL/USDT`
+- `USDC/USDT`
+- `USDC/PYUSD`
+- `USDC/USD1`
+- `USDC/USDG`
+- `SOL/JITOSOL`
+- `SOL/MSOL`
+- `SOL/JUPSOL`
+- `RAY/USDC`
+- `WIF/USDC`
+- `JUP/USDC`
+- `BONK/USDC`
+- `JTO/USDC`
+- `PYTH/USDC`
 
 ### Removed During Botless Cutover
 The following now return `410`:

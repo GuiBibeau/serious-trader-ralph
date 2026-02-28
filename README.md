@@ -14,7 +14,7 @@ Codebase components:
 - Landing page + email sign-in flow
 - Terminal at `/terminal` (market, macro, wallet, and trade ticket)
 - Account-level Privy wallet model (one wallet per user account)
-- SOL/USDC swap execution through server-side policy/sign/submit flow
+- Multi-pair spot swap execution through server-side policy/sign/submit flow
 - x402-gated market and macro read routes
 - Historical OHLCV and indicators backed by live providers
 
@@ -23,7 +23,7 @@ Codebase components:
 - **Loop A (per-slot truth):** event decoding + canonical state + marks
 - **Loop B (minute scoring):** feature extraction + scoring + cacheable views
 - External productization focus: stable, explainable Solana intelligence endpoints
-- Pair coverage is intentionally narrow today (Solana/stables first)
+- Pair coverage focuses on Solana, stables, and liquid majors in the current terminal universe
 
 ## Requirements
 
@@ -73,11 +73,32 @@ All are `POST` under `/api/x402/read/*`:
 - `market_jupiter_quote_batch`
 - `market_ohlcv`
 - `market_indicators`
+- `solana_marks_latest`
+- `solana_scores_latest`
+- `solana_views_top`
 - `macro_signals`
 - `macro_fred_indicators`
 - `macro_etf_flows`
 - `macro_stablecoin_health`
 - `macro_oil_analytics`
+
+### Supported Trading Pairs (Terminal + Trade APIs)
+
+- `SOL/USDC`
+- `SOL/USDT`
+- `USDC/USDT`
+- `USDC/PYUSD`
+- `USDC/USD1`
+- `USDC/USDG`
+- `SOL/JITOSOL`
+- `SOL/MSOL`
+- `SOL/JUPSOL`
+- `RAY/USDC`
+- `WIF/USDC`
+- `JUP/USDC`
+- `BONK/USDC`
+- `JTO/USDC`
+- `PYTH/USDC`
 
 ## API Catalog Maintenance Rule
 

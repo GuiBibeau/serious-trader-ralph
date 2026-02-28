@@ -67,6 +67,26 @@ describe("portal x402 api catalog routes", () => {
       endpointRecords.every((endpoint) => toRecord(endpoint.responseExample)),
     ).toBe(true);
 
+    const supportedTrading = toRecord(payloadRecord?.supportedTrading);
+    expect(supportedTrading).not.toBeNull();
+    const supportedPairs = Array.isArray(supportedTrading?.pairs)
+      ? supportedTrading.pairs
+      : [];
+    const supportedTokens = Array.isArray(supportedTrading?.tokens)
+      ? supportedTrading.tokens
+      : [];
+    expect(supportedPairs.length).toBeGreaterThan(10);
+    expect(
+      supportedPairs.some(
+        (row) => toRecord(row)?.id === "SOL/USDT",
+      ),
+    ).toBe(true);
+    expect(
+      supportedTokens.some(
+        (row) => toRecord(row)?.symbol === "USDT",
+      ),
+    ).toBe(true);
+
     const oilEndpoint =
       endpointRecords.find(
         (endpoint) => endpoint.path === "/api/x402/read/macro_oil_analytics",

@@ -13,6 +13,7 @@ export function GET(request: Request): Response {
     `API catalog TXT: ${origin}/api/endpoints.txt`,
     "",
     "Catalog scope: public x402 read endpoints only.",
+    "Supported trading tokens/pairs are published in the catalog under supportedTrading.",
     "Authenticated account/trading routes are not listed here.",
     "",
   ].join("\n");

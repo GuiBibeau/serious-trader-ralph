@@ -1,3 +1,5 @@
+import { SUPPORTED_PAIRS, TOKEN_CONFIGS } from "../terminal/components/trade-pairs";
+
 export type FieldSpec = {
   name: string;
   type: string;
@@ -20,6 +22,20 @@ export type CatalogDoc = {
   name: string;
   version: string;
   basePath: string;
+  supportedTrading: {
+    tokens: Array<{
+      symbol: string;
+      mint: string;
+      decimals: number;
+    }>;
+    pairs: Array<{
+      id: string;
+      baseSymbol: string;
+      quoteSymbol: string;
+      baseMint: string;
+      quoteMint: string;
+    }>;
+  };
   auth: {
     type: "x402";
     requestHeader: "payment-signature";
@@ -34,7 +50,35 @@ export type CatalogDoc = {
   endpoints: X402EndpointSpec[];
 };
 
-export const X402_CATALOG_VERSION = "2026-02-21";
+export const X402_CATALOG_VERSION = "2026-02-28";
+
+const X402_SUPPORTED_TRADING_TOKENS = Object.values(TOKEN_CONFIGS).map(
+  (token) => ({
+    symbol: token.symbol,
+    mint: token.mint,
+    decimals: token.decimals,
+  }),
+);
+
+const X402_SUPPORTED_TRADING_PAIRS = SUPPORTED_PAIRS.map((pair) => ({
+  id: pair.id,
+  baseSymbol: pair.baseSymbol,
+  quoteSymbol: pair.quoteSymbol,
+  baseMint: TOKEN_CONFIGS[pair.baseSymbol].mint,
+  quoteMint: TOKEN_CONFIGS[pair.quoteSymbol].mint,
+}));
+
+export const X402_SUPPORTED_TRADING: CatalogDoc["supportedTrading"] = {
+  tokens: X402_SUPPORTED_TRADING_TOKENS,
+  pairs: X402_SUPPORTED_TRADING_PAIRS,
+};
+
+const X402_SUPPORTED_MINTS = X402_SUPPORTED_TRADING.tokens.map(
+  (token) => token.mint,
+);
+const X402_SUPPORTED_PAIR_IDS = X402_SUPPORTED_TRADING.pairs.map(
+  (pair) => pair.id,
+);
 
 export const X402_OVERVIEW: CatalogDoc["overview"] = {
   offering:
@@ -43,6 +87,7 @@ export const X402_OVERVIEW: CatalogDoc["overview"] = {
     "This catalog includes only publicly callable x402 routes under /api/x402/read/*.",
   notes: [
     "Catalog and discovery endpoints are public. The listed x402 routes require payment authorization.",
+    "Supported terminal trading universe (tokens and pair presets) is included under supportedTrading.",
     "Pricing is dynamic per route config. Read the payment-required header (HTTP 402) as source of truth.",
     "Authenticated account and trading routes are intentionally excluded from this catalog.",
   ],
@@ -221,18 +266,19 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
     id: "market_jupiter_quote",
     method: "POST",
     path: "/api/x402/read/market_jupiter_quote",
-    summary: "Single Jupiter quote for exact-in swap sizing.",
+    summary:
+      "Single Jupiter quote for exact-in swap sizing across the supported trading universe.",
     access: "public-x402-paid",
     requiredFields: [
       {
         name: "inputMint",
         type: "string",
-        description: "Input token mint.",
+        description: "Input token mint from supportedTrading.tokens.",
       },
       {
         name: "outputMint",
         type: "string",
-        description: "Output token mint.",
+        description: "Output token mint from supportedTrading.tokens.",
       },
       {
         name: "amount",
@@ -248,22 +294,24 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
       },
     ],
     requestExample: {
-      inputMint: "So11111111111111111111111111111111111111112",
-      outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      amount: "1000000000",
+      inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      outputMint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+      amount: "100000000",
       slippageBps: 50,
     },
     responseExample: {
       ok: true,
       quote: {
-        inputMint: "So11111111111111111111111111111111111111112",
-        outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-        inAmount: "1000000000",
-        outAmount: "145230000",
-        priceImpactPct: "0.0008",
+        inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        outputMint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+        inAmount: "100000000",
+        outAmount: "99964011",
+        priceImpactPct: "0.0003",
         slippageBps: 50,
         swapMode: "ExactIn",
       },
+      supportedMints: X402_SUPPORTED_MINTS,
+      supportedPairs: X402_SUPPORTED_PAIR_IDS,
     },
   },
   {
@@ -283,9 +331,9 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
     requestExample: {
       requests: [
         {
-          inputMint: "So11111111111111111111111111111111111111112",
+          inputMint: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
           outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-          amount: "1000000000",
+          amount: "25000000",
           slippageBps: 50,
         },
       ],
@@ -299,15 +347,17 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
           ok: true,
           index: 0,
           quote: {
-            inputMint: "So11111111111111111111111111111111111111112",
+            inputMint: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
             outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-            inAmount: "1000000000",
-            outAmount: "145230000",
-            priceImpactPct: "0.0008",
+            inAmount: "25000000",
+            outAmount: "58510231",
+            priceImpactPct: "0.0012",
             route: "Meteora DLMM -> Orca V2",
           },
         },
       ],
+      supportedMints: X402_SUPPORTED_MINTS,
+      supportedPairs: X402_SUPPORTED_PAIR_IDS,
     },
   },
   {
@@ -351,7 +401,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
       },
     ],
     requestExample: {
-      baseMint: "So11111111111111111111111111111111111111112",
+      baseMint: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
       quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       lookbackHours: 168,
       limit: 168,
@@ -360,7 +410,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
     responseExample: {
       ok: true,
       ohlcv: {
-        baseMint: "So11111111111111111111111111111111111111112",
+        baseMint: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
         quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         resolutionMinutes: 60,
         startMs: 1739990400000,
@@ -380,6 +430,8 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
           },
         ],
       },
+      supportedMints: X402_SUPPORTED_MINTS,
+      supportedPairs: X402_SUPPORTED_PAIR_IDS,
     },
   },
   {
@@ -423,7 +475,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
       },
     ],
     requestExample: {
-      baseMint: "So11111111111111111111111111111111111111112",
+      baseMint: "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
       quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       lookbackHours: 168,
       limit: 168,
@@ -432,7 +484,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
     responseExample: {
       ok: true,
       ohlcv: {
-        baseMint: "So11111111111111111111111111111111111111112",
+        baseMint: "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
         quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         resolutionMinutes: 60,
         startMs: 1739990400000,
@@ -470,6 +522,8 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
           h168: 11.4,
         },
       },
+      supportedMints: X402_SUPPORTED_MINTS,
+      supportedPairs: X402_SUPPORTED_PAIR_IDS,
     },
   },
   {

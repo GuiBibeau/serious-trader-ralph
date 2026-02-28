@@ -4,6 +4,7 @@ import {
   X402_ENDPOINTS,
   X402_OVERVIEW,
   X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
+  X402_SUPPORTED_TRADING,
 } from "./_catalog";
 
 export const metadata: Metadata = {
@@ -54,6 +55,12 @@ export default function ApiCatalogPage() {
             <p className="text-muted mt-3 max-w-3xl">{X402_OVERVIEW.scope}</p>
             <p className="text-xs text-muted mt-3">
               Catalog version: <code>{X402_CATALOG_VERSION}</code>
+            </p>
+            <p className="text-xs text-muted mt-2">
+              Supported trading pairs:{" "}
+              <code>
+                {X402_SUPPORTED_TRADING.pairs.map((pair) => pair.id).join(", ")}
+              </code>
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
               <a
