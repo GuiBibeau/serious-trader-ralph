@@ -186,7 +186,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "market_snapshot",
@@ -255,7 +255,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "market_snapshot_v2",
@@ -353,7 +353,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "market_token_balance",
@@ -420,7 +420,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "market_jupiter_quote",
@@ -500,7 +500,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "market_jupiter_quote_batch",
@@ -627,7 +627,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "market_ohlcv",
@@ -718,7 +718,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "market_indicators",
@@ -814,7 +814,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "solana_marks_latest",
@@ -882,7 +882,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "solana_scores_latest",
@@ -960,7 +960,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "solana_views_top",
@@ -1041,7 +1041,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "macro_signals",
@@ -1077,7 +1077,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "macro_fred_indicators",
@@ -1161,7 +1161,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "macro_etf_flows",
@@ -1210,7 +1210,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "macro_stablecoin_health",
@@ -1259,7 +1259,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "macro_oil_analytics",
@@ -1295,7 +1295,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "perps_funding_surface",
@@ -1355,7 +1355,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "perps_open_interest_surface",
@@ -1419,7 +1419,7 @@ export default {
       ) {
         let paymentRequired: Response | null = null;
         try {
-          paymentRequired = requireX402Payment(
+          paymentRequired = await requireX402Payment(
             request,
             env,
             "perps_venue_score",
