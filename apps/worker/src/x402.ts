@@ -204,9 +204,9 @@ function defaultRpcEndpointForNetwork(network: string): string {
 
 function resolvePaymentRpcEndpoint(env: Env, network: string): string {
   const configured = String(
-    env.BILLING_RPC_ENDPOINT ??
-      env.BALANCE_RPC_ENDPOINT ??
+    env.BALANCE_RPC_ENDPOINT ??
       env.RPC_ENDPOINT ??
+      env.BILLING_RPC_ENDPOINT ??
       "",
   ).trim();
   return configured || defaultRpcEndpointForNetwork(network);
