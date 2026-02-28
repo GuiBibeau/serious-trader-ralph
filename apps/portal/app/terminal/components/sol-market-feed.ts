@@ -5,8 +5,8 @@ import { apiBase, isRecord } from "../../lib";
 import {
   getPairConfig,
   marketQuoteAmountAtomic,
-  TOKEN_CONFIGS,
   type PairId,
+  TOKEN_CONFIGS,
 } from "./trade-pairs";
 
 export type MarketPoint = {
@@ -120,7 +120,10 @@ function toChartPoints(
   return out;
 }
 
-function mergePoints(basePoints: MarketPoint[], livePoints: MarketPoint[]): MarketPoint[] {
+function mergePoints(
+  basePoints: MarketPoint[],
+  livePoints: MarketPoint[],
+): MarketPoint[] {
   const merged = [...basePoints, ...livePoints].sort((a, b) => a.ts - b.ts);
   const deduped: MarketPoint[] = [];
   let lastTs = -1;
@@ -299,19 +302,22 @@ export function useMarketFeed(pairId: PairId): MarketState {
       const base = apiBase();
       if (!base) throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
 
-      const response = await fetch(`${base}/api/x402/read/market_jupiter_quote`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "payment-signature": "portal-market-widget",
+      const response = await fetch(
+        `${base}/api/x402/read/market_jupiter_quote`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "payment-signature": "portal-market-widget",
+          },
+          body: JSON.stringify({
+            inputMint: baseMint,
+            outputMint: quoteMint,
+            amount: marketQuoteAmountAtomic(pair.id),
+            slippageBps: 50,
+          }),
         },
-        body: JSON.stringify({
-          inputMint: baseMint,
-          outputMint: quoteMint,
-          amount: marketQuoteAmountAtomic(pair.id),
-          slippageBps: 50,
-        }),
-      });
+      );
       const payload = (await response.json().catch(() => null)) as unknown;
       if (!response.ok) {
         const error =
@@ -320,7 +326,11 @@ export function useMarketFeed(pairId: PairId): MarketState {
             : `http-${response.status}`;
         throw new Error(error);
       }
-      if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.quote)) {
+      if (
+        !isRecord(payload) ||
+        payload.ok !== true ||
+        !isRecord(payload.quote)
+      ) {
         throw new Error("invalid-quote-payload");
       }
 

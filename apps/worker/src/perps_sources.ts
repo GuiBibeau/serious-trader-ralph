@@ -191,18 +191,26 @@ async function fetchJsonWithTimeout(
 }
 
 async function fetchHyperliquidRows(): Promise<PerpsVenueRow[]> {
-  const raw = await fetchJsonWithTimeout(HYPERLIQUID_INFO_URL, PERPS_FETCH_TIMEOUT_MS, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type: "metaAndAssetCtxs" }),
-  });
+  const raw = await fetchJsonWithTimeout(
+    HYPERLIQUID_INFO_URL,
+    PERPS_FETCH_TIMEOUT_MS,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "metaAndAssetCtxs" }),
+    },
+  );
   if (!Array.isArray(raw) || raw.length < 2) {
     throw new Error("invalid-hyperliquid-response");
   }
 
   const meta = raw[0];
   const ctxList = raw[1];
-  if (!isRecord(meta) || !Array.isArray(meta.universe) || !Array.isArray(ctxList)) {
+  if (
+    !isRecord(meta) ||
+    !Array.isArray(meta.universe) ||
+    !Array.isArray(ctxList)
+  ) {
     throw new Error("invalid-hyperliquid-response");
   }
 
@@ -218,7 +226,8 @@ async function fetchHyperliquidRows(): Promise<PerpsVenueRow[]> {
     const status = market.isDelisted === true ? "INACTIVE" : "ACTIVE";
 
     const fundingRate1h = toFiniteNumber(ctx.funding);
-    const markPrice = toFiniteNumber(ctx.markPx) ?? toFiniteNumber(ctx.oraclePx);
+    const markPrice =
+      toFiniteNumber(ctx.markPx) ?? toFiniteNumber(ctx.oraclePx);
     const openInterestNative = toFiniteNumber(ctx.openInterest);
     const openInterestUsd =
       markPrice === null || openInterestNative === null
@@ -263,7 +272,9 @@ async function fetchDydxRows(): Promise<PerpsVenueRow[]> {
     const symbol = normalizeSymbol(ticker.split("-")[0] ?? "");
     if (!symbol) continue;
 
-    const statusRaw = String(market.status ?? "").trim().toUpperCase();
+    const statusRaw = String(market.status ?? "")
+      .trim()
+      .toUpperCase();
     const status = statusRaw || "UNKNOWN";
 
     const fundingRate1h = toFiniteNumber(market.nextFundingRate);
@@ -452,7 +463,9 @@ function buildFundingRows(rows: PerpsVenueRow[]): PerpsSymbolFundingRow[] {
   });
 }
 
-function buildOpenInterestRows(rows: PerpsVenueRow[]): PerpsSymbolOpenInterestRow[] {
+function buildOpenInterestRows(
+  rows: PerpsVenueRow[],
+): PerpsSymbolOpenInterestRow[] {
   const grouped = groupRowsBySymbol(rows);
   return grouped.map(({ symbol, rows: symbolRows }) => {
     const totalOpenInterestUsd = round(
@@ -495,7 +508,9 @@ function buildOpenInterestRows(rows: PerpsVenueRow[]): PerpsSymbolOpenInterestRo
   });
 }
 
-function buildVenueScores(rows: PerpsVenueRow[]): PerpsVenueScoreResponse["scores"] {
+function buildVenueScores(
+  rows: PerpsVenueRow[],
+): PerpsVenueScoreResponse["scores"] {
   const byVenue = new Map<
     PerpsVenue,
     {
@@ -560,8 +575,14 @@ function buildVenueScores(rows: PerpsVenueRow[]): PerpsVenueScoreResponse["score
     };
   });
 
-  const minRaw = rawRows.reduce((min, row) => Math.min(min, row.rawScore), Infinity);
-  const maxRaw = rawRows.reduce((max, row) => Math.max(max, row.rawScore), -Infinity);
+  const minRaw = rawRows.reduce(
+    (min, row) => Math.min(min, row.rawScore),
+    Infinity,
+  );
+  const maxRaw = rawRows.reduce(
+    (max, row) => Math.max(max, row.rawScore),
+    -Infinity,
+  );
 
   const withScores = rawRows.map((row) => {
     const score =
@@ -586,9 +607,7 @@ function buildVenueScores(rows: PerpsVenueRow[]): PerpsVenueScoreResponse["score
   return withScores;
 }
 
-async function resolveFilteredRows(
-  input: PerpsRequestInput,
-): Promise<{
+async function resolveFilteredRows(input: PerpsRequestInput): Promise<{
   snapshotTs: string;
   rows: PerpsVenueRow[];
   unavailableVenues: PerpsUnavailableVenue[];
@@ -605,7 +624,8 @@ async function resolveFilteredRows(
 export async function fetchPerpsFundingSurface(
   input: PerpsRequestInput,
 ): Promise<PerpsFundingSurfaceResponse> {
-  const { snapshotTs, rows, unavailableVenues } = await resolveFilteredRows(input);
+  const { snapshotTs, rows, unavailableVenues } =
+    await resolveFilteredRows(input);
   return {
     timestamp: snapshotTs,
     symbols: resolveSymbolsFromRows(rows),
@@ -620,7 +640,8 @@ export async function fetchPerpsFundingSurface(
 export async function fetchPerpsOpenInterestSurface(
   input: PerpsRequestInput,
 ): Promise<PerpsOpenInterestSurfaceResponse> {
-  const { snapshotTs, rows, unavailableVenues } = await resolveFilteredRows(input);
+  const { snapshotTs, rows, unavailableVenues } =
+    await resolveFilteredRows(input);
   return {
     timestamp: snapshotTs,
     symbols: resolveSymbolsFromRows(rows),
@@ -635,7 +656,8 @@ export async function fetchPerpsOpenInterestSurface(
 export async function fetchPerpsVenueScore(
   input: PerpsRequestInput,
 ): Promise<PerpsVenueScoreResponse> {
-  const { snapshotTs, rows, unavailableVenues } = await resolveFilteredRows(input);
+  const { snapshotTs, rows, unavailableVenues } =
+    await resolveFilteredRows(input);
   const scores = buildVenueScores(rows);
   return {
     timestamp: snapshotTs,

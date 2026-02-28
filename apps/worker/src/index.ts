@@ -69,8 +69,8 @@ import {
   fetchPerpsFundingSurface,
   fetchPerpsOpenInterestSurface,
   fetchPerpsVenueScore,
-  SUPPORTED_PERPS_VENUES,
   type PerpsVenue,
+  SUPPORTED_PERPS_VENUES,
 } from "./perps_sources";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
@@ -457,7 +457,10 @@ export default {
           !SUPPORTED_TRADING_MINT_SET.has(outputMint) ||
           !isSupportedTradingPairByMint(inputMint, outputMint)
         ) {
-          return withCors(json(unsupportedTradePairPayload(), { status: 400 }), env);
+          return withCors(
+            json(unsupportedTradePairPayload(), { status: 400 }),
+            env,
+          );
         }
 
         // Public x402 read routes always serve mainnet market data.
@@ -642,8 +645,15 @@ export default {
         const payload = await readPayload(request);
         const baseMint = String(payload.baseMint ?? "").trim();
         const quoteMint = String(payload.quoteMint ?? "").trim();
-        if (baseMint && quoteMint && !isSupportedTradingPairByMint(baseMint, quoteMint)) {
-          return withCors(json(unsupportedTradePairPayload(), { status: 400 }), env);
+        if (
+          baseMint &&
+          quoteMint &&
+          !isSupportedTradingPairByMint(baseMint, quoteMint)
+        ) {
+          return withCors(
+            json(unsupportedTradePairPayload(), { status: 400 }),
+            env,
+          );
         }
         let ohlcv: Awaited<ReturnType<typeof fetchHistoricalOhlcvRuntime>>;
         try {
@@ -717,8 +727,15 @@ export default {
         const payload = await readPayload(request);
         const baseMint = String(payload.baseMint ?? "").trim();
         const quoteMint = String(payload.quoteMint ?? "").trim();
-        if (baseMint && quoteMint && !isSupportedTradingPairByMint(baseMint, quoteMint)) {
-          return withCors(json(unsupportedTradePairPayload(), { status: 400 }), env);
+        if (
+          baseMint &&
+          quoteMint &&
+          !isSupportedTradingPairByMint(baseMint, quoteMint)
+        ) {
+          return withCors(
+            json(unsupportedTradePairPayload(), { status: 400 }),
+            env,
+          );
         }
         let ohlcv: Awaited<ReturnType<typeof fetchHistoricalOhlcvRuntime>>;
         try {
@@ -1279,10 +1296,7 @@ export default {
         const parsedPerpsInput = parsePerpsReadInput(payload);
         if (!parsedPerpsInput.ok) {
           return withCors(
-            json(
-              { ok: false, error: parsedPerpsInput.error },
-              { status: 400 },
-            ),
+            json({ ok: false, error: parsedPerpsInput.error }, { status: 400 }),
             env,
           );
         }
@@ -1342,10 +1356,7 @@ export default {
         const parsedPerpsInput = parsePerpsReadInput(payload);
         if (!parsedPerpsInput.ok) {
           return withCors(
-            json(
-              { ok: false, error: parsedPerpsInput.error },
-              { status: 400 },
-            ),
+            json({ ok: false, error: parsedPerpsInput.error }, { status: 400 }),
             env,
           );
         }
@@ -1409,10 +1420,7 @@ export default {
         const parsedPerpsInput = parsePerpsReadInput(payload);
         if (!parsedPerpsInput.ok) {
           return withCors(
-            json(
-              { ok: false, error: parsedPerpsInput.error },
-              { status: 400 },
-            ),
+            json({ ok: false, error: parsedPerpsInput.error }, { status: 400 }),
             env,
           );
         }
@@ -2527,7 +2535,8 @@ function formatAtomicDisplay(
 ): string {
   let atomic = 0n;
   try {
-    atomic = typeof atomicInput === "bigint" ? atomicInput : BigInt(atomicInput);
+    atomic =
+      typeof atomicInput === "bigint" ? atomicInput : BigInt(atomicInput);
   } catch {
     return "0.0";
   }

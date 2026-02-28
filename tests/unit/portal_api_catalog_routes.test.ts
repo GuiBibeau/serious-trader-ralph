@@ -79,15 +79,11 @@ describe("portal x402 api catalog routes", () => {
       ? supportedTrading.tokens
       : [];
     expect(supportedPairs.length).toBeGreaterThan(10);
+    expect(supportedPairs.some((row) => toRecord(row)?.id === "SOL/USDT")).toBe(
+      true,
+    );
     expect(
-      supportedPairs.some(
-        (row) => toRecord(row)?.id === "SOL/USDT",
-      ),
-    ).toBe(true);
-    expect(
-      supportedTokens.some(
-        (row) => toRecord(row)?.symbol === "USDT",
-      ),
+      supportedTokens.some((row) => toRecord(row)?.symbol === "USDT"),
     ).toBe(true);
 
     const oilEndpoint =
@@ -129,5 +125,10 @@ describe("portal x402 api catalog routes", () => {
     expect(body.includes("https://portal.example/api/endpoints.txt")).toBe(
       true,
     );
+    expect(body.includes("/api/x402/read/perps_funding_surface")).toBe(true);
+    expect(body.includes("/api/x402/read/perps_open_interest_surface")).toBe(
+      true,
+    );
+    expect(body.includes("/api/x402/read/perps_venue_score")).toBe(true);
   });
 });

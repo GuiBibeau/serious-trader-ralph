@@ -10,7 +10,7 @@ import {
 export const metadata: Metadata = {
   title: "API Catalog | Trader Ralph",
   description:
-    "Public x402 endpoint catalog for Trader Ralph market and macro reads.",
+    "Public x402 endpoint catalog for Trader Ralph market, macro, and perps reads.",
 };
 
 function renderFieldList(
