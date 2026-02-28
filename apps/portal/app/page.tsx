@@ -589,7 +589,7 @@ function Roadmap() {
                 <div>
                   <p className="font-medium">x402 Read Endpoints</p>
                   <p className="text-sm text-muted">
-                    Paid market and macro reads exposed over HTTP for agent
+                    Paid market, macro, and perps reads exposed over HTTP for agent
                     consumption.
                   </p>
                 </div>

@@ -31,6 +31,9 @@ function createEnv(overrides?: Partial<Env>): Env {
     X402_MACRO_ETF_FLOWS_PRICE_USD: "0.01",
     X402_MACRO_STABLECOIN_HEALTH_PRICE_USD: "0.01",
     X402_MACRO_OIL_ANALYTICS_PRICE_USD: "0.01",
+    X402_PERPS_FUNDING_SURFACE_PRICE_USD: "0.01",
+    X402_PERPS_OPEN_INTEREST_SURFACE_PRICE_USD: "0.01",
+    X402_PERPS_VENUE_SCORE_PRICE_USD: "0.01",
     ...overrides,
   } as Env;
 }
@@ -84,6 +87,18 @@ describe("worker x402 helpers", () => {
       {
         key: "macro_oil_analytics",
         path: "/api/x402/read/macro_oil_analytics",
+      },
+      {
+        key: "perps_funding_surface",
+        path: "/api/x402/read/perps_funding_surface",
+      },
+      {
+        key: "perps_open_interest_surface",
+        path: "/api/x402/read/perps_open_interest_surface",
+      },
+      {
+        key: "perps_venue_score",
+        path: "/api/x402/read/perps_venue_score",
       },
     ] as const;
 

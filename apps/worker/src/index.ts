@@ -65,6 +65,13 @@ import {
   fetchMacroStablecoinHealth,
 } from "./macro_sources";
 import { computeMarketIndicators } from "./market_indicators";
+import {
+  fetchPerpsFundingSurface,
+  fetchPerpsOpenInterestSurface,
+  fetchPerpsVenueScore,
+  SUPPORTED_PERPS_VENUES,
+  type PerpsVenue,
+} from "./perps_sources";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
 import { gatherMarketSnapshot } from "./research";
@@ -1244,6 +1251,199 @@ export default {
         return withCors(settled, env);
       }
 
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/x402/read/perps_funding_surface"
+      ) {
+        let paymentRequired: Response | null = null;
+        try {
+          paymentRequired = requireX402Payment(
+            request,
+            env,
+            "perps_funding_surface",
+            url.pathname,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "x402-route-config-missing";
+          return withCors(
+            json({ ok: false, error: message }, { status: 503 }),
+            env,
+          );
+        }
+        if (paymentRequired) return withCors(paymentRequired, env);
+
+        const payload = await readPayload(request);
+        const parsedPerpsInput = parsePerpsReadInput(payload);
+        if (!parsedPerpsInput.ok) {
+          return withCors(
+            json(
+              { ok: false, error: parsedPerpsInput.error },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        let perpsSurface: Awaited<ReturnType<typeof fetchPerpsFundingSurface>>;
+        try {
+          perpsSurface = await fetchPerpsFundingSurface(parsedPerpsInput.value);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "perps-fetch-failed";
+          const responseError =
+            message === "perps-data-unavailable"
+              ? "perps-data-unavailable"
+              : "perps-fetch-failed";
+          return withCors(
+            json({ ok: false, error: responseError }, { status: 503 }),
+            env,
+          );
+        }
+
+        const base = json({ ok: true, ...perpsSurface });
+        const settled = withX402SettlementHeader(
+          base,
+          request,
+          env,
+          "perps_funding_surface",
+          url.pathname,
+        );
+        return withCors(settled, env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/x402/read/perps_open_interest_surface"
+      ) {
+        let paymentRequired: Response | null = null;
+        try {
+          paymentRequired = requireX402Payment(
+            request,
+            env,
+            "perps_open_interest_surface",
+            url.pathname,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "x402-route-config-missing";
+          return withCors(
+            json({ ok: false, error: message }, { status: 503 }),
+            env,
+          );
+        }
+        if (paymentRequired) return withCors(paymentRequired, env);
+
+        const payload = await readPayload(request);
+        const parsedPerpsInput = parsePerpsReadInput(payload);
+        if (!parsedPerpsInput.ok) {
+          return withCors(
+            json(
+              { ok: false, error: parsedPerpsInput.error },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        let perpsSurface: Awaited<
+          ReturnType<typeof fetchPerpsOpenInterestSurface>
+        >;
+        try {
+          perpsSurface = await fetchPerpsOpenInterestSurface(
+            parsedPerpsInput.value,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "perps-fetch-failed";
+          const responseError =
+            message === "perps-data-unavailable"
+              ? "perps-data-unavailable"
+              : "perps-fetch-failed";
+          return withCors(
+            json({ ok: false, error: responseError }, { status: 503 }),
+            env,
+          );
+        }
+
+        const base = json({ ok: true, ...perpsSurface });
+        const settled = withX402SettlementHeader(
+          base,
+          request,
+          env,
+          "perps_open_interest_surface",
+          url.pathname,
+        );
+        return withCors(settled, env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/x402/read/perps_venue_score"
+      ) {
+        let paymentRequired: Response | null = null;
+        try {
+          paymentRequired = requireX402Payment(
+            request,
+            env,
+            "perps_venue_score",
+            url.pathname,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "x402-route-config-missing";
+          return withCors(
+            json({ ok: false, error: message }, { status: 503 }),
+            env,
+          );
+        }
+        if (paymentRequired) return withCors(paymentRequired, env);
+
+        const payload = await readPayload(request);
+        const parsedPerpsInput = parsePerpsReadInput(payload);
+        if (!parsedPerpsInput.ok) {
+          return withCors(
+            json(
+              { ok: false, error: parsedPerpsInput.error },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        let perpsSurface: Awaited<ReturnType<typeof fetchPerpsVenueScore>>;
+        try {
+          perpsSurface = await fetchPerpsVenueScore(parsedPerpsInput.value);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "perps-fetch-failed";
+          const responseError =
+            message === "perps-data-unavailable"
+              ? "perps-data-unavailable"
+              : "perps-fetch-failed";
+          return withCors(
+            json({ ok: false, error: responseError }, { status: 503 }),
+            env,
+          );
+        }
+
+        const base = json({ ok: true, ...perpsSurface });
+        const settled = withX402SettlementHeader(
+          base,
+          request,
+          env,
+          "perps_venue_score",
+          url.pathname,
+        );
+        return withCors(settled, env);
+      }
+
       if (request.method === "POST" && url.pathname === "/api/trade/swap") {
         const requestReceivedAt = new Date().toISOString();
         let user = await requireOnboardedUser(request, env);
@@ -2353,6 +2553,78 @@ function toUniqueStrings(value: unknown, maxItems: number): string[] {
     if (out.length >= maxItems) break;
   }
   return out;
+}
+
+function parsePerpsSymbol(value: string): string {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 20);
+}
+
+function parsePerpsReadInput(payload: Record<string, unknown>):
+  | {
+      ok: true;
+      value: {
+        symbols?: string[];
+        venues?: PerpsVenue[];
+        includeInactive?: boolean;
+      };
+    }
+  | { ok: false; error: string } {
+  if (payload.symbols !== undefined && !Array.isArray(payload.symbols)) {
+    return { ok: false, error: "invalid-perps-request" };
+  }
+  if (payload.venues !== undefined && !Array.isArray(payload.venues)) {
+    return { ok: false, error: "invalid-perps-request" };
+  }
+  if (
+    payload.includeInactive !== undefined &&
+    typeof payload.includeInactive !== "boolean"
+  ) {
+    return { ok: false, error: "invalid-perps-request" };
+  }
+
+  const symbols =
+    payload.symbols === undefined
+      ? []
+      : toUniqueStrings(payload.symbols, 30)
+          .map(parsePerpsSymbol)
+          .filter((value) => value.length > 0);
+  if (payload.symbols !== undefined && symbols.length < 1) {
+    return { ok: false, error: "invalid-perps-request" };
+  }
+
+  const venueInputs =
+    payload.venues === undefined
+      ? []
+      : payload.venues
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim().toLowerCase())
+          .filter((value) => value.length > 0);
+  if (payload.venues !== undefined && venueInputs.length < 1) {
+    return { ok: false, error: "invalid-perps-request" };
+  }
+  const validVenueSet = new Set<string>(SUPPORTED_PERPS_VENUES);
+  if (venueInputs.some((venue) => !validVenueSet.has(venue))) {
+    return { ok: false, error: "invalid-perps-request" };
+  }
+  const venueStrings = Array.from(new Set(venueInputs)).slice(
+    0,
+    SUPPORTED_PERPS_VENUES.length,
+  );
+
+  return {
+    ok: true,
+    value: {
+      ...(symbols.length > 0 ? { symbols } : {}),
+      ...(venueStrings.length > 0
+        ? { venues: venueStrings as PerpsVenue[] }
+        : {}),
+      ...(payload.includeInactive === true ? { includeInactive: true } : {}),
+    },
+  };
 }
 
 function parseLoopACommitment(

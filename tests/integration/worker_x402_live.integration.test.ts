@@ -32,6 +32,9 @@ const PATHS = {
   macroEtfFlows: "/api/x402/read/macro_etf_flows",
   macroStablecoinHealth: "/api/x402/read/macro_stablecoin_health",
   macroOilAnalytics: "/api/x402/read/macro_oil_analytics",
+  perpsFundingSurface: "/api/x402/read/perps_funding_surface",
+  perpsOpenInterestSurface: "/api/x402/read/perps_open_interest_surface",
+  perpsVenueScore: "/api/x402/read/perps_venue_score",
 } as const;
 
 function buildRequest(
@@ -150,6 +153,21 @@ integrationTest(
       {
         routeKey: "macro_oil_analytics",
         path: PATHS.macroOilAnalytics,
+        body: {},
+      },
+      {
+        routeKey: "perps_funding_surface",
+        path: PATHS.perpsFundingSurface,
+        body: {},
+      },
+      {
+        routeKey: "perps_open_interest_surface",
+        path: PATHS.perpsOpenInterestSurface,
+        body: {},
+      },
+      {
+        routeKey: "perps_venue_score",
+        path: PATHS.perpsVenueScore,
         body: {},
       },
     ] as const;
@@ -559,6 +577,91 @@ integrationTest(
       macroOilBody.brentPrice === null ||
         typeof macroOilBody.brentPrice?.current === "number",
     ).toBe(true);
+
+    const perpsFundingRes = await withRetries(() =>
+      worker.fetch(
+        buildRequest(
+          PATHS.perpsFundingSurface,
+          { symbols: ["BTC", "ETH", "SOL"] },
+          "integration-signed-payment",
+        ),
+        env,
+        ctx,
+      ),
+    );
+    expect(perpsFundingRes.status).toBe(200);
+    expect(perpsFundingRes.headers.get("payment-response")).toBeTruthy();
+    const perpsFundingBody = (await perpsFundingRes.json()) as {
+      ok?: boolean;
+      rows?: Array<{
+        symbol?: string;
+        byVenue?: Array<{ venue?: string; market?: string }>;
+      }>;
+      unavailableVenues?: Array<{ venue?: string; reason?: string }>;
+    };
+    expect(perpsFundingBody.ok).toBe(true);
+    expect(Array.isArray(perpsFundingBody.rows)).toBe(true);
+    expect((perpsFundingBody.rows ?? []).length).toBeGreaterThan(0);
+    const fundingByVenueRows = perpsFundingBody.rows?.[0]?.byVenue ?? [];
+    expect(Array.isArray(fundingByVenueRows)).toBe(true);
+    expect((perpsFundingBody.unavailableVenues ?? []).length).toBeLessThan(2);
+
+    const perpsOpenInterestRes = await withRetries(() =>
+      worker.fetch(
+        buildRequest(
+          PATHS.perpsOpenInterestSurface,
+          { symbols: ["BTC", "ETH", "SOL"] },
+          "integration-signed-payment",
+        ),
+        env,
+        ctx,
+      ),
+    );
+    expect(perpsOpenInterestRes.status).toBe(200);
+    expect(perpsOpenInterestRes.headers.get("payment-response")).toBeTruthy();
+    const perpsOpenInterestBody = (await perpsOpenInterestRes.json()) as {
+      ok?: boolean;
+      rows?: Array<{ symbol?: string; totalOpenInterestUsd?: number }>;
+      unavailableVenues?: Array<{ venue?: string; reason?: string }>;
+    };
+    expect(perpsOpenInterestBody.ok).toBe(true);
+    expect(Array.isArray(perpsOpenInterestBody.rows)).toBe(true);
+    expect((perpsOpenInterestBody.rows ?? []).length).toBeGreaterThan(0);
+    expect(
+      toPositiveNumber(perpsOpenInterestBody.rows?.[0]?.totalOpenInterestUsd),
+    ).toBeGreaterThanOrEqual(0);
+    expect((perpsOpenInterestBody.unavailableVenues ?? []).length).toBeLessThan(
+      2,
+    );
+
+    const perpsVenueScoreRes = await withRetries(() =>
+      worker.fetch(
+        buildRequest(
+          PATHS.perpsVenueScore,
+          { symbols: ["BTC", "ETH", "SOL"] },
+          "integration-signed-payment",
+        ),
+        env,
+        ctx,
+      ),
+    );
+    expect(perpsVenueScoreRes.status).toBe(200);
+    expect(perpsVenueScoreRes.headers.get("payment-response")).toBeTruthy();
+    const perpsVenueScoreBody = (await perpsVenueScoreRes.json()) as {
+      ok?: boolean;
+      recommendedVenue?: string | null;
+      scores?: Array<{ venue?: string; score?: number }>;
+      unavailableVenues?: Array<{ venue?: string; reason?: string }>;
+    };
+    expect(perpsVenueScoreBody.ok).toBe(true);
+    expect(Array.isArray(perpsVenueScoreBody.scores)).toBe(true);
+    expect((perpsVenueScoreBody.scores ?? []).length).toBeGreaterThan(0);
+    expect(typeof perpsVenueScoreBody.recommendedVenue).toMatch(
+      /string|object/,
+    );
+    expect((perpsVenueScoreBody.unavailableVenues ?? []).length).toBeLessThan(
+      2,
+    );
   },
 );
 
@@ -685,5 +788,21 @@ integrationTest(
     expect(
       ((await invalidMacroStablecoin.json()) as { error?: string }).error,
     ).toBe("invalid-macro-stablecoin-request");
+
+    const invalidPerpsRequest = await worker.fetch(
+      buildRequest(
+        PATHS.perpsFundingSurface,
+        {
+          venues: "dydx",
+        },
+        "integration-signed-payment",
+      ),
+      env,
+      ctx,
+    );
+    expect(invalidPerpsRequest.status).toBe(400);
+    expect(
+      ((await invalidPerpsRequest.json()) as { error?: string }).error,
+    ).toBe("invalid-perps-request");
   },
 );

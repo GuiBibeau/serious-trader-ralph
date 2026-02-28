@@ -82,7 +82,7 @@ const X402_SUPPORTED_PAIR_IDS = X402_SUPPORTED_TRADING.pairs.map(
 
 export const X402_OVERVIEW: CatalogDoc["overview"] = {
   offering:
-    "Solana-focused x402 read endpoints for market and macro intelligence.",
+    "Solana-focused x402 read endpoints for market, macro, and cross-venue perps intelligence.",
   scope:
     "This catalog includes only publicly callable x402 routes under /api/x402/read/*.",
   notes: [
@@ -889,6 +889,210 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
         trend: "down",
         lastUpdated: "2026-02-14",
       },
+    },
+  },
+  {
+    id: "perps_funding_surface",
+    method: "POST",
+    path: "/api/x402/read/perps_funding_surface",
+    summary: "Cross-venue perps funding surface for selected symbols.",
+    access: "public-x402-paid",
+    requiredFields: [],
+    optionalFields: [
+      {
+        name: "symbols",
+        type: "string[]",
+        description: "Optional symbol filter (for example BTC, ETH, SOL).",
+      },
+      {
+        name: "venues",
+        type: '("hyperliquid" | "dydx")[]',
+        description: "Optional venue filter.",
+      },
+      {
+        name: "includeInactive",
+        type: "boolean",
+        description: "Include delisted/final-settlement markets.",
+      },
+    ],
+    requestExample: {
+      symbols: ["BTC", "ETH", "SOL"],
+      venues: ["hyperliquid", "dydx"],
+      includeInactive: false,
+    },
+    responseExample: {
+      ok: true,
+      timestamp: "2026-02-27T16:20:00.000Z",
+      symbols: ["BTC", "ETH", "SOL"],
+      venues: ["dydx", "hyperliquid"],
+      includeInactive: false,
+      count: 6,
+      rows: [
+        {
+          symbol: "BTC",
+          spreadBps1h: 0.0217,
+          meanFundingBps1h: 0.1072,
+          maxAbsFundingBps1h: 0.1189,
+          byVenue: [
+            {
+              venue: "dydx",
+              market: "BTC-USD",
+              status: "ACTIVE",
+              fundingRate1h: 0.0000119,
+              fundingBps1h: 0.119,
+              openInterestUsd: 27425750.12,
+              volume24hUsd: 104666475.36,
+            },
+            {
+              venue: "hyperliquid",
+              market: "BTC-PERP",
+              status: "ACTIVE",
+              fundingRate1h: 0.0000098,
+              fundingBps1h: 0.098,
+              openInterestUsd: 1393855608.24,
+              volume24hUsd: 2054621458.48,
+            },
+          ],
+        },
+      ],
+      unavailableVenues: [],
+    },
+  },
+  {
+    id: "perps_open_interest_surface",
+    method: "POST",
+    path: "/api/x402/read/perps_open_interest_surface",
+    summary: "Cross-venue perps open-interest and dominance surface.",
+    access: "public-x402-paid",
+    requiredFields: [],
+    optionalFields: [
+      {
+        name: "symbols",
+        type: "string[]",
+        description: "Optional symbol filter (for example BTC, ETH, SOL).",
+      },
+      {
+        name: "venues",
+        type: '("hyperliquid" | "dydx")[]',
+        description: "Optional venue filter.",
+      },
+      {
+        name: "includeInactive",
+        type: "boolean",
+        description: "Include delisted/final-settlement markets.",
+      },
+    ],
+    requestExample: {
+      symbols: ["BTC", "ETH", "SOL"],
+      includeInactive: false,
+    },
+    responseExample: {
+      ok: true,
+      timestamp: "2026-02-27T16:20:00.000Z",
+      symbols: ["BTC", "ETH", "SOL"],
+      venues: ["dydx", "hyperliquid"],
+      includeInactive: false,
+      count: 6,
+      rows: [
+        {
+          symbol: "BTC",
+          totalOpenInterestUsd: 1421281358.36,
+          leaderVenue: "hyperliquid",
+          leaderSharePct: 98.07,
+          byVenue: [
+            {
+              venue: "dydx",
+              market: "BTC-USD",
+              status: "ACTIVE",
+              markPrice: 65747.67,
+              openInterestNative: 417.1607,
+              openInterestUsd: 27425750.12,
+              sharePct: 1.93,
+            },
+            {
+              venue: "hyperliquid",
+              market: "BTC-PERP",
+              status: "ACTIVE",
+              markPrice: 65705,
+              openInterestNative: 21196.49314,
+              openInterestUsd: 1393855608.24,
+              sharePct: 98.07,
+            },
+          ],
+        },
+      ],
+      unavailableVenues: [],
+    },
+  },
+  {
+    id: "perps_venue_score",
+    method: "POST",
+    path: "/api/x402/read/perps_venue_score",
+    summary: "Venue-level scorecard across selected perps symbols.",
+    access: "public-x402-paid",
+    requiredFields: [],
+    optionalFields: [
+      {
+        name: "symbols",
+        type: "string[]",
+        description: "Optional symbol filter (for example BTC, ETH, SOL).",
+      },
+      {
+        name: "venues",
+        type: '("hyperliquid" | "dydx")[]',
+        description: "Optional venue filter.",
+      },
+      {
+        name: "includeInactive",
+        type: "boolean",
+        description: "Include delisted/final-settlement markets.",
+      },
+    ],
+    requestExample: {
+      symbols: ["BTC", "ETH", "SOL"],
+      venues: ["hyperliquid", "dydx"],
+      includeInactive: false,
+    },
+    responseExample: {
+      ok: true,
+      timestamp: "2026-02-27T16:20:00.000Z",
+      symbols: ["BTC", "ETH", "SOL"],
+      venues: ["dydx", "hyperliquid"],
+      includeInactive: false,
+      recommendedVenue: "hyperliquid",
+      scores: [
+        {
+          venue: "hyperliquid",
+          score: 100,
+          symbolsCovered: 3,
+          marketsCount: 3,
+          totalOpenInterestUsd: 2841203150.41,
+          totalVolume24hUsd: 3228901091.73,
+          avgAbsFundingBps1h: 0.0732,
+          components: {
+            oiLog: 21.7669,
+            volumeLog: 21.8953,
+            coverage: 3,
+            fundingPenalty: 0.0732,
+          },
+        },
+        {
+          venue: "dydx",
+          score: 0,
+          symbolsCovered: 3,
+          marketsCount: 3,
+          totalOpenInterestUsd: 49641012.2,
+          totalVolume24hUsd: 142322832.15,
+          avgAbsFundingBps1h: 0.0483,
+          components: {
+            oiLog: 17.7205,
+            volumeLog: 18.7734,
+            coverage: 3,
+            fundingPenalty: 0.0483,
+          },
+        },
+      ],
+      unavailableVenues: [],
     },
   },
 ];

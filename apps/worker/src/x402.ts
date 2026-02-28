@@ -17,7 +17,10 @@ type X402RouteKey =
   | "macro_fred_indicators"
   | "macro_etf_flows"
   | "macro_stablecoin_health"
-  | "macro_oil_analytics";
+  | "macro_oil_analytics"
+  | "perps_funding_surface"
+  | "perps_open_interest_surface"
+  | "perps_venue_score";
 
 type X402RouteConfig = {
   routeKey: X402RouteKey;
@@ -113,10 +116,25 @@ function loadRouteConfig(env: Env, routeKey: X402RouteKey): X402RouteConfig {
                                     env.X402_MACRO_STABLECOIN_HEALTH_PRICE_USD ??
                                       "",
                                   ).trim()
-                                : String(
-                                    env.X402_MACRO_OIL_ANALYTICS_PRICE_USD ??
-                                      "",
-                                  ).trim();
+                                : routeKey === "macro_oil_analytics"
+                                  ? String(
+                                      env.X402_MACRO_OIL_ANALYTICS_PRICE_USD ??
+                                        "",
+                                    ).trim()
+                                  : routeKey === "perps_funding_surface"
+                                    ? String(
+                                        env.X402_PERPS_FUNDING_SURFACE_PRICE_USD ??
+                                          "",
+                                      ).trim()
+                                    : routeKey === "perps_open_interest_surface"
+                                      ? String(
+                                          env.X402_PERPS_OPEN_INTEREST_SURFACE_PRICE_USD ??
+                                            "",
+                                        ).trim()
+                                      : String(
+                                          env.X402_PERPS_VENUE_SCORE_PRICE_USD ??
+                                            "",
+                                        ).trim();
   if (!network || !payTo || !asset || !priceUsdRaw) {
     throw new Error("x402-route-config-missing");
   }

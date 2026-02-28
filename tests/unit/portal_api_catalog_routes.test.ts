@@ -19,6 +19,9 @@ const EXPECTED_X402_PATHS = [
   "/api/x402/read/macro_etf_flows",
   "/api/x402/read/macro_stablecoin_health",
   "/api/x402/read/macro_oil_analytics",
+  "/api/x402/read/perps_funding_surface",
+  "/api/x402/read/perps_open_interest_surface",
+  "/api/x402/read/perps_venue_score",
 ] as const;
 
 function toRecord(value: unknown): Record<string, unknown> | null {
@@ -41,7 +44,7 @@ describe("portal x402 api catalog routes", () => {
     const endpointsRaw = Array.isArray(payloadRecord?.endpoints)
       ? payloadRecord.endpoints
       : [];
-    expect(endpointsRaw.length).toBe(15);
+    expect(endpointsRaw.length).toBe(18);
 
     const endpointRecords = endpointsRaw
       .map((item) => toRecord(item))
