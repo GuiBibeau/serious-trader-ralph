@@ -32,7 +32,10 @@ import {
   parseLevelSource,
   validateOnboardingInput,
 } from "./experience";
-import { fetchHistoricalOhlcvRuntime } from "./historical_ohlcv";
+import {
+  fetchHistoricalOhlcvFallbackRuntime,
+  fetchHistoricalOhlcvRuntime,
+} from "./historical_ohlcv";
 import { JupiterClient } from "./jupiter";
 import {
   LOOP_A_COORDINATOR_NAME,
@@ -655,17 +658,18 @@ export default {
             env,
           );
         }
+        const ohlcvOptions = {
+          defaultLookbackHours: 168,
+          defaultLimit: 168,
+          minLookbackHours: 24,
+          maxLookbackHours: 720,
+          minLimit: 24,
+          maxLimit: 720,
+          requireMints: true,
+        } as const;
         let ohlcv: Awaited<ReturnType<typeof fetchHistoricalOhlcvRuntime>>;
         try {
-          ohlcv = await fetchHistoricalOhlcvRuntime(env, payload, {
-            defaultLookbackHours: 168,
-            defaultLimit: 168,
-            minLookbackHours: 24,
-            maxLookbackHours: 720,
-            minLimit: 24,
-            maxLimit: 720,
-            requireMints: true,
-          });
+          ohlcv = await fetchHistoricalOhlcvRuntime(env, payload, ohlcvOptions);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : "ohlcv-fetch-failed";
@@ -678,10 +682,18 @@ export default {
               env,
             );
           }
-          return withCors(
-            json({ ok: false, error: "ohlcv-fetch-failed" }, { status: 503 }),
-            env,
-          );
+          try {
+            ohlcv = await fetchHistoricalOhlcvFallbackRuntime(
+              env,
+              payload,
+              ohlcvOptions,
+            );
+          } catch {
+            return withCors(
+              json({ ok: false, error: "ohlcv-fetch-failed" }, { status: 503 }),
+              env,
+            );
+          }
         }
 
         const base = json({
@@ -737,17 +749,18 @@ export default {
             env,
           );
         }
+        const ohlcvOptions = {
+          defaultLookbackHours: 168,
+          defaultLimit: 168,
+          minLookbackHours: 24,
+          maxLookbackHours: 720,
+          minLimit: 24,
+          maxLimit: 720,
+          requireMints: true,
+        } as const;
         let ohlcv: Awaited<ReturnType<typeof fetchHistoricalOhlcvRuntime>>;
         try {
-          ohlcv = await fetchHistoricalOhlcvRuntime(env, payload, {
-            defaultLookbackHours: 168,
-            defaultLimit: 168,
-            minLookbackHours: 24,
-            maxLookbackHours: 720,
-            minLimit: 24,
-            maxLimit: 720,
-            requireMints: true,
-          });
+          ohlcv = await fetchHistoricalOhlcvRuntime(env, payload, ohlcvOptions);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : "indicators-fetch-failed";
@@ -760,13 +773,21 @@ export default {
               env,
             );
           }
-          return withCors(
-            json(
-              { ok: false, error: "indicators-fetch-failed" },
-              { status: 503 },
-            ),
-            env,
-          );
+          try {
+            ohlcv = await fetchHistoricalOhlcvFallbackRuntime(
+              env,
+              payload,
+              ohlcvOptions,
+            );
+          } catch {
+            return withCors(
+              json(
+                { ok: false, error: "indicators-fetch-failed" },
+                { status: 503 },
+              ),
+              env,
+            );
+          }
         }
 
         const indicators = computeMarketIndicators(ohlcv.bars);
