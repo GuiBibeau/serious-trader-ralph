@@ -1,7 +1,12 @@
 import { requireUser } from "./auth";
 
 import { getUserSubscription, toSubscriptionView } from "./billing";
-import { USDC_MINT } from "./defaults";
+import {
+  SOL_MINT,
+  SUPPORTED_TRADING_MINTS,
+  SUPPORTED_WALLET_TOKEN_BALANCES,
+  USDC_MINT,
+} from "./defaults";
 import {
   applyExecutionResultToTrace,
   buildExecutionOutcomeFromError,
@@ -77,8 +82,9 @@ import { requireX402Payment, withX402SettlementHeader } from "./x402";
 
 const X402_READ_RPC_ENDPOINT_FALLBACK = "https://api.mainnet-beta.solana.com";
 const X402_READ_JUPITER_BASE_URL = "https://lite-api.jup.ag";
-const X402_SOL_MINT = "So11111111111111111111111111111111111111112";
+const X402_SOL_MINT = SOL_MINT;
 const MAX_EXPERIENCE_EVENTS = 200;
+const SUPPORTED_TRADING_MINT_SET = new Set(SUPPORTED_TRADING_MINTS);
 
 type ExperienceEventName =
   | "onboarding_started"
@@ -1209,15 +1215,15 @@ export default {
         }
 
         if (
-          (inputMint !== X402_SOL_MINT && inputMint !== USDC_MINT) ||
-          (outputMint !== X402_SOL_MINT && outputMint !== USDC_MINT)
+          !SUPPORTED_TRADING_MINT_SET.has(inputMint) ||
+          !SUPPORTED_TRADING_MINT_SET.has(outputMint)
         ) {
           return withCors(
             json(
               {
                 ok: false,
                 error: "unsupported-trade-pair",
-                supportedMints: [X402_SOL_MINT, USDC_MINT],
+                supportedMints: SUPPORTED_TRADING_MINTS,
               },
               { status: 400 },
             ),
@@ -1240,7 +1246,7 @@ export default {
         );
         const rpc = new SolanaRpc(rpcEndpoint);
         const policy = normalizePolicy({
-          allowedMints: [X402_SOL_MINT, USDC_MINT],
+          allowedMints: SUPPORTED_TRADING_MINTS,
           slippageBps,
           maxPriceImpactPct: 0.05,
           minSolReserveLamports: "50000000",
@@ -1548,8 +1554,38 @@ export default {
         }
         const rpc = new SolanaRpc(balanceRpcEndpoint);
         let lamports = 0n;
-        let usdcAtomic = 0n;
         const balanceErrors: string[] = [];
+        const tokenBalanceResults = await Promise.all(
+          SUPPORTED_WALLET_TOKEN_BALANCES.map(async (token) => {
+            try {
+              const atomic = await rpc.getTokenBalanceAtomic(
+                user.walletAddress as string,
+                token.mint,
+              );
+              return {
+                mint: token.mint,
+                symbol: token.symbol,
+                decimals: token.decimals,
+                atomic: atomic.toString(),
+                display: formatAtomicDisplay(atomic, token.decimals),
+              };
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              balanceErrors.push(`${token.symbol.toLowerCase()}:${message}`);
+              return {
+                mint: token.mint,
+                symbol: token.symbol,
+                decimals: token.decimals,
+                atomic: "0",
+                display: formatAtomicDisplay(0n, token.decimals),
+              };
+            }
+          }),
+        );
+        const usdcBalance =
+          tokenBalanceResults.find((token) => token.mint === USDC_MINT)
+            ?.atomic ?? "0";
 
         try {
           lamports = await rpc.getBalanceLamports(user.walletAddress);
@@ -1559,35 +1595,19 @@ export default {
           );
         }
 
-        try {
-          usdcAtomic = await rpc.getTokenBalanceAtomic(
-            user.walletAddress,
-            USDC_MINT,
-          );
-        } catch (error) {
-          balanceErrors.push(
-            `usdc:${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-
         return withCors(
           json({
             ok: true,
             balances: {
               sol: {
                 lamports: lamports.toString(),
-                display: (Number(lamports) / 1e9)
-                  .toFixed(9)
-                  .replace(/0+$/, "")
-                  .replace(/\.$/, ".0"),
+                display: formatAtomicDisplay(lamports, 9),
               },
               usdc: {
-                atomic: usdcAtomic.toString(),
-                display: (Number(usdcAtomic) / 1e6)
-                  .toFixed(6)
-                  .replace(/0+$/, "")
-                  .replace(/\.$/, ".0"),
+                atomic: usdcBalance,
+                display: formatAtomicDisplay(usdcBalance, 6),
               },
+              tokens: tokenBalanceResults,
             },
             ...(balanceErrors.length > 0
               ? { errors: balanceErrors }
@@ -2235,6 +2255,25 @@ function toBoundedInt(
   const raw = value === undefined ? fallback : Number(value);
   if (!Number.isFinite(raw)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(raw)));
+}
+
+function formatAtomicDisplay(
+  atomicInput: bigint | string,
+  decimals: number,
+): string {
+  let atomic = 0n;
+  try {
+    atomic = typeof atomicInput === "bigint" ? atomicInput : BigInt(atomicInput);
+  } catch {
+    return "0.0";
+  }
+
+  const safeDecimals = Math.max(0, Math.min(18, Math.floor(decimals)));
+  const scale = 10n ** BigInt(safeDecimals);
+  const whole = atomic / scale;
+  const fraction = (atomic % scale).toString().padStart(safeDecimals, "0");
+  const trimmed = fraction.replace(/0+$/, "");
+  return trimmed.length > 0 ? `${whole.toString()}.${trimmed}` : `${whole}.0`;
 }
 
 function toUniqueStrings(value: unknown, maxItems: number): string[] {

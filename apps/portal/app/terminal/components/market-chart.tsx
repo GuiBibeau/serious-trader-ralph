@@ -29,9 +29,11 @@ function formatVolume(value: number | undefined): string {
 export function MarketChart({
   className,
   market,
+  pairLabel,
 }: {
   className?: string;
   market: MarketState;
+  pairLabel: string;
 }) {
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
   const gradientId = useId();
@@ -230,7 +232,7 @@ export function MarketChart({
           </span>
         </div>
         <p className="mt-0.5 text-[10px] font-mono text-slate-300/90">
-          SOL/USDC • {lastUpdated}
+          {pairLabel} • {lastUpdated}
         </p>
       </div>
 

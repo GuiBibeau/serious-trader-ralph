@@ -18,22 +18,23 @@ import {
   BTN_SECONDARY,
   isRecord,
 } from "../../lib";
-import { SOL_DECIMALS, type TradeIntent, USDC_DECIMALS } from "./trade-intent";
+import type { TradeIntent } from "./trade-intent";
 
 type TradeTicketModalProps = {
   open: boolean;
   intent: TradeIntent | null;
   walletAddress: string | null;
-  solBalanceLamports?: string | null;
-  usdcBalanceAtomic?: string | null;
+  tokenBalancesByMint?: Record<string, string> | null;
   getAccessToken: () => Promise<string | null>;
   onClose: () => void;
   onTradeComplete?: (trade: TradeTicketCompletion) => void;
 };
 
 export type TradeTicketCompletion = {
-  inputSymbol: "SOL" | "USDC";
-  outputSymbol: "SOL" | "USDC";
+  inputMint: string;
+  outputMint: string;
+  inputSymbol: string;
+  outputSymbol: string;
   inAmountAtomic: string;
   outAmountAtomic: string;
   status: string;
@@ -50,18 +51,8 @@ type QuoteState = {
   priceImpactPct: number | null;
 };
 
-const USDC_AMOUNT_PRESETS = ["25", "50", "100"] as const;
-const SOL_AMOUNT_PRESETS = ["0.1", "0.25", "0.5"] as const;
-const MIN_AMOUNT_BY_SYMBOL = {
-  SOL: "0.01",
-  USDC: "1",
-} as const;
 const MIN_SLIPPAGE_BPS = "1";
 const MAX_SLIPPAGE_BPS = "5000";
-
-function decimalsForSymbol(symbol: "SOL" | "USDC"): number {
-  return symbol === "SOL" ? SOL_DECIMALS : USDC_DECIMALS;
-}
 
 function parseUiAmountToAtomic(value: string, decimals: number): string | null {
   const trimmed = value.trim();
@@ -158,8 +149,7 @@ export function TradeTicketModal({
   open,
   intent,
   walletAddress,
-  solBalanceLamports,
-  usdcBalanceAtomic,
+  tokenBalancesByMint,
   getAccessToken,
   onClose,
   onTradeComplete,
@@ -215,23 +205,17 @@ export function TradeTicketModal({
   const deferredSlippageInput = useDeferredValue(slippageInput);
 
   const amountPresets = useMemo(
-    () =>
-      intent?.inputSymbol === "USDC" ? USDC_AMOUNT_PRESETS : SOL_AMOUNT_PRESETS,
-    [intent?.inputSymbol],
+    () => intent?.amountPresets ?? [],
+    [intent?.amountPresets],
   );
 
   const maxAmountUi = useMemo(() => {
     if (!intent) return null;
-    const inputAtomicRaw =
-      intent.inputSymbol === "SOL" ? solBalanceLamports : usdcBalanceAtomic;
+    const inputAtomicRaw = tokenBalancesByMint?.[intent.inputMint];
     const inputAtomic = toPositiveAtomic(inputAtomicRaw);
     if (!inputAtomic) return null;
-    return formatAtomicToUi(
-      inputAtomic,
-      decimalsForSymbol(intent.inputSymbol),
-      6,
-    );
-  }, [intent, solBalanceLamports, usdcBalanceAtomic]);
+    return formatAtomicToUi(inputAtomic, intent.inputDecimals, 6);
+  }, [intent, tokenBalancesByMint]);
 
   const resolvedSlippageBps = useMemo(
     () => toBoundedSlippage(deferredSlippageInput, intent?.slippageBps ?? 50),
@@ -240,8 +224,8 @@ export function TradeTicketModal({
 
   const refreshQuote = useCallback(async (): Promise<void> => {
     if (!intent || !open) return;
-    const inputDecimals = decimalsForSymbol(intent.inputSymbol);
-    const outputDecimals = decimalsForSymbol(intent.outputSymbol);
+    const inputDecimals = intent.inputDecimals;
+    const outputDecimals = intent.outputDecimals;
     const inAmountAtomic = parseUiAmountToAtomic(
       deferredAmountUi,
       inputDecimals,
@@ -410,6 +394,8 @@ export function TradeTicketModal({
           ? payload.signature.trim()
           : null;
       onTradeComplete?.({
+        inputMint: intent.inputMint,
+        outputMint: intent.outputMint,
         inputSymbol: intent.inputSymbol,
         outputSymbol: intent.outputSymbol,
         inAmountAtomic: quote.inAmountAtomic,
@@ -455,7 +441,7 @@ export function TradeTicketModal({
 
   const setAmountMin = useCallback(() => {
     if (!intent) return;
-    setAmountUi(MIN_AMOUNT_BY_SYMBOL[intent.inputSymbol]);
+    setAmountUi(intent.inputMinAmountUi);
   }, [intent]);
 
   const setAmountMax = useCallback(() => {
@@ -506,7 +492,7 @@ export function TradeTicketModal({
             amountUi={amountUi}
             amountPresets={amountPresets}
             inputSymbol={intent.inputSymbol}
-            amountMinValue={MIN_AMOUNT_BY_SYMBOL[intent.inputSymbol]}
+            amountMinValue={intent.inputMinAmountUi}
             amountMaxValue={maxAmountUi}
             slippageInput={slippageInput}
             onAmountChange={handleAmountChange}
@@ -566,7 +552,7 @@ const TradeIdentityCard = memo(function TradeIdentityCard(props: {
     <div className="rounded border border-border bg-subtle px-3 py-2 text-xs">
       <div className="flex items-center justify-between">
         <span className="text-muted">Pair</span>
-        <span className="font-mono">SOL/USDC</span>
+        <span className="font-mono">{intent.pairId}</span>
       </div>
       <div className="mt-1 flex items-center justify-between">
         <span className="text-muted">Direction</span>
@@ -587,7 +573,7 @@ const TradeIdentityCard = memo(function TradeIdentityCard(props: {
 const TradeInputsSection = memo(function TradeInputsSection(props: {
   amountUi: string;
   amountPresets: readonly string[];
-  inputSymbol: "SOL" | "USDC";
+  inputSymbol: string;
   amountMinValue: string;
   amountMaxValue: string | null;
   slippageInput: string;
@@ -654,7 +640,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
             id="trade-ticket-amount"
             className="input-field !py-2.5 font-mono"
             inputMode="decimal"
-            placeholder={inputSymbol === "USDC" ? "50" : "0.25"}
+            placeholder={amountPresets[1] ?? amountPresets[0] ?? "1"}
             value={amountUi}
             onChange={onAmountChange}
           />
@@ -719,7 +705,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
 });
 
 const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
-  outputSymbol: "SOL" | "USDC";
+  outputSymbol: string;
   quote: QuoteState;
   loading: boolean;
 }) {

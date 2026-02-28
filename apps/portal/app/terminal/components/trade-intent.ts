@@ -1,22 +1,64 @@
-export const SOL_MINT = "So11111111111111111111111111111111111111112";
-export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
-export const SOL_DECIMALS = 9;
-export const USDC_DECIMALS = 6;
+import {
+  DEFAULT_PAIR_ID,
+  getPairConfig,
+  type PairId,
+  TOKEN_CONFIGS,
+  type TokenSymbol,
+} from "./trade-pairs";
 
 export type TradeDirection = "buy" | "sell";
 
 export type TradeIntent = {
+  pairId: PairId;
   source: string;
   reason: string;
   direction: TradeDirection;
   inputMint: string;
   outputMint: string;
-  inputSymbol: "SOL" | "USDC";
-  outputSymbol: "SOL" | "USDC";
+  inputSymbol: TokenSymbol;
+  outputSymbol: TokenSymbol;
+  inputDecimals: number;
+  outputDecimals: number;
+  inputMinAmountUi: string;
+  amountPresets: readonly string[];
   amountUi: string;
   slippageBps: number;
 };
+
+export function createTradeIntent(
+  direction: TradeDirection,
+  source: string,
+  pairId: PairId = DEFAULT_PAIR_ID,
+  opts?: {
+    reason?: string;
+    amountUi?: string;
+    slippageBps?: number;
+  },
+): TradeIntent {
+  const pair = getPairConfig(pairId);
+  const buy = direction === "buy";
+  const inputSymbol = buy ? pair.quoteSymbol : pair.baseSymbol;
+  const outputSymbol = buy ? pair.baseSymbol : pair.quoteSymbol;
+  const inputToken = TOKEN_CONFIGS[inputSymbol];
+  const outputToken = TOKEN_CONFIGS[outputSymbol];
+
+  return {
+    pairId: pair.id,
+    source,
+    reason: opts?.reason ?? (buy ? `Buy ${outputSymbol}` : `Sell ${inputSymbol}`),
+    direction,
+    inputMint: inputToken.mint,
+    outputMint: outputToken.mint,
+    inputSymbol,
+    outputSymbol,
+    inputDecimals: inputToken.decimals,
+    outputDecimals: outputToken.decimals,
+    inputMinAmountUi: inputToken.minAmountUi,
+    amountPresets: inputToken.amountPresets,
+    amountUi: opts?.amountUi ?? inputToken.amountPresets[1] ?? "1",
+    slippageBps: opts?.slippageBps ?? 50,
+  };
+}
 
 export function createSolUsdcIntent(
   direction: TradeDirection,
@@ -27,16 +69,5 @@ export function createSolUsdcIntent(
     slippageBps?: number;
   },
 ): TradeIntent {
-  const buy = direction === "buy";
-  return {
-    source,
-    reason: opts?.reason ?? (buy ? "Bullish setup" : "Risk-off setup"),
-    direction,
-    inputMint: buy ? USDC_MINT : SOL_MINT,
-    outputMint: buy ? SOL_MINT : USDC_MINT,
-    inputSymbol: buy ? "USDC" : "SOL",
-    outputSymbol: buy ? "SOL" : "USDC",
-    amountUi: opts?.amountUi ?? (buy ? "50" : "0.25"),
-    slippageBps: opts?.slippageBps ?? 50,
-  };
+  return createTradeIntent(direction, source, "SOL/USDC", opts);
 }

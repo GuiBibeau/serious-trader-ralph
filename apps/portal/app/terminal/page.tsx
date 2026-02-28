@@ -10,8 +10,6 @@ import {
   apiFetchJson,
   type BalanceResponse,
   BTN_SECONDARY,
-  formatSolBalanceDisplay,
-  formatUsdcBalanceDisplay,
   isRecord,
 } from "../lib";
 import { PresenceCard } from "../motion";
@@ -28,12 +26,19 @@ import { MacroStablecoinWidget } from "./components/macro-stablecoin-widget";
 import {
   formatPrice,
   type MarketState,
-  useSolMarketFeed,
+  useMarketFeed,
 } from "./components/sol-market-feed";
 import {
-  createSolUsdcIntent,
+  createTradeIntent,
   type TradeIntent,
 } from "./components/trade-intent";
+import {
+  DEFAULT_PAIR_ID,
+  getPairConfig,
+  type PairId,
+  SUPPORTED_PAIRS,
+  TOKEN_CONFIGS,
+} from "./components/trade-pairs";
 import type { TradeTicketCompletion } from "./components/trade-ticket-modal";
 import { useDashboard } from "./context";
 
@@ -52,7 +57,11 @@ const TradeTicketModal = dynamic(
   { ssr: false },
 );
 
-const MarketChart = dynamic<{ className?: string; market: MarketState }>(
+const MarketChart = dynamic<{
+  className?: string;
+  market: MarketState;
+  pairLabel: string;
+}>(
   () => import("./components/market-chart").then((mod) => mod.MarketChart),
   {
     ssr: false,
@@ -79,6 +88,32 @@ function parseAtomic(value: string): bigint | null {
     return BigInt(value);
   } catch {
     return null;
+  }
+}
+
+function formatAtomicTokenBalance(
+  atomicRaw: string | null | undefined,
+  decimals: number,
+  maxFractionDigits = 6,
+): string {
+  if (!atomicRaw || !/^\d+$/.test(atomicRaw)) return "0.00";
+  try {
+    const atomic = BigInt(atomicRaw);
+    const safeDecimals = Math.max(0, Math.min(18, Math.floor(decimals)));
+    const scale = BigInt(10) ** BigInt(safeDecimals);
+    const whole = atomic / scale;
+    if (safeDecimals === 0) return whole.toString();
+
+    const fractionRaw = (atomic % scale).toString().padStart(safeDecimals, "0");
+    const shownFraction = fractionRaw.slice(
+      0,
+      Math.min(safeDecimals, maxFractionDigits),
+    );
+    const trimmed = shownFraction.replace(/0+$/, "");
+    if (trimmed.length > 0) return `${whole.toString()}.${trimmed}`;
+    return `${whole.toString()}.00`;
+  } catch {
+    return "0.00";
   }
 }
 
@@ -143,6 +178,9 @@ function ControlRoom() {
 
   const [wallet, setWallet] = useState<AccountWallet | null>(null);
   const [walletBalances, setWalletBalances] = useState<Balances | null>(null);
+  const [tokenBalancesByMint, setTokenBalancesByMint] = useState<
+    Record<string, string>
+  >({});
   const [walletBalanceError, setWalletBalanceError] = useState<string | null>(
     null,
   );
@@ -152,6 +190,7 @@ function ControlRoom() {
   const [fundOpen, setFundOpen] = useState(false);
   const [tradeOpen, setTradeOpen] = useState(false);
   const [tradeIntent, setTradeIntent] = useState<TradeIntent | null>(null);
+  const [selectedPairId, setSelectedPairId] = useState<PairId>(DEFAULT_PAIR_ID);
   const [gridRevision, setGridRevision] = useState(0);
   const [hasCustomGridLayout, setHasCustomGridLayout] = useState(false);
 
@@ -241,6 +280,20 @@ function ControlRoom() {
           sol: { lamports: solLamports ?? "0" },
           usdc: { atomic: usdcAtomic ?? "0" },
         });
+        const nextTokenBalancesByMint: Record<string, string> = {
+          [TOKEN_CONFIGS.SOL.mint]: solLamports ?? "0",
+          [TOKEN_CONFIGS.USDC.mint]: usdcAtomic ?? "0",
+        };
+        if (Array.isArray(balancesRaw.tokens)) {
+          for (const tokenRow of balancesRaw.tokens) {
+            if (!isRecord(tokenRow)) continue;
+            const mint = String(tokenRow.mint ?? "").trim();
+            const atomic = toNumericString(tokenRow.atomic);
+            if (!mint || atomic === null) continue;
+            nextTokenBalancesByMint[mint] = atomic;
+          }
+        }
+        setTokenBalancesByMint(nextTokenBalancesByMint);
         setWalletBalanceError(null);
         return;
       }
@@ -263,6 +316,7 @@ function ControlRoom() {
   useEffect(() => {
     if (!wallet) {
       setWalletBalances(null);
+      setTokenBalancesByMint({});
       setWalletBalanceError(null);
       return;
     }
@@ -270,6 +324,7 @@ function ControlRoom() {
   }, [wallet, refreshWalletBalances]);
 
   const hasWallet = wallet !== null;
+  const selectedPair = getPairConfig(selectedPairId);
 
   const openTradeTicket = useCallback(
     (intent: TradeIntent): void => {
@@ -285,19 +340,19 @@ function ControlRoom() {
 
   const openMarketBuyTrade = useCallback(() => {
     openTradeTicket(
-      createSolUsdcIntent("buy", "MARKET_MONITOR", {
-        reason: "Market action: buy SOL",
+      createTradeIntent("buy", "MARKET_MONITOR", selectedPairId, {
+        reason: `Market action: buy ${selectedPair.baseSymbol}`,
       }),
     );
-  }, [openTradeTicket]);
+  }, [openTradeTicket, selectedPair.baseSymbol, selectedPairId]);
 
   const openMarketSellTrade = useCallback(() => {
     openTradeTicket(
-      createSolUsdcIntent("sell", "MARKET_MONITOR", {
-        reason: "Market action: reduce SOL",
+      createTradeIntent("sell", "MARKET_MONITOR", selectedPairId, {
+        reason: `Market action: reduce ${selectedPair.baseSymbol}`,
       }),
     );
-  }, [openTradeTicket]);
+  }, [openTradeTicket, selectedPair.baseSymbol, selectedPairId]);
 
   const openFundingModal = useCallback(() => {
     setFundOpen(true);
@@ -313,17 +368,31 @@ function ControlRoom() {
       const outAmount = parseAtomic(trade.outAmountAtomic);
       if (inAmount === null || outAmount === null) return;
 
+      setTokenBalancesByMint((current) => {
+        const next = { ...current };
+        const inputCurrent =
+          parseAtomic(next[trade.inputMint] ?? "0") ?? BigInt(0);
+        const outputCurrent =
+          parseAtomic(next[trade.outputMint] ?? "0") ?? BigInt(0);
+        const nextInput = inputCurrent - inAmount;
+        next[trade.inputMint] = (
+          nextInput > BigInt(0) ? nextInput : BigInt(0)
+        ).toString();
+        next[trade.outputMint] = (outputCurrent + outAmount).toString();
+        return next;
+      });
+
       setWalletBalances((current) => {
         if (!current) return current;
 
         let nextSol = parseAtomic(current.sol.lamports) ?? BigInt(0);
         let nextUsdc = parseAtomic(current.usdc.atomic) ?? BigInt(0);
 
-        if (trade.inputSymbol === "SOL") nextSol -= inAmount;
-        else nextUsdc -= inAmount;
+        if (trade.inputMint === TOKEN_CONFIGS.SOL.mint) nextSol -= inAmount;
+        if (trade.inputMint === TOKEN_CONFIGS.USDC.mint) nextUsdc -= inAmount;
 
-        if (trade.outputSymbol === "SOL") nextSol += outAmount;
-        else nextUsdc += outAmount;
+        if (trade.outputMint === TOKEN_CONFIGS.SOL.mint) nextSol += outAmount;
+        if (trade.outputMint === TOKEN_CONFIGS.USDC.mint) nextUsdc += outAmount;
 
         if (nextSol < BigInt(0)) nextSol = BigInt(0);
         if (nextUsdc < BigInt(0)) nextUsdc = BigInt(0);
@@ -412,8 +481,7 @@ function ControlRoom() {
           open
           intent={tradeIntent}
           walletAddress={wallet?.walletAddress ?? null}
-          solBalanceLamports={walletBalances?.sol.lamports ?? null}
-          usdcBalanceAtomic={walletBalances?.usdc.atomic ?? null}
+          tokenBalancesByMint={tokenBalancesByMint}
           getAccessToken={getAccessToken}
           onClose={() => setTradeOpen(false)}
           onTradeComplete={handleTradeComplete}
@@ -462,6 +530,8 @@ function ControlRoom() {
                   className="flex flex-col overflow-hidden bg-surface"
                 >
                   <MarketMonitorCard
+                    pairId={selectedPairId}
+                    onPairChange={setSelectedPairId}
                     onBuy={openMarketBuyTrade}
                     onSell={openMarketSellTrade}
                   />
@@ -472,8 +542,8 @@ function ControlRoom() {
                   className="flex flex-col overflow-hidden bg-surface"
                 >
                   <WalletMonitorCard
-                    solLamports={walletBalances?.sol.lamports ?? "0"}
-                    usdcAtomic={walletBalances?.usdc.atomic ?? "0"}
+                    pairId={selectedPairId}
+                    tokenBalancesByMint={tokenBalancesByMint}
                   />
                 </div>
 
@@ -502,11 +572,15 @@ function ControlRoom() {
 }
 
 const MarketMonitorCard = memo(function MarketMonitorCard(props: {
+  pairId: PairId;
+  onPairChange: (pairId: PairId) => void;
   onBuy: () => void;
   onSell: () => void;
 }) {
-  const { onBuy, onSell } = props;
-  const marketFeed = useSolMarketFeed();
+  const { pairId, onPairChange, onBuy, onSell } = props;
+  const pair = getPairConfig(pairId);
+  const marketFeed = useMarketFeed(pairId);
+  const pairLabel = `${pair.baseSymbol}/${pair.quoteSymbol}`;
   return (
     <>
       <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
@@ -515,7 +589,18 @@ const MarketMonitorCard = memo(function MarketMonitorCard(props: {
           MARKET_MONITOR
         </p>
         <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider">
-          <span className="text-muted">SOL/USDC</span>
+          <select
+            className="h-6 rounded border border-border bg-paper px-2 text-[10px] text-muted uppercase tracking-wider"
+            value={pairId}
+            onChange={(event) => onPairChange(event.target.value as PairId)}
+            title="Select pair"
+          >
+            {SUPPORTED_PAIRS.map((pairOption) => (
+              <option key={pairOption.id} value={pairOption.id}>
+                {pairOption.id}
+              </option>
+            ))}
+          </select>
           <span
             className={cn(
               "tabular-nums",
@@ -524,7 +609,7 @@ const MarketMonitorCard = memo(function MarketMonitorCard(props: {
                 : "text-red-400",
             )}
           >
-            ${formatPrice(marketFeed.latestPrice)}
+            {formatPrice(marketFeed.latestPrice)} {pair.quoteSymbol}
           </span>
           <button
             className={cn(
@@ -549,44 +634,63 @@ const MarketMonitorCard = memo(function MarketMonitorCard(props: {
         </div>
       </div>
       <div className="flex-1 relative bg-[var(--color-chart-bg)]">
-        <MarketChart className="opacity-80" market={marketFeed} />
+        <MarketChart
+          className="opacity-80"
+          market={marketFeed}
+          pairLabel={pairLabel}
+        />
       </div>
     </>
   );
 });
 
 const WalletMonitorCard = memo(function WalletMonitorCard(props: {
-  solLamports: string;
-  usdcAtomic: string;
+  pairId: PairId;
+  tokenBalancesByMint: Record<string, string>;
 }) {
-  const { solLamports, usdcAtomic } = props;
+  const { pairId, tokenBalancesByMint } = props;
+  const pair = getPairConfig(pairId);
+  const baseToken = TOKEN_CONFIGS[pair.baseSymbol];
+  const quoteToken = TOKEN_CONFIGS[pair.quoteSymbol];
+  const baseAtomic = tokenBalancesByMint[baseToken.mint] ?? "0";
+  const quoteAtomic = tokenBalancesByMint[quoteToken.mint] ?? "0";
+  const baseDisplay = formatAtomicTokenBalance(baseAtomic, baseToken.decimals);
+  const quoteDisplay = formatAtomicTokenBalance(
+    quoteAtomic,
+    quoteToken.decimals,
+  );
+
   return (
     <>
       <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
         <p className="label text-[10px] text-muted dashboard-drag-handle cursor-move select-none">
           WALLET_MONITOR
         </p>
-        <span className="text-[10px] uppercase tracking-wider text-emerald-400">
-          LIVE
+        <span className="text-[10px] uppercase tracking-wider text-emerald-400 font-mono">
+          {pair.id}
         </span>
       </div>
       <div className="flex-1 p-4 grid grid-cols-2 gap-4 place-content-center">
         <div className="space-y-1">
           <p className="text-[10px] text-muted uppercase tracking-wider">
-            Solana Balance
+            {baseToken.symbol} Balance
           </p>
           <p className="text-2xl font-mono font-medium text-ink">
-            {formatSolBalanceDisplay(solLamports)}
-            <span className="text-sm text-muted ml-1 font-sans">SOL</span>
+            {baseDisplay}
+            <span className="text-sm text-muted ml-1 font-sans">
+              {baseToken.symbol}
+            </span>
           </p>
         </div>
         <div className="space-y-1">
           <p className="text-[10px] text-muted uppercase tracking-wider">
-            USDC Balance
+            {quoteToken.symbol} Balance
           </p>
           <p className="text-2xl font-mono font-medium text-ink">
-            {formatUsdcBalanceDisplay(usdcAtomic)}
-            <span className="text-sm text-muted ml-1 font-sans">USDC</span>
+            {quoteDisplay}
+            <span className="text-sm text-muted ml-1 font-sans">
+              {quoteToken.symbol}
+            </span>
           </p>
         </div>
       </div>

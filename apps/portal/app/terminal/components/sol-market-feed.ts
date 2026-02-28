@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiBase, isRecord } from "../../lib";
+import {
+  getPairConfig,
+  marketQuoteAmountAtomic,
+  TOKEN_CONFIGS,
+  type PairId,
+} from "./trade-pairs";
 
 export type MarketPoint = {
   ts: number;
@@ -22,6 +28,7 @@ export type MarketState = {
   change24hPct: number | null;
   lastUpdatedMs: number | null;
   sourcePriority: string[];
+  pairId: PairId;
 };
 
 type IndicatorsPayload = {
@@ -55,40 +62,10 @@ type OhlcvPayload = {
   };
 };
 
-const SOL_MINT = "So11111111111111111111111111111111111111112";
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-const LIVE_QUOTE_AMOUNT_LAMPORTS = "1000000000"; // 1 SOL
-const USDC_DECIMALS = 6;
 const QUOTE_REFRESH_MS = 15_000;
 const INDICATORS_REFRESH_MS = 5 * 60_000;
 const MAX_LIVE_POINTS = 120;
 const MAX_TOTAL_POINTS = 240;
-
-let state: MarketState = {
-  status: "idle",
-  error: null,
-  points: [],
-  latestPrice: null,
-  change24hPct: null,
-  lastUpdatedMs: null,
-  sourcePriority: [],
-};
-
-const listeners = new Set<(next: MarketState) => void>();
-let pollTimer: number | null = null;
-let inFlight = false;
-let lastIndicatorsFetchMs = 0;
-let basePoints: MarketPoint[] = [];
-let livePoints: MarketPoint[] = [];
-
-function emit(): void {
-  for (const listener of listeners) listener(state);
-}
-
-function update(next: Partial<MarketState>): void {
-  state = { ...state, ...next };
-  emit();
-}
 
 function parseDecimalFromAtomic(raw: string, decimals: number): number {
   const digits = String(raw ?? "").trim();
@@ -136,16 +113,14 @@ function toChartPoints(
       low,
       close: price,
     };
-    if (Number.isFinite(volumeRaw)) {
-      point.volume = volumeRaw;
-    }
+    if (Number.isFinite(volumeRaw)) point.volume = volumeRaw;
     out.push(point);
   }
   out.sort((a, b) => a.ts - b.ts);
   return out;
 }
 
-function mergePoints(): MarketPoint[] {
+function mergePoints(basePoints: MarketPoint[], livePoints: MarketPoint[]): MarketPoint[] {
   const merged = [...basePoints, ...livePoints].sort((a, b) => a.ts - b.ts);
   const deduped: MarketPoint[] = [];
   let lastTs = -1;
@@ -193,232 +168,268 @@ function parseOhlcvPayload(value: unknown): OhlcvPayload | null {
   return value as unknown as OhlcvPayload;
 }
 
-async function fetchIndicators(): Promise<void> {
-  const base = apiBase();
-  if (!base) {
-    throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
-  }
-
-  const requestBody = {
-    baseMint: SOL_MINT,
-    quoteMint: USDC_MINT,
-    lookbackHours: 168,
-    limit: 168,
-    resolutionMinutes: 60,
-  };
-
-  let response = await fetch(`${base}/api/x402/read/market_indicators`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "payment-signature": "portal-market-widget",
-    },
-    body: JSON.stringify(requestBody),
-  });
-  let payload = (await response.json().catch(() => null)) as unknown;
-
-  let bars: Array<{ ts: string; close: number }> = [];
-  let sourcePriority: string[] = [];
-  let h24: number | null = null;
-
-  if (response.ok) {
-    const parsed = parseIndicatorsPayload(payload);
-    if (!parsed) throw new Error("invalid-indicators-payload");
-    bars = parsed.ohlcv.bars;
-    sourcePriority = Array.isArray(parsed.ohlcv.sourcePriorityUsed)
-      ? parsed.ohlcv.sourcePriorityUsed.filter(
-          (item): item is string => typeof item === "string",
-        )
-      : [];
-    h24 =
-      isRecord(parsed.indicators?.returnsPct) &&
-      typeof parsed.indicators?.returnsPct?.h24 === "number"
-        ? parsed.indicators.returnsPct.h24
-        : null;
-  } else if (response.status === 404) {
-    // Backward compatibility: older workers might not expose market_indicators yet.
-    response = await fetch(`${base}/api/x402/read/market_ohlcv`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "payment-signature": "portal-market-widget",
-      },
-      body: JSON.stringify(requestBody),
-    });
-    payload = (await response.json().catch(() => null)) as unknown;
-    if (!response.ok) {
-      const error =
-        isRecord(payload) && typeof payload.error === "string"
-          ? payload.error
-          : `http-${response.status}`;
-      throw new Error(error);
-    }
-    const parsed = parseOhlcvPayload(payload);
-    if (!parsed) throw new Error("invalid-ohlcv-payload");
-    bars = parsed.ohlcv.bars;
-    sourcePriority = Array.isArray(parsed.ohlcv.sourcePriorityUsed)
-      ? parsed.ohlcv.sourcePriorityUsed.filter(
-          (item): item is string => typeof item === "string",
-        )
-      : [];
-  } else {
-    const error =
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : `http-${response.status}`;
-    throw new Error(error);
-  }
-
-  basePoints = toChartPoints(bars);
-  const merged = mergePoints();
-  const latest = merged[merged.length - 1] ?? null;
-
-  update({
-    status: "ready",
+export function useMarketFeed(pairId: PairId): MarketState {
+  const pair = useMemo(() => getPairConfig(pairId), [pairId]);
+  const baseMint = TOKEN_CONFIGS[pair.baseSymbol].mint;
+  const quoteMint = TOKEN_CONFIGS[pair.quoteSymbol].mint;
+  const quoteToken = TOKEN_CONFIGS[pair.quoteSymbol];
+  const [state, setState] = useState<MarketState>({
+    status: "idle",
     error: null,
-    points: merged,
-    latestPrice: latest?.price ?? null,
-    change24hPct: calc24hChange(merged, h24),
-    sourcePriority,
-    lastUpdatedMs: Date.now(),
+    points: [],
+    latestPrice: null,
+    change24hPct: null,
+    lastUpdatedMs: null,
+    sourcePriority: [],
+    pairId,
   });
-}
-
-async function fetchLiveQuote(): Promise<void> {
-  const base = apiBase();
-  if (!base) {
-    throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
-  }
-  const response = await fetch(`${base}/api/x402/read/market_jupiter_quote`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "payment-signature": "portal-market-widget",
-    },
-    body: JSON.stringify({
-      inputMint: SOL_MINT,
-      outputMint: USDC_MINT,
-      amount: LIVE_QUOTE_AMOUNT_LAMPORTS,
-      slippageBps: 50,
-    }),
-  });
-  const payload = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) {
-    const error =
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : `http-${response.status}`;
-    throw new Error(error);
-  }
-  if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.quote)) {
-    throw new Error("invalid-quote-payload");
-  }
-  const outAmount = String(payload.quote.outAmount ?? "");
-  const nextPrice = parseDecimalFromAtomic(outAmount, USDC_DECIMALS);
-  if (!Number.isFinite(nextPrice) || nextPrice <= 0) {
-    throw new Error("invalid-quote-price");
-  }
-  const nextLivePoint: MarketPoint = {
-    ts: Date.now(),
-    price: nextPrice,
-    kind: "quote",
-    open: nextPrice,
-    high: nextPrice,
-    low: nextPrice,
-    close: nextPrice,
-  };
-  livePoints = [...livePoints, nextLivePoint].slice(-MAX_LIVE_POINTS);
-  const merged = mergePoints();
-  const latest = merged[merged.length - 1] ?? null;
-  update({
-    status: "ready",
-    error: null,
-    points: merged,
-    latestPrice: latest?.price ?? null,
-    change24hPct: calc24hChange(merged, state.change24hPct),
-    lastUpdatedMs: Date.now(),
-  });
-}
-
-async function refreshTick(): Promise<void> {
-  if (inFlight) return;
-  inFlight = true;
-  if (state.status === "idle") {
-    update({ status: "loading", error: null });
-  }
-
-  let lastError: string | null = null;
-  try {
-    if (
-      basePoints.length === 0 ||
-      Date.now() - lastIndicatorsFetchMs >= INDICATORS_REFRESH_MS
-    ) {
-      try {
-        await fetchIndicators();
-        lastIndicatorsFetchMs = Date.now();
-      } catch (error) {
-        lastError =
-          error instanceof Error ? error.message : "indicators-failed";
-      }
-    }
-    try {
-      await fetchLiveQuote();
-      if (lastError) {
-        update({
-          status: "ready",
-          error: lastError,
-        });
-      }
-    } catch (error) {
-      const quoteError =
-        error instanceof Error ? error.message : "quote-fetch-failed";
-      update({
-        status: state.points.length > 0 ? "ready" : "error",
-        error: lastError ? `${lastError}; ${quoteError}` : quoteError,
-      });
-    }
-  } finally {
-    inFlight = false;
-  }
-}
-
-function ensurePolling(): void {
-  if (typeof window === "undefined") return;
-  if (pollTimer !== null) return;
-  void refreshTick();
-  pollTimer = window.setInterval(() => {
-    void refreshTick();
-  }, QUOTE_REFRESH_MS);
-}
-
-function maybeStopPolling(): void {
-  if (typeof window === "undefined") return;
-  if (listeners.size > 0) return;
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
-export function useSolMarketFeed(): MarketState {
-  const [snapshot, setSnapshot] = useState<MarketState>(state);
+  const inFlightRef = useRef(false);
+  const lastIndicatorsFetchMsRef = useRef(0);
+  const basePointsRef = useRef<MarketPoint[]>([]);
+  const livePointsRef = useRef<MarketPoint[]>([]);
+  const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    listeners.add(setSnapshot);
-    setSnapshot(state);
-    ensurePolling();
-    return () => {
-      listeners.delete(setSnapshot);
-      maybeStopPolling();
-    };
-  }, []);
+    setState({
+      status: "idle",
+      error: null,
+      points: [],
+      latestPrice: null,
+      change24hPct: null,
+      lastUpdatedMs: null,
+      sourcePriority: [],
+      pairId,
+    });
+    basePointsRef.current = [];
+    livePointsRef.current = [];
+    lastIndicatorsFetchMsRef.current = 0;
+  }, [pairId]);
 
-  return snapshot;
+  useEffect(() => {
+    async function fetchIndicators(): Promise<void> {
+      const base = apiBase();
+      if (!base) throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
+
+      const requestBody = {
+        baseMint,
+        quoteMint,
+        lookbackHours: 168,
+        limit: 168,
+        resolutionMinutes: 60,
+      };
+
+      let response = await fetch(`${base}/api/x402/read/market_indicators`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "payment-signature": "portal-market-widget",
+        },
+        body: JSON.stringify(requestBody),
+      });
+      let payload = (await response.json().catch(() => null)) as unknown;
+
+      let bars: Array<{ ts: string; close: number }> = [];
+      let sourcePriority: string[] = [];
+      let h24: number | null = null;
+
+      if (response.ok) {
+        const parsed = parseIndicatorsPayload(payload);
+        if (!parsed) throw new Error("invalid-indicators-payload");
+        bars = parsed.ohlcv.bars;
+        sourcePriority = Array.isArray(parsed.ohlcv.sourcePriorityUsed)
+          ? parsed.ohlcv.sourcePriorityUsed.filter(
+              (item): item is string => typeof item === "string",
+            )
+          : [];
+        h24 =
+          isRecord(parsed.indicators?.returnsPct) &&
+          typeof parsed.indicators?.returnsPct?.h24 === "number"
+            ? parsed.indicators.returnsPct.h24
+            : null;
+      } else if (response.status === 404) {
+        response = await fetch(`${base}/api/x402/read/market_ohlcv`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "payment-signature": "portal-market-widget",
+          },
+          body: JSON.stringify(requestBody),
+        });
+        payload = (await response.json().catch(() => null)) as unknown;
+        if (!response.ok) {
+          const error =
+            isRecord(payload) && typeof payload.error === "string"
+              ? payload.error
+              : `http-${response.status}`;
+          throw new Error(error);
+        }
+        const parsed = parseOhlcvPayload(payload);
+        if (!parsed) throw new Error("invalid-ohlcv-payload");
+        bars = parsed.ohlcv.bars;
+        sourcePriority = Array.isArray(parsed.ohlcv.sourcePriorityUsed)
+          ? parsed.ohlcv.sourcePriorityUsed.filter(
+              (item): item is string => typeof item === "string",
+            )
+          : [];
+      } else {
+        const error =
+          isRecord(payload) && typeof payload.error === "string"
+            ? payload.error
+            : `http-${response.status}`;
+        throw new Error(error);
+      }
+
+      basePointsRef.current = toChartPoints(bars);
+      const merged = mergePoints(basePointsRef.current, livePointsRef.current);
+      const latest = merged[merged.length - 1] ?? null;
+
+      setState((current) => ({
+        ...current,
+        status: "ready",
+        error: null,
+        points: merged,
+        latestPrice: latest?.price ?? null,
+        change24hPct: calc24hChange(merged, h24),
+        sourcePriority,
+        lastUpdatedMs: Date.now(),
+      }));
+    }
+
+    async function fetchLiveQuote(): Promise<void> {
+      const base = apiBase();
+      if (!base) throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
+
+      const response = await fetch(`${base}/api/x402/read/market_jupiter_quote`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "payment-signature": "portal-market-widget",
+        },
+        body: JSON.stringify({
+          inputMint: baseMint,
+          outputMint: quoteMint,
+          amount: marketQuoteAmountAtomic(pair.id),
+          slippageBps: 50,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as unknown;
+      if (!response.ok) {
+        const error =
+          isRecord(payload) && typeof payload.error === "string"
+            ? payload.error
+            : `http-${response.status}`;
+        throw new Error(error);
+      }
+      if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.quote)) {
+        throw new Error("invalid-quote-payload");
+      }
+
+      const outAmount = String(payload.quote.outAmount ?? "");
+      const nextPrice = parseDecimalFromAtomic(outAmount, quoteToken.decimals);
+      if (!Number.isFinite(nextPrice) || nextPrice <= 0) {
+        throw new Error("invalid-quote-price");
+      }
+      const nextLivePoint: MarketPoint = {
+        ts: Date.now(),
+        price: nextPrice,
+        kind: "quote",
+        open: nextPrice,
+        high: nextPrice,
+        low: nextPrice,
+        close: nextPrice,
+      };
+      livePointsRef.current = [...livePointsRef.current, nextLivePoint].slice(
+        -MAX_LIVE_POINTS,
+      );
+      const merged = mergePoints(basePointsRef.current, livePointsRef.current);
+      const latest = merged[merged.length - 1] ?? null;
+      setState((current) => ({
+        ...current,
+        status: "ready",
+        error: null,
+        points: merged,
+        latestPrice: latest?.price ?? null,
+        change24hPct: calc24hChange(merged, current.change24hPct),
+        lastUpdatedMs: Date.now(),
+      }));
+    }
+
+    async function refreshTick(): Promise<void> {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+      setState((current) =>
+        current.status === "idle"
+          ? {
+              ...current,
+              status: "loading",
+              error: null,
+            }
+          : current,
+      );
+
+      let lastError: string | null = null;
+      try {
+        if (
+          basePointsRef.current.length === 0 ||
+          Date.now() - lastIndicatorsFetchMsRef.current >= INDICATORS_REFRESH_MS
+        ) {
+          try {
+            await fetchIndicators();
+            lastIndicatorsFetchMsRef.current = Date.now();
+          } catch (error) {
+            lastError =
+              error instanceof Error ? error.message : "indicators-failed";
+          }
+        }
+        try {
+          await fetchLiveQuote();
+          if (lastError) {
+            setState((current) => ({
+              ...current,
+              status: "ready",
+              error: lastError,
+            }));
+          }
+        } catch (error) {
+          const quoteError =
+            error instanceof Error ? error.message : "quote-fetch-failed";
+          setState((current) => ({
+            ...current,
+            status: current.points.length > 0 ? "ready" : "error",
+            error: lastError ? `${lastError}; ${quoteError}` : quoteError,
+          }));
+        }
+      } finally {
+        inFlightRef.current = false;
+      }
+    }
+
+    void refreshTick();
+    timerRef.current = window.setInterval(() => {
+      void refreshTick();
+    }, QUOTE_REFRESH_MS);
+
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [baseMint, pair.id, quoteMint, quoteToken.decimals]);
+
+  return state;
 }
 
 export function formatPrice(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "--";
-  return value.toFixed(2);
+  const abs = Math.abs(value);
+  const maximumFractionDigits =
+    abs >= 1_000 ? 2 : abs >= 1 ? 4 : abs >= 0.01 ? 6 : 8;
+  const minimumFractionDigits = abs >= 1 ? 2 : 0;
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits,
+    maximumFractionDigits,
+  });
 }
 
 export function formatPercent(value: number | null): string {
