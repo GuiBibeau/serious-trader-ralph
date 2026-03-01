@@ -90,6 +90,8 @@ export const X402_OVERVIEW: CatalogDoc["overview"] = {
     "This catalog includes only publicly callable x402 routes under /x402/read/*.",
   notes: [
     "Catalog and discovery endpoints are public. The listed x402 routes require payment authorization.",
+    "payment-signature must be a valid on-chain Solana transaction signature that settles the required amount to payTo.",
+    "Environment policy: dev expects devnet USDC; staging and production expect mainnet USDC.",
     "Supported terminal trading universe (tokens and pair presets) is included under supportedTrading.",
     "Pricing is dynamic per route config. Read the payment-required header (HTTP 402) as source of truth.",
     "Authenticated account and trading routes are intentionally excluded from this catalog.",
