@@ -40,7 +40,9 @@ function extractEmailFromLinkedAccounts(value: unknown): string | null {
   if (!Array.isArray(value)) return null;
   for (const account of value) {
     if (!isRecord(account)) continue;
-    const type = String(account.type ?? "").trim().toLowerCase();
+    const type = String(account.type ?? "")
+      .trim()
+      .toLowerCase();
     if (type !== "email") continue;
     const email =
       normalizeEmail(account.email) ?? normalizeEmail(account.address) ?? null;
@@ -53,7 +55,9 @@ function extractUserEmail(payload: Record<string, unknown>): string | null {
   const direct = normalizeEmail(payload.email);
   if (direct) return direct;
 
-  const linkedFromSnake = extractEmailFromLinkedAccounts(payload.linked_accounts);
+  const linkedFromSnake = extractEmailFromLinkedAccounts(
+    payload.linked_accounts,
+  );
   if (linkedFromSnake) return linkedFromSnake;
 
   return extractEmailFromLinkedAccounts(payload.linkedAccounts);

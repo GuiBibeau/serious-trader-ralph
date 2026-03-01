@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type SVGProps } from "react";
+import { type SVGProps, useEffect, useState } from "react";
 import { FadeUp, StaggerChildren, StaggerItem } from "./motion";
 
 // ── Icons (Inline SVGs) ──────────────────────────────────────────────────────
@@ -303,13 +303,15 @@ function WaitlistModal(props: { open: boolean; onClose: () => void }) {
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center px-4"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center px-4">
+      <button
+        type="button"
+        aria-label="Close waitlist modal"
+        className="absolute inset-0"
+        onClick={onClose}
+      />
       <div
-        className="w-full max-w-md rounded-2xl border border-border bg-surface p-6"
-        onClick={(event) => event.stopPropagation()}
+        className="relative w-full max-w-md rounded-2xl border border-border bg-surface p-6"
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -679,7 +681,10 @@ export default function LandingPage() {
       <Roadmap />
       <Trust />
       <Footer />
-      <WaitlistModal open={waitlistOpen} onClose={() => setWaitlistOpen(false)} />
+      <WaitlistModal
+        open={waitlistOpen}
+        onClose={() => setWaitlistOpen(false)}
+      />
     </main>
   );
 }
