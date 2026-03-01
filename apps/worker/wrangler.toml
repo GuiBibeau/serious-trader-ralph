@@ -3,6 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2026-02-03"
 compatibility_flags = ["nodejs_compat"]
 account_id = "4e3939d5df701303b59ffbe4472184de"
+workers_dev = true
 
 [vars]
 ALLOWED_ORIGINS = "*"
