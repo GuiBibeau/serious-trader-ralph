@@ -133,7 +133,7 @@ jobs:
               curl -fsSIL "https://api.trader-ralph.com${path}" > /dev/null
             done
           else
-            for path in /api /api/endpoints.json /api/endpoints.txt /api/llms.txt /api/dev-skills.txt; do
+            for path in /api /api/endpoints.json /api/endpoints.txt /api/dev-skills.txt /endpoints.json /endpoints.txt /llms.txt /dev-skills.txt; do
               curl -fsSIL "${SITE_URL}${path}" > /dev/null
             done
           fi
