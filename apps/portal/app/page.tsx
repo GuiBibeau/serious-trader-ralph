@@ -1,6 +1,6 @@
 "use client";
 
-import type { SVGProps } from "react";
+import { useEffect, useState, type SVGProps } from "react";
 import { FadeUp, StaggerChildren, StaggerItem } from "./motion";
 
 // ── Icons (Inline SVGs) ──────────────────────────────────────────────────────
@@ -197,7 +197,8 @@ function GridBackground() {
   );
 }
 
-function Navbar() {
+function Navbar(props: { onRequestAccess: () => void }) {
+  const { onRequestAccess } = props;
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-paper/80 backdrop-blur-md">
       <div className="w-[min(1120px,92vw)] mx-auto h-16 flex items-center justify-between">
@@ -222,25 +223,21 @@ function Navbar() {
           </a>
         </div>
         <div className="flex items-center gap-4">
-          <a
-            href="/login"
-            className="text-sm font-medium text-muted hover:text-ink transition-colors"
-          >
-            Sign in
-          </a>
-          <a
-            href="mailto:hello@ralph.fund"
+          <button
+            type="button"
+            onClick={onRequestAccess}
             className="hidden sm:flex items-center gap-2 px-4 py-1.5  text-sm font-medium bg-white text-black rounded-full hover:bg-gray-200 transition-colors"
           >
             Request Access
-          </a>
+          </button>
         </div>
       </div>
     </nav>
   );
 }
 
-function Hero() {
+function Hero(props: { onRequestAccess: () => void }) {
+  const { onRequestAccess } = props;
   return (
     <section className="relative min-h-[90vh] flex flex-col justify-center pt-20 overflow-hidden">
       <GridBackground />
@@ -265,12 +262,13 @@ function Hero() {
             x402 endpoints.
           </p>
           <div className="flex flex-wrap items-center gap-4">
-            <a
-              href="mailto:hello@ralph.fund"
+            <button
+              type="button"
+              onClick={onRequestAccess}
               className="h-12 px-8 inline-flex items-center justify-center rounded-full bg-accent text-white font-medium text-lg shadow-[0_0_20px_var(--color-accent-soft)] hover:shadow-[0_0_30px_var(--color-accent-soft)] hover:scale-105 transition-all duration-300"
             >
               Request Access <IconArrowRight className="ml-2 w-5 h-5" />
-            </a>
+            </button>
             <a
               href="#features"
               className="h-12 px-8 inline-flex items-center justify-center rounded-full border border-border bg-surface/50 text-ink font-medium text-lg hover:bg-surface transition-colors"
@@ -284,6 +282,139 @@ function Hero() {
       {/* Decorative gradient blur at bottom */}
       <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-paper to-transparent pointer-events-none" />
     </section>
+  );
+}
+
+function WaitlistModal(props: { open: boolean; onClose: () => void }) {
+  const { open, onClose } = props;
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState<
+    "idle" | "submitting" | "success" | "error"
+  >("idle");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) return;
+    setEmail("");
+    setStatus("idle");
+    setErrorMessage(null);
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center px-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-border bg-surface p-6"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="label">Waitlist</p>
+            <h3 className="text-xl font-bold mt-2">Request Access</h3>
+          </div>
+          <button
+            type="button"
+            className="text-muted hover:text-ink text-sm"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        {status === "success" ? (
+          <p className="text-sm text-emerald-300 mt-4">
+            Thanks for signing up, we&apos;ll send you an email once you are
+            accepted.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-muted mt-3">
+              Enter your email to join the waitlist.
+            </p>
+            <form
+              className="mt-4 space-y-3"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (status === "submitting") return;
+
+                const normalized = email.trim().toLowerCase();
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+                  setStatus("error");
+                  setErrorMessage("Please enter a valid email.");
+                  return;
+                }
+
+                setStatus("submitting");
+                setErrorMessage(null);
+
+                try {
+                  const response = await fetch("/api/waitlist", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                      email: normalized,
+                      source: "landing_page_modal",
+                    }),
+                  });
+                  const payload = (await response
+                    .json()
+                    .catch(() => null)) as unknown;
+                  if (!response.ok) {
+                    const message =
+                      payload &&
+                      typeof payload === "object" &&
+                      "error" in payload &&
+                      typeof payload.error === "string"
+                        ? payload.error
+                        : "waitlist-submit-failed";
+                    if (
+                      response.status === 410 ||
+                      message === "manual-onboarding-only" ||
+                      message.includes("manual-onboarding")
+                    ) {
+                      setStatus("success");
+                      return;
+                    }
+                    throw new Error(message);
+                  }
+                  setStatus("success");
+                } catch (error) {
+                  setStatus("error");
+                  setErrorMessage(
+                    error instanceof Error
+                      ? error.message
+                      : "waitlist-submit-failed",
+                  );
+                }
+              }}
+            >
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="w-full rounded-md border border-border bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent"
+                placeholder="you@fund.com"
+                autoComplete="email"
+              />
+              {status === "error" && errorMessage ? (
+                <p className="text-xs text-amber-300">{errorMessage}</p>
+              ) : null}
+              <button
+                type="submit"
+                disabled={status === "submitting"}
+                className="w-full h-11 inline-flex items-center justify-center rounded-full bg-accent text-white font-medium text-sm disabled:opacity-60"
+              >
+                {status === "submitting" ? "Submitting..." : "Join Waitlist"}
+              </button>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -537,15 +668,18 @@ function Footer() {
 }
 
 export default function LandingPage() {
+  const [waitlistOpen, setWaitlistOpen] = useState(false);
+
   return (
     <main className="dark bg-paper text-ink min-h-screen selection:bg-accent selection:text-ink">
-      <Navbar />
-      <Hero />
+      <Navbar onRequestAccess={() => setWaitlistOpen(true)} />
+      <Hero onRequestAccess={() => setWaitlistOpen(true)} />
       <BentoGrid />
       <AccessModel />
       <Roadmap />
       <Trust />
       <Footer />
+      <WaitlistModal open={waitlistOpen} onClose={() => setWaitlistOpen(false)} />
     </main>
   );
 }

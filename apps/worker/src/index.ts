@@ -123,6 +123,37 @@ const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
   "terminal_opened_from_consumer",
 ]);
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function normalizeEmail(value: unknown): string | null {
+  const email = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return email || null;
+}
+
+async function hasWaitlistEmail(env: Env, email: string): Promise<boolean> {
+  const row = (await env.WAITLIST_DB.prepare(
+    "SELECT email FROM waitlist WHERE lower(email) = ?1 LIMIT 1",
+  )
+    .bind(email.toLowerCase())
+    .first()) as unknown;
+  return Boolean(row && typeof row === "object");
+}
+
+async function upsertWaitlistEmail(
+  env: Env,
+  email: string,
+  source: string | null,
+): Promise<void> {
+  await env.WAITLIST_DB.prepare(
+    `INSERT INTO waitlist (email, source) VALUES (?1, ?2)
+     ON CONFLICT(email) DO NOTHING`,
+  )
+    .bind(email.toLowerCase(), source)
+    .run();
+}
+
 export {
   ExecutionCoordinator,
   LoopACoordinator,
@@ -174,10 +205,20 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/waitlist") {
-        return withCors(
-          json({ ok: false, error: "manual-onboarding-only" }, { status: 410 }),
-          env,
-        );
+        const payload = await readPayload(request);
+        const email = normalizeEmail(payload.email);
+        if (!email || !EMAIL_RE.test(email)) {
+          return withCors(
+            json({ ok: false, error: "invalid-email" }, { status: 400 }),
+            env,
+          );
+        }
+
+        const source = String(payload.source ?? "landing_page")
+          .trim()
+          .slice(0, 80);
+        await upsertWaitlistEmail(env, email, source || null);
+        return withCors(json({ ok: true, email }), env);
       }
 
       if (
@@ -2335,7 +2376,9 @@ export default {
       const status =
         message === "unauthorized"
           ? 401
-          : message === "manual-onboarding-required"
+          : message === "manual-onboarding-required" ||
+              message === "waitlist-required" ||
+              message === "waitlist-email-required"
             ? 403
             : message === "d1-migrations-not-applied" ||
                 message.startsWith("x402-route-config-")
@@ -2443,6 +2486,15 @@ async function requireOnboardedUser(
   env: Env,
 ): Promise<UserRow> {
   const auth = await requireUser(request, env);
+  const email = normalizeEmail(auth.email);
+  if (!email) {
+    throw new Error("waitlist-email-required");
+  }
+  const waitlisted = await hasWaitlistEmail(env, email);
+  if (!waitlisted) {
+    throw new Error("waitlist-required");
+  }
+
   const existing = await findUserByPrivyUserId(env, auth.privyUserId);
   if (existing) return existing;
   return await upsertUser(env, auth.privyUserId);

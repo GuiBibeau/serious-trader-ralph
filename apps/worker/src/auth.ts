@@ -4,6 +4,7 @@ import type { Env } from "./types";
 
 type AuthUser = {
   privyUserId: string;
+  email: string | null;
 };
 
 let cachedJwksAppId: string | null = null;
@@ -21,6 +22,41 @@ function jwksForApp(appId: string): ReturnType<typeof createRemoteJWKSet> {
   cachedJwksAppId = appId;
   cachedJwks = createRemoteJWKSet(url);
   return cachedJwks;
+}
+
+function normalizeEmail(value: unknown): string | null {
+  const email = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!email) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function extractEmailFromLinkedAccounts(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  for (const account of value) {
+    if (!isRecord(account)) continue;
+    const type = String(account.type ?? "").trim().toLowerCase();
+    if (type !== "email") continue;
+    const email =
+      normalizeEmail(account.email) ?? normalizeEmail(account.address) ?? null;
+    if (email) return email;
+  }
+  return null;
+}
+
+function extractUserEmail(payload: Record<string, unknown>): string | null {
+  const direct = normalizeEmail(payload.email);
+  if (direct) return direct;
+
+  const linkedFromSnake = extractEmailFromLinkedAccounts(payload.linked_accounts);
+  if (linkedFromSnake) return linkedFromSnake;
+
+  return extractEmailFromLinkedAccounts(payload.linkedAccounts);
 }
 
 export async function requireUser(
@@ -56,5 +92,8 @@ export async function requireUser(
     throw new Error("unauthorized");
   }
 
-  return { privyUserId };
+  return {
+    privyUserId,
+    email: extractUserEmail(payload as Record<string, unknown>),
+  };
 }

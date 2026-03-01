@@ -2,6 +2,7 @@
 
 // Hoisted regex — avoids re-creating RegExp per apiFetchJson call (Rule 7.9)
 const BEARER_RE = /^bearer\s+/i;
+const LOCAL_EDGE_API_BASE = "http://127.0.0.1:8888";
 
 const SOL_DECIMALS = 9;
 const USDC_DECIMALS = 6;
@@ -75,7 +76,11 @@ export function formatBalanceSummary(
 }
 
 export function apiBase(): string {
-  return (process.env.NEXT_PUBLIC_EDGE_API_BASE ?? "").replace(/\/+$/, "");
+  const configured = (process.env.NEXT_PUBLIC_EDGE_API_BASE ?? "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (configured) return configured;
+  return process.env.NODE_ENV === "production" ? "" : LOCAL_EDGE_API_BASE;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
