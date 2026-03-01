@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
+import { getPrivyUserById } from "./privy";
 import type { Env } from "./types";
 
 type AuthUser = {
@@ -36,24 +37,70 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function extractEmailFromObject(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+
+  const directFields = [
+    "email",
+    "address",
+    "verified_email",
+    "claimed_email",
+    "primary_email",
+  ] as const;
+  for (const field of directFields) {
+    const email = normalizeEmail(value[field]);
+    if (email) return email;
+  }
+
+  const nestedFields = ["profile", "details", "claims", "user"] as const;
+  for (const field of nestedFields) {
+    if (!isRecord(value[field])) continue;
+    for (const direct of directFields) {
+      const email = normalizeEmail(value[field][direct]);
+      if (email) return email;
+    }
+  }
+
+  return null;
+}
+
 function extractEmailFromLinkedAccounts(value: unknown): string | null {
   if (!Array.isArray(value)) return null;
+  let fallback: string | null = null;
   for (const account of value) {
     if (!isRecord(account)) continue;
     const type = String(account.type ?? "")
       .trim()
       .toLowerCase();
-    if (type !== "email") continue;
-    const email =
-      normalizeEmail(account.email) ?? normalizeEmail(account.address) ?? null;
-    if (email) return email;
+    const email = extractEmailFromObject(account);
+    if (!email) continue;
+    if (type === "email") return email;
+    if (!fallback) fallback = email;
   }
-  return null;
+  return fallback;
+}
+
+function extractEmailFromPayloadUser(
+  payload: Record<string, unknown>,
+): string | null {
+  const user = payload.user;
+  if (!isRecord(user)) return null;
+
+  const direct = extractEmailFromObject(user);
+  if (direct) return direct;
+
+  const linkedSnake = extractEmailFromLinkedAccounts(user.linked_accounts);
+  if (linkedSnake) return linkedSnake;
+
+  return extractEmailFromLinkedAccounts(user.linkedAccounts);
 }
 
 function extractUserEmail(payload: Record<string, unknown>): string | null {
-  const direct = normalizeEmail(payload.email);
+  const direct = extractEmailFromObject(payload);
   if (direct) return direct;
+
+  const userEmail = extractEmailFromPayloadUser(payload);
+  if (userEmail) return userEmail;
 
   const linkedFromSnake = extractEmailFromLinkedAccounts(
     payload.linked_accounts,
@@ -96,8 +143,20 @@ export async function requireUser(
     throw new Error("unauthorized");
   }
 
+  let email = extractUserEmail(payload as Record<string, unknown>);
+  if (!email) {
+    try {
+      const profile = await getPrivyUserById(env, privyUserId);
+      email = extractUserEmail(
+        isRecord(profile) ? profile : ({} as Record<string, unknown>),
+      );
+    } catch {
+      // Fall back to null email; caller will enforce waitlist constraints.
+    }
+  }
+
   return {
     privyUserId,
-    email: extractUserEmail(payload as Record<string, unknown>),
+    email,
   };
 }
