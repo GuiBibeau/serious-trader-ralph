@@ -1,5 +1,5 @@
-import { headers } from "next/headers";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import {
   X402_CATALOG_VERSION,
   X402_ENDPOINTS,
@@ -152,7 +152,12 @@ export default async function ApiCatalogPage() {
                   <code>
                     {endpoint.method} {endpoint.path}
                   </code>
-                  <code>{toAbsoluteApiUrl(apiOrigin, toApiRuntimePath(endpoint.path))}</code>
+                  <code>
+                    {toAbsoluteApiUrl(
+                      apiOrigin,
+                      toApiRuntimePath(endpoint.path),
+                    )}
+                  </code>
                   <span className="text-[11px] rounded-full border border-border px-2 py-0.5 text-muted">
                     {endpoint.access}
                   </span>
