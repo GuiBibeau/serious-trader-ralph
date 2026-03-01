@@ -98,7 +98,7 @@ jobs:
 
           DEPLOY_OUTPUT="$(npx --yes vercel "${DEPLOY_ARGS[@]}")"
           DEPLOYMENT_URL="$(
-            printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+\\.vercel\\.app' | tail -n 1
+            printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+\.vercel\.app' | tail -n 1
           )"
 
           if [ -z "${DEPLOYMENT_URL}" ]; then
