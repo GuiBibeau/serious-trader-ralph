@@ -6,6 +6,12 @@ import {
   X402_SUPPORTED_TRADING,
   type X402EndpointSpec,
 } from "../_catalog";
+import {
+  buildDiscoveryUrls,
+  resolveApiOriginFromRequest,
+  toAbsoluteApiUrl,
+  toApiRuntimePath,
+} from "../_discovery";
 
 const CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=600";
 
@@ -26,7 +32,8 @@ function formatExample(value: Record<string, unknown>): string {
 }
 
 export function GET(request: Request): Response {
-  const origin = new URL(request.url).origin;
+  const apiOrigin = resolveApiOriginFromRequest(request);
+  const discovery = buildDiscoveryUrls(apiOrigin);
 
   const lines: string[] = [
     "Trader Ralph x402 API Catalog",
@@ -49,22 +56,32 @@ export function GET(request: Request): Response {
     "request: payment-signature",
     "response: payment-required, payment-response",
     "",
+    "runtime urls:",
+    `api origin: ${apiOrigin}`,
+    `x402 base path: ${toApiRuntimePath("/x402/read")}`,
+    `x402 base url: ${toAbsoluteApiUrl(apiOrigin, toApiRuntimePath("/x402/read"))}`,
+    "",
     `example 402 response: ${JSON.stringify(X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE)}`,
     "",
     `supported trading tokens: ${X402_SUPPORTED_TRADING.tokens.map((token) => token.symbol).join(", ")}`,
     `supported trading pairs: ${X402_SUPPORTED_TRADING.pairs.map((pair) => pair.id).join(", ")}`,
     "",
     "discovery:",
-    `html: ${origin}/api`,
-    `json: ${origin}/endpoints.json`,
-    `text: ${origin}/endpoints.txt`,
-    `llms: ${origin}/llms.txt`,
+    `html: ${discovery.html}`,
+    `json: ${discovery.json}`,
+    `text: ${discovery.text}`,
+    `llms: ${discovery.llms}`,
+    `skills: ${discovery.skills}`,
     "",
     "endpoints:",
   ];
 
   for (const endpoint of X402_ENDPOINTS) {
-    lines.push(`${endpoint.method} ${endpoint.path} - ${endpoint.summary}`);
+    const runtimePath = toApiRuntimePath(endpoint.path);
+    const runtimeUrl = toAbsoluteApiUrl(apiOrigin, runtimePath);
+    lines.push(
+      `${endpoint.method} ${endpoint.path} (runtime: ${runtimeUrl}) - ${endpoint.summary}`,
+    );
     lines.push(`  ${formatFields("required", endpoint.requiredFields)}`);
     lines.push(`  ${formatFields("optional", endpoint.optionalFields)}`);
     lines.push(`  example request: ${formatExample(endpoint.requestExample)}`);
