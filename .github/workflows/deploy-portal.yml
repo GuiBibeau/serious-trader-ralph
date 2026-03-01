@@ -1,0 +1,145 @@
+name: Deploy Portal (Vercel)
+
+on:
+  push:
+    branches: [dev, staging, main]
+
+concurrency:
+  group: deploy-portal-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-portal:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve lane config
+        id: lane
+        run: |
+          set -euo pipefail
+
+          case "${GITHUB_REF_NAME}" in
+            dev)
+              echo "edge_api_base=https://dev.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "site_url=https://dev.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "alias_domains=dev.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "expected_edge_host=dev.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              ;;
+            staging)
+              echo "edge_api_base=https://staging.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "site_url=https://staging.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "alias_domains=staging.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "expected_edge_host=staging.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              ;;
+            main)
+              echo "edge_api_base=https://api.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "site_url=https://trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "alias_domains=trader-ralph.com,www.trader-ralph.com,api.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "expected_edge_host=api.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "unsupported branch: ${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Deploy portal
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          DEPLOY_ARGS=(
+            deploy
+            --scope guivercelpro
+            --token "$VERCEL_TOKEN"
+            --yes
+            --build-env "NEXT_PUBLIC_EDGE_API_BASE=${{ steps.lane.outputs.edge_api_base }}"
+            --build-env "NEXT_PUBLIC_SITE_URL=${{ steps.lane.outputs.site_url }}"
+            --json
+          )
+
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            DEPLOY_ARGS+=(--prod)
+          fi
+
+          DEPLOY_JSON="$(npx --yes vercel "${DEPLOY_ARGS[@]}")"
+          DEPLOYMENT_URL="$(
+            printf '%s' "$DEPLOY_JSON" | node -e 'const fs = require("node:fs"); const raw = fs.readFileSync(0, "utf8"); const parsed = JSON.parse(raw); process.stdout.write(`https://${parsed.url}`);'
+          )"
+
+          echo "deployment_url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
+          echo "Deployment URL: ${DEPLOYMENT_URL}"
+
+      - name: Enforce lane aliases
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          IFS=',' read -r -a domains <<< "${{ steps.lane.outputs.alias_domains }}"
+          for domain in "${domains[@]}"; do
+            npx --yes vercel alias set "${{ steps.deploy.outputs.deployment_url }}" "$domain" --scope guivercelpro --token "$VERCEL_TOKEN"
+            echo "Aliased $domain"
+          done
+
+      - name: Smoke check lane URLs and docs
+        run: |
+          set -euo pipefail
+
+          SITE_URL="${{ steps.lane.outputs.site_url }}"
+
+          curl -fsSIL "$SITE_URL" > /dev/null
+
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            for path in /endpoints.json /endpoints.txt /llms.txt /dev-skills.txt; do
+              curl -fsSIL "https://api.trader-ralph.com${path}" > /dev/null
+            done
+          else
+            for path in /api /api/endpoints.json /api/endpoints.txt /api/llms.txt /api/dev-skills.txt; do
+              curl -fsSIL "${SITE_URL}${path}" > /dev/null
+            done
+          fi
+
+      - name: Smoke check lane API host in login bundle
+        run: |
+          set -euo pipefail
+
+          SITE_URL="${{ steps.lane.outputs.site_url }}"
+          EXPECTED_EDGE_HOST="${{ steps.lane.outputs.expected_edge_host }}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+
+          curl -fsSL "${SITE_URL}/login" > "${tmp}/login.html"
+          grep -oE '/_next/static/[^" ]+\.js' "${tmp}/login.html" | sort -u > "${tmp}/scripts.txt"
+
+          if [ ! -s "${tmp}/scripts.txt" ]; then
+            echo "No Next.js JS bundle references found on ${SITE_URL}/login" >&2
+            exit 1
+          fi
+
+          while read -r script_path; do
+            curl -fsSL "${SITE_URL}${script_path}" >> "${tmp}/bundle.js"
+          done < "${tmp}/scripts.txt"
+
+          if ! grep -q "${EXPECTED_EDGE_HOST}" "${tmp}/bundle.js"; then
+            echo "Expected API host ${EXPECTED_EDGE_HOST} not found in login bundle" >&2
+            exit 1
+          fi
+
+          if grep -qE 'ralph-edge-(dev|staging)\.gui-bibeau\.workers\.dev' "${tmp}/bundle.js"; then
+            echo "Legacy workers.dev host leaked into login bundle" >&2
+            exit 1
+          fi
+
