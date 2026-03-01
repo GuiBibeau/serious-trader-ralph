@@ -90,17 +90,22 @@ jobs:
             --yes
             --build-env "NEXT_PUBLIC_EDGE_API_BASE=${{ steps.lane.outputs.edge_api_base }}"
             --build-env "NEXT_PUBLIC_SITE_URL=${{ steps.lane.outputs.site_url }}"
-            --json
           )
 
           if [ "${GITHUB_REF_NAME}" = "main" ]; then
             DEPLOY_ARGS+=(--prod)
           fi
 
-          DEPLOY_JSON="$(npx --yes vercel "${DEPLOY_ARGS[@]}")"
+          DEPLOY_OUTPUT="$(npx --yes vercel "${DEPLOY_ARGS[@]}")"
           DEPLOYMENT_URL="$(
-            printf '%s' "$DEPLOY_JSON" | node -e 'const fs = require("node:fs"); const raw = fs.readFileSync(0, "utf8"); const parsed = JSON.parse(raw); process.stdout.write(`https://${parsed.url}`);'
+            printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+\\.vercel\\.app' | tail -n 1
           )"
+
+          if [ -z "${DEPLOYMENT_URL}" ]; then
+            echo "Failed to parse deployment URL from Vercel output" >&2
+            printf '%s\n' "$DEPLOY_OUTPUT" >&2
+            exit 1
+          fi
 
           echo "deployment_url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
           echo "Deployment URL: ${DEPLOYMENT_URL}"
