@@ -28,13 +28,13 @@ jobs:
             dev)
               echo "edge_api_base=https://dev.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
               echo "site_url=https://dev.trader-ralph.com" >> "$GITHUB_OUTPUT"
-              echo "alias_domains=dev.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "alias_domains=dev.trader-ralph.com,dev.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
               echo "expected_edge_host=dev.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
               ;;
             staging)
               echo "edge_api_base=https://staging.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
               echo "site_url=https://staging.trader-ralph.com" >> "$GITHUB_OUTPUT"
-              echo "alias_domains=staging.trader-ralph.com" >> "$GITHUB_OUTPUT"
+              echo "alias_domains=staging.trader-ralph.com,staging.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
               echo "expected_edge_host=staging.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
               ;;
             main)
@@ -130,8 +130,10 @@ jobs:
           set -euo pipefail
 
           SITE_URL="${{ steps.lane.outputs.site_url }}"
+          EDGE_API_BASE="${{ steps.lane.outputs.edge_api_base }}"
 
           curl -fsSIL "$SITE_URL" > /dev/null
+          curl -fsSIL "${EDGE_API_BASE}/api/health" > /dev/null
 
           if [ "${GITHUB_REF_NAME}" = "main" ]; then
             for path in /endpoints.json /endpoints.txt /llms.txt /dev-skills.txt; do
