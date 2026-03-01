@@ -261,8 +261,8 @@ function Hero() {
           </h1>
           <p className="max-w-2xl text-lg md:text-xl text-muted leading-relaxed mb-8">
             Trader Ralph is building a Solana-first intelligence factory:
-            automated alpha plus external signal access through our
-            terminal and x402 endpoints.
+            automated alpha plus external signal access through our terminal and
+            x402 endpoints.
           </p>
           <div className="flex flex-wrap items-center gap-4">
             <a
@@ -367,9 +367,9 @@ function BentoGrid() {
                 </div>
                 <h3 className="text-2xl font-bold mb-2">Execution Layer</h3>
                 <p className="text-muted max-w-md">
-                  Deterministic server-side execution with strict policy
-                  checks, adaptive lanes, MEV protection, and high-speed
-                  on-chain submission.
+                  Deterministic server-side execution with strict policy checks,
+                  adaptive lanes, MEV protection, and high-speed on-chain
+                  submission.
                 </p>
               </div>
               <div className="flex items-center gap-4 mt-8">
@@ -590,8 +590,8 @@ function Roadmap() {
                 <div>
                   <p className="font-medium">x402 Intelligence APIs</p>
                   <p className="text-sm text-muted">
-                    Paid market, macro, and perps intelligence exposed over
-                    HTTP for agents and internal tooling.
+                    Paid market, macro, and perps intelligence exposed over HTTP
+                    for agents and internal tooling.
                   </p>
                 </div>
               </li>
@@ -651,7 +651,8 @@ function Roadmap() {
                   </p>
                   <p className="text-sm text-muted">
                     Policy-bound orchestration that connects research outputs to
-                    recommendation, execution, and continuous performance tuning.
+                    recommendation, execution, and continuous performance
+                    tuning.
                   </p>
                 </div>
               </li>

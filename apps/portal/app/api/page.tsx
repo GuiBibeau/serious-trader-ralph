@@ -63,16 +63,10 @@ export default function ApiCatalogPage() {
               </code>
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-              <a
-                className="underline hover:text-accent"
-                href="/endpoints.json"
-              >
+              <a className="underline hover:text-accent" href="/endpoints.json">
                 /endpoints.json
               </a>
-              <a
-                className="underline hover:text-accent"
-                href="/endpoints.txt"
-              >
+              <a className="underline hover:text-accent" href="/endpoints.txt">
                 /endpoints.txt
               </a>
               <a className="underline hover:text-accent" href="/llms.txt">

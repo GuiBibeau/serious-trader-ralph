@@ -59,9 +59,9 @@ describe("portal x402 api catalog routes", () => {
 
     expect(endpointPaths.includes("/api/me")).toBe(false);
     expect(endpointPaths.includes("/api/trade/swap")).toBe(false);
-    expect(
-      endpointPaths.every((path) => path.startsWith("/x402/read/")),
-    ).toBe(true);
+    expect(endpointPaths.every((path) => path.startsWith("/x402/read/"))).toBe(
+      true,
+    );
 
     expect(
       endpointRecords.every((endpoint) => toRecord(endpoint.requestExample)),
@@ -119,12 +119,8 @@ describe("portal x402 api catalog routes", () => {
 
     const body = await response.text();
     expect(body.includes("https://portal.example/api")).toBe(true);
-    expect(body.includes("https://portal.example/endpoints.json")).toBe(
-      true,
-    );
-    expect(body.includes("https://portal.example/endpoints.txt")).toBe(
-      true,
-    );
+    expect(body.includes("https://portal.example/endpoints.json")).toBe(true);
+    expect(body.includes("https://portal.example/endpoints.txt")).toBe(true);
     for (const expectedPath of EXPECTED_X402_PATHS) {
       expect(body.includes(expectedPath)).toBe(true);
     }
