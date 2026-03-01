@@ -189,6 +189,9 @@ export default {
     }
 
     const url = new URL(request.url);
+    if (url.pathname !== "/api" && !url.pathname.startsWith("/api/")) {
+      url.pathname = `/api${url.pathname}`;
+    }
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
         const loopAHealth = await readLoopAHealthFromKv(env);
