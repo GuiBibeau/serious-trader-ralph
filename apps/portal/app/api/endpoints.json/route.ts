@@ -6,11 +6,19 @@ import {
   X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
   X402_SUPPORTED_TRADING,
 } from "../_catalog";
+import {
+  buildDiscoveryUrls,
+  resolveApiOriginFromRequest,
+  toAbsoluteApiUrl,
+  toApiRuntimePath,
+} from "../_discovery";
 
 const CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=600";
 
 export function GET(request: Request): Response {
-  const origin = new URL(request.url).origin;
+  const apiOrigin = resolveApiOriginFromRequest(request);
+  const discovery = buildDiscoveryUrls(apiOrigin);
+  const runtimeBasePath = toApiRuntimePath("/x402/read");
 
   const payload: CatalogDoc & {
     examples: {
@@ -21,6 +29,18 @@ export function GET(request: Request): Response {
       json: string;
       text: string;
       llms: string;
+      skills: string;
+    };
+    runtime: {
+      apiOrigin: string;
+      x402BasePath: string;
+      x402BaseUrl: string;
+      endpoints: Array<{
+        id: string;
+        method: "POST";
+        runtimePath: string;
+        url: string;
+      }>;
     };
   } = {
     name: "Trader Ralph x402 API Catalog",
@@ -38,11 +58,20 @@ export function GET(request: Request): Response {
     examples: {
       paymentRequiredResponse: X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
     },
-    discovery: {
-      html: `${origin}/api`,
-      json: `${origin}/endpoints.json`,
-      text: `${origin}/endpoints.txt`,
-      llms: `${origin}/llms.txt`,
+    discovery,
+    runtime: {
+      apiOrigin,
+      x402BasePath: runtimeBasePath,
+      x402BaseUrl: toAbsoluteApiUrl(apiOrigin, runtimeBasePath),
+      endpoints: X402_ENDPOINTS.map((endpoint) => {
+        const runtimePath = toApiRuntimePath(endpoint.path);
+        return {
+          id: endpoint.id,
+          method: endpoint.method,
+          runtimePath,
+          url: toAbsoluteApiUrl(apiOrigin, runtimePath),
+        };
+      }),
     },
   };
 

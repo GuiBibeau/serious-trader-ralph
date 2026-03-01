@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import type { Metadata } from "next";
 import {
   X402_CATALOG_VERSION,
@@ -6,6 +7,12 @@ import {
   X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
   X402_SUPPORTED_TRADING,
 } from "./_catalog";
+import {
+  buildDiscoveryUrls,
+  resolveApiOriginFromHeaders,
+  toAbsoluteApiUrl,
+  toApiRuntimePath,
+} from "./_discovery";
 
 export const metadata: Metadata = {
   title: "API Catalog | Trader Ralph",
@@ -44,7 +51,13 @@ function hasFields(record: Record<string, unknown>): boolean {
   return Object.keys(record).length > 0;
 }
 
-export default function ApiCatalogPage() {
+export default async function ApiCatalogPage() {
+  const requestHeaders = await headers();
+  const apiOrigin = resolveApiOriginFromHeaders(requestHeaders);
+  const discovery = buildDiscoveryUrls(apiOrigin);
+  const x402BasePath = toApiRuntimePath("/x402/read");
+  const x402BaseUrl = toAbsoluteApiUrl(apiOrigin, x402BasePath);
+
   return (
     <main>
       <section className="py-[clamp(3rem,6vw,6rem)] border-t border-border">
@@ -57,20 +70,32 @@ export default function ApiCatalogPage() {
               Catalog version: <code>{X402_CATALOG_VERSION}</code>
             </p>
             <p className="text-xs text-muted mt-2">
+              API origin: <code>{apiOrigin}</code>
+            </p>
+            <p className="text-xs text-muted mt-2">
+              x402 base URL: <code>{x402BaseUrl}</code>
+            </p>
+            <p className="text-xs text-muted mt-2">
               Supported trading pairs:{" "}
               <code>
                 {X402_SUPPORTED_TRADING.pairs.map((pair) => pair.id).join(", ")}
               </code>
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-              <a className="underline hover:text-accent" href="/endpoints.json">
-                /endpoints.json
+              <a className="underline hover:text-accent" href={discovery.json}>
+                {discovery.json}
               </a>
-              <a className="underline hover:text-accent" href="/endpoints.txt">
-                /endpoints.txt
+              <a className="underline hover:text-accent" href={discovery.text}>
+                {discovery.text}
               </a>
-              <a className="underline hover:text-accent" href="/llms.txt">
-                /llms.txt
+              <a className="underline hover:text-accent" href={discovery.llms}>
+                {discovery.llms}
+              </a>
+              <a
+                className="underline hover:text-accent"
+                href={discovery.skills}
+              >
+                {discovery.skills}
               </a>
             </div>
           </div>
@@ -79,7 +104,7 @@ export default function ApiCatalogPage() {
             <p className="label">How x402 Works</p>
             <ol className="mt-3 space-y-2 text-sm">
               <li>
-                1. Request an endpoint under <code>/x402/read/*</code>.
+                1. Request an endpoint under <code>{x402BasePath}/*</code>.
               </li>
               <li>
                 2. If payment is missing, you get <code>402</code> with{" "}
@@ -127,6 +152,7 @@ export default function ApiCatalogPage() {
                   <code>
                     {endpoint.method} {endpoint.path}
                   </code>
+                  <code>{toAbsoluteApiUrl(apiOrigin, toApiRuntimePath(endpoint.path))}</code>
                   <span className="text-[11px] rounded-full border border-border px-2 py-0.5 text-muted">
                     {endpoint.access}
                   </span>
