@@ -342,7 +342,14 @@ export function TradeTicketModal({
         priceImpactPct: null,
       });
     }
-  }, [deferredAmountUi, intent, open, resolvedSlippageBps, setQuoteTransition]);
+  }, [
+    deferredAmountUi,
+    getAccessToken,
+    intent,
+    open,
+    resolvedSlippageBps,
+    setQuoteTransition,
+  ]);
 
   useEffect(() => {
     if (!open || !intent) return;
