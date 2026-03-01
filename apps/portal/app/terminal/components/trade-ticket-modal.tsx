@@ -53,6 +53,7 @@ type QuoteState = {
 
 const MIN_SLIPPAGE_BPS = "1";
 const MAX_SLIPPAGE_BPS = "5000";
+const BEARER_RE = /^bearer\s+/i;
 
 function parseUiAmountToAtomic(value: string, decimals: number): string | null {
   const trimmed = value.trim();
@@ -270,14 +271,21 @@ export function TradeTicketModal({
     quoteRequestIdRef.current = requestId;
 
     try {
+      const rawToken = String((await getAccessToken()) ?? "").trim();
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "payment-signature": "portal-trade-ticket",
+      };
+      if (rawToken) {
+        headers.authorization = BEARER_RE.test(rawToken)
+          ? rawToken
+          : `Bearer ${rawToken}`;
+      }
       const response = await fetch(
         `${base}/api/x402/read/market_jupiter_quote`,
         {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "payment-signature": "portal-trade-ticket",
-          },
+          headers,
           body: JSON.stringify({
             inputMint: intent.inputMint,
             outputMint: intent.outputMint,
