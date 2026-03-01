@@ -1,0 +1,53 @@
+name: Deploy (staging/production)
+
+on:
+  push:
+    branches: [staging, main]
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'staging' && 'staging' || 'production' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install worker deps
+        working-directory: apps/worker
+        run: npm install
+
+      - name: Apply D1 migrations
+        working-directory: apps/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_name }}" = "staging" ]; then
+            npx wrangler d1 migrations apply ralph_waitlist_staging --remote --env staging
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            npx wrangler d1 migrations apply ralph_waitlist --remote --env production
+          else
+            echo "Unsupported branch: ${{ github.ref_name }}"
+            exit 1
+          fi
+
+      - name: Deploy worker
+        working-directory: apps/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ "${{ github.ref_name }}" = "staging" ]; then
+            npx wrangler deploy --env staging
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            npx wrangler deploy --env production
+          else
+            echo "Unsupported branch: ${{ github.ref_name }}"
+            exit 1
+          fi
