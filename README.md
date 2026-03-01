@@ -45,9 +45,9 @@ bun run dev
 
 ```bash
 cd apps/worker
-npm install
-npm run db:migrate:local
-npm run dev:local
+bun install
+bun run db:migrate:local
+bun run dev:local
 ```
 
 ## Account Wallet Migration (One-Time)
@@ -56,8 +56,8 @@ Before applying the destructive bot-runtime schema migration, run:
 
 ```bash
 cd apps/worker
-npm run wallet:migrate:users -- --env <dev|staging|production> --dry-run
-npm run wallet:migrate:users -- --env <dev|staging|production> --apply
+bun run wallet:migrate:users -- --env <dev|staging|production> --dry-run
+bun run wallet:migrate:users -- --env <dev|staging|production> --apply
 ```
 
 Migration report output:
