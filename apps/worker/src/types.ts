@@ -79,6 +79,7 @@ export type Env = {
   X402_NETWORK?: string;
   X402_PAY_TO?: string;
   X402_ASSET_MINT?: string;
+  X402_TRUSTED_ORIGINS?: string;
   X402_ENFORCE_ONCHAIN?: string;
   X402_MAX_TIMEOUT_SECONDS?: string;
   X402_MARKET_SNAPSHOT_PRICE_USD?: string;
