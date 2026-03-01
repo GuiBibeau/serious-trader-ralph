@@ -49,8 +49,26 @@ jobs:
               ;;
           esac
 
+      - name: Check Vercel credentials
+        id: vercel_auth
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${VERCEL_TOKEN:-}" ] && [ -n "${VERCEL_ORG_ID:-}" ] && [ -n "${VERCEL_PROJECT_ID:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::warning::Skipping managed Vercel deploy because one or more Vercel secrets are missing for environment ${GITHUB_REF_NAME}."
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+
       - name: Deploy portal
         id: deploy
+        if: steps.vercel_auth.outputs.enabled == 'true'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -81,6 +99,7 @@ jobs:
           echo "Deployment URL: ${DEPLOYMENT_URL}"
 
       - name: Enforce lane aliases
+        if: steps.vercel_auth.outputs.enabled == 'true'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -142,4 +161,3 @@ jobs:
             echo "Legacy workers.dev host leaked into login bundle" >&2
             exit 1
           fi
-
