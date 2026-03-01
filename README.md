@@ -85,6 +85,12 @@ All are `POST` under `/api/x402/read/*`:
 - `perps_open_interest_surface`
 - `perps_venue_score`
 
+### x402 Environment Policy
+
+- `dev`: expects a real devnet transaction signature paying devnet USDC (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`)
+- `staging` and `production`: expect a real mainnet transaction signature paying mainnet USDC (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
+- `payment-signature` is validated on-chain against route requirements (`network`, `asset`, `payTo`, and `amount`)
+
 ### Supported Trading Pairs (Terminal + Trade APIs)
 
 - `SOL/USDC`

@@ -15,6 +15,7 @@ function createEnv(overrides?: Partial<Env>): Env {
     X402_NETWORK: "solana-devnet",
     X402_PAY_TO: "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF",
     X402_ASSET_MINT: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    X402_ENFORCE_ONCHAIN: "0",
     X402_MAX_TIMEOUT_SECONDS: "60",
     X402_MARKET_SNAPSHOT_PRICE_USD: "0.01",
     X402_MARKET_SNAPSHOT_V2_PRICE_USD: "0.01",
@@ -45,7 +46,7 @@ function decodeBase64Json(value: string | null): Record<string, unknown> {
 }
 
 describe("worker x402 helpers", () => {
-  test("routes require payment when signature is absent", () => {
+  test("routes require payment when signature is absent", async () => {
     const env = createEnv();
     const routes = [
       {
@@ -106,7 +107,12 @@ describe("worker x402 helpers", () => {
       const request = new Request(`http://localhost${route.path}`, {
         method: "POST",
       });
-      const response = requireX402Payment(request, env, route.key, route.path);
+      const response = await requireX402Payment(
+        request,
+        env,
+        route.key,
+        route.path,
+      );
 
       expect(response).not.toBeNull();
       expect(response?.status).toBe(402);
@@ -152,7 +158,7 @@ describe("worker x402 helpers", () => {
     expect(resource.method).toBe("POST");
   });
 
-  test("missing macro_signals price var throws config error", () => {
+  test("missing macro_signals price var throws config error", async () => {
     const env = createEnv({ X402_MACRO_SIGNALS_PRICE_USD: undefined });
     const request = new Request(
       "http://localhost/api/x402/read/macro_signals",
@@ -160,14 +166,50 @@ describe("worker x402 helpers", () => {
         method: "POST",
       },
     );
-    expect(() =>
+    await expect(
       requireX402Payment(
         request,
         env,
         "macro_signals",
         "/api/x402/read/macro_signals",
       ),
-    ).toThrow(/x402-route-config-missing/);
+    ).rejects.toThrow(/x402-route-config-missing/);
+  });
+
+  test("on-chain verification rejects malformed payment signature", async () => {
+    const kvStore = new Map<string, string>();
+    const env = createEnv({
+      X402_ENFORCE_ONCHAIN: "1",
+      CONFIG_KV: {
+        async get(key: string) {
+          return kvStore.get(key) ?? null;
+        },
+        async put(key: string, value: string) {
+          kvStore.set(key, value);
+        },
+      } as KVNamespace,
+    });
+    const request = new Request(
+      "http://localhost/api/x402/read/macro_signals",
+      {
+        method: "POST",
+        headers: {
+          "payment-signature": "signed",
+        },
+      },
+    );
+
+    const response = await requireX402Payment(
+      request,
+      env,
+      "macro_signals",
+      "/api/x402/read/macro_signals",
+    );
+
+    expect(response).not.toBeNull();
+    expect(response?.status).toBe(402);
+    const payload = (await response?.json()) as { reason?: string };
+    expect(payload.reason).toBe("x402-payment-signature-invalid");
   });
 
   test("market_jupiter_quote rejects supported mints when pair is not in trading universe", async () => {
