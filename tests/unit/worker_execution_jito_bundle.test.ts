@@ -11,6 +11,10 @@ const getPrivyWalletAddressByIdMock = mock(
   async () => "mock-wallet-address-by-id",
 );
 const getPrivyWalletAddressMock = mock(async () => "mock-wallet-address");
+const getPrivyUserByIdMock = mock(async () => ({
+  id: "did:privy:mock-user",
+  linked_accounts: [],
+}));
 const swapWithRetryMock = mock(async () => ({
   swap: {
     swapTransaction: "unsigned-base64",
@@ -29,6 +33,7 @@ mock.module("../../apps/worker/src/privy", () => ({
   createPrivySolanaWallet: createPrivySolanaWalletMock,
   getPrivyWalletAddress: getPrivyWalletAddressMock,
   getPrivyWalletAddressById: getPrivyWalletAddressByIdMock,
+  getPrivyUserById: getPrivyUserByIdMock,
   signTransactionWithPrivyById: signTransactionWithPrivyByIdMock,
 }));
 mock.module("../../apps/worker/src/swap", () => ({
@@ -46,6 +51,7 @@ describe("worker jito bundle execution adapter", () => {
     createPrivySolanaWalletMock.mockClear();
     getPrivyWalletAddressByIdMock.mockClear();
     getPrivyWalletAddressMock.mockClear();
+    getPrivyUserByIdMock.mockClear();
     signTransactionWithPrivyByIdMock.mockClear();
     swapWithRetryMock.mockClear();
     globalThis.fetch = ORIGINAL_FETCH;
