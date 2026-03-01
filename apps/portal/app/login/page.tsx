@@ -2,8 +2,10 @@
 
 import { usePrivy } from "@privy-io/react-auth";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, apiFetchJson, BTN_PRIMARY, BTN_SECONDARY } from "../lib";
+
+const ACCESS_CHECK_TIMEOUT_MS = 12_000;
 
 function isSignInHostAllowed(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
@@ -15,12 +17,31 @@ function isSignInHostAllowed(hostname: string): boolean {
   );
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error(timeoutMessage));
+      }, timeoutMs);
+    });
+    return (await Promise.race([promise, timeoutPromise])) as T;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
 export default function LoginPage() {
   const { ready, authenticated, login, getAccessToken, logout } = usePrivy();
   const router = useRouter();
   const [signInAllowed, setSignInAllowed] = useState<boolean | null>(null);
   const [checkingAccess, setCheckingAccess] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const attemptedAccessCheck = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -28,18 +49,34 @@ export default function LoginPage() {
   }, []);
 
   useEffect(() => {
+    if (!authenticated) {
+      attemptedAccessCheck.current = false;
+    }
+  }, [authenticated]);
+
+  useEffect(() => {
     if (!ready || !authenticated || signInAllowed !== true) return;
+    if (attemptedAccessCheck.current) return;
+    attemptedAccessCheck.current = true;
     let active = true;
 
     const checkAccess = async () => {
       setCheckingAccess(true);
       setAccessError(null);
       try {
-        const token = await getAccessToken();
+        const token = await withTimeout(
+          getAccessToken(),
+          ACCESS_CHECK_TIMEOUT_MS,
+          "access-token-timeout",
+        );
         if (!token || !token.trim()) {
           throw new Error("unauthorized");
         }
-        await apiFetchJson("/api/me", token, { method: "GET" });
+        await withTimeout(
+          apiFetchJson("/api/me", token, { method: "GET" }),
+          ACCESS_CHECK_TIMEOUT_MS,
+          "access-check-timeout",
+        );
         if (active) {
           router.replace("/terminal");
         }
@@ -58,7 +95,7 @@ export default function LoginPage() {
               : "auth-check-failed",
           );
         }
-        await logout();
+        void logout().catch(() => {});
       } finally {
         if (active) {
           setCheckingAccess(false);
