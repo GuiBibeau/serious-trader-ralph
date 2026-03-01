@@ -1,7 +1,9 @@
+import { requireUser } from "./auth";
 import { BILLING_USDC_MINT } from "./billing";
 import { json } from "./response";
 import { SolanaRpc } from "./solana_rpc";
 import type { Env } from "./types";
+import { findUserByPrivyUserId } from "./users_db";
 
 type X402RouteKey =
   | "market_snapshot"
@@ -42,6 +44,87 @@ const DEVNET_RPC_ENDPOINT = "https://api.devnet.solana.com";
 const X402_REPLAY_KEY_PREFIX = "x402:payment-signature:";
 const X402_REPLAY_TTL_SECONDS = 60 * 60 * 24 * 30;
 const BASE58_SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{32,128}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function normalizeOrigin(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function parseTrustedOriginPatterns(raw: string | undefined): string[] {
+  return String(raw ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function patternMatchesOrigin(pattern: string, origin: string): boolean {
+  if (pattern === "*") return true;
+  if (!pattern.includes("*")) return pattern === origin;
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`^${escaped.replace(/\*/g, ".*")}$`);
+  return regex.test(origin);
+}
+
+function getRequestOrigin(request: Request): string | null {
+  const direct = normalizeOrigin(String(request.headers.get("origin") ?? ""));
+  if (direct) return direct;
+  const referer = String(request.headers.get("referer") ?? "").trim();
+  return normalizeOrigin(referer);
+}
+
+function isTrustedOriginRequest(request: Request, env: Env): boolean {
+  const origin = getRequestOrigin(request);
+  if (!origin) return false;
+  const patterns = parseTrustedOriginPatterns(env.X402_TRUSTED_ORIGINS);
+  if (patterns.length === 0) return false;
+  for (const pattern of patterns) {
+    if (patternMatchesOrigin(pattern, origin)) return true;
+  }
+  return false;
+}
+
+function normalizeEmail(value: unknown): string | null {
+  const email = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!email || !EMAIL_RE.test(email)) return null;
+  return email;
+}
+
+async function hasWaitlistEmail(env: Env, email: string): Promise<boolean> {
+  const row = (await env.WAITLIST_DB.prepare(
+    "SELECT email FROM waitlist WHERE lower(email) = ?1 LIMIT 1",
+  )
+    .bind(email.toLowerCase())
+    .first()) as unknown;
+  return Boolean(row && typeof row === "object");
+}
+
+async function canBypassX402ForTrustedPortalRequest(
+  request: Request,
+  env: Env,
+): Promise<boolean> {
+  if (!isTrustedOriginRequest(request, env)) return false;
+  try {
+    const auth = await requireUser(request, env);
+    const existing = await findUserByPrivyUserId(env, auth.privyUserId);
+    if (existing) return true;
+
+    const email = normalizeEmail(auth.email);
+    if (!email) return false;
+    return await hasWaitlistEmail(env, email);
+  } catch {
+    return false;
+  }
+}
 
 type ParsedTokenBalance = {
   accountIndex?: number;
@@ -432,6 +515,9 @@ export async function requireX402Payment(
   resourcePath: string,
 ): Promise<Response | null> {
   const config = loadRouteConfig(env, routeKey);
+  if (await canBypassX402ForTrustedPortalRequest(request, env)) {
+    return null;
+  }
   const signature = getPaymentSignature(request);
   if (!signature) {
     return buildPaymentRequiredResponse(config, request, resourcePath);

@@ -127,7 +127,25 @@ must ship together so `/api`, `/endpoints.json`, `/endpoints.txt`, and
 - `dev` is promoted to `staging` via PR.
 - `staging` is promoted to `main` via PR.
 - CI runs on push and pull request events for `dev`, `staging`, and `main`.
-- Dev deployment runs on pushes to `dev`; staging/production deploys remain manual via workflow dispatch.
+- Cloudflare worker deploys run automatically on pushes to `dev`, `staging`, and `main`.
+- Vercel portal deploys run automatically on pushes to `dev`, `staging`, and `main`.
+- Vercel deploy automation enforces lane-domain aliases on every deploy:
+  - `dev` -> `dev.trader-ralph.com`
+  - `staging` -> `staging.trader-ralph.com`
+  - `main` -> `trader-ralph.com`, `www.trader-ralph.com`, `api.trader-ralph.com`
+- Vercel deploy automation injects lane build env routing:
+  - `dev` -> `NEXT_PUBLIC_EDGE_API_BASE=https://dev.api.trader-ralph.com`, `NEXT_PUBLIC_SITE_URL=https://dev.trader-ralph.com`
+  - `staging` -> `NEXT_PUBLIC_EDGE_API_BASE=https://staging.api.trader-ralph.com`, `NEXT_PUBLIC_SITE_URL=https://staging.trader-ralph.com`
+  - `main` -> `NEXT_PUBLIC_EDGE_API_BASE=https://api.trader-ralph.com`, `NEXT_PUBLIC_SITE_URL=https://trader-ralph.com`
+- Deploy smoke checks verify docs endpoints and assert the login bundle points to the expected lane API host.
+
+### CI Secrets Required for Deploy Automation
+
+- `CLOUDFLARE_API_TOKEN`
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+- Configure Vercel secrets at minimum in GitHub Environments `dev`, `staging`, and `production`.
 
 ## Tests
 

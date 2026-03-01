@@ -1,5 +1,6 @@
 "use client";
 
+import { usePrivy } from "@privy-io/react-auth";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiBase, isRecord } from "../../lib";
 import {
@@ -66,6 +67,28 @@ const QUOTE_REFRESH_MS = 15_000;
 const INDICATORS_REFRESH_MS = 5 * 60_000;
 const MAX_LIVE_POINTS = 120;
 const MAX_TOTAL_POINTS = 240;
+const BEARER_RE = /^bearer\s+/i;
+
+async function buildPortalX402Headers(
+  getAccessToken: () => Promise<string | null>,
+  paymentSignature: string,
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "payment-signature": paymentSignature,
+  };
+  try {
+    const rawToken = String((await getAccessToken()) ?? "").trim();
+    if (rawToken) {
+      headers.authorization = BEARER_RE.test(rawToken)
+        ? rawToken
+        : `Bearer ${rawToken}`;
+    }
+  } catch {
+    // Leave request unauthenticated; worker will enforce x402.
+  }
+  return headers;
+}
 
 function parseDecimalFromAtomic(raw: string, decimals: number): number {
   const digits = String(raw ?? "").trim();
@@ -172,6 +195,7 @@ function parseOhlcvPayload(value: unknown): OhlcvPayload | null {
 }
 
 export function useMarketFeed(pairId: PairId): MarketState {
+  const { getAccessToken } = usePrivy();
   const pair = useMemo(() => getPairConfig(pairId), [pairId]);
   const baseMint = TOKEN_CONFIGS[pair.baseSymbol].mint;
   const quoteMint = TOKEN_CONFIGS[pair.quoteSymbol].mint;
@@ -220,13 +244,14 @@ export function useMarketFeed(pairId: PairId): MarketState {
         limit: 168,
         resolutionMinutes: 60,
       };
+      const headers = await buildPortalX402Headers(
+        getAccessToken,
+        "portal-market-widget",
+      );
 
       let response = await fetch(`${base}/api/x402/read/market_indicators`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "payment-signature": "portal-market-widget",
-        },
+        headers,
         body: JSON.stringify(requestBody),
       });
       let payload = (await response.json().catch(() => null)) as unknown;
@@ -252,10 +277,7 @@ export function useMarketFeed(pairId: PairId): MarketState {
       } else if (response.status === 404) {
         response = await fetch(`${base}/api/x402/read/market_ohlcv`, {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "payment-signature": "portal-market-widget",
-          },
+          headers,
           body: JSON.stringify(requestBody),
         });
         payload = (await response.json().catch(() => null)) as unknown;
@@ -301,15 +323,16 @@ export function useMarketFeed(pairId: PairId): MarketState {
     async function fetchLiveQuote(): Promise<void> {
       const base = apiBase();
       if (!base) throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
+      const headers = await buildPortalX402Headers(
+        getAccessToken,
+        "portal-market-widget",
+      );
 
       const response = await fetch(
         `${base}/api/x402/read/market_jupiter_quote`,
         {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "payment-signature": "portal-market-widget",
-          },
+          headers,
           body: JSON.stringify({
             inputMint: baseMint,
             outputMint: quoteMint,
@@ -425,7 +448,7 @@ export function useMarketFeed(pairId: PairId): MarketState {
         timerRef.current = null;
       }
     };
-  }, [baseMint, pair.id, quoteMint, quoteToken.decimals]);
+  }, [baseMint, getAccessToken, pair.id, quoteMint, quoteToken.decimals]);
 
   return state;
 }

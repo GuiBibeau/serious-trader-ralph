@@ -1,5 +1,6 @@
 "use client";
 
+import { usePrivy } from "@privy-io/react-auth";
 import { useEffect, useState } from "react";
 import { apiBase, isRecord } from "../../lib";
 
@@ -148,6 +149,26 @@ const FRED_INTERVAL_MS = 5 * 60_000;
 const ETF_INTERVAL_MS = 2 * 60_000;
 const STABLECOIN_INTERVAL_MS = 60_000;
 const OIL_INTERVAL_MS = 5 * 60_000;
+const BEARER_RE = /^bearer\s+/i;
+
+let macroAccessTokenGetter: (() => Promise<string | null>) | null = null;
+
+function setMacroAccessTokenGetter(
+  getter: (() => Promise<string | null>) | null,
+): void {
+  macroAccessTokenGetter = getter;
+}
+
+async function getMacroAuthorizationHeader(): Promise<string | null> {
+  if (!macroAccessTokenGetter) return null;
+  try {
+    const token = String((await macroAccessTokenGetter()) ?? "").trim();
+    if (!token) return null;
+    return BEARER_RE.test(token) ? token : `Bearer ${token}`;
+  } catch {
+    return null;
+  }
+}
 
 function toNumberOrNull(value: unknown): number | null {
   const n = typeof value === "number" ? value : Number(value);
@@ -200,12 +221,16 @@ async function fetchMacroPayload(
 ): Promise<unknown> {
   const base = apiBase();
   if (!base) throw new Error("missing NEXT_PUBLIC_EDGE_API_BASE");
+  const authorization = await getMacroAuthorizationHeader();
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "payment-signature": "portal-macro-widget",
+  };
+  if (authorization) headers.authorization = authorization;
+
   const response = await fetch(`${base}${path}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "payment-signature": "portal-macro-widget",
-    },
+    headers,
     body: JSON.stringify(body),
   });
   const payload = (await response.json().catch(() => null)) as unknown;
@@ -276,7 +301,17 @@ function maybeStopPolling<T>(store: Store<T>): void {
 }
 
 function useStoreState<T>(store: Store<T>): MacroFeedState<T> {
+  const { getAccessToken } = usePrivy();
   const [snapshot, setSnapshot] = useState<MacroFeedState<T>>(store.state);
+
+  useEffect(() => {
+    setMacroAccessTokenGetter(getAccessToken);
+    return () => {
+      if (macroAccessTokenGetter === getAccessToken) {
+        setMacroAccessTokenGetter(null);
+      }
+    };
+  }, [getAccessToken]);
 
   useEffect(() => {
     store.listeners.add(setSnapshot);
