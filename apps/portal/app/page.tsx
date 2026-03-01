@@ -1,6 +1,6 @@
 "use client";
 
-import type { SVGProps } from "react";
+import { type SVGProps, useEffect, useState } from "react";
 import { FadeUp, StaggerChildren, StaggerItem } from "./motion";
 
 // ── Icons (Inline SVGs) ──────────────────────────────────────────────────────
@@ -197,7 +197,8 @@ function GridBackground() {
   );
 }
 
-function Navbar() {
+function Navbar(props: { onRequestAccess: () => void }) {
+  const { onRequestAccess } = props;
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-paper/80 backdrop-blur-md">
       <div className="w-[min(1120px,92vw)] mx-auto h-16 flex items-center justify-between">
@@ -222,25 +223,21 @@ function Navbar() {
           </a>
         </div>
         <div className="flex items-center gap-4">
-          <a
-            href="/login"
-            className="text-sm font-medium text-muted hover:text-ink transition-colors"
-          >
-            Sign in
-          </a>
-          <a
-            href="mailto:hello@ralph.fund"
+          <button
+            type="button"
+            onClick={onRequestAccess}
             className="hidden sm:flex items-center gap-2 px-4 py-1.5  text-sm font-medium bg-white text-black rounded-full hover:bg-gray-200 transition-colors"
           >
             Request Access
-          </a>
+          </button>
         </div>
       </div>
     </nav>
   );
 }
 
-function Hero() {
+function Hero(props: { onRequestAccess: () => void }) {
+  const { onRequestAccess } = props;
   return (
     <section className="relative min-h-[90vh] flex flex-col justify-center pt-20 overflow-hidden">
       <GridBackground />
@@ -261,16 +258,17 @@ function Hero() {
           </h1>
           <p className="max-w-2xl text-lg md:text-xl text-muted leading-relaxed mb-8">
             Trader Ralph is building a Solana-first intelligence factory:
-            automated internal loops plus external signal access through our
-            terminal and x402 endpoints.
+            automated alpha plus external signal access through our terminal and
+            x402 endpoints.
           </p>
           <div className="flex flex-wrap items-center gap-4">
-            <a
-              href="mailto:hello@ralph.fund"
+            <button
+              type="button"
+              onClick={onRequestAccess}
               className="h-12 px-8 inline-flex items-center justify-center rounded-full bg-accent text-white font-medium text-lg shadow-[0_0_20px_var(--color-accent-soft)] hover:shadow-[0_0_30px_var(--color-accent-soft)] hover:scale-105 transition-all duration-300"
             >
               Request Access <IconArrowRight className="ml-2 w-5 h-5" />
-            </a>
+            </button>
             <a
               href="#features"
               className="h-12 px-8 inline-flex items-center justify-center rounded-full border border-border bg-surface/50 text-ink font-medium text-lg hover:bg-surface transition-colors"
@@ -284,6 +282,139 @@ function Hero() {
       {/* Decorative gradient blur at bottom */}
       <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-paper to-transparent pointer-events-none" />
     </section>
+  );
+}
+
+function WaitlistModal(props: { open: boolean; onClose: () => void }) {
+  const { open, onClose } = props;
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState<
+    "idle" | "submitting" | "success" | "error"
+  >("idle");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) return;
+    setEmail("");
+    setStatus("idle");
+    setErrorMessage(null);
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center px-4">
+      <button
+        type="button"
+        aria-label="Close waitlist modal"
+        className="absolute inset-0"
+        onClick={onClose}
+      />
+      <div className="relative w-full max-w-md rounded-2xl border border-border bg-surface p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="label">Waitlist</p>
+            <h3 className="text-xl font-bold mt-2">Request Access</h3>
+          </div>
+          <button
+            type="button"
+            className="text-muted hover:text-ink text-sm"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        {status === "success" ? (
+          <p className="text-sm text-emerald-300 mt-4">
+            Thanks for signing up, we&apos;ll send you an email once you are
+            accepted.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-muted mt-3">
+              Enter your email to join the waitlist.
+            </p>
+            <form
+              className="mt-4 space-y-3"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (status === "submitting") return;
+
+                const normalized = email.trim().toLowerCase();
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+                  setStatus("error");
+                  setErrorMessage("Please enter a valid email.");
+                  return;
+                }
+
+                setStatus("submitting");
+                setErrorMessage(null);
+
+                try {
+                  const response = await fetch("/api/waitlist", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                      email: normalized,
+                      source: "landing_page_modal",
+                    }),
+                  });
+                  const payload = (await response
+                    .json()
+                    .catch(() => null)) as unknown;
+                  if (!response.ok) {
+                    const message =
+                      payload &&
+                      typeof payload === "object" &&
+                      "error" in payload &&
+                      typeof payload.error === "string"
+                        ? payload.error
+                        : "waitlist-submit-failed";
+                    if (
+                      response.status === 410 ||
+                      message === "manual-onboarding-only" ||
+                      message.includes("manual-onboarding")
+                    ) {
+                      setStatus("success");
+                      return;
+                    }
+                    throw new Error(message);
+                  }
+                  setStatus("success");
+                } catch (error) {
+                  setStatus("error");
+                  setErrorMessage(
+                    error instanceof Error
+                      ? error.message
+                      : "waitlist-submit-failed",
+                  );
+                }
+              }}
+            >
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="w-full rounded-md border border-border bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent"
+                placeholder="you@fund.com"
+                autoComplete="email"
+              />
+              {status === "error" && errorMessage ? (
+                <p className="text-xs text-amber-300">{errorMessage}</p>
+              ) : null}
+              <button
+                type="submit"
+                disabled={status === "submitting"}
+                className="w-full h-11 inline-flex items-center justify-center rounded-full bg-accent text-white font-medium text-sm disabled:opacity-60"
+              >
+                {status === "submitting" ? "Submitting..." : "Join Waitlist"}
+              </button>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -337,10 +468,11 @@ function BentoGrid() {
             <div className="w-12 h-12 rounded-lg bg-blue-500/10 flex items-center justify-center mb-6 text-blue-500">
               <IconLayers className="w-6 h-6" />
             </div>
-            <h3 className="text-xl font-bold mb-2">Swap Routing</h3>
+            <h3 className="text-xl font-bold mb-2">Protocol-Aware Routing</h3>
             <p className="text-sm text-muted">
-              SOL/USDC swaps route through supported Solana liquidity via
-              Jupiter. The user signs through the Privy wallet flow.
+              Orders route through multi-venue Solana liquidity using
+              cutting-edge protocol integrations designed for access and
+              stronger fill quality.
             </p>
           </StaggerItem>
 
@@ -349,10 +481,10 @@ function BentoGrid() {
             <div className="w-12 h-12 rounded-lg bg-purple-500/10 flex items-center justify-center mb-6 text-purple-500">
               <IconLock className="w-6 h-6" />
             </div>
-            <h3 className="text-xl font-bold mb-2">Execution Scope</h3>
+            <h3 className="text-xl font-bold mb-2">Quant Execution Fabric</h3>
             <p className="text-sm text-muted">
-              Current terminal trading scope is spot SOL/USDC. Additional
-              markets and derivatives are planned after core loop reliability.
+              Quant execution fabric for all: multi-venue routing, policy-first
+              controls, and low-latency lanes for systematic Solana strategies.
             </p>
           </StaggerItem>
 
@@ -366,9 +498,9 @@ function BentoGrid() {
                 </div>
                 <h3 className="text-2xl font-bold mb-2">Execution Layer</h3>
                 <p className="text-muted max-w-md">
-                  Execution is server-side with policy checks, Privy signing,
-                  and RPC submission. Built for deterministic behavior and
-                  operational safety.
+                  Deterministic server-side execution with strict policy checks,
+                  adaptive lanes, MEV protection, and high-speed on-chain
+                  submission.
                 </p>
               </div>
               <div className="flex items-center gap-4 mt-8">
@@ -536,15 +668,21 @@ function Footer() {
 }
 
 export default function LandingPage() {
+  const [waitlistOpen, setWaitlistOpen] = useState(false);
+
   return (
     <main className="dark bg-paper text-ink min-h-screen selection:bg-accent selection:text-ink">
-      <Navbar />
-      <Hero />
+      <Navbar onRequestAccess={() => setWaitlistOpen(true)} />
+      <Hero onRequestAccess={() => setWaitlistOpen(true)} />
       <BentoGrid />
       <AccessModel />
       <Roadmap />
       <Trust />
       <Footer />
+      <WaitlistModal
+        open={waitlistOpen}
+        onClose={() => setWaitlistOpen(false)}
+      />
     </main>
   );
 }
@@ -558,10 +696,10 @@ function Roadmap() {
       <div className="w-[min(1120px,92vw)] mx-auto">
         <FadeUp>
           <div className="mb-16 text-center">
-            <h2 className="text-3xl font-bold">Build Tracks</h2>
+            <h2 className="text-3xl font-bold">Quant Infrastructure Stack</h2>
             <p className="text-muted mt-2">
-              Two tracks: internal automation loops and consumable signal
-              products.
+              Execution fabric and intelligence surfaces for systematic Solana
+              strategies.
             </p>
           </div>
         </FadeUp>
@@ -571,36 +709,36 @@ function Roadmap() {
           <div className="p-8 rounded-2xl border border-border bg-surface/50">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_#10b981]"></div>
-              <h3 className="text-lg font-bold">Current (Live)</h3>
+              <h3 className="text-lg font-bold">Available Now</h3>
             </div>
             <ul className="space-y-4">
               <li className="flex items-start gap-3">
                 <IconCheck className="w-5 h-5 text-emerald-500 mt-0.5" />
                 <div>
-                  <p className="font-medium">Terminal + Wallet</p>
+                  <p className="font-medium">Quant Terminal + Wallet</p>
                   <p className="text-sm text-muted">
-                    Privy-authenticated terminal with account wallet balances
-                    and trade actions.
+                    Privy-authenticated terminal with account balances, trade
+                    actions, and strategy workflows.
                   </p>
                 </div>
               </li>
               <li className="flex items-start gap-3">
                 <IconCheck className="w-5 h-5 text-emerald-500 mt-0.5" />
                 <div>
-                  <p className="font-medium">x402 Read Endpoints</p>
+                  <p className="font-medium">x402 Intelligence APIs</p>
                   <p className="text-sm text-muted">
-                    Paid market, macro, and perps reads exposed over HTTP for
-                    agent consumption.
+                    Paid market, macro, and perps intelligence exposed over HTTP
+                    for agents and internal tooling.
                   </p>
                 </div>
               </li>
               <li className="flex items-start gap-3">
                 <IconCheck className="w-5 h-5 text-emerald-500 mt-0.5" />
                 <div>
-                  <p className="font-medium">Server-side Swap Path</p>
+                  <p className="font-medium">Execution Fabric</p>
                   <p className="text-sm text-muted">
-                    SOL/USDC swap with policy checks, Privy signing, and RPC
-                    submission.
+                    Multi-pair server-side execution with policy checks,
+                    adaptive lanes, and on-chain submission.
                   </p>
                 </div>
               </li>
@@ -611,7 +749,7 @@ function Roadmap() {
           <div className="p-8 rounded-2xl border border-dashed border-border bg-paper/50 opacity-80 hover:opacity-100 transition-opacity">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-2 h-2 rounded-full bg-accent animate-pulse"></div>
-              <h3 className="text-lg font-bold">Development Pipeline</h3>
+              <h3 className="text-lg font-bold">Scaling Next</h3>
             </div>
             <ul className="space-y-4">
               <li className="flex items-start gap-3">
@@ -619,10 +757,12 @@ function Roadmap() {
                   <div className="w-2 h-2 rounded-full bg-muted"></div>
                 </div>
                 <div>
-                  <p className="font-medium">Loop A: Slot Truth Engine</p>
+                  <p className="font-medium">
+                    Recommendation Intelligence Engine
+                  </p>
                   <p className="text-sm text-muted">
-                    Canonical per-slot state, marks, and repairable ingestion
-                    for Solana entities.
+                    Context-aware recommendations that combine market, macro,
+                    perps, and position state into actionable strategy guidance.
                   </p>
                 </div>
               </li>
@@ -631,10 +771,10 @@ function Roadmap() {
                   <div className="w-2 h-2 rounded-full bg-muted"></div>
                 </div>
                 <div>
-                  <p className="font-medium">Loop B: Minute Scoring Engine</p>
+                  <p className="font-medium">Execution Quality Optimizer</p>
                   <p className="text-sm text-muted">
-                    Versioned features, scores, and cacheable views for terminal
-                    and x402 products.
+                    Real-time venue and route optimization designed to improve
+                    fill quality, reduce slippage, and adapt to market regimes.
                   </p>
                 </div>
               </li>
@@ -643,10 +783,13 @@ function Roadmap() {
                   <div className="w-2 h-2 rounded-full bg-muted"></div>
                 </div>
                 <div>
-                  <p className="font-medium">Agentic Hedge Fund Loops</p>
+                  <p className="font-medium">
+                    Autonomous Strategy Orchestration
+                  </p>
                   <p className="text-sm text-muted">
-                    Internal automation loops first, then selective external
-                    product surfaces.
+                    Policy-bound orchestration that connects research outputs to
+                    recommendation, execution, and continuous performance
+                    tuning.
                   </p>
                 </div>
               </li>
