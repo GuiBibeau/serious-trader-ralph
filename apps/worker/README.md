@@ -33,9 +33,9 @@ x402 route pricing/network vars are configured in `wrangler.toml` via `X402_*` v
 
 ```bash
 cd apps/worker
-npm install
-npm run db:migrate:local
-npm run dev:local
+bun install
+bun run db:migrate:local
+bun run dev:local
 ```
 
 ## API
@@ -103,8 +103,8 @@ The following now return `410`:
 
 ```bash
 cd apps/worker
-npm run wallet:migrate:users -- --env <dev|staging|production> --dry-run
-npm run wallet:migrate:users -- --env <dev|staging|production> --apply
+bun run wallet:migrate:users -- --env <dev|staging|production> --dry-run
+bun run wallet:migrate:users -- --env <dev|staging|production> --apply
 ```
 
 2. Review generated audit report:
@@ -126,5 +126,5 @@ This validates x402 endpoint payment requirements and paid-read responses.
 
 ```bash
 cd apps/worker
-npm run access:grant -- --env staging --privy-user-id did:privy:abc
+bun run access:grant -- --env staging --privy-user-id did:privy:abc
 ```

@@ -13,3 +13,4 @@ trades/
 tasks/
 .tmp/
 .turbo/
+.vercel
