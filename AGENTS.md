@@ -38,6 +38,7 @@
   - `VERCEL_TOKEN`
   - `VERCEL_ORG_ID`
   - `VERCEL_PROJECT_ID`
+- Store Vercel secrets in each GitHub Environment used by workflows: `dev`, `staging`, and `production`.
 
 ## Agentic Execution Checklist
 

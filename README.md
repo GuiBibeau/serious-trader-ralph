@@ -145,6 +145,7 @@ must ship together so `/api`, `/endpoints.json`, `/endpoints.txt`, and
 - `VERCEL_TOKEN`
 - `VERCEL_ORG_ID`
 - `VERCEL_PROJECT_ID`
+- Configure Vercel secrets at minimum in GitHub Environments `dev`, `staging`, and `production`.
 
 ## Tests
 
