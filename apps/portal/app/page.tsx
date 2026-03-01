@@ -310,9 +310,7 @@ function WaitlistModal(props: { open: boolean; onClose: () => void }) {
         className="absolute inset-0"
         onClick={onClose}
       />
-      <div
-        className="relative w-full max-w-md rounded-2xl border border-border bg-surface p-6"
-      >
+      <div className="relative w-full max-w-md rounded-2xl border border-border bg-surface p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="label">Waitlist</p>
