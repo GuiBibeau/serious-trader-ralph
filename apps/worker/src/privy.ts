@@ -151,6 +151,22 @@ export async function getPrivyWalletAddress(env: Env): Promise<string> {
   return await getPrivyWalletAddressById(env, requirePrivyWalletId(env));
 }
 
+export async function getPrivyUserById(
+  env: Env,
+  userId: string,
+): Promise<unknown> {
+  const { baseUrl, headers } = privyHeaders(env);
+  const response = await privyFetchWithRetry(
+    `${baseUrl}/users/${encodeURIComponent(userId)}`,
+    { method: "GET", headers },
+  );
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`privy-user-fetch-failed: ${response.status} ${text}`);
+  }
+  return (await response.json()) as unknown;
+}
+
 export async function signTransactionWithPrivyById(
   env: Env,
   walletId: string,
