@@ -65,7 +65,7 @@ Migration report output:
 
 ## x402 Read Endpoints
 
-All are `POST` under `/api/x402/read/*`:
+All are `POST` under `/x402/read/*`:
 - `market_snapshot`
 - `market_snapshot_v2`
 - `market_token_balance`
@@ -117,9 +117,17 @@ catalog in the same PR before merge:
 - `/Users/guillaumebibeau-laviolette/github/serious-trader-ralph/apps/portal/app/api/page.tsx` (if presentation needs adjustment)
 - `/Users/guillaumebibeau-laviolette/github/serious-trader-ralph/tests/unit/portal_api_catalog_routes.test.ts`
 
-Rule: worker route changes under `/api/x402/read/*` and catalog/discovery docs
-must ship together so `/api`, `/api/endpoints.json`, `/api/endpoints.txt`, and
+Rule: worker route changes under `/x402/read/*` and catalog/discovery docs
+must ship together so `/api`, `/endpoints.json`, `/endpoints.txt`, and
 `/llms.txt` remain accurate.
+
+## Branch Promotion Flow
+
+- Feature branches (`codex/*` or `feature/*`) open PRs into `dev`.
+- `dev` is promoted to `staging` via PR.
+- `staging` is promoted to `main` via PR.
+- CI runs on push and pull request events for `dev`, `staging`, and `main`.
+- Dev deployment runs on pushes to `dev`; staging/production deploys remain manual via workflow dispatch.
 
 ## Tests
 
