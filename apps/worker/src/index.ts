@@ -124,6 +124,50 @@ const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
 ]);
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DISCOVERY_DOC_PATHS = new Set([
+  "/api",
+  "/endpoints.json",
+  "/endpoints.txt",
+  "/llms.txt",
+  "/dev-skills.txt",
+  "/api/endpoints.json",
+  "/api/endpoints.txt",
+  "/api/llms.txt",
+  "/api/dev-skills.txt",
+]);
+
+function resolvePortalOriginForApiHost(hostname: string): string {
+  const normalized = hostname.trim().toLowerCase().split(":")[0] ?? "";
+  if (normalized === "dev.api.trader-ralph.com") {
+    return "https://dev.trader-ralph.com";
+  }
+  if (normalized === "staging.api.trader-ralph.com") {
+    return "https://staging.trader-ralph.com";
+  }
+  return "https://www.trader-ralph.com";
+}
+
+async function proxyPortalDiscovery(
+  request: Request,
+  pathname: string,
+): Promise<Response> {
+  const requestUrl = new URL(request.url);
+  const portalOrigin = resolvePortalOriginForApiHost(requestUrl.host);
+  const targetPath = pathname;
+  const upstream = await fetch(`${portalOrigin}${targetPath}`, {
+    method: "GET",
+    headers: {
+      accept:
+        request.headers.get("accept") ??
+        "text/html,application/json,text/plain,*/*",
+    },
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: upstream.headers,
+  });
+}
 
 function normalizeEmail(value: unknown): string | null {
   const email = String(value ?? "")
@@ -189,6 +233,10 @@ export default {
     }
 
     const url = new URL(request.url);
+    if (request.method === "GET" && DISCOVERY_DOC_PATHS.has(url.pathname)) {
+      const proxied = await proxyPortalDiscovery(request, url.pathname);
+      return withCors(proxied, env);
+    }
     if (url.pathname !== "/api" && !url.pathname.startsWith("/api/")) {
       url.pathname = `/api${url.pathname}`;
     }
