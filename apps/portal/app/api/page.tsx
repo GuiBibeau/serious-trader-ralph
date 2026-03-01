@@ -65,15 +65,15 @@ export default function ApiCatalogPage() {
             <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
               <a
                 className="underline hover:text-accent"
-                href="/api/endpoints.json"
+                href="/endpoints.json"
               >
-                /api/endpoints.json
+                /endpoints.json
               </a>
               <a
                 className="underline hover:text-accent"
-                href="/api/endpoints.txt"
+                href="/endpoints.txt"
               >
-                /api/endpoints.txt
+                /endpoints.txt
               </a>
               <a className="underline hover:text-accent" href="/llms.txt">
                 /llms.txt
@@ -85,7 +85,7 @@ export default function ApiCatalogPage() {
             <p className="label">How x402 Works</p>
             <ol className="mt-3 space-y-2 text-sm">
               <li>
-                1. Request an endpoint under <code>/api/x402/read/*</code>.
+                1. Request an endpoint under <code>/x402/read/*</code>.
               </li>
               <li>
                 2. If payment is missing, you get <code>402</code> with{" "}

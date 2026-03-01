@@ -4,24 +4,24 @@ import { GET as getTextCatalog } from "../../apps/portal/app/api/endpoints.txt/r
 import { GET as getLlmsTxt } from "../../apps/portal/app/llms.txt/route";
 
 const EXPECTED_X402_PATHS = [
-  "/api/x402/read/market_snapshot",
-  "/api/x402/read/market_snapshot_v2",
-  "/api/x402/read/market_token_balance",
-  "/api/x402/read/market_jupiter_quote",
-  "/api/x402/read/market_jupiter_quote_batch",
-  "/api/x402/read/market_ohlcv",
-  "/api/x402/read/market_indicators",
-  "/api/x402/read/solana_marks_latest",
-  "/api/x402/read/solana_scores_latest",
-  "/api/x402/read/solana_views_top",
-  "/api/x402/read/macro_signals",
-  "/api/x402/read/macro_fred_indicators",
-  "/api/x402/read/macro_etf_flows",
-  "/api/x402/read/macro_stablecoin_health",
-  "/api/x402/read/macro_oil_analytics",
-  "/api/x402/read/perps_funding_surface",
-  "/api/x402/read/perps_open_interest_surface",
-  "/api/x402/read/perps_venue_score",
+  "/x402/read/market_snapshot",
+  "/x402/read/market_snapshot_v2",
+  "/x402/read/market_token_balance",
+  "/x402/read/market_jupiter_quote",
+  "/x402/read/market_jupiter_quote_batch",
+  "/x402/read/market_ohlcv",
+  "/x402/read/market_indicators",
+  "/x402/read/solana_marks_latest",
+  "/x402/read/solana_scores_latest",
+  "/x402/read/solana_views_top",
+  "/x402/read/macro_signals",
+  "/x402/read/macro_fred_indicators",
+  "/x402/read/macro_etf_flows",
+  "/x402/read/macro_stablecoin_health",
+  "/x402/read/macro_oil_analytics",
+  "/x402/read/perps_funding_surface",
+  "/x402/read/perps_open_interest_surface",
+  "/x402/read/perps_venue_score",
 ] as const;
 
 function toRecord(value: unknown): Record<string, unknown> | null {
@@ -60,7 +60,7 @@ describe("portal x402 api catalog routes", () => {
     expect(endpointPaths.includes("/api/me")).toBe(false);
     expect(endpointPaths.includes("/api/trade/swap")).toBe(false);
     expect(
-      endpointPaths.every((path) => path.startsWith("/api/x402/read/")),
+      endpointPaths.every((path) => path.startsWith("/x402/read/")),
     ).toBe(true);
 
     expect(
@@ -88,7 +88,7 @@ describe("portal x402 api catalog routes", () => {
 
     const oilEndpoint =
       endpointRecords.find(
-        (endpoint) => endpoint.path === "/api/x402/read/macro_oil_analytics",
+        (endpoint) => endpoint.path === "/x402/read/macro_oil_analytics",
       ) ?? null;
     const oilExample = oilEndpoint
       ? toRecord(oilEndpoint.responseExample)
@@ -119,16 +119,14 @@ describe("portal x402 api catalog routes", () => {
 
     const body = await response.text();
     expect(body.includes("https://portal.example/api")).toBe(true);
-    expect(body.includes("https://portal.example/api/endpoints.json")).toBe(
+    expect(body.includes("https://portal.example/endpoints.json")).toBe(
       true,
     );
-    expect(body.includes("https://portal.example/api/endpoints.txt")).toBe(
+    expect(body.includes("https://portal.example/endpoints.txt")).toBe(
       true,
     );
-    expect(body.includes("/api/x402/read/perps_funding_surface")).toBe(true);
-    expect(body.includes("/api/x402/read/perps_open_interest_surface")).toBe(
-      true,
-    );
-    expect(body.includes("/api/x402/read/perps_venue_score")).toBe(true);
+    for (const expectedPath of EXPECTED_X402_PATHS) {
+      expect(body.includes(expectedPath)).toBe(true);
+    }
   });
 });

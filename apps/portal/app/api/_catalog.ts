@@ -87,7 +87,7 @@ export const X402_OVERVIEW: CatalogDoc["overview"] = {
   offering:
     "Solana-focused x402 read endpoints for market, macro, and cross-venue perps intelligence.",
   scope:
-    "This catalog includes only publicly callable x402 routes under /api/x402/read/*.",
+    "This catalog includes only publicly callable x402 routes under /x402/read/*.",
   notes: [
     "Catalog and discovery endpoints are public. The listed x402 routes require payment authorization.",
     "Supported terminal trading universe (tokens and pair presets) is included under supportedTrading.",
@@ -116,7 +116,7 @@ export const X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE: Record<string, unknown> = {
       },
     ],
     resource: {
-      uri: "/api/x402/read/market_snapshot",
+      uri: "/x402/read/market_snapshot",
       method: "POST",
     },
   },
@@ -126,7 +126,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "market_snapshot",
     method: "POST",
-    path: "/api/x402/read/market_snapshot",
+    path: "/x402/read/market_snapshot",
     summary: "Point-in-time market/account snapshot with valuation context.",
     access: "public-x402-paid",
     requiredFields: [
@@ -171,7 +171,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "market_snapshot_v2",
     method: "POST",
-    path: "/api/x402/read/market_snapshot_v2",
+    path: "/x402/read/market_snapshot_v2",
     summary:
       "Extended snapshot including per-mint balances for tracked assets.",
     access: "public-x402-paid",
@@ -235,7 +235,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "market_token_balance",
     method: "POST",
-    path: "/api/x402/read/market_token_balance",
+    path: "/x402/read/market_token_balance",
     summary: "Token balance lookup for one wallet and one mint.",
     access: "public-x402-paid",
     requiredFields: [
@@ -268,7 +268,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "market_jupiter_quote",
     method: "POST",
-    path: "/api/x402/read/market_jupiter_quote",
+    path: "/x402/read/market_jupiter_quote",
     summary:
       "Single Jupiter quote for exact-in swap sizing across the supported trading universe.",
     access: "public-x402-paid",
@@ -320,7 +320,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "market_jupiter_quote_batch",
     method: "POST",
-    path: "/api/x402/read/market_jupiter_quote_batch",
+    path: "/x402/read/market_jupiter_quote_batch",
     summary: "Batch Jupiter quotes (1..20 requests).",
     access: "public-x402-paid",
     requiredFields: [
@@ -366,7 +366,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "market_ohlcv",
     method: "POST",
-    path: "/api/x402/read/market_ohlcv",
+    path: "/x402/read/market_ohlcv",
     summary: "Hourly OHLCV bars for a mint pair.",
     access: "public-x402-paid",
     requiredFields: [
@@ -440,7 +440,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "market_indicators",
     method: "POST",
-    path: "/api/x402/read/market_indicators",
+    path: "/x402/read/market_indicators",
     summary: "Hourly OHLCV + derived indicators for a mint pair.",
     access: "public-x402-paid",
     requiredFields: [
@@ -532,7 +532,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "solana_marks_latest",
     method: "POST",
-    path: "/api/x402/read/solana_marks_latest",
+    path: "/x402/read/solana_marks_latest",
     summary: "Latest Loop A mark set from KV hot cache.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -570,7 +570,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "solana_scores_latest",
     method: "POST",
-    path: "/api/x402/read/solana_scores_latest",
+    path: "/x402/read/solana_scores_latest",
     summary: "Latest Loop B score set with optional pair filter.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -605,7 +605,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "solana_views_top",
     method: "POST",
-    path: "/api/x402/read/solana_views_top",
+    path: "/x402/read/solana_views_top",
     summary: "Latest Loop B top views (top movers, stress, anomaly).",
     access: "public-x402-paid",
     requiredFields: [],
@@ -641,7 +641,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "macro_signals",
     method: "POST",
-    path: "/api/x402/read/macro_signals",
+    path: "/x402/read/macro_signals",
     summary: "Top-level macro signals bundle.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -708,7 +708,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "macro_fred_indicators",
     method: "POST",
-    path: "/api/x402/read/macro_fred_indicators",
+    path: "/x402/read/macro_fred_indicators",
     summary: "FRED indicator set with optional series filters.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -754,7 +754,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "macro_etf_flows",
     method: "POST",
-    path: "/api/x402/read/macro_etf_flows",
+    path: "/x402/read/macro_etf_flows",
     summary: "ETF flow analytics with optional ticker filters.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -797,7 +797,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "macro_stablecoin_health",
     method: "POST",
-    path: "/api/x402/read/macro_stablecoin_health",
+    path: "/x402/read/macro_stablecoin_health",
     summary: "Stablecoin system-health metrics with optional coin filters.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -841,7 +841,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "macro_oil_analytics",
     method: "POST",
-    path: "/api/x402/read/macro_oil_analytics",
+    path: "/x402/read/macro_oil_analytics",
     summary: "Oil and energy macro analytics bundle.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -897,7 +897,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "perps_funding_surface",
     method: "POST",
-    path: "/api/x402/read/perps_funding_surface",
+    path: "/x402/read/perps_funding_surface",
     summary: "Cross-venue perps funding surface for selected symbols.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -964,7 +964,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "perps_open_interest_surface",
     method: "POST",
-    path: "/api/x402/read/perps_open_interest_surface",
+    path: "/x402/read/perps_open_interest_surface",
     summary: "Cross-venue perps open-interest and dominance surface.",
     access: "public-x402-paid",
     requiredFields: [],
@@ -1030,7 +1030,7 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "perps_venue_score",
     method: "POST",
-    path: "/api/x402/read/perps_venue_score",
+    path: "/x402/read/perps_venue_score",
     summary: "Venue-level scorecard across selected perps symbols.",
     access: "public-x402-paid",
     requiredFields: [],

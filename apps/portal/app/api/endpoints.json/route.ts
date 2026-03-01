@@ -25,7 +25,7 @@ export function GET(request: Request): Response {
   } = {
     name: "Trader Ralph x402 API Catalog",
     version: X402_CATALOG_VERSION,
-    basePath: "/api/x402/read",
+    basePath: "/x402/read",
     supportedTrading: X402_SUPPORTED_TRADING,
     auth: {
       type: "x402",
@@ -40,8 +40,8 @@ export function GET(request: Request): Response {
     },
     discovery: {
       html: `${origin}/api`,
-      json: `${origin}/api/endpoints.json`,
-      text: `${origin}/api/endpoints.txt`,
+      json: `${origin}/endpoints.json`,
+      text: `${origin}/endpoints.txt`,
       llms: `${origin}/llms.txt`,
     },
   };
