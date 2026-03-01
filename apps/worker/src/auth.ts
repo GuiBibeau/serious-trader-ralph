@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
+import { getPrivyUserById } from "./privy";
 import type { Env } from "./types";
 
 type AuthUser = {
@@ -142,8 +143,20 @@ export async function requireUser(
     throw new Error("unauthorized");
   }
 
+  let email = extractUserEmail(payload as Record<string, unknown>);
+  if (!email) {
+    try {
+      const profile = await getPrivyUserById(env, privyUserId);
+      email = extractUserEmail(
+        isRecord(profile) ? profile : ({} as Record<string, unknown>),
+      );
+    } catch {
+      // Fall back to null email; caller will enforce waitlist constraints.
+    }
+  }
+
   return {
     privyUserId,
-    email: extractUserEmail(payload as Record<string, unknown>),
+    email,
   };
 }
