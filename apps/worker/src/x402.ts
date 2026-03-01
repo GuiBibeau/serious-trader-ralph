@@ -1,5 +1,6 @@
 import { BILLING_USDC_MINT } from "./billing";
 import { json } from "./response";
+import { SolanaRpc } from "./solana_rpc";
 import type { Env } from "./types";
 
 type X402RouteKey =
@@ -35,6 +36,33 @@ type X402RouteConfig = {
 const PAYMENT_REQUIRED_HEADER = "payment-required";
 const PAYMENT_SIGNATURE_HEADER = "payment-signature";
 const PAYMENT_RESPONSE_HEADER = "payment-response";
+const X_PAYMENT_HEADER = "x-payment";
+const MAINNET_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com";
+const DEVNET_RPC_ENDPOINT = "https://api.devnet.solana.com";
+const X402_REPLAY_KEY_PREFIX = "x402:payment-signature:";
+const X402_REPLAY_TTL_SECONDS = 60 * 60 * 24 * 30;
+const BASE58_SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{32,128}$/;
+
+type ParsedTokenBalance = {
+  accountIndex?: number;
+  mint?: string;
+  owner?: string;
+  uiTokenAmount?: {
+    amount?: string;
+  };
+};
+
+type ParsedTxMeta = {
+  err?: unknown;
+  preTokenBalances?: ParsedTokenBalance[];
+  postTokenBalances?: ParsedTokenBalance[];
+};
+
+type ParsedTxResponse = {
+  slot?: number;
+  blockTime?: number | null;
+  meta?: ParsedTxMeta;
+};
 
 function toBase64Json(input: unknown): string {
   const raw = JSON.stringify(input);
@@ -64,6 +92,197 @@ function normalizePositiveInt(
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.floor(n);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toBigIntAmount(value: unknown): bigint {
+  if (typeof value !== "string" || value.trim() === "") return 0n;
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function parseTokenBalances(raw: unknown): ParsedTokenBalance[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: ParsedTokenBalance[] = [];
+  for (const row of raw) {
+    if (!isRecord(row)) continue;
+    const accountIndex = Number(row.accountIndex);
+    const mint = typeof row.mint === "string" ? row.mint : undefined;
+    const owner = typeof row.owner === "string" ? row.owner : undefined;
+    const uiTokenAmount = isRecord(row.uiTokenAmount)
+      ? ({
+          amount:
+            typeof row.uiTokenAmount.amount === "string"
+              ? row.uiTokenAmount.amount
+              : undefined,
+        } satisfies ParsedTokenBalance["uiTokenAmount"])
+      : undefined;
+    rows.push({
+      accountIndex: Number.isFinite(accountIndex) ? accountIndex : undefined,
+      mint,
+      owner,
+      uiTokenAmount,
+    });
+  }
+  return rows;
+}
+
+function sumPositiveReceivedAtomic(
+  meta: ParsedTxMeta | null | undefined,
+  payTo: string,
+  assetMint: string,
+): bigint {
+  if (!meta) return 0n;
+  const pre = parseTokenBalances(meta.preTokenBalances);
+  const post = parseTokenBalances(meta.postTokenBalances);
+  const preByIndex = new Map<number, bigint>();
+  const postByIndex = new Map<number, bigint>();
+  const indexes = new Set<number>();
+
+  for (const row of pre) {
+    if (
+      typeof row.accountIndex !== "number" ||
+      row.mint !== assetMint ||
+      row.owner !== payTo
+    ) {
+      continue;
+    }
+    indexes.add(row.accountIndex);
+    preByIndex.set(row.accountIndex, toBigIntAmount(row.uiTokenAmount?.amount));
+  }
+  for (const row of post) {
+    if (
+      typeof row.accountIndex !== "number" ||
+      row.mint !== assetMint ||
+      row.owner !== payTo
+    ) {
+      continue;
+    }
+    indexes.add(row.accountIndex);
+    postByIndex.set(
+      row.accountIndex,
+      toBigIntAmount(row.uiTokenAmount?.amount),
+    );
+  }
+
+  let total = 0n;
+  for (const index of indexes) {
+    const before = preByIndex.get(index) ?? 0n;
+    const after = postByIndex.get(index) ?? 0n;
+    const delta = after - before;
+    if (delta > 0n) total += delta;
+  }
+  return total;
+}
+
+function getPaymentSignature(request: Request): string {
+  return String(
+    request.headers.get(PAYMENT_SIGNATURE_HEADER) ??
+      request.headers.get(X_PAYMENT_HEADER) ??
+      "",
+  ).trim();
+}
+
+function onchainVerificationEnabled(env: Env): boolean {
+  const raw = String(env.X402_ENFORCE_ONCHAIN ?? "1")
+    .trim()
+    .toLowerCase();
+  return !(raw === "0" || raw === "false" || raw === "off");
+}
+
+function defaultRpcEndpointForNetwork(network: string): string {
+  const normalized = network.trim().toLowerCase();
+  if (normalized.includes("devnet")) return DEVNET_RPC_ENDPOINT;
+  return MAINNET_RPC_ENDPOINT;
+}
+
+function resolvePaymentRpcEndpoint(env: Env, network: string): string {
+  const configured = String(
+    env.BALANCE_RPC_ENDPOINT ??
+      env.RPC_ENDPOINT ??
+      env.BILLING_RPC_ENDPOINT ??
+      "",
+  ).trim();
+  return configured || defaultRpcEndpointForNetwork(network);
+}
+
+async function consumePaymentSignature(
+  signature: string,
+  config: X402RouteConfig,
+  env: Env,
+): Promise<void> {
+  if (!BASE58_SIGNATURE_RE.test(signature)) {
+    throw new Error("x402-payment-signature-invalid");
+  }
+  if (!env.CONFIG_KV) {
+    throw new Error("x402-payment-replay-store-missing");
+  }
+
+  const replayKey = `${X402_REPLAY_KEY_PREFIX}${signature}`;
+  const existing = await env.CONFIG_KV.get(replayKey);
+  if (existing) {
+    throw new Error("x402-payment-signature-replayed");
+  }
+
+  const rpcEndpoint = resolvePaymentRpcEndpoint(env, config.network);
+  const rpc = new SolanaRpc(rpcEndpoint);
+  const rawTx = await rpc.getTransactionParsed(signature, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  });
+  if (!rawTx) {
+    throw new Error("x402-payment-signature-not-found");
+  }
+
+  const tx = rawTx as ParsedTxResponse;
+  const blockTime = Number(tx.blockTime ?? 0);
+  if (!Number.isFinite(blockTime) || blockTime <= 0) {
+    throw new Error("x402-payment-missing-blocktime");
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const ageSec = nowSec - Math.floor(blockTime);
+  if (ageSec > config.maxTimeoutSeconds) {
+    throw new Error("x402-payment-expired");
+  }
+  if (ageSec < -30) {
+    throw new Error("x402-payment-future-blocktime");
+  }
+
+  const meta = isRecord(tx.meta) ? (tx.meta as ParsedTxMeta) : null;
+  if (!meta || meta.err) {
+    throw new Error("x402-payment-transaction-failed");
+  }
+
+  const receivedAtomic = sumPositiveReceivedAtomic(
+    meta,
+    config.payTo,
+    config.asset,
+  );
+  const requiredAtomic = toBigIntAmount(config.amountAtomic);
+  if (receivedAtomic < requiredAtomic) {
+    throw new Error("x402-payment-insufficient-amount");
+  }
+
+  await env.CONFIG_KV.put(
+    replayKey,
+    JSON.stringify({
+      routeKey: config.routeKey,
+      network: config.network,
+      asset: config.asset,
+      requiredAtomic: config.amountAtomic,
+      receivedAtomic: receivedAtomic.toString(),
+      consumedAt: new Date().toISOString(),
+      slot: Number(tx.slot ?? 0),
+      blockTime: Math.floor(blockTime),
+    }),
+    { expirationTtl: X402_REPLAY_TTL_SECONDS },
+  );
 }
 
 function loadRouteConfig(env: Env, routeKey: X402RouteKey): X402RouteConfig {
@@ -177,20 +396,12 @@ function buildPaymentRequirements(
   };
 }
 
-export function requireX402Payment(
+function buildPaymentRequiredResponse(
+  config: X402RouteConfig,
   request: Request,
-  env: Env,
-  routeKey: X402RouteKey,
   resourcePath: string,
-): Response | null {
-  const config = loadRouteConfig(env, routeKey);
-  const signature = String(
-    request.headers.get(PAYMENT_SIGNATURE_HEADER) ??
-      request.headers.get("x-payment") ??
-      "",
-  ).trim();
-  if (signature) return null;
-
+  reason?: string,
+): Response {
   const paymentRequired = buildPaymentRequirements(
     config,
     request,
@@ -200,6 +411,7 @@ export function requireX402Payment(
     {
       ok: false,
       error: "payment-required",
+      ...(reason ? { reason } : {}),
       paymentRequired,
     },
     { status: 402 },
@@ -211,6 +423,33 @@ export function requireX402Payment(
     statusText: response.statusText,
     headers,
   });
+}
+
+export async function requireX402Payment(
+  request: Request,
+  env: Env,
+  routeKey: X402RouteKey,
+  resourcePath: string,
+): Promise<Response | null> {
+  const config = loadRouteConfig(env, routeKey);
+  const signature = getPaymentSignature(request);
+  if (!signature) {
+    return buildPaymentRequiredResponse(config, request, resourcePath);
+  }
+  if (!onchainVerificationEnabled(env)) {
+    return null;
+  }
+
+  try {
+    await consumePaymentSignature(signature, config, env);
+    return null;
+  } catch (error) {
+    const reason =
+      error instanceof Error
+        ? error.message
+        : "x402-payment-verification-failed";
+    return buildPaymentRequiredResponse(config, request, resourcePath, reason);
+  }
 }
 
 export function withX402SettlementHeader(
@@ -235,6 +474,9 @@ export function withX402SettlementHeader(
       method: request.method,
     },
     settled: true,
+    ...(getPaymentSignature(request)
+      ? { paymentSignature: getPaymentSignature(request) }
+      : {}),
   };
   const headers = new Headers(response.headers);
   headers.set(PAYMENT_RESPONSE_HEADER, toBase64Json(payload));

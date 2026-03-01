@@ -15,6 +15,8 @@ export function GET(request: Request): Response {
     "Catalog scope: public x402 read endpoints only.",
     "Catalog includes market snapshots/quotes, loop views, macro analytics, and cross-venue perps intelligence.",
     "Perps endpoints: /api/x402/read/perps_funding_surface, /api/x402/read/perps_open_interest_surface, /api/x402/read/perps_venue_score.",
+    "x402 verification policy: payment-signature must be an on-chain Solana transaction signature.",
+    "Environment policy: dev expects devnet USDC; staging and production expect mainnet USDC.",
     "Supported trading tokens/pairs are published in the catalog under supportedTrading.",
     "Authenticated account/trading routes are not listed here.",
     "",

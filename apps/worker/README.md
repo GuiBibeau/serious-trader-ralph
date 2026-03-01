@@ -28,6 +28,8 @@ wrangler secret put EIA_API_KEY
 ```
 
 x402 route pricing/network vars are configured in `wrangler.toml` via `X402_*` values.
+Set `X402_ENFORCE_ONCHAIN=1` in deployed environments so `payment-signature`
+is verified as an on-chain Solana transaction against route requirements.
 
 ## Local Quick Start
 
@@ -70,6 +72,14 @@ All `POST` under `/api/x402/read/*`:
 - `macro_etf_flows`
 - `macro_stablecoin_health`
 - `macro_oil_analytics`
+- `perps_funding_surface`
+- `perps_open_interest_surface`
+- `perps_venue_score`
+
+### x402 Network Policy by Environment
+
+- `dev`: `X402_NETWORK=solana-devnet`, `X402_ASSET_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`
+- `staging`/`production`: `X402_NETWORK=solana-mainnet`, `X402_ASSET_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
 
 ### Supported Trading Pairs (Terminal + Trade APIs)
 

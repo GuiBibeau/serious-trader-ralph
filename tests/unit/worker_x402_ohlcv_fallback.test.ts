@@ -36,6 +36,7 @@ function createEnv(overrides?: Partial<Env>): Env {
     X402_NETWORK: "solana-devnet",
     X402_PAY_TO: "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF",
     X402_ASSET_MINT: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    X402_ENFORCE_ONCHAIN: "0",
     X402_MAX_TIMEOUT_SECONDS: "60",
     X402_MARKET_OHLCV_PRICE_USD: "0.01",
     X402_MARKET_INDICATORS_PRICE_USD: "0.01",
