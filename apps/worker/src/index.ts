@@ -198,6 +198,43 @@ async function upsertWaitlistEmail(
     .run();
 }
 
+async function recordEndpointCall(
+  env: Env,
+  method: string,
+  path: string,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  await env.WAITLIST_DB.prepare(
+    `INSERT INTO endpoint_call_stats (
+      endpoint_method,
+      endpoint_path,
+      call_count,
+      first_called_at,
+      last_called_at,
+      created_at,
+      updated_at
+    ) VALUES (?1, ?2, 1, ?3, ?3, ?3, ?3)
+     ON CONFLICT(endpoint_method, endpoint_path) DO UPDATE SET
+       call_count = endpoint_call_stats.call_count + 1,
+       last_called_at = excluded.last_called_at,
+       updated_at = excluded.updated_at`,
+  )
+    .bind(method.toUpperCase(), path, nowIso)
+    .run();
+}
+
+async function recordEndpointCallSafe(
+  env: Env,
+  method: string,
+  path: string,
+): Promise<void> {
+  try {
+    await recordEndpointCall(env, method, path);
+  } catch {
+    // Do not fail request handling if telemetry write fails.
+  }
+}
+
 export {
   ExecutionCoordinator,
   LoopACoordinator,
@@ -234,12 +271,14 @@ export default {
 
     const url = new URL(request.url);
     if (request.method === "GET" && DISCOVERY_DOC_PATHS.has(url.pathname)) {
+      await recordEndpointCallSafe(env, request.method, url.pathname);
       const proxied = await proxyPortalDiscovery(request, url.pathname);
       return withCors(proxied, env);
     }
     if (url.pathname !== "/api" && !url.pathname.startsWith("/api/")) {
       url.pathname = `/api${url.pathname}`;
     }
+    await recordEndpointCallSafe(env, request.method, url.pathname);
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
         const loopAHealth = await readLoopAHealthFromKv(env);
