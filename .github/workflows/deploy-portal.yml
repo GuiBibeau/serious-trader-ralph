@@ -66,6 +66,13 @@ jobs:
           echo "::warning::Skipping managed Vercel deploy because one or more Vercel secrets are missing for environment ${GITHUB_REF_NAME}."
           echo "enabled=false" >> "$GITHUB_OUTPUT"
 
+      - name: Enforce Vercel credentials on staging and main
+        if: steps.vercel_auth.outputs.enabled != 'true' && github.ref_name != 'dev'
+        run: |
+          set -euo pipefail
+          echo "::error::Missing Vercel secrets for ${GITHUB_REF_NAME}. Configure VERCEL_TOKEN, VERCEL_ORG_ID, and VERCEL_PROJECT_ID in this GitHub Environment."
+          exit 1
+
       - name: Deploy portal
         id: deploy
         if: steps.vercel_auth.outputs.enabled == 'true'
