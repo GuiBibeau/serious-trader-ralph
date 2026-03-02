@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { GET as getJsonCatalog } from "../../apps/portal/app/api/endpoints.json/route";
 import { GET as getTextCatalog } from "../../apps/portal/app/api/endpoints.txt/route";
+import { GET as getApiLlmsTxt } from "../../apps/portal/app/api/llms.txt/route";
 import { GET as getLlmsTxt } from "../../apps/portal/app/llms.txt/route";
 
 const EXPECTED_X402_PATHS = [
@@ -40,6 +41,12 @@ describe("portal x402 api catalog routes", () => {
     const payload = (await response.json()) as unknown;
     const payloadRecord = toRecord(payload);
     expect(payloadRecord).not.toBeNull();
+    const discovery = toRecord(payloadRecord?.discovery);
+    expect(discovery).not.toBeNull();
+    expect(String(discovery?.openapi ?? "")).toContain("/openapi.json");
+    expect(String(discovery?.agentRegistryMetadata ?? "")).toContain(
+      "/agent-registry/metadata.json",
+    );
 
     const endpointsRaw = Array.isArray(payloadRecord?.endpoints)
       ? payloadRecord.endpoints
@@ -121,8 +128,23 @@ describe("portal x402 api catalog routes", () => {
     expect(body.includes("https://portal.example/api")).toBe(true);
     expect(body.includes("https://portal.example/endpoints.json")).toBe(true);
     expect(body.includes("https://portal.example/endpoints.txt")).toBe(true);
+    expect(body.includes("https://portal.example/openapi.json")).toBe(true);
+    expect(
+      body.includes("https://portal.example/agent-registry/metadata.json"),
+    ).toBe(true);
     for (const expectedPath of EXPECTED_X402_PATHS) {
       expect(body.includes(expectedPath)).toBe(true);
     }
+  });
+
+  test("GET /api/llms.txt alias returns llms discovery body", async () => {
+    const response = getApiLlmsTxt(
+      new Request("https://portal.example/api/llms.txt"),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/plain");
+    const body = await response.text();
+    expect(body.includes("API origin: https://portal.example")).toBe(true);
+    expect(body.includes("https://portal.example/openapi.json")).toBe(true);
   });
 });
