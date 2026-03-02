@@ -25,6 +25,7 @@ wrangler secret put DUNE_QUERY_ID
 wrangler secret put DUNE_API_URL
 wrangler secret put FRED_API_KEY
 wrangler secret put EIA_API_KEY
+wrangler secret put WAITLIST_WRITE_TOKEN
 ```
 
 x402 route pricing/network vars are configured in `wrangler.toml` via `X402_*` values.

@@ -35,11 +35,17 @@ Codebase components:
 
 ```bash
 bun install
-bun run dev
+bun run dev:local
 ```
 
 - Portal: `http://localhost:3000`
 - Worker: `http://127.0.0.1:8888/api/health`
+
+The `bun run dev:local` command pins the UI to your local Cloudflare Worker stack at `http://127.0.0.1:8888`. If you prefer explicit env files, copy the template below to `apps/portal/.env.local` before running:
+
+```bash
+cp apps/portal/.env.local.example apps/portal/.env.local
+```
 
 ## Worker Local Quick Start
 

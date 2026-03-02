@@ -153,12 +153,32 @@ export default function LoginPage() {
                 Sign in verification failed. Please try again.
               </p>
             ) : null}
+            {accessError === "origin-not-allowed" ? (
+              <p className="text-sm text-amber-300 mt-3">
+                This Privy app id does not allow the current origin. Add{" "}
+                <code>http://localhost:3000</code> and{" "}
+                <code>http://127.0.0.1:3000</code> to allowed origins in the
+                Privy dashboard.
+              </p>
+            ) : null}
             <div className="flex flex-wrap items-center gap-3 mt-6">
               <button
                 className={BTN_PRIMARY}
-                onClick={() => {
+                onClick={async () => {
                   setAccessError(null);
-                  login();
+                  try {
+                    await login();
+                  } catch (error) {
+                    const message =
+                      error instanceof Error
+                        ? error.message
+                        : String(error ?? "auth-check-failed");
+                    setAccessError(
+                      /origin not allowed/i.test(message)
+                        ? "origin-not-allowed"
+                        : "auth-check-failed",
+                    );
+                  }
                 }}
                 disabled={!ready || checkingAccess}
                 type="button"
