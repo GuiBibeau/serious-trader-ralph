@@ -132,16 +132,16 @@ jobs:
           SITE_URL="${{ steps.lane.outputs.site_url }}"
           EDGE_API_BASE="${{ steps.lane.outputs.edge_api_base }}"
 
-          curl -fsSIL "$SITE_URL" > /dev/null
-          curl -fsSIL "${EDGE_API_BASE}/api/health" > /dev/null
+          curl -fsS -o /dev/null "$SITE_URL"
+          curl -fsS -o /dev/null "${EDGE_API_BASE}/api/health"
 
           if [ "${GITHUB_REF_NAME}" = "main" ]; then
             for path in /endpoints.json /endpoints.txt /llms.txt /dev-skills.txt; do
-              curl -fsSIL "https://api.trader-ralph.com${path}" > /dev/null
+              curl -fsS -o /dev/null "https://api.trader-ralph.com${path}"
             done
           else
             for path in /api /api/endpoints.json /api/endpoints.txt /api/dev-skills.txt /endpoints.json /endpoints.txt /llms.txt /dev-skills.txt; do
-              curl -fsSIL "${SITE_URL}${path}" > /dev/null
+              curl -fsS -o /dev/null "${SITE_URL}${path}"
             done
           fi
 
