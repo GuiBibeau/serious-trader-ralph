@@ -1,6 +1,18 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  allowedDevOrigins: [
+    "localhost",
+    "*.localhost",
+    "127.0.0.1",
+    "dev.trader-ralph.com",
+    "staging.trader-ralph.com",
+    "trader-ralph.com",
+    "www.trader-ralph.com",
+    "api.trader-ralph.com",
+    "dev.api.trader-ralph.com",
+    "staging.api.trader-ralph.com",
+  ],
   async rewrites() {
     return {
       beforeFiles: [
