@@ -8,6 +8,7 @@ import {
 } from "../_catalog";
 import {
   buildDiscoveryUrls,
+  type DiscoveryUrls,
   resolveApiOriginFromRequest,
   toAbsoluteApiUrl,
   toApiRuntimePath,
@@ -24,13 +25,7 @@ export function GET(request: Request): Response {
     examples: {
       paymentRequiredResponse: Record<string, unknown>;
     };
-    discovery: {
-      html: string;
-      json: string;
-      text: string;
-      llms: string;
-      skills: string;
-    };
+    discovery: DiscoveryUrls;
     runtime: {
       apiOrigin: string;
       x402BasePath: string;

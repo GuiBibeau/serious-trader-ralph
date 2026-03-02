@@ -136,13 +136,18 @@ jobs:
           curl -fsS -o /dev/null "${EDGE_API_BASE}/api/health"
 
           if [ "${GITHUB_REF_NAME}" = "main" ]; then
-            for path in /endpoints.json /endpoints.txt /llms.txt /dev-skills.txt; do
+            for path in /endpoints.json /endpoints.txt /llms.txt /api/llms.txt /dev-skills.txt /openapi.json /agent-registry/metadata.json; do
               curl -fsS -o /dev/null "https://api.trader-ralph.com${path}"
             done
+            curl -fsS -o /dev/null "https://api.trader-ralph.com/api/agent/query"
           else
-            for path in /api /api/endpoints.json /api/endpoints.txt /api/dev-skills.txt /endpoints.json /endpoints.txt /llms.txt /dev-skills.txt; do
+            for path in /api /api/endpoints.json /api/endpoints.txt /api/llms.txt /api/dev-skills.txt /openapi.json /api/openapi.json /agent-registry/metadata.json /api/agent-registry/metadata.json /endpoints.json /endpoints.txt /llms.txt /dev-skills.txt; do
               curl -fsS -o /dev/null "${SITE_URL}${path}"
             done
+            for path in /openapi.json /api/openapi.json /agent-registry/metadata.json /api/agent-registry/metadata.json /endpoints.json /endpoints.txt /llms.txt /api/llms.txt /dev-skills.txt; do
+              curl -fsS -o /dev/null "${EDGE_API_BASE}${path}"
+            done
+            curl -fsS -o /dev/null "${EDGE_API_BASE}/api/agent/query"
           fi
 
       - name: Smoke check lane API host in login bundle
