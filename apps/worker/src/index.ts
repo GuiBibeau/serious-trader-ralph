@@ -135,6 +135,39 @@ const DISCOVERY_DOC_PATHS = new Set([
   "/api/llms.txt",
   "/api/dev-skills.txt",
 ]);
+const BEARER_RE = /^bearer\s+/i;
+
+function parseBearerToken(value: string | null): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  if (!BEARER_RE.test(raw)) return null;
+  return raw.replace(BEARER_RE, "").trim() || null;
+}
+
+function authorizeWaitlistWrite(
+  request: Request,
+  env: Env,
+): { ok: true } | { ok: false; status: number; error: string } {
+  const configuredToken = String(env.WAITLIST_WRITE_TOKEN ?? "").trim();
+  if (!configuredToken) {
+    return {
+      ok: false,
+      status: 503,
+      error: "waitlist-auth-not-configured",
+    };
+  }
+
+  const token = parseBearerToken(request.headers.get("authorization"));
+  if (!token || token !== configuredToken) {
+    return {
+      ok: false,
+      status: 401,
+      error: "auth-required",
+    };
+  }
+
+  return { ok: true };
+}
 
 function resolvePortalOriginForApiHost(hostname: string): string {
   const normalized = hostname.trim().toLowerCase().split(":")[0] ?? "";
@@ -295,6 +328,17 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/waitlist") {
+        const waitlistAuth = authorizeWaitlistWrite(request, env);
+        if (!waitlistAuth.ok) {
+          return withCors(
+            json(
+              { ok: false, error: waitlistAuth.error },
+              { status: waitlistAuth.status },
+            ),
+            env,
+          );
+        }
+
         const payload = await readPayload(request);
         const email = normalizeEmail(payload.email);
         if (!email || !EMAIL_RE.test(email)) {

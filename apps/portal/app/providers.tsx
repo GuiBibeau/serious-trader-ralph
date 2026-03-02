@@ -43,7 +43,6 @@ export function Providers({ children }: { children: ReactNode }) {
             theme: privyTheme,
             accentColor: "#ff4fa3",
             logo: undefined,
-            walletChainType: "solana-only",
             showWalletLoginFirst: false,
           },
           embeddedWallets: {
