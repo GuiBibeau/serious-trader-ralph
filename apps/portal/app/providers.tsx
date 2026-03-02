@@ -36,10 +36,10 @@ export function Providers({ children }: { children: ReactNode }) {
       <PrivyProvider
         appId={appId}
         config={{
+          // Keep this explicit to avoid showing providers we don't want yet.
+          // Note: the Privy dashboard still needs Email enabled for this to work.
+          loginMethods: ["email"],
           appearance: {
-            // Keep this explicit to avoid showing providers we don't want yet.
-            // Note: the Privy dashboard still needs Email enabled for this to work.
-            loginMethods: ["email"],
             theme: privyTheme,
             accentColor: "#ff4fa3",
             logo: undefined,

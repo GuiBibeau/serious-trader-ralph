@@ -12,7 +12,8 @@ const ORIGINAL_ENV = {
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
-  process.env.NEXT_PUBLIC_EDGE_API_BASE = ORIGINAL_ENV.NEXT_PUBLIC_EDGE_API_BASE;
+  process.env.NEXT_PUBLIC_EDGE_API_BASE =
+    ORIGINAL_ENV.NEXT_PUBLIC_EDGE_API_BASE;
   process.env.NEXT_PUBLIC_SITE_URL = ORIGINAL_ENV.NEXT_PUBLIC_SITE_URL;
   process.env.WAITLIST_UPSTREAM_BEARER_TOKEN =
     ORIGINAL_ENV.WAITLIST_UPSTREAM_BEARER_TOKEN;
@@ -80,7 +81,10 @@ describe("portal waitlist route", () => {
     process.env.NODE_ENV = "production";
 
     let capturedAuthHeader = "";
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
       capturedAuthHeader = String(
         (init?.headers as Record<string, string> | undefined)?.authorization ??
           "",
