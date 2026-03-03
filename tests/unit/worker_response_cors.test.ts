@@ -12,6 +12,7 @@ describe("worker response cors headers", () => {
     const allowHeaders =
       response.headers.get("access-control-allow-headers") ?? "";
     expect(allowHeaders.toLowerCase().includes("idempotency-key")).toBe(true);
+    expect(allowHeaders.toLowerCase().includes("x-exec-api-key")).toBe(true);
     expect(response.headers.get("access-control-allow-origin")).toBe(
       "http://localhost:3000",
     );
