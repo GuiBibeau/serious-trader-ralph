@@ -40,7 +40,7 @@ mock.module("../../apps/worker/src/swap", () => ({
   swapWithRetry: swapWithRetryMock,
 }));
 
-const { executeJitoBundleSwap } = await import(
+const { executeJitoBundleSwap, resetJitoTipAccountCacheForTest } = await import(
   "../../apps/worker/src/execution/jito_bundle_executor"
 );
 
@@ -54,6 +54,7 @@ describe("worker jito bundle execution adapter", () => {
     getPrivyUserByIdMock.mockClear();
     signTransactionWithPrivyByIdMock.mockClear();
     swapWithRetryMock.mockClear();
+    resetJitoTipAccountCacheForTest();
     globalThis.fetch = ORIGINAL_FETCH;
   });
 
@@ -187,5 +188,151 @@ describe("worker jito bundle execution adapter", () => {
     );
     expect(result.executionMeta?.classification).toBe("confirmed");
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  test("retries protected lane dispatch when bundle status is dropped", async () => {
+    let sendBundleCalls = 0;
+    const fetchMock = mock(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        method?: string;
+      };
+      if (body.method === "getTipAccounts") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: ["TipAccount111111111111111111111111111111111"],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (body.method === "sendBundle") {
+        sendBundleCalls += 1;
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: `bundle-${sendBundleCalls}`,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (body.method === "getBundleStatuses") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: [
+              {
+                confirmationStatus:
+                  sendBundleCalls === 1 ? "dropped" : "confirmed",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("unexpected-method", { status: 500 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await executeJitoBundleSwap({
+      env: {
+        JITO_BLOCK_ENGINE_URL: "https://block.engine",
+        EXEC_PROTECTED_MAX_RETRIES: "2",
+        EXEC_PROTECTED_RETRY_BASE_MS: "0",
+      } as Env,
+      policy: normalizePolicy({ commitment: "confirmed" }),
+      rpc: {
+        simulateTransactionBase64: async () => ({ err: null }),
+      } as never,
+      jupiter: {} as never,
+      quoteResponse: {
+        inputMint: "A",
+        outputMint: "B",
+        inAmount: "1",
+        outAmount: "2",
+      },
+      userPublicKey: "11111111111111111111111111111111",
+      privyWalletId: "wallet-id",
+      log: () => {},
+    });
+
+    expect(result.status).toBe("confirmed");
+    expect(result.executionMeta?.bundleId).toBe("bundle-2");
+    expect(sendBundleCalls).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  test("returns normalized error when protected lane retries are exhausted", async () => {
+    const fetchMock = mock(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        method?: string;
+      };
+      if (body.method === "getTipAccounts") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: ["TipAccount111111111111111111111111111111111"],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (body.method === "sendBundle") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: "bundle-fail",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (body.method === "getBundleStatuses") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: [{ confirmationStatus: "dropped" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("unexpected-method", { status: 500 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await executeJitoBundleSwap({
+      env: {
+        JITO_BLOCK_ENGINE_URL: "https://block.engine",
+        EXEC_PROTECTED_MAX_RETRIES: "1",
+        EXEC_PROTECTED_RETRY_BASE_MS: "0",
+      } as Env,
+      policy: normalizePolicy({ commitment: "confirmed" }),
+      rpc: {
+        simulateTransactionBase64: async () => ({ err: null }),
+      } as never,
+      jupiter: {} as never,
+      quoteResponse: {
+        inputMint: "A",
+        outputMint: "B",
+        inAmount: "1",
+        outAmount: "2",
+      },
+      userPublicKey: "11111111111111111111111111111111",
+      privyWalletId: "wallet-id",
+      log: () => {},
+    });
+
+    expect(result.status).toBe("error");
+    const err = result.err as {
+      code?: string;
+      bundleStatus?: string;
+      attempts?: number;
+    };
+    expect(err.code).toBe("submission-failed");
+    expect(err.bundleStatus).toBe("dropped");
+    expect(err.attempts).toBe(2);
   });
 });

@@ -295,6 +295,44 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("accepts relay_signed submit on protected lane", async () => {
+    const relayPayload = buildRelaySignedPayload({ lane: "protected" });
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-protected-1",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { requestId?: string };
+      const row = sqlite
+        .query(
+          "SELECT lane, metadata_json as metadataJson FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(body.requestId) as
+        | { lane?: string; metadataJson?: string }
+        | undefined;
+      expect(row?.lane).toBe("protected");
+      const metadata = JSON.parse(String(row?.metadataJson ?? "{}")) as {
+        laneResolution?: { lane?: string; adapter?: string };
+      };
+      expect(metadata.laneResolution?.lane).toBe("protected");
+      expect(metadata.laneResolution?.adapter).toBe("jito_bundle");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("rejects same idempotency key with different payload", async () => {
     const relayPayload = buildRelaySignedPayload();
     const differentRelayPayload = buildRelaySignedPayload({ lamports: 2 });
