@@ -648,6 +648,77 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("denies privy_execute submit when mode-aware policy rejects wallet", async () => {
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_POLICY_PRIVY_WALLET_ALLOWLIST:
+        "So11111111111111111111111111111111111111112",
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-policy-wallet-1",
+          },
+          body: JSON.stringify(PRIVY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(403);
+      const body = (await response.json()) as {
+        error?: string;
+        reason?: string;
+        policy?: { outcome?: string };
+      };
+      expect(body.error).toBe("policy-denied");
+      expect(body.reason).toBe("privy-wallet-not-allowlisted");
+      expect(body.policy?.outcome).toBe("deny");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("stores mode-aware policy metadata for accepted privy_execute submits", async () => {
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_POLICY_PRIVY_REQUIRE_SIMULATION_PROTECTED: "1",
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-policy-meta-1",
+          },
+          body: JSON.stringify(PRIVY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { requestId?: string };
+      const row = sqlite
+        .query(
+          "SELECT metadata_json as metadataJson FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(String(body.requestId)) as { metadataJson?: string } | undefined;
+      const metadata = JSON.parse(String(row?.metadataJson ?? "{}")) as {
+        policy?: {
+          outcome?: string;
+          defaults?: { requireSimulation?: boolean };
+        };
+      };
+      expect(metadata.policy?.outcome).toBe("allow");
+      expect(metadata.policy?.defaults?.requireSimulation).toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("rejects privy_execute submit when wallet mismatches authenticated user", async () => {
     const { env, sqlite } = createExecSubmitEnv();
     try {

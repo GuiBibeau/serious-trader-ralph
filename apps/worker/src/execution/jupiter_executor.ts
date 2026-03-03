@@ -18,6 +18,13 @@ function isSafeLaneExecution(input: ExecuteSwapInput): boolean {
   return lane === "safe";
 }
 
+function readsTruthyExecutionParam(value: unknown): boolean {
+  if (value === true) return true;
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "on";
+}
+
 function normalizeConfirmationStatus(
   status: string | undefined,
 ): Extract<
@@ -128,7 +135,10 @@ export async function executeJupiterSwap(
     }
   }
 
-  const requiresSimulation = safeLane || policy.simulateOnly;
+  const requiresSimulation =
+    safeLane ||
+    policy.simulateOnly ||
+    readsTruthyExecutionParam(input.execution?.params?.requireSimulation);
   let simulatedAt: string | undefined;
   if (requiresSimulation) {
     const sim = await rpc.simulateTransactionBase64(signedBase64, {

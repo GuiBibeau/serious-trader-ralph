@@ -10,7 +10,7 @@ const MAX_RELAY_TX_BYTES = 2_048;
 type RelaySignedPayload = NonNullable<ExecSubmitRequestV1["relaySigned"]>;
 type BlockhashCommitment = "processed" | "confirmed" | "finalized";
 
-type ParsedRelayTransaction = {
+export type ParsedRelayTransaction = {
   transactionVersion: "legacy" | "v0";
   signatureCount: number;
   recentBlockhash: string;
