@@ -34,6 +34,28 @@ Status: draft contract for implementation gating (`X402-001`).
 - Caller sends execution intent for server-controlled Privy custody.
 - Ralph builds/signs/submits transaction server-side.
 
+## Lane Semantics
+
+### `safe` lane (deterministic guardrails)
+
+- Available for `privy_execute` only (not `relay_signed`).
+- Enforces pre-dispatch transaction guardrails on the signed payload before submission:
+  - tx size bytes
+  - instruction count
+  - account key count
+  - compute unit limit
+  - estimated fee upper bound
+- Always performs a mandatory pre-dispatch simulation, even when `simulateOnly=false`.
+- If any guardrail or simulation fails, submission is denied before `sendTransaction`.
+
+Env overrides for safe-lane limits:
+
+- `EXEC_SAFE_MAX_TX_BYTES` (default `1232`)
+- `EXEC_SAFE_MAX_INSTRUCTION_COUNT` (default `24`)
+- `EXEC_SAFE_MAX_ACCOUNT_KEYS` (default `96`)
+- `EXEC_SAFE_MAX_COMPUTE_UNIT_LIMIT` (default `1400000`)
+- `EXEC_SAFE_MAX_ESTIMATED_FEE_LAMPORTS` (default `2000000`)
+
 ## Copy/Paste Examples
 
 Set your API base:

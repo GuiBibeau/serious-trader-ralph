@@ -198,12 +198,61 @@ function executionErrorMessage(value: unknown): string | null {
   return text ? text.slice(0, 2_000) : null;
 }
 
-function toTerminalStatusFromExecuteResult(
+function policyDeniedReason(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Error) {
+    const text = value.message.trim();
+    if (text.startsWith("policy-denied:")) {
+      return text.slice("policy-denied:".length) || "policy-denied";
+    }
+    return null;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text.startsWith("policy-denied:")) {
+      return text.slice("policy-denied:".length) || "policy-denied";
+    }
+    return null;
+  }
+  if (typeof value === "object" && value && !Array.isArray(value)) {
+    const code = String((value as { code?: unknown }).code ?? "")
+      .trim()
+      .toLowerCase();
+    if (code !== "policy-denied") return null;
+    const reason = String((value as { reason?: unknown }).reason ?? "").trim();
+    return reason || "policy-denied";
+  }
+  return null;
+}
+
+function resolveTerminalFailureFromExecuteResult(
   status: string,
-): "landed" | "failed" {
-  if (status === "finalized") return "landed";
-  if (status === "processed" || status === "confirmed") return "landed";
-  return "failed";
+  err: unknown,
+): {
+  terminalStatus: "failed" | "rejected";
+  errorCode: string;
+  statusReason: string;
+} | null {
+  if (
+    status === "processed" ||
+    status === "confirmed" ||
+    status === "finalized"
+  ) {
+    return null;
+  }
+  const deniedReason = policyDeniedReason(err);
+  if (deniedReason) {
+    return {
+      terminalStatus: "rejected",
+      errorCode: "policy-denied",
+      statusReason: `policy-denied:${deniedReason}`,
+    };
+  }
+  return {
+    terminalStatus: "failed",
+    errorCode: status,
+    statusReason: status,
+  };
 }
 
 function authorizeWaitlistWrite(
@@ -699,6 +748,9 @@ const worker = {
           const options = parsed.value.privyExecute.options ?? {};
           const execution = {
             adapter: laneResolution.adapter,
+            params: {
+              lane: laneResolution.lane,
+            },
           };
           const policy = normalizePolicy({
             allowedMints: SUPPORTED_TRADING_MINTS,
@@ -809,9 +861,11 @@ const worker = {
               },
             });
             const settledAt = new Date().toISOString();
-            const terminalStatus = toTerminalStatusFromExecuteResult(
+            const failure = resolveTerminalFailureFromExecuteResult(
               result.status,
+              result.err,
             );
+            const terminalStatus = failure ? failure.terminalStatus : "landed";
             const errorMessage = executionErrorMessage(result.err);
             providerResponse = {
               ...(providerResponse ?? {}),
@@ -830,7 +884,7 @@ const worker = {
               attemptId,
               status: result.status,
               providerResponse,
-              errorCode: terminalStatus === "failed" ? result.status : null,
+              errorCode: failure ? failure.errorCode : null,
               errorMessage,
               completedAt: settledAt,
             });
@@ -842,7 +896,7 @@ const worker = {
               provider: laneResolution.adapter,
               signature: result.signature,
               slot: null,
-              errorCode: terminalStatus === "failed" ? result.status : null,
+              errorCode: failure ? failure.errorCode : null,
               errorMessage,
               receipt: {
                 mode: parsed.value.mode,
@@ -861,7 +915,7 @@ const worker = {
             await terminalizeExecutionRequest(env.WAITLIST_DB, {
               requestId: reservation.request.requestId,
               status: terminalStatus,
-              statusReason: terminalStatus === "failed" ? result.status : null,
+              statusReason: failure ? failure.statusReason : null,
               details: {
                 provider: laneResolution.adapter,
                 attempt: 1,
@@ -871,6 +925,14 @@ const worker = {
             });
           } catch (error) {
             const failedAt = new Date().toISOString();
+            const deniedReason = policyDeniedReason(error);
+            const terminalStatus = deniedReason ? "rejected" : "failed";
+            const errorCode = deniedReason
+              ? "policy-denied"
+              : "execution-failed";
+            const statusReason = deniedReason
+              ? `policy-denied:${deniedReason}`
+              : "execution-failed";
             const errorMessage =
               executionErrorMessage(error) ?? "execution-submit-failed";
             await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
@@ -879,41 +941,41 @@ const worker = {
               attemptNo: 1,
               lane: laneResolution.lane,
               provider: laneResolution.adapter,
-              status: "failed",
+              status: terminalStatus,
               providerResponse,
-              errorCode: "execution-failed",
+              errorCode,
               errorMessage,
               startedAt: attemptStartedAt,
             });
             await finalizeExecutionAttempt(env.WAITLIST_DB, {
               attemptId,
-              status: "failed",
+              status: terminalStatus,
               providerResponse,
-              errorCode: "execution-failed",
+              errorCode,
               errorMessage,
               completedAt: failedAt,
             });
             await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
               requestId: reservation.request.requestId,
               receiptId: newExecutionReceiptId(),
-              finalizedStatus: "failed",
+              finalizedStatus: terminalStatus,
               lane: laneResolution.lane,
               provider: laneResolution.adapter,
               signature: null,
               slot: null,
-              errorCode: "execution-failed",
+              errorCode,
               errorMessage,
               receipt: {
                 mode: parsed.value.mode,
                 route: laneResolution.adapter,
-                outcome: "failed",
+                outcome: terminalStatus,
               },
               readyAt: failedAt,
             });
             await terminalizeExecutionRequest(env.WAITLIST_DB, {
               requestId: reservation.request.requestId,
-              status: "failed",
-              statusReason: "execution-failed",
+              status: terminalStatus,
+              statusReason,
               details: {
                 provider: laneResolution.adapter,
                 attempt: 1,

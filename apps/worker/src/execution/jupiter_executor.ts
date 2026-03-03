@@ -1,8 +1,21 @@
 import { buildAndSignPrivySwapTransaction } from "./privy_swap_builder";
+import { evaluateSafeLaneTransaction } from "./safe_lane_policy";
 import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
+
+type JupiterExecutorDeps = {
+  buildAndSignPrivySwapTransaction?: typeof buildAndSignPrivySwapTransaction;
+  evaluateSafeLaneTransaction?: typeof evaluateSafeLaneTransaction;
+};
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isSafeLaneExecution(input: ExecuteSwapInput): boolean {
+  const lane = String(input.execution?.params?.lane ?? "")
+    .trim()
+    .toLowerCase();
+  return lane === "safe";
 }
 
 function normalizeConfirmationStatus(
@@ -23,6 +36,7 @@ function normalizeConfirmationStatus(
 
 export async function executeJupiterSwap(
   input: ExecuteSwapInput,
+  deps: JupiterExecutorDeps = {},
 ): Promise<ExecuteSwapResult> {
   const route = "jupiter";
   const {
@@ -52,6 +66,10 @@ export async function executeJupiterSwap(
   }
 
   if (guardEnabled) await guardEnabled();
+  const buildAndSign =
+    deps.buildAndSignPrivySwapTransaction ?? buildAndSignPrivySwapTransaction;
+  const evaluateSafeLane =
+    deps.evaluateSafeLaneTransaction ?? evaluateSafeLaneTransaction;
 
   const {
     signedBase64,
@@ -59,7 +77,7 @@ export async function executeJupiterSwap(
     refreshed,
     lastValidBlockHeight,
     txBuiltAt,
-  } = await buildAndSignPrivySwapTransaction({
+  } = await buildAndSign({
     env,
     policy,
     rpc,
@@ -72,32 +90,99 @@ export async function executeJupiterSwap(
     guardEnabled,
   });
 
-  if (policy.simulateOnly) {
+  const safeLane = isSafeLaneExecution(input);
+  if (safeLane) {
+    const safeEvaluation = evaluateSafeLane({
+      env,
+      signedTransactionBase64: signedBase64,
+    });
+    log(safeEvaluation.ok ? "info" : "warn", "safe lane tx guardrails", {
+      ok: safeEvaluation.ok,
+      reason: safeEvaluation.ok ? null : safeEvaluation.reason,
+      profile: safeEvaluation.profile,
+      limits: safeEvaluation.limits,
+    });
+    if (!safeEvaluation.ok) {
+      const deniedAt = nowIso();
+      return {
+        status: "simulate_error",
+        signature: null,
+        usedQuote,
+        refreshed,
+        lastValidBlockHeight,
+        err: {
+          code: "policy-denied",
+          reason: safeEvaluation.reason,
+          profile: safeEvaluation.profile,
+          limits: safeEvaluation.limits,
+        },
+        executionMeta: {
+          route,
+          classification: "error",
+          trace: {
+            txBuiltAt,
+            failedAt: deniedAt,
+          },
+        },
+      };
+    }
+  }
+
+  const requiresSimulation = safeLane || policy.simulateOnly;
+  let simulatedAt: string | undefined;
+  if (requiresSimulation) {
     const sim = await rpc.simulateTransactionBase64(signedBase64, {
       commitment: policy.commitment,
       sigVerify: true,
     });
-    const simulatedAt = nowIso();
+    simulatedAt = nowIso();
     const ok = !sim.err;
     log(ok ? "info" : "warn", "tx simulated", {
       ok,
       err: sim.err ?? null,
       unitsConsumed: sim.unitsConsumed ?? null,
+      lane: safeLane ? "safe" : "default",
     });
+    if (!ok) {
+      return {
+        status: "simulate_error",
+        signature: null,
+        usedQuote,
+        refreshed,
+        lastValidBlockHeight,
+        err: safeLane
+          ? {
+              code: "policy-denied",
+              reason: "safe-lane-simulation-failed",
+              simulationError: sim.err ?? null,
+            }
+          : (sim.err ?? null),
+        executionMeta: {
+          route,
+          classification: "error",
+          trace: {
+            txBuiltAt,
+            simulatedAt,
+            failedAt: simulatedAt,
+          },
+        },
+      };
+    }
+  }
+
+  if (policy.simulateOnly) {
     return {
-      status: ok ? "simulated" : "simulate_error",
+      status: "simulated",
       signature: null,
       usedQuote,
       refreshed,
       lastValidBlockHeight,
-      err: sim.err ?? null,
       executionMeta: {
         route,
-        classification: ok ? "simulated" : "error",
+        classification: "simulated",
         trace: {
           txBuiltAt,
-          simulatedAt,
-          ...(ok ? {} : { failedAt: simulatedAt }),
+          ...(simulatedAt ? { simulatedAt } : {}),
         },
       },
     };
@@ -148,6 +233,7 @@ export async function executeJupiterSwap(
               : "error",
       trace: {
         txBuiltAt,
+        ...(simulatedAt ? { simulatedAt } : {}),
         sentAt,
         ...(status === "processed" ? { landedAt: finalizedOrConfirmedAt } : {}),
         ...(status === "confirmed"
