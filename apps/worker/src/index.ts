@@ -23,7 +23,18 @@ import {
   ExecutionCoordinator,
   requestExecutionCoordinatorDecision,
 } from "./execution/coordinator";
+import {
+  hashExecutionSubmitPayload,
+  readIdempotencyKey,
+  reserveExecutionSubmitRequest,
+} from "./execution/idempotency";
+import {
+  appendExecutionStatusEvent,
+  getExecutionLatestStatus,
+  updateExecutionRequestStatus,
+} from "./execution/repository";
 import { executeSwapViaRouter } from "./execution/router";
+import { parseExecSubmitPayload } from "./execution/submit_contract";
 import {
   type ExperienceLevel,
   evaluateOnboarding,
@@ -343,6 +354,154 @@ export default {
             ? url.searchParams.get("q")
             : (payload.query ?? payload.q);
         return withCors(json(buildAgentQueryResponse(query, url)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/x402/exec/submit"
+      ) {
+        const payload = await readPayload(request);
+        const parsed = parseExecSubmitPayload(payload);
+        if (!parsed.ok) {
+          return withCors(
+            json({ ok: false, error: parsed.error }, { status: 400 }),
+            env,
+          );
+        }
+
+        const idempotencyKey = readIdempotencyKey(request);
+        if (!idempotencyKey) {
+          return withCors(
+            json(
+              { ok: false, error: "missing-idempotency-key" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        let actorType: "anonymous_x402" | "privy_user" = "anonymous_x402";
+        let actorId: string | null = null;
+        const isRelaySigned = parsed.value.mode === "relay_signed";
+        if (isRelaySigned) {
+          let paymentRequired: Response | null = null;
+          try {
+            paymentRequired = await requireX402Payment(
+              request,
+              env,
+              "exec_submit",
+              url.pathname,
+            );
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : "x402-route-config-missing";
+            return withCors(
+              json({ ok: false, error: message }, { status: 503 }),
+              env,
+            );
+          }
+          if (paymentRequired) return withCors(paymentRequired, env);
+        } else {
+          let user = await requireOnboardedUser(request, env);
+          user = await ensureUserWallet(env, user);
+          if (!user.walletAddress || !user.privyWalletId) {
+            return withCors(
+              json(
+                { ok: false, error: "user-wallet-missing" },
+                { status: 503 },
+              ),
+              env,
+            );
+          }
+          if (parsed.value.privyExecute.wallet !== user.walletAddress) {
+            return withCors(
+              json({ ok: false, error: "invalid-request" }, { status: 400 }),
+              env,
+            );
+          }
+          actorType = "privy_user";
+          actorId = user.id;
+        }
+
+        const payloadHash = await hashExecutionSubmitPayload(parsed.value);
+        const reservation = await reserveExecutionSubmitRequest({
+          db: env.WAITLIST_DB,
+          requestId: newExecRequestId(),
+          idempotencyKey,
+          actorType,
+          actorId,
+          mode: parsed.value.mode,
+          lane: parsed.value.lane,
+          payloadHash,
+          metadata: parsed.metadataForStorage,
+        });
+
+        if (reservation.result === "conflict") {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error: "invalid-request",
+                reason: reservation.error,
+                requestId: reservation.request.requestId,
+              },
+              { status: 409 },
+            ),
+            env,
+          );
+        }
+
+        if (reservation.result === "created") {
+          await appendExecutionStatusEvent(env.WAITLIST_DB, {
+            requestId: reservation.request.requestId,
+            status: "received",
+            reason: null,
+            details: null,
+          });
+          await updateExecutionRequestStatus(env.WAITLIST_DB, {
+            requestId: reservation.request.requestId,
+            status: "validated",
+            statusReason: null,
+          });
+          await appendExecutionStatusEvent(env.WAITLIST_DB, {
+            requestId: reservation.request.requestId,
+            status: "validated",
+            reason: null,
+            details: null,
+          });
+        }
+
+        const latest = await getExecutionLatestStatus(
+          env.WAITLIST_DB,
+          reservation.request.requestId,
+        );
+        const updatedAt =
+          latest?.request.updatedAt ?? reservation.request.updatedAt;
+        const state = toExecSubmitState(latest?.request.status ?? "validated");
+        const base = json({
+          ok: true,
+          requestId: reservation.request.requestId,
+          status: {
+            state,
+            terminal: isExecSubmitTerminalState(state),
+            updatedAt,
+          },
+          poll: {
+            statusUrl: `/api/x402/exec/status/${reservation.request.requestId}`,
+            receiptUrl: `/api/x402/exec/receipt/${reservation.request.requestId}`,
+          },
+        });
+        if (!isRelaySigned) return withCors(base, env);
+        const settled = withX402SettlementHeader(
+          base,
+          request,
+          env,
+          "exec_submit",
+          url.pathname,
+        );
+        return withCors(settled, env);
       }
 
       if (request.method === "POST" && url.pathname === "/api/waitlist") {
@@ -2787,6 +2946,40 @@ function toUniqueStrings(value: unknown, maxItems: number): string[] {
     if (out.length >= maxItems) break;
   }
   return out;
+}
+
+type ExecSubmitState =
+  | "received"
+  | "validated"
+  | "queued"
+  | "dispatched"
+  | "landed"
+  | "finalized"
+  | "failed"
+  | "expired";
+
+function newExecRequestId(): string {
+  const token = crypto.randomUUID().replace(/-/g, "");
+  return `execreq_${token}`;
+}
+
+function toExecSubmitState(status: string): ExecSubmitState {
+  if (status === "received") return "received";
+  if (status === "validated") return "validated";
+  if (status === "dispatched") return "dispatched";
+  if (status === "landed") return "landed";
+  if (status === "expired") return "expired";
+  if (status === "failed" || status === "rejected") return "failed";
+  return "received";
+}
+
+function isExecSubmitTerminalState(state: ExecSubmitState): boolean {
+  return (
+    state === "landed" ||
+    state === "finalized" ||
+    state === "failed" ||
+    state === "expired"
+  );
 }
 
 function parsePerpsSymbol(value: string): string {

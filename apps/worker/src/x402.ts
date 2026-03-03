@@ -6,6 +6,7 @@ import type { Env } from "./types";
 import { findUserByPrivyUserId } from "./users_db";
 
 type X402RouteKey =
+  | "exec_submit"
   | "market_snapshot"
   | "market_snapshot_v2"
   | "market_token_balance"
@@ -373,70 +374,74 @@ function loadRouteConfig(env: Env, routeKey: X402RouteKey): X402RouteConfig {
   const payTo = String(env.X402_PAY_TO ?? "").trim();
   const asset = String(env.X402_ASSET_MINT ?? BILLING_USDC_MINT).trim();
   const priceUsdRaw =
-    routeKey === "market_snapshot"
-      ? String(env.X402_MARKET_SNAPSHOT_PRICE_USD ?? "").trim()
-      : routeKey === "market_snapshot_v2"
-        ? String(env.X402_MARKET_SNAPSHOT_V2_PRICE_USD ?? "").trim()
-        : routeKey === "market_token_balance"
-          ? String(env.X402_MARKET_TOKEN_BALANCE_PRICE_USD ?? "").trim()
-          : routeKey === "market_jupiter_quote"
-            ? String(env.X402_MARKET_JUPITER_QUOTE_PRICE_USD ?? "").trim()
-            : routeKey === "market_jupiter_quote_batch"
-              ? String(
-                  env.X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD ?? "",
-                ).trim()
-              : routeKey === "market_ohlcv"
-                ? String(env.X402_MARKET_OHLCV_PRICE_USD ?? "").trim()
-                : routeKey === "market_indicators"
-                  ? String(env.X402_MARKET_INDICATORS_PRICE_USD ?? "").trim()
-                  : routeKey === "solana_marks_latest"
-                    ? String(
-                        env.X402_SOLANA_MARKS_LATEST_PRICE_USD ?? "",
-                      ).trim()
-                    : routeKey === "solana_scores_latest"
+    routeKey === "exec_submit"
+      ? String(env.X402_EXEC_SUBMIT_PRICE_USD ?? "").trim()
+      : routeKey === "market_snapshot"
+        ? String(env.X402_MARKET_SNAPSHOT_PRICE_USD ?? "").trim()
+        : routeKey === "market_snapshot_v2"
+          ? String(env.X402_MARKET_SNAPSHOT_V2_PRICE_USD ?? "").trim()
+          : routeKey === "market_token_balance"
+            ? String(env.X402_MARKET_TOKEN_BALANCE_PRICE_USD ?? "").trim()
+            : routeKey === "market_jupiter_quote"
+              ? String(env.X402_MARKET_JUPITER_QUOTE_PRICE_USD ?? "").trim()
+              : routeKey === "market_jupiter_quote_batch"
+                ? String(
+                    env.X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD ?? "",
+                  ).trim()
+                : routeKey === "market_ohlcv"
+                  ? String(env.X402_MARKET_OHLCV_PRICE_USD ?? "").trim()
+                  : routeKey === "market_indicators"
+                    ? String(env.X402_MARKET_INDICATORS_PRICE_USD ?? "").trim()
+                    : routeKey === "solana_marks_latest"
                       ? String(
-                          env.X402_SOLANA_SCORES_LATEST_PRICE_USD ?? "",
+                          env.X402_SOLANA_MARKS_LATEST_PRICE_USD ?? "",
                         ).trim()
-                      : routeKey === "solana_views_top"
+                      : routeKey === "solana_scores_latest"
                         ? String(
-                            env.X402_SOLANA_VIEWS_TOP_PRICE_USD ?? "",
+                            env.X402_SOLANA_SCORES_LATEST_PRICE_USD ?? "",
                           ).trim()
-                        : routeKey === "macro_signals"
+                        : routeKey === "solana_views_top"
                           ? String(
-                              env.X402_MACRO_SIGNALS_PRICE_USD ?? "",
+                              env.X402_SOLANA_VIEWS_TOP_PRICE_USD ?? "",
                             ).trim()
-                          : routeKey === "macro_fred_indicators"
+                          : routeKey === "macro_signals"
                             ? String(
-                                env.X402_MACRO_FRED_INDICATORS_PRICE_USD ?? "",
+                                env.X402_MACRO_SIGNALS_PRICE_USD ?? "",
                               ).trim()
-                            : routeKey === "macro_etf_flows"
+                            : routeKey === "macro_fred_indicators"
                               ? String(
-                                  env.X402_MACRO_ETF_FLOWS_PRICE_USD ?? "",
+                                  env.X402_MACRO_FRED_INDICATORS_PRICE_USD ??
+                                    "",
                                 ).trim()
-                              : routeKey === "macro_stablecoin_health"
+                              : routeKey === "macro_etf_flows"
                                 ? String(
-                                    env.X402_MACRO_STABLECOIN_HEALTH_PRICE_USD ??
-                                      "",
+                                    env.X402_MACRO_ETF_FLOWS_PRICE_USD ?? "",
                                   ).trim()
-                                : routeKey === "macro_oil_analytics"
+                                : routeKey === "macro_stablecoin_health"
                                   ? String(
-                                      env.X402_MACRO_OIL_ANALYTICS_PRICE_USD ??
+                                      env.X402_MACRO_STABLECOIN_HEALTH_PRICE_USD ??
                                         "",
                                     ).trim()
-                                  : routeKey === "perps_funding_surface"
+                                  : routeKey === "macro_oil_analytics"
                                     ? String(
-                                        env.X402_PERPS_FUNDING_SURFACE_PRICE_USD ??
+                                        env.X402_MACRO_OIL_ANALYTICS_PRICE_USD ??
                                           "",
                                       ).trim()
-                                    : routeKey === "perps_open_interest_surface"
+                                    : routeKey === "perps_funding_surface"
                                       ? String(
-                                          env.X402_PERPS_OPEN_INTEREST_SURFACE_PRICE_USD ??
+                                          env.X402_PERPS_FUNDING_SURFACE_PRICE_USD ??
                                             "",
                                         ).trim()
-                                      : String(
-                                          env.X402_PERPS_VENUE_SCORE_PRICE_USD ??
-                                            "",
-                                        ).trim();
+                                      : routeKey ===
+                                          "perps_open_interest_surface"
+                                        ? String(
+                                            env.X402_PERPS_OPEN_INTEREST_SURFACE_PRICE_USD ??
+                                              "",
+                                          ).trim()
+                                        : String(
+                                            env.X402_PERPS_VENUE_SCORE_PRICE_USD ??
+                                              "",
+                                          ).trim();
   if (!network || !payTo || !asset || !priceUsdRaw) {
     throw new Error("x402-route-config-missing");
   }
