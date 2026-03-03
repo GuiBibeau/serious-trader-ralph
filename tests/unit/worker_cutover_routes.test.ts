@@ -14,6 +14,11 @@ function createExecutionContextStub(): ExecutionContext {
 
 async function loadWorker() {
   mock.restore();
+  mock.module("../../apps/worker/src/auth", () => ({
+    requireUser: async () => {
+      throw new Error("unauthorized");
+    },
+  }));
   const module = (await import(
     `../../apps/worker/src/index?cutover=${Date.now()}-${Math.random()}`
   )) as typeof import("../../apps/worker/src/index");
