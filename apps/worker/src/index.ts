@@ -28,6 +28,11 @@ import {
   readIdempotencyKey,
   reserveExecutionSubmitRequest,
 } from "./execution/idempotency";
+import {
+  createRelayImmutabilitySnapshot,
+  readRelayImmutabilitySnapshot,
+  verifyRelayImmutabilitySnapshot,
+} from "./execution/relay_immutability";
 import { validateRelaySignedSubmission } from "./execution/relay_signed_validator";
 import {
   appendExecutionStatusEvent,
@@ -387,6 +392,9 @@ export default {
         let actorId: string | null = null;
         const isRelaySigned = parsed.value.mode === "relay_signed";
         let submitMetadata = parsed.metadataForStorage;
+        let relayImmutability: ReturnType<
+          typeof readRelayImmutabilitySnapshot
+        > = null;
         if (isRelaySigned) {
           let paymentRequired: Response | null = null;
           try {
@@ -425,6 +433,22 @@ export default {
               env,
             );
           }
+          relayImmutability = await createRelayImmutabilitySnapshot({
+            signedTransactionBase64: parsed.value.relaySigned.signedTransaction,
+          });
+          if (!relayImmutability) {
+            return withCors(
+              json(
+                {
+                  ok: false,
+                  error: "invalid-transaction",
+                  reason: "relay-immutability-hash-failed",
+                },
+                { status: 400 },
+              ),
+              env,
+            );
+          }
           submitMetadata = {
             ...(submitMetadata ?? {}),
             relayValidation: {
@@ -435,6 +459,7 @@ export default {
               recentBlockhash: validation.parsed.recentBlockhash,
               programIds: validation.parsed.programIds,
             },
+            relayImmutability,
           };
         } else {
           let user = await requireOnboardedUser(request, env);
@@ -484,6 +509,40 @@ export default {
             ),
             env,
           );
+        }
+
+        if (isRelaySigned && reservation.result !== "created") {
+          const storedImmutability = readRelayImmutabilitySnapshot(
+            reservation.request.metadata,
+          );
+          if (storedImmutability) {
+            const immutabilityVerification =
+              await verifyRelayImmutabilitySnapshot({
+                expectedReceivedTxHash: storedImmutability.receivedTxHash,
+                signedTransactionBase64:
+                  parsed.value.mode === "relay_signed"
+                    ? parsed.value.relaySigned.signedTransaction
+                    : "",
+              });
+            if (!immutabilityVerification.ok) {
+              return withCors(
+                json(
+                  {
+                    ok: false,
+                    error: immutabilityVerification.error,
+                    reason: immutabilityVerification.reason,
+                  },
+                  {
+                    status:
+                      immutabilityVerification.error === "policy-denied"
+                        ? 403
+                        : 400,
+                  },
+                ),
+                env,
+              );
+            }
+          }
         }
 
         if (reservation.result === "created") {
@@ -588,6 +647,9 @@ export default {
         const state = toExecSubmitState(latest.request.status);
         const queueDepthRaw = Number(latest.request.metadata?.queueDepth);
         const queuePositionRaw = Number(latest.request.metadata?.queuePosition);
+        const relayImmutability = readRelayImmutabilitySnapshot(
+          latest.request.metadata,
+        );
         return withCors(
           json({
             ok: true,
@@ -607,6 +669,7 @@ export default {
               ...(Number.isFinite(queuePositionRaw) && queuePositionRaw >= 0
                 ? { queuePosition: Math.floor(queuePositionRaw) }
                 : {}),
+              ...(relayImmutability ? { immutability: relayImmutability } : {}),
             },
             events: timelineEvents.map((event) => {
               const mappedState = toExecSubmitState(event.status);
@@ -655,6 +718,9 @@ export default {
 
         const state = toExecSubmitState(latest.request.status);
         const terminal = isExecSubmitTerminalState(state);
+        const relayImmutability = readRelayImmutabilitySnapshot(
+          latest.request.metadata,
+        );
         if (!latest.receipt) {
           return withCors(
             json({
@@ -665,6 +731,9 @@ export default {
                 state,
                 terminal,
                 updatedAt: latest.request.updatedAt,
+                ...(relayImmutability
+                  ? { immutability: relayImmutability }
+                  : {}),
               },
             }),
             env,
@@ -712,6 +781,7 @@ export default {
                     : null,
                 terminalAt: latest.request.terminalAt,
               },
+              ...(relayImmutability ? { immutability: relayImmutability } : {}),
             },
           }),
           env,
