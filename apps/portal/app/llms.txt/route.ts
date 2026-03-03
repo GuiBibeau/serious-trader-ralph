@@ -27,6 +27,8 @@ export function GET(request: Request): Response {
     `API catalog JSON: ${discovery.json}`,
     `API catalog TXT: ${discovery.text}`,
     `API skills pack: ${discovery.skills}`,
+    `OpenAPI: ${discovery.openapi}`,
+    `Agent Registry metadata: ${discovery.agentRegistryMetadata}`,
     "",
     "Catalog scope: public x402 read endpoints only.",
     "Catalog includes market snapshots/quotes, loop views, macro analytics, and cross-venue perps intelligence.",

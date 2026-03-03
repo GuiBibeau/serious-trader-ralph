@@ -1,3 +1,4 @@
+import { buildAgentQueryResponse } from "./agent_query";
 import { requireUser } from "./auth";
 
 import { getUserSubscription, toSubscriptionView } from "./billing";
@@ -130,10 +131,14 @@ const DISCOVERY_DOC_PATHS = new Set([
   "/endpoints.txt",
   "/llms.txt",
   "/dev-skills.txt",
+  "/openapi.json",
+  "/agent-registry/metadata.json",
   "/api/endpoints.json",
   "/api/endpoints.txt",
   "/api/llms.txt",
   "/api/dev-skills.txt",
+  "/api/openapi.json",
+  "/api/agent-registry/metadata.json",
 ]);
 const BEARER_RE = /^bearer\s+/i;
 
@@ -325,6 +330,19 @@ export default {
           }),
           env,
         );
+      }
+
+      if (
+        (request.method === "GET" || request.method === "POST") &&
+        url.pathname === "/api/agent/query"
+      ) {
+        const payload =
+          request.method === "POST" ? await readPayload(request) : {};
+        const query =
+          request.method === "GET"
+            ? url.searchParams.get("q")
+            : (payload.query ?? payload.q);
+        return withCors(json(buildAgentQueryResponse(query, url)), env);
       }
 
       if (request.method === "POST" && url.pathname === "/api/waitlist") {

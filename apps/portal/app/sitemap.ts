@@ -12,6 +12,11 @@ const PUBLIC_PATHS = [
   "/api/endpoints.json",
   "/api/endpoints.txt",
   "/llms.txt",
+  "/api/llms.txt",
+  "/openapi.json",
+  "/api/openapi.json",
+  "/agent-registry/metadata.json",
+  "/api/agent-registry/metadata.json",
   "/login",
   "/terminal",
 ] as const;

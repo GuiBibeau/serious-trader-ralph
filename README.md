@@ -91,6 +91,32 @@ All are `POST` under `/x402/read/*`:
 - `perps_open_interest_surface`
 - `perps_venue_score`
 
+## Agent Registry Integration
+
+Public registry/discovery routes:
+- `GET /api/agent/query` (or `GET /api/agent/query?q=...`)
+- `POST /api/agent/query` with `{ "query": "..." }`
+- `GET /openapi.json`
+- `GET /agent-registry/metadata.json`
+
+Alias routes under `/api/*` are also available for `openapi.json` and
+`agent-registry/metadata.json`.
+
+Static metadata source-of-truth files:
+- `docs/agent-registry/metadata.dev.json`
+- `docs/agent-registry/metadata.staging.json`
+- `docs/agent-registry/metadata.production.json`
+
+Manual registry tooling:
+
+```bash
+bun run agent-registry:validate -- --lane dev
+bun run agent-registry:sync -- --lane dev --step all --dry-run
+bun run agent-registry:sync -- --lane production --step all
+```
+
+Runbook: `docs/agent-registry/runbook.md`
+
 ### x402 Environment Policy
 
 - `dev`: expects a real devnet transaction signature paying devnet USDC (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`)

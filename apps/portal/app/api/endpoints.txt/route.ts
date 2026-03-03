@@ -72,6 +72,8 @@ export function GET(request: Request): Response {
     `text: ${discovery.text}`,
     `llms: ${discovery.llms}`,
     `skills: ${discovery.skills}`,
+    `openapi: ${discovery.openapi}`,
+    `agent registry metadata: ${discovery.agentRegistryMetadata}`,
     "",
     "endpoints:",
   ];
