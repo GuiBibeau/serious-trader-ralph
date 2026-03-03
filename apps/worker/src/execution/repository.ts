@@ -1,3 +1,7 @@
+import {
+  assertExecutionStatusTransition,
+  type ExecutionLifecycleStatus,
+} from "./lifecycle";
 import { verifyRelayImmutabilitySnapshot } from "./relay_immutability";
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -13,18 +17,21 @@ export type ExecutionLane = "fast" | "protected" | "safe";
 export type ExecutionStatus =
   | "received"
   | "validated"
+  | "queued"
   | "dispatched"
   | "landed"
+  | "finalized"
   | "failed"
   | "expired"
   | "rejected";
 export type ExecutionTerminalStatus = Extract<
   ExecutionStatus,
-  "landed" | "failed" | "expired" | "rejected"
+  "landed" | "finalized" | "failed" | "expired" | "rejected"
 >;
 
 export const EXECUTION_TERMINAL_STATUSES = new Set<ExecutionStatus>([
   "landed",
+  "finalized",
   "failed",
   "expired",
   "rejected",
@@ -190,6 +197,7 @@ function mapExecutionRequestRow(
       ) ||
       stringValue(row.status) === "received" ||
       stringValue(row.status) === "validated" ||
+      stringValue(row.status) === "queued" ||
       stringValue(row.status) === "dispatched"
         ? (stringValue(row.status) as ExecutionStatus)
         : "received",
@@ -235,9 +243,11 @@ function mapExecutionStatusEventRow(
     requestId: stringValue(row.requestId),
     seq: numberValue(row.seq),
     status:
+      stringValue(row.status) === "queued" ||
       stringValue(row.status) === "validated" ||
       stringValue(row.status) === "dispatched" ||
       stringValue(row.status) === "landed" ||
+      stringValue(row.status) === "finalized" ||
       stringValue(row.status) === "failed" ||
       stringValue(row.status) === "expired" ||
       stringValue(row.status) === "rejected"
@@ -443,6 +453,13 @@ export async function updateExecutionRequestStatus(
     nowIso?: string;
   },
 ): Promise<ExecutionRequestRecord | null> {
+  const current = await getExecutionRequestById(db, input.requestId);
+  if (!current) return null;
+  assertExecutionStatusTransition({
+    fromStatus: current.status as ExecutionLifecycleStatus,
+    toStatus: input.status as ExecutionLifecycleStatus,
+  });
+
   const nowIso = input.nowIso ?? executionNowIso();
   await db
     .prepare(
@@ -454,6 +471,10 @@ export async function updateExecutionRequestStatus(
         validated_at = CASE
           WHEN ?1 = 'validated' AND validated_at IS NULL THEN ?3
           ELSE validated_at
+        END,
+        terminal_at = CASE
+          WHEN ?1 IN ('landed', 'finalized', 'failed', 'expired', 'rejected') AND terminal_at IS NULL THEN ?3
+          ELSE terminal_at
         END,
         updated_at = ?3
       WHERE request_id = ?4
@@ -591,6 +612,19 @@ export async function terminalizeExecutionRequest(
   request: ExecutionRequestRecord | null;
   event: ExecutionStatusEventRecord | null;
 }> {
+  const current = await getExecutionRequestById(db, input.requestId);
+  if (!current) {
+    return {
+      applied: false,
+      request: null,
+      event: null,
+    };
+  }
+  assertExecutionStatusTransition({
+    fromStatus: current.status as ExecutionLifecycleStatus,
+    toStatus: input.status as ExecutionLifecycleStatus,
+  });
+
   const nowIso = input.nowIso ?? executionNowIso();
   const result = await db
     .prepare(
@@ -599,10 +633,16 @@ export async function terminalizeExecutionRequest(
       SET
         status = ?1,
         status_reason = ?2,
-        terminal_at = ?3,
+        terminal_at = CASE
+          WHEN terminal_at IS NULL THEN ?3
+          ELSE terminal_at
+        END,
         updated_at = ?3
       WHERE request_id = ?4
-        AND terminal_at IS NULL
+        AND (
+          terminal_at IS NULL
+          OR (?1 = 'finalized' AND status = 'landed')
+        )
       `,
     )
     .bind(input.status, input.statusReason ?? null, nowIso, input.requestId)
