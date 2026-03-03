@@ -48,6 +48,26 @@ describe("worker execution router", () => {
     ).rejects.toThrow(/jito-block-engine-url-missing/);
   });
 
+  test("helius sender adapter is present but not configured", async () => {
+    await expect(
+      executeSwapViaRouter({
+        env: {} as never,
+        execution: { adapter: "helius_sender" },
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      }),
+    ).rejects.toThrow(/helius-sender-url-missing/);
+  });
+
   test("magicblock adapter is present but not configured", async () => {
     await expect(
       executeSwapViaRouter({
