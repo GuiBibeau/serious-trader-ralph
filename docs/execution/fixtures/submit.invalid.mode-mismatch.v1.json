@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "v1",
+  "mode": "relay_signed",
+  "lane": "fast",
+  "privyExecute": {
+    "intentType": "swap",
+    "wallet": "8zN6fyyNEZF3Q2R3qbA6Nf4jM3i2x41Qm4xJ8M14H9Qv",
+    "swap": {
+      "inputMint": "So11111111111111111111111111111111111111112",
+      "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "amountAtomic": "15000000",
+      "slippageBps": 50
+    }
+  }
+}

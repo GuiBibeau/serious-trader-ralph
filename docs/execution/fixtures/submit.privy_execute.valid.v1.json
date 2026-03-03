@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "v1",
+  "mode": "privy_execute",
+  "lane": "protected",
+  "metadata": {
+    "source": "terminal-ui",
+    "reason": "user-submit"
+  },
+  "privyExecute": {
+    "intentType": "swap",
+    "wallet": "8zN6fyyNEZF3Q2R3qbA6Nf4jM3i2x41Qm4xJ8M14H9Qv",
+    "swap": {
+      "inputMint": "So11111111111111111111111111111111111111112",
+      "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "amountAtomic": "15000000",
+      "slippageBps": 50
+    },
+    "options": {
+      "simulateOnly": false,
+      "dryRun": false,
+      "commitment": "confirmed"
+    }
+  }
+}

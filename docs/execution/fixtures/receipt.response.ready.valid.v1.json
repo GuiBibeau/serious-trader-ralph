@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "requestId": "execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+  "ready": true,
+  "receipt": {
+    "schemaVersion": "v1",
+    "receiptId": "exec_0d4f24ad83cbe9af",
+    "requestId": "execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+    "mode": "relay_signed",
+    "lane": "fast",
+    "actorType": "anonymous_x402",
+    "provider": "helius_sender",
+    "generatedAt": "2026-03-03T01:15:44.100Z",
+    "outcome": {
+      "status": "finalized",
+      "signature": "3fYvovuh6BmUMN4p6KQxPWJ9f9q71Y8Qq7Mdy5Wq2kyYHfK2bgwQdP4xoL5o6uqAasD7KTzsk8QbJL3v4xQ2yxPq",
+      "errorCode": null,
+      "errorMessage": null
+    },
+    "trace": {
+      "receivedAt": "2026-03-03T01:15:40.100Z",
+      "validatedAt": "2026-03-03T01:15:40.500Z",
+      "dispatchedAt": "2026-03-03T01:15:41.100Z",
+      "landedAt": "2026-03-03T01:15:42.100Z",
+      "terminalAt": "2026-03-03T01:15:44.100Z"
+    }
+  }
+}

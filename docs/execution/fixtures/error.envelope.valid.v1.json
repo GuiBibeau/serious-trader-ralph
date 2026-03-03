@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "requestId": null,
+  "error": {
+    "code": "invalid-request",
+    "message": "missing required field: mode",
+    "details": {
+      "field": "mode"
+    }
+  }
+}

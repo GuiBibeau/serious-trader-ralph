@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "v1",
+  "mode": "relay_signed",
+  "lane": "fast",
+  "metadata": {
+    "source": "x402-agent",
+    "reason": "market-order-burst",
+    "clientRequestId": "agent-req-001"
+  },
+  "relaySigned": {
+    "encoding": "base64",
+    "signedTransaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAED"
+  }
+}

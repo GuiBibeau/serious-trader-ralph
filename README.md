@@ -25,6 +25,12 @@ Codebase components:
 - External productization focus: stable, explainable Solana intelligence endpoints
 - Pair coverage focuses on Solana, stables, and liquid majors in the current terminal universe
 
+## Execution Contract (Draft)
+
+- Canonical execution contract draft: `docs/execution/exec-api-v1.md`
+- JSON schemas: `docs/execution/schemas/*`
+- Contract fixtures: `docs/execution/fixtures/*`
+
 ## Requirements
 
 - Bun
