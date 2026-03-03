@@ -7,6 +7,7 @@ import {
   createExecutionContextStub,
   createWorkerLiveEnv,
 } from "../integration/_worker_live_test_utils";
+import { buildRelaySignedPayload } from "./_relay_signed_test_utils";
 
 const requireUserMock = mock(async () => ({
   privyUserId: "did:privy:user_1",
@@ -135,20 +136,11 @@ function createExecStatusEnv(): { env: Env; sqlite: Database } {
       WAITLIST_DB: createSqliteD1Adapter(sqlite),
       PRIVY_APP_ID: "privy-app-id",
       X402_EXEC_SUBMIT_PRICE_USD: "0.01",
+      EXEC_RELAY_VALIDATE_BLOCKHASH: "0",
     },
   });
   return { env, sqlite };
 }
-
-const RELAY_PAYLOAD = {
-  schemaVersion: "v1",
-  mode: "relay_signed",
-  lane: "fast",
-  relaySigned: {
-    encoding: "base64",
-    signedTransaction: "QUFBQUFBQUFBQUFBQUFBQQ==",
-  },
-};
 
 describe("worker x402 exec status route", () => {
   beforeEach(() => {
@@ -192,6 +184,7 @@ describe("worker x402 exec status route", () => {
   });
 
   test("returns ordered timeline and latest status after submit", async () => {
+    const relayPayload = buildRelaySignedPayload();
     const { env, sqlite } = createExecStatusEnv();
     try {
       const submit = await worker.fetch(
@@ -202,7 +195,7 @@ describe("worker x402 exec status route", () => {
             "idempotency-key": "idem-status-1",
             "payment-signature": "unit-signed-payment",
           },
-          body: JSON.stringify(RELAY_PAYLOAD),
+          body: JSON.stringify(relayPayload),
         }),
         env,
         createExecutionContextStub(),
@@ -247,6 +240,7 @@ describe("worker x402 exec status route", () => {
   });
 
   test("includes attempt/provider metadata when attempts exist", async () => {
+    const relayPayload = buildRelaySignedPayload();
     const { env, sqlite } = createExecStatusEnv();
     try {
       const submit = await worker.fetch(
@@ -257,7 +251,7 @@ describe("worker x402 exec status route", () => {
             "idempotency-key": "idem-status-2",
             "payment-signature": "unit-signed-payment",
           },
-          body: JSON.stringify(RELAY_PAYLOAD),
+          body: JSON.stringify(relayPayload),
         }),
         env,
         createExecutionContextStub(),
