@@ -18,7 +18,7 @@ It provides one execution fabric for:
 
 - Terminal UI at `/terminal`
 - Account-level Privy wallet model (one wallet per user)
-- x402 paid read APIs (`/api/x402/read/*`)
+- x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:
   - `POST /api/x402/exec/submit`
   - `GET /api/x402/exec/status/:requestId`
@@ -57,14 +57,18 @@ bun run dev:local
 - Schemas: `docs/execution/schemas/*`
 - Fixtures: `docs/execution/fixtures/*`
 
-### x402 Read API
+### x402 API
 
-All are `POST` routes under `/api/x402/read/*`:
+x402 paid read routes (`POST`, under `/api/x402/read/*`):
 
 - Market: `market_snapshot`, `market_snapshot_v2`, `market_token_balance`, `market_jupiter_quote`, `market_jupiter_quote_batch`, `market_ohlcv`, `market_indicators`
 - Solana loop views: `solana_marks_latest`, `solana_scores_latest`, `solana_views_top`
 - Macro: `macro_signals`, `macro_fred_indicators`, `macro_etf_flows`, `macro_stablecoin_health`, `macro_oil_analytics`
 - Perps: `perps_funding_surface`, `perps_open_interest_surface`, `perps_venue_score`
+
+x402 execution routes:
+- Paid submit: `POST /api/x402/exec/submit`
+- Public polling: `GET /api/x402/exec/status/:requestId`, `GET /api/x402/exec/receipt/:requestId`
 
 Use discovery/openapi for machine-readable catalog:
 - `/api`

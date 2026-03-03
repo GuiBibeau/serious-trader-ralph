@@ -11,10 +11,10 @@ export type FieldSpec = {
 
 export type X402EndpointSpec = {
   id: string;
-  method: "POST";
+  method: "GET" | "POST";
   path: string;
   summary: string;
-  access: "public-x402-paid";
+  access: "public-x402-paid" | "public-x402-unpaid";
   requiredFields: FieldSpec[];
   optionalFields: FieldSpec[];
   requestExample: Record<string, unknown>;
@@ -85,11 +85,12 @@ const X402_SUPPORTED_PAIR_IDS = X402_SUPPORTED_TRADING.pairs.map(
 
 export const X402_OVERVIEW: CatalogDoc["overview"] = {
   offering:
-    "Solana-focused x402 read endpoints for market, macro, and cross-venue perps intelligence.",
+    "Solana-focused x402 endpoints for market/macro/perps intelligence plus execution submit/status/receipt.",
   scope:
-    "This catalog includes only publicly callable x402 routes under /x402/read/*.",
+    "This catalog includes publicly callable x402 routes under /x402/read/* and /x402/exec/*.",
   notes: [
-    "Catalog and discovery endpoints are public. The listed x402 routes require payment authorization.",
+    "Catalog and discovery endpoints are public. x402 read endpoints and /x402/exec/submit require payment authorization.",
+    "/x402/exec/status/{requestId} and /x402/exec/receipt/{requestId} are public polling endpoints and do not require payment.",
     "payment-signature must be a valid on-chain Solana transaction signature that settles the required amount to payTo.",
     "Environment policy: dev expects devnet USDC; staging and production expect mainnet USDC.",
     "Supported terminal trading universe (tokens and pair presets) is included under supportedTrading.",
@@ -124,7 +125,7 @@ export const X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE: Record<string, unknown> = {
   },
 };
 
-export const X402_ENDPOINTS: X402EndpointSpec[] = [
+export const X402_READ_ENDPOINTS: X402EndpointSpec[] = [
   {
     id: "market_snapshot",
     method: "POST",
@@ -1100,4 +1101,166 @@ export const X402_ENDPOINTS: X402EndpointSpec[] = [
       unavailableVenues: [],
     },
   },
+];
+
+export const X402_EXEC_ENDPOINTS: X402EndpointSpec[] = [
+  {
+    id: "exec_submit",
+    method: "POST",
+    path: "/x402/exec/submit",
+    summary: "Submit execution request in relay_signed or privy_execute mode.",
+    access: "public-x402-paid",
+    requiredFields: [
+      {
+        name: "schemaVersion",
+        type: '"v1"',
+        description: "Execution submit schema version.",
+      },
+      {
+        name: "mode",
+        type: '"relay_signed" | "privy_execute"',
+        description: "Execution mode.",
+      },
+      {
+        name: "lane",
+        type: '"fast" | "protected" | "safe"',
+        description: "Execution lane.",
+      },
+    ],
+    optionalFields: [
+      {
+        name: "metadata",
+        type: "object",
+        description:
+          "Optional tracing metadata (source, reason, clientRequestId).",
+      },
+      {
+        name: "relaySigned",
+        type: "object",
+        description:
+          'Required when mode="relay_signed": { encoding: "base64", signedTransaction: "<base64>" }.',
+      },
+      {
+        name: "privyExecute",
+        type: "object",
+        description:
+          'Required when mode="privy_execute": swap intent payload for Privy-backed execution.',
+      },
+    ],
+    requestExample: {
+      schemaVersion: "v1",
+      mode: "relay_signed",
+      lane: "fast",
+      metadata: {
+        source: "external-agent",
+        reason: "market-entry",
+        clientRequestId: "cli-001",
+      },
+      relaySigned: {
+        encoding: "base64",
+        signedTransaction: "AQABAgMEBQYH",
+      },
+    },
+    responseExample: {
+      ok: true,
+      requestId: "execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+      status: {
+        state: "validated",
+        terminal: false,
+        updatedAt: "2026-03-01T12:00:00.000Z",
+      },
+      poll: {
+        statusUrl: "/api/x402/exec/status/execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+        receiptUrl: "/api/x402/exec/receipt/execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+      },
+    },
+  },
+  {
+    id: "exec_status",
+    method: "GET",
+    path: "/x402/exec/status/{requestId}",
+    summary: "Fetch execution status timeline and attempt metadata.",
+    access: "public-x402-unpaid",
+    requiredFields: [
+      {
+        name: "requestId",
+        type: "string",
+        description: "Execution request id from submit response.",
+      },
+    ],
+    optionalFields: [],
+    requestExample: {},
+    responseExample: {
+      ok: true,
+      requestId: "execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+      status: {
+        state: "dispatched",
+        terminal: false,
+        mode: "relay_signed",
+        lane: "fast",
+        actorType: "anonymous_x402",
+        receivedAt: "2026-03-01T12:00:00.000Z",
+        updatedAt: "2026-03-01T12:00:02.000Z",
+        terminalAt: null,
+      },
+      events: [
+        { state: "received", at: "2026-03-01T12:00:00.000Z" },
+        { state: "validated", at: "2026-03-01T12:00:00.050Z" },
+        {
+          state: "dispatched",
+          at: "2026-03-01T12:00:02.000Z",
+          provider: "helius_sender",
+          attempt: 1,
+        },
+      ],
+      attempts: [
+        {
+          attempt: 1,
+          provider: "helius_sender",
+          state: "dispatched",
+          at: "2026-03-01T12:00:02.000Z",
+        },
+      ],
+    },
+  },
+  {
+    id: "exec_receipt",
+    method: "GET",
+    path: "/x402/exec/receipt/{requestId}",
+    summary: "Fetch terminal execution receipt when available.",
+    access: "public-x402-unpaid",
+    requiredFields: [
+      {
+        name: "requestId",
+        type: "string",
+        description: "Execution request id from submit response.",
+      },
+    ],
+    optionalFields: [],
+    requestExample: {},
+    responseExample: {
+      ok: true,
+      requestId: "execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+      ready: true,
+      receipt: {
+        schemaVersion: "v1",
+        requestId: "execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+        mode: "relay_signed",
+        lane: "fast",
+        finalStatus: "landed",
+        submittedAt: "2026-03-01T12:00:00.000Z",
+        terminalAt: "2026-03-01T12:00:04.000Z",
+        signatures: [
+          "5N1h9KxWw5wxy4A2k8x1oM3E7Z6r3uH2fY5jvYHk3KqA6oQXn5j8vL6pWk2z5b1u7Nq2m4u9n9X7a6s2h3m1",
+        ],
+        provider: "helius_sender",
+        slot: 294001234,
+      },
+    },
+  },
+];
+
+export const X402_ENDPOINTS: X402EndpointSpec[] = [
+  ...X402_READ_ENDPOINTS,
+  ...X402_EXEC_ENDPOINTS,
 ];
