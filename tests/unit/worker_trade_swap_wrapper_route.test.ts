@@ -224,7 +224,7 @@ describe("worker trade swap compatibility wrapper route", () => {
           }
         | undefined;
       expect(requestRow?.mode).toBe("privy_execute");
-      expect(requestRow?.lane).toBe("fast");
+      expect(requestRow?.lane).toBe("safe");
       const metadata = JSON.parse(String(requestRow?.metadataJson ?? "{}")) as {
         source?: string;
         reason?: string;

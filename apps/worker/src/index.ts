@@ -3317,7 +3317,14 @@ function resolveTradeSwapExecutionLane(
   const adapter = String(execution?.adapter ?? "")
     .trim()
     .toLowerCase();
-  if (!adapter || adapter === "jupiter" || adapter === "fast") return "fast";
+  if (!adapter || adapter === "jupiter") return "safe";
+  if (
+    adapter === "fast" ||
+    adapter === "helius" ||
+    adapter === "helius_sender"
+  ) {
+    return "fast";
+  }
   if (
     adapter === "jito" ||
     adapter === "jito_bundle" ||
@@ -3332,7 +3339,6 @@ function resolveTradeSwapExecutionLane(
   ) {
     return "safe";
   }
-  if (adapter === "helius" || adapter === "helius_sender") return "fast";
   return undefined;
 }
 
