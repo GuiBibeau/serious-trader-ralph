@@ -81,6 +81,9 @@ export type Env = {
   X402_NETWORK?: string;
   X402_PAY_TO?: string;
   X402_ASSET_MINT?: string;
+  X402_PROVIDER?: string;
+  X402_FACILITATOR_URL?: string;
+  X402_FACILITATOR_TIMEOUT_MS?: string;
   WAITLIST_WRITE_TOKEN?: string;
   X402_TRUSTED_ORIGINS?: string;
   X402_ENFORCE_ONCHAIN?: string;
