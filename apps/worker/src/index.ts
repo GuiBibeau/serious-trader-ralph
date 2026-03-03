@@ -200,8 +200,8 @@ function executionErrorMessage(value: unknown): string | null {
 
 function toTerminalStatusFromExecuteResult(
   status: string,
-): "landed" | "finalized" | "failed" {
-  if (status === "finalized") return "finalized";
+): "landed" | "failed" {
+  if (status === "finalized") return "landed";
   if (status === "processed" || status === "confirmed") return "landed";
   return "failed";
 }

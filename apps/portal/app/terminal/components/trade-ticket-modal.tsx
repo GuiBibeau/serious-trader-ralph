@@ -278,6 +278,7 @@ export function TradeTicketModal({
   const quoteAbortRef = useRef<AbortController | null>(null);
   const executeAbortRef = useRef<AbortController | null>(null);
   const executeToastIdRef = useRef<string | number | null>(null);
+  const continueExecutionOnUnmountRef = useRef(false);
   const quoteRequestIdRef = useRef(0);
   const mountedRef = useRef(true);
   const openRef = useRef(open);
@@ -296,6 +297,7 @@ export function TradeTicketModal({
     (options?: CloseModalOptions) => {
       const cancelExecution = Boolean(options?.cancelExecution);
       if (cancelExecution) {
+        continueExecutionOnUnmountRef.current = false;
         executeAbortRef.current?.abort();
         dismissExecuteToast();
       }
@@ -322,8 +324,10 @@ export function TradeTicketModal({
     return () => {
       mountedRef.current = false;
       quoteAbortRef.current?.abort();
-      executeAbortRef.current?.abort();
-      dismissExecuteToast();
+      if (!continueExecutionOnUnmountRef.current) {
+        executeAbortRef.current?.abort();
+        dismissExecuteToast();
+      }
     };
   }, [dismissExecuteToast]);
 
@@ -534,6 +538,7 @@ export function TradeTicketModal({
 
     try {
       executeAbortRef.current?.abort();
+      continueExecutionOnUnmountRef.current = false;
       const controller = new AbortController();
       executeAbortRef.current = controller;
       dismissExecuteToast();
@@ -578,6 +583,7 @@ export function TradeTicketModal({
         throw new Error("invalid-exec-submit-response");
       }
 
+      continueExecutionOnUnmountRef.current = true;
       closeModal();
       execToastId = toast.loading("TX submitting...", {
         position: "bottom-right",
@@ -663,6 +669,7 @@ export function TradeTicketModal({
         position: "bottom-right",
         duration: 6000,
       });
+      continueExecutionOnUnmountRef.current = false;
       executeToastIdRef.current = null;
     } catch (error) {
       if (executeAbortRef.current?.signal.aborted) return;
@@ -682,6 +689,7 @@ export function TradeTicketModal({
           duration: 7000,
         });
       }
+      continueExecutionOnUnmountRef.current = false;
       if (!mountedRef.current) return;
       if (!openRef.current) return;
       setSubmitStatus("error");
