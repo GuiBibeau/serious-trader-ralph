@@ -10,19 +10,7 @@ import {
   SUPPORTED_WALLET_TOKEN_BALANCES,
   USDC_MINT,
 } from "./defaults";
-import {
-  applyExecutionResultToTrace,
-  buildExecutionOutcomeFromError,
-  buildExecutionOutcomeFromResult,
-  createExecutionDecision,
-  createExecutionIntent,
-  newExecutionLatencyTrace,
-  recordExecutionReceipt,
-} from "./execution/contracts";
-import {
-  ExecutionCoordinator,
-  requestExecutionCoordinatorDecision,
-} from "./execution/coordinator";
+import { ExecutionCoordinator } from "./execution/coordinator";
 import {
   hashExecutionSubmitPayload,
   readIdempotencyKey,
@@ -46,7 +34,6 @@ import {
   listExecutionStatusEvents,
   updateExecutionRequestStatus,
 } from "./execution/repository";
-import { executeSwapViaRouter } from "./execution/router";
 import { parseExecSubmitPayload } from "./execution/submit_contract";
 import {
   type ExperienceLevel,
@@ -100,7 +87,7 @@ import {
   type PerpsVenue,
   SUPPORTED_PERPS_VENUES,
 } from "./perps_sources";
-import { enforcePolicy, normalizePolicy } from "./policy";
+import { normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
@@ -367,7 +354,7 @@ function resolveX402ReadRpcEndpoint(env: Env): string {
   return X402_READ_RPC_ENDPOINT_FALLBACK;
 }
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext) {
     if (request.method === "OPTIONS") {
       return okCors(env);
@@ -2176,7 +2163,6 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/trade/swap") {
-        const requestReceivedAt = new Date().toISOString();
         let user = await requireOnboardedUser(request, env);
         user = await ensureUserWallet(env, user);
         if (!user.walletAddress || !user.privyWalletId) {
@@ -2226,28 +2212,6 @@ export default {
           );
         }
 
-        const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
-        if (!rpcEndpoint) {
-          return withCors(
-            json({ ok: false, error: "rpc-endpoint-missing" }, { status: 500 }),
-            env,
-          );
-        }
-
-        const jupiter = new JupiterClient(
-          String(env.JUPITER_BASE_URL ?? "").trim() ||
-            X402_READ_JUPITER_BASE_URL,
-          env.JUPITER_API_KEY,
-        );
-        const rpc = new SolanaRpc(rpcEndpoint);
-        const policy = normalizePolicy({
-          allowedMints: SUPPORTED_TRADING_MINTS,
-          slippageBps,
-          maxPriceImpactPct: 0.05,
-          minSolReserveLamports: "50000000",
-          commitment: "confirmed",
-        });
-
         const walletAddress = user.walletAddress;
         const inputAmount = BigInt(amount);
         if (inputAmount <= 0n) {
@@ -2259,243 +2223,99 @@ export default {
             env,
           );
         }
-        if (inputMint === X402_SOL_MINT) {
-          const balanceLamports = await rpc.getBalanceLamports(walletAddress);
-          const minSolReserveLamports = BigInt(policy.minSolReserveLamports);
-          if (inputAmount + minSolReserveLamports > balanceLamports) {
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "insufficient-sol-reserve",
-                  reserveLamports: minSolReserveLamports.toString(),
-                  balanceLamports: balanceLamports.toString(),
+        const lane = resolveTradeSwapExecutionLane(execution);
+        const idempotencyKey =
+          readIdempotencyKey(request) ??
+          newTradeSwapCompatibilityIdempotencyKey();
+        const submitPayload: Record<string, unknown> = {
+          schemaVersion: "v1",
+          mode: "privy_execute",
+          ...(lane ? { lane } : {}),
+          ...(source || reason
+            ? {
+                metadata: {
+                  ...(source ? { source } : {}),
+                  ...(reason ? { reason } : {}),
                 },
-                { status: 400 },
-              ),
-              env,
-            );
-          }
-        } else {
-          const tokenBalance = await rpc.getTokenBalanceAtomic(
-            walletAddress,
-            inputMint,
-          );
-          if (inputAmount > tokenBalance) {
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "insufficient-token-balance",
-                  balanceAtomic: tokenBalance.toString(),
-                },
-                { status: 400 },
-              ),
-              env,
-            );
-          }
-        }
-
-        const quoteResponse = await jupiter.quote({
-          inputMint,
-          outputMint,
-          amount,
-          slippageBps: policy.slippageBps,
-          swapMode: "ExactIn",
-        });
-        enforcePolicy(policy, quoteResponse);
-
-        const trace = newExecutionLatencyTrace(requestReceivedAt);
-        trace.validatedAt = new Date().toISOString();
-        trace.decisionAt = new Date().toISOString();
-
-        const intent = createExecutionIntent({
-          receivedAt: requestReceivedAt,
-          userId: user.id,
-          wallet: walletAddress,
-          inputMint,
-          outputMint,
-          amountAtomic: amount,
-          slippageBps: policy.slippageBps,
-          source: source || "TERMINAL",
-          reason: reason || undefined,
-          execution,
-          simulateOnly: policy.simulateOnly,
-          dryRun: policy.dryRun,
-          commitment: policy.commitment,
-        });
-        let executionRoute =
-          String(execution?.adapter ?? "jupiter").trim() || "jupiter";
-        let decision = createExecutionDecision({
-          intentId: intent.intentId,
-          decidedAt: trace.decisionAt,
-          route: executionRoute,
-          simulateOnly: policy.simulateOnly,
-          dryRun: policy.dryRun,
-          commitment: policy.commitment,
-        });
-        try {
-          const coordinator = await requestExecutionCoordinatorDecision(env, {
-            intent,
-          });
-          if (coordinator && !coordinator.accepted) {
-            const rejectedAt = new Date().toISOString();
-            trace.failedAt = rejectedAt;
-            try {
-              await recordExecutionReceipt(env, {
-                generatedAt: rejectedAt,
-                intent,
-                decision,
-                trace,
-                outcome: {
-                  status: "rejected",
-                  signature: null,
-                  refreshed: false,
-                  lastValidBlockHeight: null,
-                  error: coordinator.reason ?? "execution-rejected",
-                },
-                quote: quoteResponse,
-              });
-            } catch (receiptError) {
-              console.error("trade.swap.receipt.error", {
-                userId: user.id,
-                route: executionRoute,
-                message:
-                  receiptError instanceof Error
-                    ? receiptError.message
-                    : String(receiptError),
-              });
-            }
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "execution-rejected",
-                  reason: coordinator.reason,
-                  queueDepth: coordinator.queueDepth,
-                  queuePosition: coordinator.queuePosition,
-                },
-                { status: 409 },
-              ),
-              env,
-            );
-          }
-          if (coordinator?.accepted && coordinator.decision) {
-            decision = coordinator.decision;
-            executionRoute = coordinator.decision.route;
-          }
-        } catch (coordinatorError) {
-          console.warn("trade.swap.coordinator.fallback", {
-            userId: user.id,
-            message:
-              coordinatorError instanceof Error
-                ? coordinatorError.message
-                : String(coordinatorError),
-          });
-        }
-        const routedExecution: ExecutionConfig | undefined = {
-          ...(execution ?? {}),
-          adapter: executionRoute,
-        };
-
-        let result: Awaited<ReturnType<typeof executeSwapViaRouter>>;
-        try {
-          result = await executeSwapViaRouter({
-            env,
-            execution: routedExecution,
-            policy,
-            rpc,
-            jupiter,
-            quoteResponse,
-            userPublicKey: walletAddress,
-            privyWalletId: user.privyWalletId,
-            log(level, message, meta) {
-              console[level]("trade.swap", {
-                userId: user.id,
-                inputMint,
-                outputMint,
-                amount,
-                slippageBps: policy.slippageBps,
-                source: source || "TERMINAL",
-                reason: reason || undefined,
-                executionRoute,
-                message,
-                ...(meta ?? {}),
-              });
+              }
+            : {}),
+          privyExecute: {
+            intentType: "swap",
+            wallet: walletAddress,
+            swap: {
+              inputMint,
+              outputMint,
+              amountAtomic: amount,
+              slippageBps,
             },
-          });
-        } catch (error) {
-          trace.failedAt = new Date().toISOString();
-          try {
-            await recordExecutionReceipt(env, {
-              generatedAt: trace.failedAt,
-              intent,
-              decision,
-              trace,
-              outcome: buildExecutionOutcomeFromError(error),
-              quote: quoteResponse,
-            });
-          } catch (receiptError) {
-            console.error("trade.swap.receipt.error", {
-              userId: user.id,
-              route: executionRoute,
-              message:
-                receiptError instanceof Error
-                  ? receiptError.message
-                  : String(receiptError),
-            });
-          }
-          throw error;
-        }
-
-        const settledAt = new Date().toISOString();
-        const traceSettled = applyExecutionResultToTrace({
-          trace,
-          result,
-          settledAt,
+          },
+        };
+        const submitHeaders = new Headers({
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
         });
-        let executionReceipt: Awaited<
-          ReturnType<typeof recordExecutionReceipt>
-        > | null = null;
+        const authorization = request.headers.get("authorization");
+        if (authorization) submitHeaders.set("authorization", authorization);
+        const submitRequest = new Request(
+          new URL("/api/x402/exec/submit", url.origin).toString(),
+          {
+            method: "POST",
+            headers: submitHeaders,
+            body: JSON.stringify(submitPayload),
+          },
+        );
+        const submitResponse = await worker.fetch(submitRequest, env, _ctx);
+        let submitPayloadRaw: unknown = null;
         try {
-          executionReceipt = await recordExecutionReceipt(env, {
-            generatedAt: settledAt,
-            intent,
-            decision,
-            trace: traceSettled,
-            outcome: buildExecutionOutcomeFromResult(result),
-            quote: result.usedQuote,
-          });
-        } catch (receiptError) {
-          console.error("trade.swap.receipt.error", {
-            userId: user.id,
-            route: executionRoute,
-            message:
-              receiptError instanceof Error
-                ? receiptError.message
-                : String(receiptError),
-          });
+          submitPayloadRaw = await submitResponse.json();
+        } catch {
+          submitPayloadRaw = null;
         }
-
+        if (!isRecord(submitPayloadRaw)) {
+          return withCors(
+            json({ ok: false, error: "trade-submit-failed" }, { status: 502 }),
+            env,
+          );
+        }
+        if (submitResponse.status >= 400 || submitPayloadRaw.ok !== true) {
+          const error =
+            typeof submitPayloadRaw.error === "string"
+              ? submitPayloadRaw.error
+              : "trade-submit-failed";
+          return withCors(
+            json({ ok: false, error }, { status: submitResponse.status }),
+            env,
+          );
+        }
+        const requestId = String(submitPayloadRaw.requestId ?? "").trim();
+        if (!requestId) {
+          return withCors(
+            json({ ok: false, error: "trade-submit-failed" }, { status: 502 }),
+            env,
+          );
+        }
+        const status = isRecord(submitPayloadRaw.status)
+          ? String(submitPayloadRaw.status.state ?? "").trim()
+          : "";
         return withCors(
           json({
             ok: true,
-            status: result.status,
-            signature: result.signature,
-            refreshed: result.refreshed,
-            lastValidBlockHeight: result.lastValidBlockHeight,
-            quote: summarizeJupiterQuote(
-              result.usedQuote as unknown as Record<string, unknown>,
-            ),
+            requestId,
+            status: status || "validated",
+            signature: null,
+            refreshed: false,
+            lastValidBlockHeight: null,
             source: source || "TERMINAL",
-            err: result.err ?? null,
-            executionReceipt:
-              executionReceipt === null
-                ? null
-                : {
-                    receiptId: executionReceipt.receiptId,
-                    key: executionReceipt.storage.key,
-                  },
+            err: null,
+            executionReceipt: null,
+            ...(isRecord(submitPayloadRaw.poll)
+              ? { poll: submitPayloadRaw.poll }
+              : {}),
+            compatibility: {
+              route: "/api/trade/swap",
+              deprecated: true,
+              replacement: "/api/x402/exec/submit",
+            },
           }),
           env,
         );
@@ -3142,6 +2962,8 @@ export default {
   },
 };
 
+export default worker;
+
 async function requireOnboardedUser(
   request: Request,
   env: Env,
@@ -3487,6 +3309,41 @@ function parseExecutionConfig(value: unknown): ExecutionConfig | undefined {
     ...(adapter ? { adapter } : {}),
     ...(params ? { params } : {}),
   };
+}
+
+function resolveTradeSwapExecutionLane(
+  execution: ExecutionConfig | undefined,
+): "fast" | "protected" | "safe" | undefined {
+  const adapter = String(execution?.adapter ?? "")
+    .trim()
+    .toLowerCase();
+  if (!adapter || adapter === "jupiter") return "safe";
+  if (
+    adapter === "fast" ||
+    adapter === "helius" ||
+    adapter === "helius_sender"
+  ) {
+    return "fast";
+  }
+  if (
+    adapter === "jito" ||
+    adapter === "jito_bundle" ||
+    adapter === "protected"
+  ) {
+    return "protected";
+  }
+  if (
+    adapter === "magicblock" ||
+    adapter === "magicblock_ephemeral_rollup" ||
+    adapter === "safe"
+  ) {
+    return "safe";
+  }
+  return undefined;
+}
+
+function newTradeSwapCompatibilityIdempotencyKey(): string {
+  return `trade_swap_${crypto.randomUUID().replace(/-/g, "")}`;
 }
 
 function parseRiskMode(

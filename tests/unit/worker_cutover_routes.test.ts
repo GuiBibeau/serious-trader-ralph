@@ -1,5 +1,4 @@
-import { describe, expect, test } from "bun:test";
-import worker from "../../apps/worker/src/index";
+import { describe, expect, mock, test } from "bun:test";
 import type { Env } from "../../apps/worker/src/types";
 
 const env = {
@@ -13,8 +12,22 @@ function createExecutionContextStub(): ExecutionContext {
   } as ExecutionContext;
 }
 
+async function loadWorker() {
+  mock.restore();
+  mock.module("../../apps/worker/src/auth", () => ({
+    requireUser: async () => {
+      throw new Error("unauthorized");
+    },
+  }));
+  const module = (await import(
+    `../../apps/worker/src/index?cutover=${Date.now()}-${Math.random()}`
+  )) as typeof import("../../apps/worker/src/index");
+  return module.default;
+}
+
 describe("worker botless cutover routes", () => {
   test("health endpoint remains unchanged", async () => {
+    const worker = await loadWorker();
     const response = await worker.fetch(
       new Request("http://localhost/api/health", { method: "GET" }),
       env,
@@ -26,6 +39,7 @@ describe("worker botless cutover routes", () => {
   });
 
   test("removed bot/admin/runtime endpoints return 410", async () => {
+    const worker = await loadWorker();
     const cases: Array<{ method: string; path: string }> = [
       { method: "GET", path: "/api/bots" },
       { method: "GET", path: "/api/bots/bot-1" },
@@ -55,6 +69,7 @@ describe("worker botless cutover routes", () => {
   });
 
   test("account wallet routes enforce auth", async () => {
+    const worker = await loadWorker();
     const authEnv = {
       ...env,
       PRIVY_APP_ID: "app_test",
