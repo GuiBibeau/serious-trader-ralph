@@ -145,4 +145,6 @@ export type Env = {
   EXEC_LANE_SAFE_ALLOW_ANONYMOUS?: string;
   EXEC_FAST_MAX_RETRIES?: string;
   EXEC_FAST_RETRY_BASE_MS?: string;
+  EXEC_PROTECTED_MAX_RETRIES?: string;
+  EXEC_PROTECTED_RETRY_BASE_MS?: string;
 };
