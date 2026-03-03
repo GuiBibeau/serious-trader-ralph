@@ -136,7 +136,7 @@ function parsePrivyExecute(value: unknown): {
     outputMint.length < 32 ||
     outputMint.length > 64 ||
     !BASE58_RE.test(outputMint) ||
-    !/^[0-9]+$/.test(amountAtomic) ||
+    !/^[1-9][0-9]*$/.test(amountAtomic) ||
     !Number.isInteger(slippageBps) ||
     slippageBps < 1 ||
     slippageBps > 5_000

@@ -424,4 +424,37 @@ describe("worker x402 exec submit scaffold route", () => {
       sqlite.close();
     }
   });
+
+  test("rejects malformed privy_execute intent payloads deterministically", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-3",
+          },
+          body: JSON.stringify({
+            ...PRIVY_PAYLOAD,
+            privyExecute: {
+              ...PRIVY_PAYLOAD.privyExecute,
+              swap: {
+                ...PRIVY_PAYLOAD.privyExecute.swap,
+                amountAtomic: "0",
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error?: string };
+      expect(body.error).toBe("invalid-request");
+    } finally {
+      sqlite.close();
+    }
+  });
 });

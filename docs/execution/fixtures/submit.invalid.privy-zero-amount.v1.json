@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "v1",
+  "mode": "privy_execute",
+  "lane": "protected",
+  "privyExecute": {
+    "intentType": "swap",
+    "wallet": "11111111111111111111111111111111",
+    "swap": {
+      "inputMint": "So11111111111111111111111111111111111111112",
+      "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "amountAtomic": "0",
+      "slippageBps": 50
+    }
+  }
+}

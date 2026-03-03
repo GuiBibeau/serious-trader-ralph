@@ -49,6 +49,12 @@ describe("execution contract v1 schemas", () => {
         "docs/execution/fixtures/submit.invalid.missing-lane.v1.json",
       ),
     ).toBe(false);
+    expect(
+      validate(
+        schema,
+        "docs/execution/fixtures/submit.invalid.privy-zero-amount.v1.json",
+      ),
+    ).toBe(false);
   });
 
   test("submit response fixture validates", () => {
