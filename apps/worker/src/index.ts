@@ -29,11 +29,16 @@ import {
 import { validateRelaySignedSubmission } from "./execution/relay_signed_validator";
 import {
   appendExecutionStatusEvent,
+  createExecutionAttemptIdempotent,
+  finalizeExecutionAttempt,
   getExecutionLatestStatus,
   listExecutionAttempts,
   listExecutionStatusEvents,
+  terminalizeExecutionRequest,
   updateExecutionRequestStatus,
+  upsertExecutionReceiptIdempotent,
 } from "./execution/repository";
+import { executeSwapViaRouter } from "./execution/router";
 import { parseExecSubmitPayload } from "./execution/submit_contract";
 import {
   type ExperienceLevel,
@@ -87,7 +92,7 @@ import {
   type PerpsVenue,
   SUPPORTED_PERPS_VENUES,
 } from "./perps_sources";
-import { normalizePolicy } from "./policy";
+import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
@@ -158,6 +163,47 @@ function parseBearerToken(value: string | null): string | null {
   if (!raw) return null;
   if (!BEARER_RE.test(raw)) return null;
   return raw.replace(BEARER_RE, "").trim() || null;
+}
+
+function readBooleanEnv(value: unknown, fallback = false): boolean {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "1" || normalized === "true" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "off") {
+    return false;
+  }
+  return fallback;
+}
+
+function shouldSyncExecutePrivySubmit(env: Env): boolean {
+  return readBooleanEnv(env.EXEC_PRIVY_SYNC_SUBMIT_ENABLED, false);
+}
+
+function newExecutionAttemptId(): string {
+  return `execatt_${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+function newExecutionReceiptId(): string {
+  return `exec_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+function executionErrorMessage(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Error) return value.message.slice(0, 2_000);
+  const text = String(value).trim();
+  return text ? text.slice(0, 2_000) : null;
+}
+
+function toTerminalStatusFromExecuteResult(
+  status: string,
+): "landed" | "failed" {
+  if (status === "finalized") return "landed";
+  if (status === "processed" || status === "confirmed") return "landed";
+  return "failed";
 }
 
 function authorizeWaitlistWrite(
@@ -429,6 +475,11 @@ const worker = {
         let relayImmutability: ReturnType<
           typeof readRelayImmutabilitySnapshot
         > = null;
+        let privyActorContext: {
+          userId: string;
+          walletAddress: string;
+          privyWalletId: string;
+        } | null = null;
         if (!isRelaySigned) {
           let user = await requireOnboardedUser(request, env);
           user = await ensureUserWallet(env, user);
@@ -449,6 +500,11 @@ const worker = {
           }
           actorType = "privy_user";
           actorId = user.id;
+          privyActorContext = {
+            userId: user.id,
+            walletAddress: user.walletAddress,
+            privyWalletId: user.privyWalletId,
+          };
         }
 
         const laneResolution = resolveExecutionLane({
@@ -631,6 +687,241 @@ const worker = {
             reason: null,
             details: null,
           });
+        }
+
+        if (
+          reservation.result === "created" &&
+          !isRelaySigned &&
+          shouldSyncExecutePrivySubmit(env) &&
+          privyActorContext
+        ) {
+          const swap = parsed.value.privyExecute.swap;
+          const options = parsed.value.privyExecute.options ?? {};
+          const execution = {
+            adapter: laneResolution.adapter,
+          };
+          const policy = normalizePolicy({
+            allowedMints: SUPPORTED_TRADING_MINTS,
+            slippageBps: swap.slippageBps,
+            maxPriceImpactPct: 0.05,
+            minSolReserveLamports: "50000000",
+            simulateOnly: Boolean(options.simulateOnly),
+            dryRun: Boolean(options.dryRun),
+            commitment: options.commitment ?? "confirmed",
+          });
+
+          const attemptId = newExecutionAttemptId();
+          const attemptStartedAt = new Date().toISOString();
+          let providerResponse: Record<string, unknown> | null = {
+            route: laneResolution.adapter,
+            lane: laneResolution.lane,
+            mode: parsed.value.mode,
+          };
+
+          try {
+            const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
+            if (!rpcEndpoint) {
+              throw new Error("rpc-endpoint-missing");
+            }
+            const rpc = new SolanaRpc(rpcEndpoint);
+            const jupiter = new JupiterClient(
+              String(env.JUPITER_BASE_URL ?? "").trim() ||
+                X402_READ_JUPITER_BASE_URL,
+              env.JUPITER_API_KEY,
+            );
+
+            const inputAmount = BigInt(swap.amountAtomic);
+            if (inputAmount <= 0n) {
+              throw new Error("invalid-trade-request");
+            }
+
+            if (swap.inputMint === X402_SOL_MINT) {
+              const balanceLamports = await rpc.getBalanceLamports(
+                privyActorContext.walletAddress,
+              );
+              const minSolReserveLamports = BigInt(
+                policy.minSolReserveLamports,
+              );
+              if (inputAmount + minSolReserveLamports > balanceLamports) {
+                throw new Error("insufficient-sol-reserve");
+              }
+            } else {
+              const tokenBalance = await rpc.getTokenBalanceAtomic(
+                privyActorContext.walletAddress,
+                swap.inputMint,
+              );
+              if (inputAmount > tokenBalance) {
+                throw new Error("insufficient-token-balance");
+              }
+            }
+
+            const quoteResponse = await jupiter.quote({
+              inputMint: swap.inputMint,
+              outputMint: swap.outputMint,
+              amount: swap.amountAtomic,
+              slippageBps: policy.slippageBps,
+              swapMode: "ExactIn",
+            });
+            enforcePolicy(policy, quoteResponse);
+
+            await updateExecutionRequestStatus(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              status: "dispatched",
+              statusReason: null,
+            });
+            await appendExecutionStatusEvent(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              status: "dispatched",
+              reason: null,
+              details: {
+                provider: laneResolution.adapter,
+                attempt: 1,
+              },
+              createdAt: attemptStartedAt,
+            });
+            await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
+              attemptId,
+              requestId: reservation.request.requestId,
+              attemptNo: 1,
+              lane: laneResolution.lane,
+              provider: laneResolution.adapter,
+              status: "dispatched",
+              providerResponse,
+              startedAt: attemptStartedAt,
+            });
+
+            const result = await executeSwapViaRouter({
+              env,
+              execution,
+              policy,
+              rpc,
+              jupiter,
+              quoteResponse,
+              userPublicKey: privyActorContext.walletAddress,
+              privyWalletId: privyActorContext.privyWalletId,
+              log(level, message, meta) {
+                console[level]("exec.submit", {
+                  requestId: reservation.request.requestId,
+                  userId: privyActorContext.userId,
+                  message,
+                  ...(meta ?? {}),
+                });
+              },
+            });
+            const settledAt = new Date().toISOString();
+            const terminalStatus = toTerminalStatusFromExecuteResult(
+              result.status,
+            );
+            const errorMessage = executionErrorMessage(result.err);
+            providerResponse = {
+              ...(providerResponse ?? {}),
+              executionStatus: result.status,
+              refreshed: result.refreshed,
+              lastValidBlockHeight: result.lastValidBlockHeight,
+              executionMeta:
+                result.executionMeta &&
+                typeof result.executionMeta === "object" &&
+                !Array.isArray(result.executionMeta)
+                  ? result.executionMeta
+                  : null,
+            };
+
+            await finalizeExecutionAttempt(env.WAITLIST_DB, {
+              attemptId,
+              status: result.status,
+              providerResponse,
+              errorCode: terminalStatus === "failed" ? result.status : null,
+              errorMessage,
+              completedAt: settledAt,
+            });
+            await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              receiptId: newExecutionReceiptId(),
+              finalizedStatus: terminalStatus,
+              lane: laneResolution.lane,
+              provider: laneResolution.adapter,
+              signature: result.signature,
+              slot: null,
+              errorCode: terminalStatus === "failed" ? result.status : null,
+              errorMessage,
+              receipt: {
+                mode: parsed.value.mode,
+                route: laneResolution.adapter,
+                resultStatus: result.status,
+                outcome: terminalStatus,
+                quote: {
+                  inputMint: swap.inputMint,
+                  outputMint: swap.outputMint,
+                  inAmount: swap.amountAtomic,
+                  outAmount: String(result.usedQuote?.outAmount ?? ""),
+                },
+              },
+              readyAt: settledAt,
+            });
+            await terminalizeExecutionRequest(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              status: terminalStatus,
+              statusReason: terminalStatus === "failed" ? result.status : null,
+              details: {
+                provider: laneResolution.adapter,
+                attempt: 1,
+                ...(result.signature ? { signature: result.signature } : {}),
+              },
+              nowIso: settledAt,
+            });
+          } catch (error) {
+            const failedAt = new Date().toISOString();
+            const errorMessage =
+              executionErrorMessage(error) ?? "execution-submit-failed";
+            await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
+              attemptId,
+              requestId: reservation.request.requestId,
+              attemptNo: 1,
+              lane: laneResolution.lane,
+              provider: laneResolution.adapter,
+              status: "failed",
+              providerResponse,
+              errorCode: "execution-failed",
+              errorMessage,
+              startedAt: attemptStartedAt,
+            });
+            await finalizeExecutionAttempt(env.WAITLIST_DB, {
+              attemptId,
+              status: "failed",
+              providerResponse,
+              errorCode: "execution-failed",
+              errorMessage,
+              completedAt: failedAt,
+            });
+            await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              receiptId: newExecutionReceiptId(),
+              finalizedStatus: "failed",
+              lane: laneResolution.lane,
+              provider: laneResolution.adapter,
+              signature: null,
+              slot: null,
+              errorCode: "execution-failed",
+              errorMessage,
+              receipt: {
+                mode: parsed.value.mode,
+                route: laneResolution.adapter,
+                outcome: "failed",
+              },
+              readyAt: failedAt,
+            });
+            await terminalizeExecutionRequest(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              status: "failed",
+              statusReason: "execution-failed",
+              details: {
+                provider: laneResolution.adapter,
+                attempt: 1,
+                errorMessage,
+              },
+              nowIso: failedAt,
+            });
+          }
         }
 
         const latest = await getExecutionLatestStatus(

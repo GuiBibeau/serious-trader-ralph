@@ -12,6 +12,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import {
+  ApiError,
   apiBase,
   apiFetchJson,
   BTN_PRIMARY,
@@ -54,6 +55,116 @@ type QuoteState = {
 const MIN_SLIPPAGE_BPS = "1";
 const MAX_SLIPPAGE_BPS = "5000";
 const BEARER_RE = /^bearer\s+/i;
+const EXEC_POLL_INTERVAL_MS = 1200;
+const EXEC_POLL_TIMEOUT_MS = 45000;
+
+type ExecTerminalResult = {
+  status: string;
+  signature: string | null;
+};
+
+type CloseModalOptions = {
+  cancelExecution?: boolean;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function newIdempotencyKey(): string {
+  const prefix = "trade";
+  const ts = Date.now().toString(36);
+  const token =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}-${ts}-${token}`;
+}
+
+function parseExecSubmitAck(payload: unknown): {
+  requestId: string;
+  state: string;
+} | null {
+  if (!isRecord(payload) || payload.ok !== true) return null;
+  const requestId = String(payload.requestId ?? "").trim();
+  const status = isRecord(payload.status) ? payload.status : null;
+  const state = String(status?.state ?? "").trim();
+  if (!requestId || !state) return null;
+  return { requestId, state };
+}
+
+function parseExecStatusSnapshot(payload: unknown): {
+  state: string;
+  terminal: boolean;
+} | null {
+  if (!isRecord(payload) || payload.ok !== true) return null;
+  const status = isRecord(payload.status) ? payload.status : null;
+  const state = String(status?.state ?? "").trim();
+  const terminal = status?.terminal === true;
+  if (!state) return null;
+  return { state, terminal };
+}
+
+function parseExecReceipt(payload: unknown): {
+  ready: boolean;
+  outcomeStatus: string | null;
+  signature: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+} | null {
+  if (!isRecord(payload) || payload.ok !== true) return null;
+  const ready = payload.ready === true;
+  if (!ready) {
+    return {
+      ready: false,
+      outcomeStatus: null,
+      signature: null,
+      errorCode: null,
+      errorMessage: null,
+    };
+  }
+  const receipt = isRecord(payload.receipt) ? payload.receipt : null;
+  const outcome = receipt && isRecord(receipt.outcome) ? receipt.outcome : null;
+  return {
+    ready: true,
+    outcomeStatus: String(outcome?.status ?? "").trim() || null,
+    signature:
+      typeof outcome?.signature === "string" && outcome.signature.trim()
+        ? outcome.signature.trim()
+        : null,
+    errorCode:
+      typeof outcome?.errorCode === "string" && outcome.errorCode.trim()
+        ? outcome.errorCode.trim()
+        : null,
+    errorMessage:
+      typeof outcome?.errorMessage === "string" && outcome.errorMessage.trim()
+        ? outcome.errorMessage.trim()
+        : null,
+  };
+}
+
+function isExecSuccessStatus(status: string): boolean {
+  return status === "landed" || status === "finalized";
+}
+
+function describeExecError(
+  error: unknown,
+  fallback = "execution-failed",
+): string {
+  if (error instanceof ApiError) {
+    if (isRecord(error.data)) {
+      const reason = String(error.data.reason ?? "").trim();
+      const detail = String(error.data.error ?? "").trim();
+      if (reason) return `${detail || error.message}:${reason}`;
+      if (detail) return detail;
+    }
+    return error.message || fallback;
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return fallback;
+}
 
 function parseUiAmountToAtomic(value: string, decimals: number): string | null {
   const trimmed = value.trim();
@@ -159,15 +270,47 @@ export function TradeTicketModal({
   const [slippageInput, setSlippageInput] = useState("50");
   const [quote, setQuote] = useState<QuoteState>(EMPTY_QUOTE);
   const [submitStatus, setSubmitStatus] = useState<
-    "idle" | "submitting" | "error"
+    "idle" | "submitting" | "tracking" | "error"
   >("idle");
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [isQuoteTransitionPending, startQuoteTransition] = useTransition();
 
-  const onCloseRef = useRef(onClose);
   const quoteAbortRef = useRef<AbortController | null>(null);
+  const executeAbortRef = useRef<AbortController | null>(null);
+  const executeToastIdRef = useRef<string | number | null>(null);
+  const continueExecutionOnUnmountRef = useRef(false);
   const quoteRequestIdRef = useRef(0);
-  onCloseRef.current = onClose;
+  const mountedRef = useRef(true);
+  const openRef = useRef(open);
+
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+
+  const dismissExecuteToast = useCallback(() => {
+    if (executeToastIdRef.current === null) return;
+    toast.dismiss(executeToastIdRef.current);
+    executeToastIdRef.current = null;
+  }, []);
+
+  const closeModal = useCallback(
+    (options?: CloseModalOptions) => {
+      const cancelExecution = Boolean(options?.cancelExecution);
+      if (cancelExecution) {
+        continueExecutionOnUnmountRef.current = false;
+        executeAbortRef.current?.abort();
+        dismissExecuteToast();
+      }
+      openRef.current = false;
+      onClose();
+    },
+    [dismissExecuteToast, onClose],
+  );
+
+  const cancelAndCloseModal = useCallback(() => {
+    quoteAbortRef.current?.abort();
+    closeModal({ cancelExecution: true });
+  }, [closeModal]);
 
   const setQuoteTransition = useCallback((next: QuoteState) => {
     startQuoteTransition(() => {
@@ -179,18 +322,23 @@ export function TradeTicketModal({
 
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       quoteAbortRef.current?.abort();
+      if (!continueExecutionOnUnmountRef.current) {
+        executeAbortRef.current?.abort();
+        dismissExecuteToast();
+      }
     };
-  }, []);
+  }, [dismissExecuteToast]);
 
   useEffect(() => {
     if (!open) return;
     function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") onCloseRef.current();
+      if (event.key === "Escape") cancelAndCloseModal();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [cancelAndCloseModal, open]);
 
   useEffect(() => {
     if (!open || !intent) return;
@@ -380,34 +528,129 @@ export function TradeTicketModal({
       return;
     }
 
+    const boundedSlippageBps = toBoundedSlippage(
+      slippageInput,
+      resolvedSlippageBps,
+    );
     setSubmitStatus("submitting");
     setSubmitMessage(null);
+    let execToastId: string | number | null = null;
 
     try {
+      executeAbortRef.current?.abort();
+      continueExecutionOnUnmountRef.current = false;
+      const controller = new AbortController();
+      executeAbortRef.current = controller;
+      dismissExecuteToast();
+
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
 
-      const payload = await apiFetchJson("/api/trade/swap", token, {
+      const idempotencyKey = newIdempotencyKey();
+      const submitPayload = await apiFetchJson("/api/x402/exec/submit", token, {
         method: "POST",
+        headers: {
+          "Idempotency-Key": idempotencyKey,
+        },
+        signal: controller.signal,
         body: JSON.stringify({
-          inputMint: intent.inputMint,
-          outputMint: intent.outputMint,
-          amount: quote.inAmountAtomic,
-          slippageBps: resolvedSlippageBps,
-          source: intent.source,
-          reason: intent.reason,
+          schemaVersion: "v1",
+          mode: "privy_execute",
+          lane: "safe",
+          metadata: {
+            source: intent.source,
+            reason: intent.reason,
+            clientRequestId: idempotencyKey,
+          },
+          privyExecute: {
+            intentType: "swap",
+            wallet: walletAddress,
+            swap: {
+              inputMint: intent.inputMint,
+              outputMint: intent.outputMint,
+              amountAtomic: quote.inAmountAtomic,
+              slippageBps: boundedSlippageBps,
+            },
+            options: {
+              commitment: "confirmed",
+            },
+          },
         }),
       });
 
-      if (!isRecord(payload) || payload.ok !== true) {
-        throw new Error("swap-failed");
+      const submitAck = parseExecSubmitAck(submitPayload);
+      if (!submitAck) {
+        throw new Error("invalid-exec-submit-response");
       }
 
-      const status = String(payload.status ?? "").trim() || "unknown";
-      const nextSignature =
-        typeof payload.signature === "string" && payload.signature.trim()
-          ? payload.signature.trim()
-          : null;
+      continueExecutionOnUnmountRef.current = true;
+      closeModal();
+      execToastId = toast.loading("TX submitting...", {
+        position: "bottom-right",
+        duration: Number.POSITIVE_INFINITY,
+      });
+      executeToastIdRef.current = execToastId;
+
+      const startedAtMs = Date.now();
+      let latestState = submitAck.state;
+      let terminal: ExecTerminalResult | null = null;
+      while (Date.now() - startedAtMs < EXEC_POLL_TIMEOUT_MS) {
+        if (controller.signal.aborted) {
+          throw new Error("execution-cancelled");
+        }
+
+        const statusPayload = await apiFetchJson(
+          `/api/x402/exec/status/${submitAck.requestId}`,
+          token,
+          {
+            method: "GET",
+            signal: controller.signal,
+          },
+        );
+        const statusSnapshot = parseExecStatusSnapshot(statusPayload);
+        if (!statusSnapshot) throw new Error("invalid-exec-status-response");
+
+        latestState = statusSnapshot.state;
+        if (statusSnapshot.terminal) {
+          const receiptPayload = await apiFetchJson(
+            `/api/x402/exec/receipt/${submitAck.requestId}`,
+            token,
+            {
+              method: "GET",
+              signal: controller.signal,
+            },
+          );
+          const receipt = parseExecReceipt(receiptPayload);
+          if (!receipt) throw new Error("invalid-exec-receipt-response");
+
+          if (receipt.ready) {
+            const outcomeStatus =
+              receipt.outcomeStatus?.toLowerCase() || latestState.toLowerCase();
+            if (isExecSuccessStatus(outcomeStatus)) {
+              terminal = {
+                status: outcomeStatus,
+                signature: receipt.signature,
+              };
+              break;
+            }
+            const failureReason =
+              receipt.errorCode ??
+              receipt.errorMessage ??
+              `execution-${outcomeStatus}`;
+            throw new Error(failureReason);
+          }
+          if (latestState === "failed" || latestState === "expired") {
+            throw new Error(`execution-${latestState}`);
+          }
+        }
+
+        await sleep(EXEC_POLL_INTERVAL_MS);
+      }
+
+      if (!terminal) {
+        throw new Error(`execution-timeout:${latestState}`);
+      }
+
       onTradeComplete?.({
         inputMint: intent.inputMint,
         outputMint: intent.outputMint,
@@ -415,28 +658,53 @@ export function TradeTicketModal({
         outputSymbol: intent.outputSymbol,
         inAmountAtomic: quote.inAmountAtomic,
         outAmountAtomic: quote.outAmountAtomic,
-        status,
-        signature: nextSignature,
+        status: terminal.status,
+        signature: terminal.signature,
       });
-      toast.success("Swap executed", {
-        description: nextSignature
-          ? `Signature: ${nextSignature.slice(0, 8)}...${nextSignature.slice(-8)}`
-          : `Status: ${status}`,
+      toast.success("Trade executed", {
+        id: execToastId ?? undefined,
+        description: terminal.signature
+          ? `Signature: ${terminal.signature.slice(0, 8)}...${terminal.signature.slice(-8)}`
+          : `Status: ${terminal.status}`,
         position: "bottom-right",
+        duration: 6000,
       });
-      onClose();
+      continueExecutionOnUnmountRef.current = false;
+      executeToastIdRef.current = null;
     } catch (error) {
+      if (executeAbortRef.current?.signal.aborted) return;
+      const message = describeExecError(error, "execution-failed");
+      if (executeToastIdRef.current !== null || execToastId !== null) {
+        toast.error("Trade execution failed", {
+          id: executeToastIdRef.current ?? execToastId ?? undefined,
+          description: message,
+          position: "bottom-right",
+          duration: 7000,
+        });
+        executeToastIdRef.current = null;
+      } else {
+        toast.error("Trade execution failed", {
+          description: message,
+          position: "bottom-right",
+          duration: 7000,
+        });
+      }
+      continueExecutionOnUnmountRef.current = false;
+      if (!mountedRef.current) return;
+      if (!openRef.current) return;
       setSubmitStatus("error");
-      setSubmitMessage(error instanceof Error ? error.message : "swap-failed");
+      setSubmitMessage(message);
     }
   }, [
+    closeModal,
+    dismissExecuteToast,
     getAccessToken,
     intent,
-    onClose,
     onTradeComplete,
     quote.inAmountAtomic,
     quote.outAmountAtomic,
     resolvedSlippageBps,
+    slippageInput,
     walletAddress,
   ]);
 
@@ -480,7 +748,7 @@ export function TradeTicketModal({
       <button
         aria-label="Close trade ticket"
         className="absolute inset-0"
-        onClick={onClose}
+        onClick={cancelAndCloseModal}
         type="button"
       />
       <div className="relative w-[min(520px,92vw)] max-h-[90vh] overflow-y-auto card">
@@ -493,7 +761,7 @@ export function TradeTicketModal({
           </div>
           <button
             className="flex items-center justify-center w-9 h-9 rounded-md border border-border bg-surface text-xl cursor-pointer hover:bg-paper transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
-            onClick={onClose}
+            onClick={cancelAndCloseModal}
             type="button"
             aria-label="Close"
           >
@@ -526,13 +794,21 @@ export function TradeTicketModal({
           />
 
           {submitMessage ? (
-            <p className="text-red-400 text-xs">{submitMessage}</p>
+            <p
+              className={
+                submitStatus === "error"
+                  ? "text-red-400 text-xs"
+                  : "text-muted text-xs"
+              }
+            >
+              {submitMessage}
+            </p>
           ) : null}
 
           <div className="flex justify-end gap-2 pt-1">
             <button
               className={`${BTN_SECONDARY} !py-2 !px-4 text-xs`}
-              onClick={onClose}
+              onClick={cancelAndCloseModal}
               type="button"
             >
               Close
@@ -543,12 +819,15 @@ export function TradeTicketModal({
               type="button"
               disabled={
                 submitStatus === "submitting" ||
+                submitStatus === "tracking" ||
                 quote.status !== "ready" ||
                 !quote.inAmountAtomic
               }
             >
-              {submitStatus === "submitting"
-                ? "Submitting..."
+              {submitStatus === "submitting" || submitStatus === "tracking"
+                ? submitStatus === "tracking"
+                  ? "Tracking..."
+                  : "Submitting..."
                 : `Execute ${intent.direction === "buy" ? "Buy" : "Sell"}`}
             </button>
           </div>
