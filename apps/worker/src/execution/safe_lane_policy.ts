@@ -277,10 +277,15 @@ function inspectVersionedTransaction(
       updateComputeBudgetSnapshot(computeBudget, ix.data);
     }
     const lookups = tx.message.addressTableLookups ?? [];
+    const lookupAccountCount = lookups.reduce((total, lookup) => {
+      return (
+        total + lookup.writableIndexes.length + lookup.readonlyIndexes.length
+      );
+    }, 0);
     return buildProfile({
       txSizeBytes: rawBytes.length,
       instructionCount: instructions.length,
-      accountKeyCount: tx.message.staticAccountKeys.length,
+      accountKeyCount: tx.message.staticAccountKeys.length + lookupAccountCount,
       addressTableLookupCount: lookups.length,
       signatureCount: tx.signatures.length,
       computeUnitLimit: computeBudget.computeUnitLimit,

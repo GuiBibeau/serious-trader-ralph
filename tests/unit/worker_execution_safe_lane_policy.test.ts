@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AddressLookupTableAccount,
   ComputeBudgetProgram,
   Keypair,
   SystemProgram,
   Transaction,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
 } from "@solana/web3.js";
 import { evaluateSafeLaneTransaction } from "../../apps/worker/src/execution/safe_lane_policy";
 import type { Env } from "../../apps/worker/src/types";
@@ -41,6 +45,55 @@ function buildSignedSwapTxBase64(input?: {
   );
   tx.sign(payer);
   return Buffer.from(tx.serialize()).toString("base64");
+}
+
+function buildVersionedLookupTx(): {
+  signedBase64: string;
+  staticAccountCount: number;
+  lookupAddressCount: number;
+} {
+  const payer = Keypair.generate();
+  const lookupAddresses = Array.from(
+    { length: 10 },
+    () => Keypair.generate().publicKey,
+  );
+  const lookupTableAccount = new AddressLookupTableAccount({
+    key: Keypair.generate().publicKey,
+    state: {
+      deactivationSlot: 0n,
+      lastExtendedSlot: 0,
+      lastExtendedSlotStartIndex: 0,
+      authority: payer.publicKey,
+      addresses: lookupAddresses,
+    },
+  });
+  const instruction = new TransactionInstruction({
+    programId: SystemProgram.programId,
+    keys: lookupAddresses.map((pubkey) => ({
+      pubkey,
+      isSigner: false,
+      isWritable: true,
+    })),
+    data: new Uint8Array(),
+  });
+  const message = new TransactionMessage({
+    payerKey: payer.publicKey,
+    recentBlockhash: "11111111111111111111111111111111",
+    instructions: [instruction],
+  }).compileToV0Message([lookupTableAccount]);
+  const lookupAddressCount = message.addressTableLookups.reduce(
+    (total, item) => {
+      return total + item.writableIndexes.length + item.readonlyIndexes.length;
+    },
+    0,
+  );
+  const tx = new VersionedTransaction(message);
+  tx.sign([payer]);
+  return {
+    signedBase64: Buffer.from(tx.serialize()).toString("base64"),
+    staticAccountCount: message.staticAccountKeys.length,
+    lookupAddressCount,
+  };
 }
 
 describe("worker safe lane policy guardrails", () => {
@@ -112,5 +165,23 @@ describe("worker safe lane policy guardrails", () => {
     if (result.ok) return;
     expect(result.reason).toBe("safe-lane-invalid-transaction");
     expect(result.profile).toBeNull();
+  });
+
+  test("counts lookup-table addresses when enforcing account key limits", () => {
+    const lookupTx = buildVersionedLookupTx();
+    const result = evaluateSafeLaneTransaction({
+      env: {
+        EXEC_SAFE_MAX_ACCOUNT_KEYS: "8",
+      } as Env,
+      signedTransactionBase64: lookupTx.signedBase64,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("safe-lane-max-account-keys-exceeded");
+    expect(result.profile?.addressTableLookupCount).toBe(1);
+    expect(result.profile?.accountKeyCount).toBe(
+      lookupTx.staticAccountCount + lookupTx.lookupAddressCount,
+    );
   });
 });
