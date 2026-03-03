@@ -225,11 +225,18 @@ describe("worker x402 exec receipt route", () => {
       const receipt = await worker.fetch(
         new Request(
           `http://localhost/api/x402/exec/receipt/${submitBody.requestId}`,
+          {
+            headers: {
+              "payment-signature": "ignored-on-receipt",
+            },
+          },
         ),
         env,
         createExecutionContextStub(),
       );
       expect(receipt.status).toBe(200);
+      expect(receipt.headers.get("payment-required")).toBeNull();
+      expect(receipt.headers.get("payment-response")).toBeNull();
       const body = (await receipt.json()) as {
         ok?: boolean;
         ready?: boolean;

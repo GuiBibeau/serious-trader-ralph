@@ -206,11 +206,18 @@ describe("worker x402 exec status route", () => {
       const status = await worker.fetch(
         new Request(
           `http://localhost/api/x402/exec/status/${submitBody.requestId}`,
+          {
+            headers: {
+              "payment-signature": "ignored-on-status",
+            },
+          },
         ),
         env,
         createExecutionContextStub(),
       );
       expect(status.status).toBe(200);
+      expect(status.headers.get("payment-required")).toBeNull();
+      expect(status.headers.get("payment-response")).toBeNull();
       const body = (await status.json()) as {
         ok?: boolean;
         status?: {
