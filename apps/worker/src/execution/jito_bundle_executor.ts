@@ -1,5 +1,4 @@
-import { signTransactionWithPrivyById } from "../privy";
-import { swapWithRetry } from "../swap";
+import { buildAndSignPrivySwapTransaction } from "./privy_swap_builder";
 import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
 
 type JitoRpcResponse = {
@@ -165,21 +164,23 @@ export async function executeJitoBundleSwap(
   if (guardEnabled) await guardEnabled();
 
   const {
-    swap,
-    quoteResponse: usedQuote,
+    signedBase64,
+    usedQuote,
     refreshed,
-  } = await swapWithRetry(jupiter, quoteResponse, userPublicKey, policy);
-  const txBuiltAt = nowIso();
-
-  if (!privyWalletId) {
-    throw new Error("missing-privy-wallet-id");
-  }
-
-  const signedBase64 = await signTransactionWithPrivyById(
+    lastValidBlockHeight,
+    txBuiltAt,
+  } = await buildAndSignPrivySwapTransaction({
     env,
+    policy,
+    rpc,
+    jupiter,
+    quoteResponse,
+    userPublicKey,
     privyWalletId,
-    swap.swapTransaction,
-  );
+    log,
+    execution: input.execution,
+    guardEnabled,
+  });
 
   if (policy.simulateOnly) {
     const sim = await rpc.simulateTransactionBase64(signedBase64, {
@@ -193,7 +194,7 @@ export async function executeJitoBundleSwap(
       signature: null,
       usedQuote,
       refreshed,
-      lastValidBlockHeight: swap.lastValidBlockHeight,
+      lastValidBlockHeight,
       err: sim.err ?? null,
       executionMeta: {
         route,
@@ -255,7 +256,7 @@ export async function executeJitoBundleSwap(
     signature: null,
     usedQuote,
     refreshed,
-    lastValidBlockHeight: swap.lastValidBlockHeight,
+    lastValidBlockHeight,
     err:
       status === "error"
         ? {
