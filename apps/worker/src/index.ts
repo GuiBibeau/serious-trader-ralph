@@ -297,6 +297,48 @@ async function recordEndpointCallSafe(
   }
 }
 
+async function sha256Hex(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  const bytes = new Uint8Array(digest);
+  return Array.from(bytes)
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function buildExecSubmitBillingAuditMetadata(
+  request: Request,
+  resourcePath: string,
+): Promise<Record<string, unknown>> {
+  const paymentSignature = String(
+    request.headers.get("payment-signature") ?? "",
+  ).trim();
+  const paymentSignatureHash =
+    paymentSignature.length > 0
+      ? `sha256:${await sha256Hex(paymentSignature)}`
+      : null;
+  return {
+    schemaVersion: "v1",
+    model: "x402",
+    routeKey: "exec_submit",
+    resource: {
+      uri: resourcePath,
+      method: request.method.toUpperCase(),
+    },
+    payment: {
+      required: true,
+      signatureProvided: paymentSignature.length > 0,
+      ...(paymentSignatureHash ? { signatureHash: paymentSignatureHash } : {}),
+    },
+    settlementHeader: "payment-response",
+    polling: {
+      statusPath: "/api/x402/exec/status/:requestId",
+      receiptPath: "/api/x402/exec/receipt/:requestId",
+      requiresPayment: false,
+    },
+  };
+}
+
 export {
   ExecutionCoordinator,
   LoopACoordinator,
@@ -466,6 +508,14 @@ export default {
             );
           }
           if (paymentRequired) return withCors(paymentRequired, env);
+          const billingMetadata = await buildExecSubmitBillingAuditMetadata(
+            request,
+            url.pathname,
+          );
+          submitMetadata = {
+            ...(submitMetadata ?? {}),
+            x402Billing: billingMetadata,
+          };
 
           const validation = await validateRelaySignedSubmission(
             env,

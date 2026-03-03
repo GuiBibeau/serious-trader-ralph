@@ -112,7 +112,10 @@ function createSqliteD1Adapter(db: Database): D1Database {
   } as unknown as D1Database;
 }
 
-function createExecSubmitEnv(): { env: Env; sqlite: Database } {
+function createExecSubmitEnv(overrides?: Partial<Env>): {
+  env: Env;
+  sqlite: Database;
+} {
   const sqlite = new Database(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON;");
   sqlite.exec(`
@@ -139,6 +142,7 @@ function createExecSubmitEnv(): { env: Env; sqlite: Database } {
       PRIVY_APP_ID: "privy-app-id",
       X402_EXEC_SUBMIT_PRICE_USD: "0.01",
       EXEC_RELAY_VALIDATE_BLOCKHASH: "0",
+      ...(overrides ?? {}),
     },
   });
   return { env, sqlite };
@@ -196,6 +200,8 @@ describe("worker x402 exec submit scaffold route", () => {
       expect(response.status).toBe(402);
       const payload = (await response.json()) as { error?: string };
       expect(payload.error).toBe("payment-required");
+      expect(response.headers.get("payment-required")).toBeString();
+      expect(response.headers.get("payment-response")).toBeNull();
     } finally {
       sqlite.close();
     }
@@ -268,9 +274,29 @@ describe("worker x402 exec submit scaffold route", () => {
       expect(row?.lane).toBe("fast");
       const metadata = JSON.parse(String(row?.metadataJson ?? "{}")) as {
         laneResolution?: { lane?: string; adapter?: string };
+        x402Billing?: {
+          routeKey?: string;
+          settlementHeader?: string;
+          payment?: {
+            required?: boolean;
+            signatureProvided?: boolean;
+            signatureHash?: string;
+          };
+          polling?: {
+            requiresPayment?: boolean;
+          };
+        };
       };
       expect(metadata.laneResolution?.lane).toBe("fast");
       expect(metadata.laneResolution?.adapter).toBe("helius_sender");
+      expect(metadata.x402Billing?.routeKey).toBe("exec_submit");
+      expect(metadata.x402Billing?.settlementHeader).toBe("payment-response");
+      expect(metadata.x402Billing?.payment?.required).toBe(true);
+      expect(metadata.x402Billing?.payment?.signatureProvided).toBe(true);
+      expect(metadata.x402Billing?.payment?.signatureHash).toMatch(
+        /^sha256:[a-f0-9]{64}$/,
+      );
+      expect(metadata.x402Billing?.polling?.requiresPayment).toBe(false);
 
       const second = await worker.fetch(
         new Request("http://localhost/api/x402/exec/submit", {
@@ -533,6 +559,34 @@ describe("worker x402 exec submit scaffold route", () => {
       expect(response.status).toBe(400);
       const body = (await response.json()) as { error?: string };
       expect(body.error).toBe("invalid-request");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("maps x402 submit config errors to deterministic 503 responses", async () => {
+    const relayPayload = buildRelaySignedPayload();
+    const { env, sqlite } = createExecSubmitEnv({
+      X402_EXEC_SUBMIT_PRICE_USD: undefined,
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-config-err",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(503);
+      const payload = (await response.json()) as { error?: string };
+      expect(payload.error).toBe("x402-route-config-missing");
     } finally {
       sqlite.close();
     }
