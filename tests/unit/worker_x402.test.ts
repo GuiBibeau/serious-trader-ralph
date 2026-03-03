@@ -136,6 +136,65 @@ describe("worker x402 helpers", () => {
     }
   });
 
+  test("local provider preserves configured network in payment-required", async () => {
+    const env = createEnv({
+      X402_NETWORK: "solana-mainnet",
+    });
+    const request = new Request(
+      "http://localhost/api/x402/read/macro_signals",
+      {
+        method: "POST",
+      },
+    );
+
+    const response = await requireX402Payment(
+      request,
+      env,
+      "macro_signals",
+      "/api/x402/read/macro_signals",
+    );
+
+    expect(response).not.toBeNull();
+    expect(response?.status).toBe(402);
+    const header = response?.headers.get("payment-required") ?? null;
+    const payload = decodeBase64Json(header);
+    expect(payload.x402Version).toBe(2);
+    const accepts = Array.isArray(payload.accepts) ? payload.accepts : [];
+    expect(accepts.length).toBe(1);
+    const accept0 = accepts[0] as Record<string, unknown>;
+    expect(accept0.network).toBe("solana-mainnet");
+  });
+
+  test("corbits provider normalizes solana-mainnet to solana-mainnet-beta in payment-required", async () => {
+    const env = createEnv({
+      X402_PROVIDER: "corbits",
+      X402_NETWORK: "solana-mainnet",
+    });
+    const request = new Request(
+      "http://localhost/api/x402/read/macro_signals",
+      {
+        method: "POST",
+      },
+    );
+
+    const response = await requireX402Payment(
+      request,
+      env,
+      "macro_signals",
+      "/api/x402/read/macro_signals",
+    );
+
+    expect(response).not.toBeNull();
+    expect(response?.status).toBe(402);
+    const header = response?.headers.get("payment-required") ?? null;
+    const payload = decodeBase64Json(header);
+    expect(payload.x402Version).toBe(1);
+    const accepts = Array.isArray(payload.accepts) ? payload.accepts : [];
+    expect(accepts.length).toBe(1);
+    const accept0 = accepts[0] as Record<string, unknown>;
+    expect(accept0.network).toBe("solana-mainnet-beta");
+  });
+
   test("withX402SettlementHeader sets payment-response for macro_signals", () => {
     const env = createEnv();
     const request = new Request(

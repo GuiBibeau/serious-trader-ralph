@@ -684,12 +684,14 @@ function buildPaymentRequirements(
     request,
     resourcePath,
   );
+  const network =
+    provider === "corbits" ? facilitatorRequirements.network : config.network;
   return {
     x402Version: provider === "corbits" ? 1 : 2,
     accepts: [
       {
         scheme: "exact",
-        network: facilitatorRequirements.network,
+        network,
         asset: facilitatorRequirements.asset,
         amount: config.amountAtomic,
         maxAmountRequired: facilitatorRequirements.maxAmountRequired,
