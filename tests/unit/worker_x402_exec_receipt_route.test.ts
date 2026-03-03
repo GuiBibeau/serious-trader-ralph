@@ -214,12 +214,23 @@ describe("worker x402 exec receipt route", () => {
       const body = (await receipt.json()) as {
         ok?: boolean;
         ready?: boolean;
-        status?: { state?: string; terminal?: boolean };
+        status?: {
+          state?: string;
+          terminal?: boolean;
+          immutability?: {
+            hashAlgorithm?: string;
+            receivedTxHash?: string;
+          };
+        };
       };
       expect(body.ok).toBe(true);
       expect(body.ready).toBe(false);
       expect(body.status?.state).toBe("validated");
       expect(body.status?.terminal).toBe(false);
+      expect(body.status?.immutability?.hashAlgorithm).toBe("sha256");
+      expect(body.status?.immutability?.receivedTxHash).toMatch(
+        /^sha256:[a-f0-9]{64}$/,
+      );
     } finally {
       sqlite.close();
     }
@@ -337,6 +348,12 @@ describe("worker x402 exec receipt route", () => {
             landedAt?: string | null;
             terminalAt?: string | null;
           };
+          immutability?: {
+            hashAlgorithm?: string;
+            receivedTxHash?: string;
+            submittedTxHash?: string;
+            verifiedTxHash?: string;
+          };
         };
       };
       expect(body.ready).toBe(true);
@@ -359,6 +376,16 @@ describe("worker x402 exec receipt route", () => {
       );
       expect(body.receipt?.trace?.landedAt).toBe("2026-03-03T03:00:03.000Z");
       expect(body.receipt?.trace?.terminalAt).toBe("2026-03-03T03:00:02.000Z");
+      expect(body.receipt?.immutability?.hashAlgorithm).toBe("sha256");
+      expect(body.receipt?.immutability?.receivedTxHash).toMatch(
+        /^sha256:[a-f0-9]{64}$/,
+      );
+      expect(body.receipt?.immutability?.submittedTxHash).toBe(
+        body.receipt?.immutability?.receivedTxHash,
+      );
+      expect(body.receipt?.immutability?.verifiedTxHash).toBe(
+        body.receipt?.immutability?.receivedTxHash,
+      );
     } finally {
       sqlite.close();
     }

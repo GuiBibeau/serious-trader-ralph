@@ -1,3 +1,5 @@
+import { verifyRelayImmutabilitySnapshot } from "./relay_immutability";
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
@@ -640,6 +642,10 @@ export async function createExecutionAttemptIdempotent(
     status: string;
     providerRequestId?: string | null;
     providerResponse?: JsonObject | null;
+    relayImmutability?: {
+      expectedReceivedTxHash: string;
+      signedTransactionBase64: string;
+    };
     errorCode?: string | null;
     errorMessage?: string | null;
     startedAt?: string;
@@ -655,6 +661,23 @@ export async function createExecutionAttemptIdempotent(
 
   const startedAt = input.startedAt ?? executionNowIso();
   const nowIso = input.nowIso ?? startedAt;
+  let providerResponse = input.providerResponse ?? null;
+  if (input.relayImmutability) {
+    const immutability = await verifyRelayImmutabilitySnapshot({
+      expectedReceivedTxHash: input.relayImmutability.expectedReceivedTxHash,
+      signedTransactionBase64: input.relayImmutability.signedTransactionBase64,
+      verifiedAt: startedAt,
+    });
+    if (!immutability.ok) {
+      throw new Error(
+        `execution-attempt-${immutability.error}:${immutability.reason}`,
+      );
+    }
+    providerResponse = {
+      ...(providerResponse ?? {}),
+      relayImmutability: immutability.snapshot,
+    };
+  }
   try {
     await db
       .prepare(
@@ -684,7 +707,7 @@ export async function createExecutionAttemptIdempotent(
         input.provider,
         input.status,
         input.providerRequestId ?? null,
-        toJsonString(input.providerResponse),
+        toJsonString(providerResponse),
         input.errorCode ?? null,
         input.errorMessage ?? null,
         startedAt,

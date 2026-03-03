@@ -297,6 +297,73 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("rejects relay replay when stored immutability hash diverges", async () => {
+    const relayPayload = buildRelaySignedPayload();
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const first = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-4",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as { requestId?: string };
+      const requestId = String(firstBody.requestId ?? "");
+      expect(requestId).toBeString();
+
+      const metadataRow = sqlite
+        .query(
+          "SELECT metadata_json as metadataJson FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(requestId) as { metadataJson?: string } | undefined;
+      const metadata = JSON.parse(
+        String(metadataRow?.metadataJson ?? "{}"),
+      ) as {
+        relayImmutability?: { receivedTxHash?: string };
+      };
+      metadata.relayImmutability = {
+        ...(metadata.relayImmutability ?? {}),
+        receivedTxHash: `sha256:${"f".repeat(64)}`,
+      };
+      sqlite
+        .query(
+          "UPDATE execution_requests SET metadata_json = ?2 WHERE request_id = ?1",
+        )
+        .run(requestId, JSON.stringify(metadata));
+
+      const replay = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-4",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(replay.status).toBe(403);
+      const replayBody = (await replay.json()) as {
+        error?: string;
+        reason?: string;
+      };
+      expect(replayBody.error).toBe("policy-denied");
+      expect(replayBody.reason).toBe("relay-immutability-mismatch");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("accepts privy_execute submit for authenticated user", async () => {
     const { env, sqlite } = createExecSubmitEnv();
     try {

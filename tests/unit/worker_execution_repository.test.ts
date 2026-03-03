@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createRelayImmutabilitySnapshot } from "../../apps/worker/src/execution/relay_immutability";
 import {
   appendExecutionStatusEvent,
   createExecutionAttemptIdempotent,
@@ -16,6 +17,7 @@ import {
   updateExecutionRequestStatus,
   upsertExecutionReceiptIdempotent,
 } from "../../apps/worker/src/execution/repository";
+import { buildRelaySignedPayload } from "./_relay_signed_test_utils";
 
 function createSqliteD1Adapter(db: Database): D1Database {
   return {
@@ -334,6 +336,63 @@ describe("worker execution repository", () => {
       expect(latest?.latestEvent?.status).toBe("validated");
       expect(latest?.latestAttempt?.attemptNo).toBe(1);
       expect(latest?.receipt?.receiptId).toBe("receipt_5");
+    });
+  });
+
+  test("enforces relay immutability before attempt creation when provided", async () => {
+    await withExecutionRepo(async (_db, d1) => {
+      await createExecutionRequestIdempotent(d1, {
+        requestId: "req_6",
+        idempotencyScope: "anonymous_x402:bot_6",
+        idempotencyKey: "idem_6",
+        payloadHash: "payload_hash_6",
+        actorType: "anonymous_x402",
+        actorId: "bot_6",
+        mode: "relay_signed",
+        lane: "fast",
+      });
+
+      const relayPayload = buildRelaySignedPayload();
+      const relaySnapshot = await createRelayImmutabilitySnapshot({
+        signedTransactionBase64: relayPayload.relaySigned.signedTransaction,
+      });
+      expect(relaySnapshot).not.toBeNull();
+      if (!relaySnapshot) return;
+
+      const created = await createExecutionAttemptIdempotent(d1, {
+        attemptId: "attempt_6_1",
+        requestId: "req_6",
+        attemptNo: 1,
+        lane: "fast",
+        provider: "helius_sender",
+        status: "dispatched",
+        relayImmutability: {
+          expectedReceivedTxHash: relaySnapshot.receivedTxHash,
+          signedTransactionBase64: relayPayload.relaySigned.signedTransaction,
+        },
+        startedAt: "2026-03-03T00:05:00.000Z",
+      });
+      expect(created.created).toBe(true);
+      expect(
+        created.row.providerResponse?.relayImmutability?.receivedTxHash,
+      ).toBe(relaySnapshot.receivedTxHash);
+
+      await expect(
+        createExecutionAttemptIdempotent(d1, {
+          attemptId: "attempt_6_2",
+          requestId: "req_6",
+          attemptNo: 2,
+          lane: "fast",
+          provider: "helius_sender",
+          status: "dispatched",
+          relayImmutability: {
+            expectedReceivedTxHash: relaySnapshot.receivedTxHash,
+            signedTransactionBase64: buildRelaySignedPayload({ lamports: 2 })
+              .relaySigned.signedTransaction,
+          },
+          startedAt: "2026-03-03T00:05:01.000Z",
+        }),
+      ).rejects.toThrow("execution-attempt-policy-denied");
     });
   });
 });

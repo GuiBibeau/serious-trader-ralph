@@ -219,6 +219,12 @@ describe("worker x402 exec status route", () => {
           mode?: string;
           lane?: string;
           actorType?: string;
+          immutability?: {
+            hashAlgorithm?: string;
+            receivedTxHash?: string;
+            submittedTxHash?: string;
+            verifiedTxHash?: string;
+          };
         };
         events?: Array<{ state?: string; at?: string }>;
       };
@@ -228,6 +234,16 @@ describe("worker x402 exec status route", () => {
       expect(body.status?.mode).toBe("relay_signed");
       expect(body.status?.lane).toBe("fast");
       expect(body.status?.actorType).toBe("anonymous_x402");
+      expect(body.status?.immutability?.hashAlgorithm).toBe("sha256");
+      expect(body.status?.immutability?.receivedTxHash).toMatch(
+        /^sha256:[a-f0-9]{64}$/,
+      );
+      expect(body.status?.immutability?.submittedTxHash).toBe(
+        body.status?.immutability?.receivedTxHash,
+      );
+      expect(body.status?.immutability?.verifiedTxHash).toBe(
+        body.status?.immutability?.receivedTxHash,
+      );
       expect(Array.isArray(body.events)).toBe(true);
       expect(body.events?.map((event) => event.state)).toEqual([
         "received",
