@@ -18,6 +18,11 @@ import {
 } from "./execution/idempotency";
 import { resolveExecutionLane } from "./execution/lane_resolver";
 import {
+  evaluateExecutionSubmitPolicy,
+  evaluatePrivyRuntimeBalancePolicy,
+  type SubmitPolicyRuntime,
+} from "./execution/policy_engine";
+import {
   assembleCanonicalExecutionReceiptV1,
   canonicalExecutionReceiptStorageKey,
 } from "./execution/receipt_assembler";
@@ -26,7 +31,6 @@ import {
   readRelayImmutabilitySnapshot,
   verifyRelayImmutabilitySnapshot,
 } from "./execution/relay_immutability";
-import { validateRelaySignedSubmission } from "./execution/relay_signed_validator";
 import {
   appendExecutionStatusEvent,
   createExecutionAttemptIdempotent,
@@ -308,6 +312,21 @@ function executionErrorMessage(value: unknown): string | null {
   if (value instanceof Error) return value.message.slice(0, 2_000);
   const text = String(value).trim();
   return text ? text.slice(0, 2_000) : null;
+}
+
+function normalizePolicyReason(value: unknown, fallback: string): string {
+  const raw = executionErrorMessage(value) ?? "";
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-:]+|[-:]+$/g, "");
+  return normalized || fallback;
+}
+
+function asPolicyDeniedError(reason: string): Error {
+  return new Error(`policy-denied:${reason}`);
 }
 
 function policyDeniedReason(value: unknown): string | null {
@@ -638,6 +657,15 @@ const worker = {
         let relayImmutability: ReturnType<
           typeof readRelayImmutabilitySnapshot
         > = null;
+        let relayValidationParsed: {
+          transactionVersion: "legacy" | "v0";
+          signatureCount: number;
+          txSizeBytes: number;
+          feePayer: string;
+          recentBlockhash: string;
+          programIds: string[];
+        } | null = null;
+        let submitPolicyRuntime: SubmitPolicyRuntime | null = null;
         let privyActorContext: {
           userId: string;
           walletAddress: string;
@@ -762,20 +790,54 @@ const worker = {
             ...(submitMetadata ?? {}),
             x402Billing: billingMetadata,
           };
+        }
 
-          const validation = await validateRelaySignedSubmission(
+        const submitPolicy = await evaluateExecutionSubmitPolicy({
+          env,
+          request: parsed.value,
+          lane: laneResolution.lane,
+          actorType,
+        });
+        if (!submitPolicy.ok) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error: submitPolicy.error,
+                reason: submitPolicy.reason,
+                policy: submitPolicy.metadata,
+              },
+              { status: submitPolicy.status },
+            ),
             env,
-            parsed.value.relaySigned,
           );
-          if (!validation.ok) {
+        }
+        submitPolicyRuntime = submitPolicy.runtime ?? null;
+        relayValidationParsed = submitPolicy.relayParsed
+          ? {
+              transactionVersion: submitPolicy.relayParsed.transactionVersion,
+              signatureCount: submitPolicy.relayParsed.signatureCount,
+              txSizeBytes: submitPolicy.relayParsed.txSizeBytes,
+              feePayer: submitPolicy.relayParsed.feePayer,
+              recentBlockhash: submitPolicy.relayParsed.recentBlockhash,
+              programIds: submitPolicy.relayParsed.programIds,
+            }
+          : null;
+        submitMetadata = {
+          ...(submitMetadata ?? {}),
+          policy: submitPolicy.metadata,
+        };
+
+        if (isRelaySigned) {
+          if (!relayValidationParsed) {
             return withCors(
               json(
                 {
                   ok: false,
-                  error: validation.error,
-                  reason: validation.reason,
+                  error: "invalid-transaction",
+                  reason: "relay-validation-missing",
                 },
-                { status: validation.error === "policy-denied" ? 403 : 400 },
+                { status: 400 },
               ),
               env,
             );
@@ -799,12 +861,12 @@ const worker = {
           submitMetadata = {
             ...(submitMetadata ?? {}),
             relayValidation: {
-              transactionVersion: validation.parsed.transactionVersion,
-              signatureCount: validation.parsed.signatureCount,
-              txSizeBytes: validation.parsed.txSizeBytes,
-              feePayer: validation.parsed.feePayer,
-              recentBlockhash: validation.parsed.recentBlockhash,
-              programIds: validation.parsed.programIds,
+              transactionVersion: relayValidationParsed.transactionVersion,
+              signatureCount: relayValidationParsed.signatureCount,
+              txSizeBytes: relayValidationParsed.txSizeBytes,
+              feePayer: relayValidationParsed.feePayer,
+              recentBlockhash: relayValidationParsed.recentBlockhash,
+              programIds: relayValidationParsed.programIds,
             },
             relayImmutability,
           };
@@ -900,11 +962,15 @@ const worker = {
         ) {
           const swap = parsed.value.privyExecute.swap;
           const options = parsed.value.privyExecute.options ?? {};
+          const executionParams: Record<string, unknown> = {
+            lane: laneResolution.lane,
+          };
+          if (submitPolicyRuntime?.requireSimulation) {
+            executionParams.requireSimulation = true;
+          }
           const execution = {
             adapter: laneResolution.adapter,
-            params: {
-              lane: laneResolution.lane,
-            },
+            params: executionParams,
           };
           const policy = normalizePolicy({
             allowedMints: SUPPORTED_TRADING_MINTS,
@@ -936,29 +1002,23 @@ const worker = {
               env.JUPITER_API_KEY,
             );
 
-            const inputAmount = BigInt(swap.amountAtomic);
-            if (inputAmount <= 0n) {
-              throw new Error("invalid-trade-request");
-            }
-
-            if (swap.inputMint === X402_SOL_MINT) {
-              const balanceLamports = await rpc.getBalanceLamports(
-                privyActorContext.walletAddress,
-              );
-              const minSolReserveLamports = BigInt(
-                policy.minSolReserveLamports,
-              );
-              if (inputAmount + minSolReserveLamports > balanceLamports) {
-                throw new Error("insufficient-sol-reserve");
-              }
-            } else {
-              const tokenBalance = await rpc.getTokenBalanceAtomic(
-                privyActorContext.walletAddress,
-                swap.inputMint,
-              );
-              if (inputAmount > tokenBalance) {
-                throw new Error("insufficient-token-balance");
-              }
+            const runtimeBalancePolicy =
+              await evaluatePrivyRuntimeBalancePolicy({
+                env,
+                lane: laneResolution.lane,
+                walletAddress: privyActorContext.walletAddress,
+                inputMint: swap.inputMint,
+                amountAtomic: swap.amountAtomic,
+                minSolReserveLamports: policy.minSolReserveLamports,
+                rpc,
+                runtimeDefaults: submitPolicyRuntime,
+              });
+            providerResponse = {
+              ...(providerResponse ?? {}),
+              runtimePolicy: runtimeBalancePolicy.metadata,
+            };
+            if (!runtimeBalancePolicy.ok) {
+              throw asPolicyDeniedError(runtimeBalancePolicy.reason);
             }
 
             const quoteResponse = await jupiter.quote({
@@ -968,7 +1028,13 @@ const worker = {
               slippageBps: policy.slippageBps,
               swapMode: "ExactIn",
             });
-            enforcePolicy(policy, quoteResponse);
+            try {
+              enforcePolicy(policy, quoteResponse);
+            } catch (error) {
+              throw asPolicyDeniedError(
+                `privy-quote-${normalizePolicyReason(error, "policy-violation")}`,
+              );
+            }
 
             await updateExecutionRequestStatus(env.WAITLIST_DB, {
               requestId: reservation.request.requestId,

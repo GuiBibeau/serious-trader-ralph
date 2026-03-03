@@ -56,6 +56,47 @@ Env overrides for safe-lane limits:
 - `EXEC_SAFE_MAX_COMPUTE_UNIT_LIMIT` (default `1400000`)
 - `EXEC_SAFE_MAX_ESTIMATED_FEE_LAMPORTS` (default `2000000`)
 
+## Mode-Aware Policy Engine (Phase 2)
+
+`POST /api/x402/exec/submit` now evaluates explicit mode-aware policies before request reservation.
+
+- `relay_signed` policy:
+  - deterministic relay payload validation
+  - program allowlist / denylist enforcement
+  - optional blockhash freshness checks
+- `privy_execute` policy:
+  - actor identity enforcement (`anonymous_x402` denied for privy mode)
+  - wallet allowlist / denylist enforcement
+  - lane-aware notional caps
+  - lane-aware simulation requirements
+  - runtime balance checks before dispatch
+
+Policy decisions are machine-readable and stored under request metadata (`metadata.policy`) with:
+
+- `policyVersion`
+- `environment`
+- `mode`, `lane`, `actorType`
+- `outcome`, `reason`
+- `checks[]` with pass/fail/skip statuses
+- resolved `defaults`
+
+Policy env defaults support global or lane/environment scoped variants:
+
+- Global:
+  - `EXEC_POLICY_ENV` (`dev`, `staging`, `production`)
+  - `EXEC_POLICY_PRIVY_WALLET_ALLOWLIST`
+  - `EXEC_POLICY_PRIVY_WALLET_DENYLIST`
+  - `EXEC_POLICY_PRIVY_MAX_NOTIONAL_ATOMIC`
+  - `EXEC_POLICY_PRIVY_MAX_NOTIONAL_FAST_ATOMIC`
+  - `EXEC_POLICY_PRIVY_MAX_NOTIONAL_PROTECTED_ATOMIC`
+  - `EXEC_POLICY_PRIVY_MAX_NOTIONAL_SAFE_ATOMIC`
+  - `EXEC_POLICY_PRIVY_REQUIRE_SIMULATION`
+  - `EXEC_POLICY_PRIVY_REQUIRE_SIMULATION_FAST`
+  - `EXEC_POLICY_PRIVY_REQUIRE_SIMULATION_PROTECTED`
+  - `EXEC_POLICY_PRIVY_REQUIRE_SIMULATION_SAFE`
+  - `EXEC_POLICY_PRIVY_ENFORCE_BALANCE_CHECKS`
+- Environment-prefixed (same suffixes): `EXEC_POLICY_DEV_*`, `EXEC_POLICY_STAGING_*`, `EXEC_POLICY_PRODUCTION_*`
+
 ## Copy/Paste Examples
 
 Set your API base:

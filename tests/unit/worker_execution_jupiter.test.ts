@@ -231,4 +231,57 @@ describe("worker jupiter execution adapter", () => {
       ).reason,
     ).toBe("safe-lane-simulation-failed");
   });
+
+  test("non-safe lanes can require simulation via execution policy params", async () => {
+    const callOrder: string[] = [];
+    const simulateTransactionBase64 = mock(async () => {
+      callOrder.push("simulate");
+      return { err: null };
+    });
+    const sendTransactionBase64 = mock(async () => {
+      callOrder.push("send");
+      return "sig-protected";
+    });
+    const confirmSignature = mock(async () => {
+      callOrder.push("confirm");
+      return { ok: true, status: "confirmed" };
+    });
+
+    const result = await executeJupiterSwap(
+      {
+        env: {} as Env,
+        policy: normalizePolicy({ commitment: "confirmed" }),
+        rpc: {
+          simulateTransactionBase64,
+          sendTransactionBase64,
+          confirmSignature,
+        } as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        privyWalletId: "wallet-id",
+        execution: {
+          adapter: "jupiter",
+          params: {
+            lane: "protected",
+            requireSimulation: true,
+          },
+        },
+        log: () => {},
+      },
+      {
+        buildAndSignPrivySwapTransaction: buildAndSignPrivySwapTransactionMock,
+      },
+    );
+
+    expect(result.status).toBe("confirmed");
+    expect(callOrder).toEqual(["simulate", "send", "confirm"]);
+    expect(sendTransactionBase64).toHaveBeenCalledTimes(1);
+    expect(simulateTransactionBase64).toHaveBeenCalledTimes(1);
+  });
 });
