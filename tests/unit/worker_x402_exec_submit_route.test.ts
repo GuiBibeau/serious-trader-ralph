@@ -9,6 +9,7 @@ import {
   MAINNET_USDC_MINT,
   SOL_MINT,
 } from "../integration/_worker_live_test_utils";
+import { buildRelaySignedPayload } from "./_relay_signed_test_utils";
 
 const requireUserMock = mock(async () => ({
   privyUserId: "did:privy:user_1",
@@ -137,20 +138,11 @@ function createExecSubmitEnv(): { env: Env; sqlite: Database } {
       WAITLIST_DB: createSqliteD1Adapter(sqlite),
       PRIVY_APP_ID: "privy-app-id",
       X402_EXEC_SUBMIT_PRICE_USD: "0.01",
+      EXEC_RELAY_VALIDATE_BLOCKHASH: "0",
     },
   });
   return { env, sqlite };
 }
-
-const RELAY_PAYLOAD = {
-  schemaVersion: "v1",
-  mode: "relay_signed",
-  lane: "fast",
-  relaySigned: {
-    encoding: "base64",
-    signedTransaction: "QUFBQUFBQUFBQUFBQUFBQQ==",
-  },
-};
 
 const PRIVY_PAYLOAD = {
   schemaVersion: "v1",
@@ -185,6 +177,7 @@ describe("worker x402 exec submit scaffold route", () => {
   });
 
   test("requires payment for anonymous relay_signed submits", async () => {
+    const relayPayload = buildRelaySignedPayload();
     const { env, sqlite } = createExecSubmitEnv();
     try {
       const response = await worker.fetch(
@@ -194,7 +187,7 @@ describe("worker x402 exec submit scaffold route", () => {
             "content-type": "application/json",
             "idempotency-key": "idem-anon-1",
           },
-          body: JSON.stringify(RELAY_PAYLOAD),
+          body: JSON.stringify(relayPayload),
         }),
         env,
         createExecutionContextStub(),
@@ -209,6 +202,7 @@ describe("worker x402 exec submit scaffold route", () => {
   });
 
   test("accepts relay_signed submit with payment and returns deterministic replay", async () => {
+    const relayPayload = buildRelaySignedPayload();
     const { env, sqlite } = createExecSubmitEnv();
     try {
       const first = await worker.fetch(
@@ -219,7 +213,7 @@ describe("worker x402 exec submit scaffold route", () => {
             "idempotency-key": "idem-anon-2",
             "payment-signature": "unit-signed-payment",
           },
-          body: JSON.stringify(RELAY_PAYLOAD),
+          body: JSON.stringify(relayPayload),
         }),
         env,
         createExecutionContextStub(),
@@ -244,7 +238,7 @@ describe("worker x402 exec submit scaffold route", () => {
             "idempotency-key": "idem-anon-2",
             "payment-signature": "unit-signed-payment",
           },
-          body: JSON.stringify(RELAY_PAYLOAD),
+          body: JSON.stringify(relayPayload),
         }),
         env,
         createExecutionContextStub(),
@@ -260,6 +254,8 @@ describe("worker x402 exec submit scaffold route", () => {
   });
 
   test("rejects same idempotency key with different payload", async () => {
+    const relayPayload = buildRelaySignedPayload();
+    const differentRelayPayload = buildRelaySignedPayload({ lamports: 2 });
     const { env, sqlite } = createExecSubmitEnv();
     try {
       await worker.fetch(
@@ -270,7 +266,7 @@ describe("worker x402 exec submit scaffold route", () => {
             "idempotency-key": "idem-anon-3",
             "payment-signature": "unit-signed-payment",
           },
-          body: JSON.stringify(RELAY_PAYLOAD),
+          body: JSON.stringify(relayPayload),
         }),
         env,
         createExecutionContextStub(),
@@ -284,13 +280,7 @@ describe("worker x402 exec submit scaffold route", () => {
             "idempotency-key": "idem-anon-3",
             "payment-signature": "unit-signed-payment",
           },
-          body: JSON.stringify({
-            ...RELAY_PAYLOAD,
-            relaySigned: {
-              ...RELAY_PAYLOAD.relaySigned,
-              signedTransaction: "QkJCQkJCQkJCQkJCQkJCQg==",
-            },
-          }),
+          body: JSON.stringify(differentRelayPayload),
         }),
         env,
         createExecutionContextStub(),

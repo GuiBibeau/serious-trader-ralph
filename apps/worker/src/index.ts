@@ -28,6 +28,7 @@ import {
   readIdempotencyKey,
   reserveExecutionSubmitRequest,
 } from "./execution/idempotency";
+import { validateRelaySignedSubmission } from "./execution/relay_signed_validator";
 import {
   appendExecutionStatusEvent,
   getExecutionLatestStatus,
@@ -385,6 +386,7 @@ export default {
         let actorType: "anonymous_x402" | "privy_user" = "anonymous_x402";
         let actorId: string | null = null;
         const isRelaySigned = parsed.value.mode === "relay_signed";
+        let submitMetadata = parsed.metadataForStorage;
         if (isRelaySigned) {
           let paymentRequired: Response | null = null;
           try {
@@ -405,6 +407,35 @@ export default {
             );
           }
           if (paymentRequired) return withCors(paymentRequired, env);
+
+          const validation = await validateRelaySignedSubmission(
+            env,
+            parsed.value.relaySigned,
+          );
+          if (!validation.ok) {
+            return withCors(
+              json(
+                {
+                  ok: false,
+                  error: validation.error,
+                  reason: validation.reason,
+                },
+                { status: validation.error === "policy-denied" ? 403 : 400 },
+              ),
+              env,
+            );
+          }
+          submitMetadata = {
+            ...(submitMetadata ?? {}),
+            relayValidation: {
+              transactionVersion: validation.parsed.transactionVersion,
+              signatureCount: validation.parsed.signatureCount,
+              txSizeBytes: validation.parsed.txSizeBytes,
+              feePayer: validation.parsed.feePayer,
+              recentBlockhash: validation.parsed.recentBlockhash,
+              programIds: validation.parsed.programIds,
+            },
+          };
         } else {
           let user = await requireOnboardedUser(request, env);
           user = await ensureUserWallet(env, user);
@@ -437,7 +468,7 @@ export default {
           mode: parsed.value.mode,
           lane: parsed.value.lane,
           payloadHash,
-          metadata: parsed.metadataForStorage,
+          metadata: submitMetadata,
         });
 
         if (reservation.result === "conflict") {
