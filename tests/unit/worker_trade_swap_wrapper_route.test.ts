@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Env } from "../../apps/worker/src/types";
@@ -143,6 +143,10 @@ function createTradeSwapEnv(): { env: Env; sqlite: Database } {
 }
 
 describe("worker trade swap compatibility wrapper route", () => {
+  afterAll(() => {
+    mock.restore();
+  });
+
   beforeEach(() => {
     requireUserMock.mockClear();
     findUserByPrivyUserIdMock.mockClear();
