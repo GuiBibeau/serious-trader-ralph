@@ -97,6 +97,37 @@ Policy env defaults support global or lane/environment scoped variants:
   - `EXEC_POLICY_PRIVY_ENFORCE_BALANCE_CHECKS`
 - Environment-prefixed (same suffixes): `EXEC_POLICY_DEV_*`, `EXEC_POLICY_STAGING_*`, `EXEC_POLICY_PRODUCTION_*`
 
+## Submit Abuse Guardrails (Phase 2)
+
+`POST /api/x402/exec/submit` includes abuse controls before reservation:
+
+- payload byte and shape guards
+- actor/IP throttles (windowed)
+- duplicate burst controls on idempotency key reuse
+- configurable blocklists for IPs, actors, and idempotency keys
+
+When limits are exceeded:
+
+- blocklist denials return `403` with `policy-denied`
+- throttling returns `429` with deterministic reason and `retry-after`
+
+Guardrail env controls:
+
+- `EXEC_SUBMIT_ABUSE_GUARD_ENABLED`
+- `EXEC_SUBMIT_MAX_PAYLOAD_BYTES`
+- `EXEC_SUBMIT_MAX_PAYLOAD_DEPTH`
+- `EXEC_SUBMIT_MAX_PAYLOAD_KEYS`
+- `EXEC_SUBMIT_MAX_PAYLOAD_NODES`
+- `EXEC_SUBMIT_RATE_LIMIT_WINDOW_SECONDS`
+- `EXEC_SUBMIT_RATE_LIMIT_IP_MAX`
+- `EXEC_SUBMIT_RATE_LIMIT_ACTOR_MAX`
+- `EXEC_SUBMIT_DUPLICATE_WINDOW_SECONDS`
+- `EXEC_SUBMIT_DUPLICATE_BURST_MAX`
+- `EXEC_SUBMIT_BLOCKLIST_IPS`
+- `EXEC_SUBMIT_BLOCKLIST_ACTORS`
+- `EXEC_SUBMIT_BLOCKLIST_IDEMPOTENCY_KEYS`
+- `EXEC_SUBMIT_ABUSE_KV_PREFIX`
+
 ## Copy/Paste Examples
 
 Set your API base:

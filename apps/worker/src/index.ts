@@ -10,6 +10,10 @@ import {
   SUPPORTED_WALLET_TOKEN_BALANCES,
   USDC_MINT,
 } from "./defaults";
+import {
+  enforceExecSubmitAbuseGuard,
+  readExecSubmitPayloadWithLimits,
+} from "./execution/abuse_guard";
 import { ExecutionCoordinator } from "./execution/coordinator";
 import {
   hashExecutionSubmitPayload,
@@ -628,8 +632,24 @@ const worker = {
         request.method === "POST" &&
         url.pathname === "/api/x402/exec/submit"
       ) {
-        const payload = await readPayload(request);
-        const parsed = parseExecSubmitPayload(payload);
+        const payloadRead = await readExecSubmitPayloadWithLimits(request, env);
+        if (!payloadRead.ok) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error: payloadRead.error,
+                reason: payloadRead.reason,
+                abuse: {
+                  payload: payloadRead.metadata,
+                },
+              },
+              { status: payloadRead.status },
+            ),
+            env,
+          );
+        }
+        const parsed = parseExecSubmitPayload(payloadRead.payload);
         if (!parsed.ok) {
           return withCors(
             json({ ok: false, error: parsed.error }, { status: 400 }),
@@ -671,6 +691,7 @@ const worker = {
           walletAddress: string;
           privyWalletId: string;
         } | null = null;
+        const payloadAbuseMetadata = payloadRead.metadata;
         const apiKeyActor = resolveExecApiKeyActor(request, env);
         if (apiKeyActor) {
           if (!apiKeyActor.modes.has(parsed.value.mode)) {
@@ -732,6 +753,42 @@ const worker = {
           }
         }
 
+        const abuseCheck = await enforceExecSubmitAbuseGuard({
+          env,
+          request,
+          actorType,
+          actorId,
+          idempotencyKey,
+        });
+        if (!abuseCheck.ok) {
+          console.warn("exec.submit.abuse.denied", {
+            actorType,
+            actorId,
+            reason: abuseCheck.reason,
+            status: abuseCheck.status,
+            ...(abuseCheck.metadata ?? {}),
+          });
+          const denied = json(
+            {
+              ok: false,
+              error: abuseCheck.error,
+              reason: abuseCheck.reason,
+              abuse: abuseCheck.metadata,
+            },
+            {
+              status: abuseCheck.status,
+              ...(abuseCheck.retryAfterSeconds
+                ? {
+                    headers: {
+                      "retry-after": String(abuseCheck.retryAfterSeconds),
+                    },
+                  }
+                : {}),
+            },
+          );
+          return withCors(denied, env);
+        }
+
         const laneResolution = resolveExecutionLane({
           env,
           requestedLane: parsed.value.lane,
@@ -753,6 +810,10 @@ const worker = {
         }
         submitMetadata = {
           ...(submitMetadata ?? {}),
+          abuse: {
+            payload: payloadAbuseMetadata,
+            request: abuseCheck.metadata,
+          },
           laneResolution: laneResolution.metadata,
           actor: {
             type: actorType,

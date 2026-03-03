@@ -719,6 +719,54 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("throttles burst submits by ip with deterministic 429 response", async () => {
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_SUBMIT_RATE_LIMIT_IP_MAX: "1",
+      EXEC_SUBMIT_RATE_LIMIT_ACTOR_MAX: "10",
+      EXEC_SUBMIT_RATE_LIMIT_WINDOW_SECONDS: "60",
+      EXEC_SUBMIT_DUPLICATE_BURST_MAX: "10",
+    });
+    try {
+      const first = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-abuse-rate-1",
+            "cf-connecting-ip": "203.0.113.11",
+          },
+          body: JSON.stringify(PRIVY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(first.status).toBe(200);
+
+      const second = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-abuse-rate-2",
+            "cf-connecting-ip": "203.0.113.11",
+          },
+          body: JSON.stringify(PRIVY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(second.status).toBe(429);
+      expect(second.headers.get("retry-after")).toBe("60");
+      const body = (await second.json()) as { error?: string; reason?: string };
+      expect(body.error).toBe("policy-denied");
+      expect(body.reason).toBe("submit-ip-rate-limit-exceeded");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("rejects privy_execute submit when wallet mismatches authenticated user", async () => {
     const { env, sqlite } = createExecSubmitEnv();
     try {
