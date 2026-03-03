@@ -1,5 +1,4 @@
-import { signTransactionWithPrivyById } from "../privy";
-import { swapWithRetry } from "../swap";
+import { buildAndSignPrivySwapTransaction } from "./privy_swap_builder";
 import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
 
 function nowIso(): string {
@@ -55,23 +54,23 @@ export async function executeJupiterSwap(
   if (guardEnabled) await guardEnabled();
 
   const {
-    swap,
-    quoteResponse: usedQuote,
+    signedBase64,
+    usedQuote,
     refreshed,
-  } = await swapWithRetry(jupiter, quoteResponse, userPublicKey, policy);
-  const txBuiltAt = nowIso();
-
-  if (!privyWalletId) {
-    throw new Error("missing-privy-wallet-id");
-  }
-
-  log("info", "signing transaction", { walletId: privyWalletId });
-  const signedBase64 = await signTransactionWithPrivyById(
+    lastValidBlockHeight,
+    txBuiltAt,
+  } = await buildAndSignPrivySwapTransaction({
     env,
+    policy,
+    rpc,
+    jupiter,
+    quoteResponse,
+    userPublicKey,
     privyWalletId,
-    swap.swapTransaction,
-  );
-  log("info", "transaction signed");
+    log,
+    execution: input.execution,
+    guardEnabled,
+  });
 
   if (policy.simulateOnly) {
     const sim = await rpc.simulateTransactionBase64(signedBase64, {
@@ -90,7 +89,7 @@ export async function executeJupiterSwap(
       signature: null,
       usedQuote,
       refreshed,
-      lastValidBlockHeight: swap.lastValidBlockHeight,
+      lastValidBlockHeight,
       err: sim.err ?? null,
       executionMeta: {
         route,
@@ -114,7 +113,7 @@ export async function executeJupiterSwap(
 
   log("info", "tx submitted", {
     signature,
-    lastValidBlockHeight: swap.lastValidBlockHeight,
+    lastValidBlockHeight,
   });
 
   const confirmation = await rpc.confirmSignature(signature, {
@@ -135,7 +134,7 @@ export async function executeJupiterSwap(
     signature,
     usedQuote,
     refreshed,
-    lastValidBlockHeight: swap.lastValidBlockHeight,
+    lastValidBlockHeight,
     err: confirmation.err ?? null,
     executionMeta: {
       route,
