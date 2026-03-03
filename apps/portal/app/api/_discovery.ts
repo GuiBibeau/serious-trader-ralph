@@ -114,18 +114,27 @@ export function toAbsoluteApiUrl(apiOrigin: string, path: string): string {
   return `${origin}${normalized}`;
 }
 
-export function buildDiscoveryUrls(apiOrigin: string): {
+export type DiscoveryUrls = {
   html: string;
   json: string;
   text: string;
   llms: string;
   skills: string;
-} {
+  openapi: string;
+  agentRegistryMetadata: string;
+};
+
+export function buildDiscoveryUrls(apiOrigin: string): DiscoveryUrls {
   return {
     html: toAbsoluteApiUrl(apiOrigin, "/api"),
     json: toAbsoluteApiUrl(apiOrigin, "/endpoints.json"),
     text: toAbsoluteApiUrl(apiOrigin, "/endpoints.txt"),
     llms: toAbsoluteApiUrl(apiOrigin, "/llms.txt"),
     skills: toAbsoluteApiUrl(apiOrigin, "/dev-skills.txt"),
+    openapi: toAbsoluteApiUrl(apiOrigin, "/openapi.json"),
+    agentRegistryMetadata: toAbsoluteApiUrl(
+      apiOrigin,
+      "/agent-registry/metadata.json",
+    ),
   };
 }

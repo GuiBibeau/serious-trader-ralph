@@ -97,6 +97,18 @@ export default async function ApiCatalogPage() {
               >
                 {discovery.skills}
               </a>
+              <a
+                className="underline hover:text-accent"
+                href={discovery.openapi}
+              >
+                {discovery.openapi}
+              </a>
+              <a
+                className="underline hover:text-accent"
+                href={discovery.agentRegistryMetadata}
+              >
+                {discovery.agentRegistryMetadata}
+              </a>
             </div>
           </div>
 

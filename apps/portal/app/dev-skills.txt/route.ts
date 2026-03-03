@@ -85,6 +85,18 @@ export function GET(request: Request): Response {
       sourceUrl: discovery.llms,
       purpose: "LLM discovery metadata and endpoint index.",
     },
+    {
+      id: "trader-ralph-openapi-json",
+      title: "/openapi.json",
+      sourceUrl: discovery.openapi,
+      purpose: "OpenAPI 3.1 specification for all public routes.",
+    },
+    {
+      id: "trader-ralph-agent-registry-metadata",
+      title: "/agent-registry/metadata.json",
+      sourceUrl: discovery.agentRegistryMetadata,
+      purpose: "Lane-specific metadata document for Solana Agent Registry.",
+    },
   ];
 
   const lines: string[] = [

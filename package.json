@@ -30,6 +30,9 @@
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
     "test:integration:worker:live": "RUN_INTEGRATION_TESTS=1 RUN_WORKER_LIVE_TESTS=1 bun test tests/integration/worker_x402_live.integration.test.ts",
+    "agent-registry:validate": "bun run scripts/agent_registry/sync.ts --step validate",
+    "agent-registry:sync": "bun run scripts/agent_registry/sync.ts",
+    "agent-registry:submit": "bun run scripts/agent_registry/sync.ts --step submit",
     "contracts:loop-a:schemas": "bun run scripts/generate_loop_a_schemas.ts",
     "typecheck": "bunx tsc --noEmit",
     "lint": "biome check .",
@@ -38,6 +41,7 @@
     "edge:db:migrate:local": "cd apps/worker && bun run db:migrate:local"
   },
   "dependencies": {
+    "8004-solana": "^0.7.8",
     "@coral-xyz/anchor": "^0.32.1",
     "@ellipsis-labs/phoenix-sdk": "^2.0.3",
     "@openbook-dex/openbook-v2": "^0.2.10",
