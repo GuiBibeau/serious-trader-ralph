@@ -533,10 +533,10 @@ export class ExecutionCoordinator {
     const state = await this.loadState();
     const recoveredExpiredInflight = recoverExpiredInflight(state, now);
     const enqueue = enqueueIntent(state, intent, now);
-    const lane = resolveIntentLane(intent);
+    const stateLane = resolveStateLane(state);
     const auctionWindowMs = resolveAuctionWindowMs({
       env: this.env,
-      lane,
+      lane: stateLane,
       overrideRaw: payload.auctionWindowMs,
     });
     if ("error" in enqueue) {
@@ -673,6 +673,21 @@ export class ExecutionCoordinator {
     const recoveredExpiredInflight = recoverExpiredInflight(state, now);
     const inflight = state.inflight;
     if (!inflight) {
+      if (recoveredExpiredInflight) {
+        state.updatedAt = now;
+        const lane = resolveStateLane(state);
+        const auctionWindowMs = resolveAuctionWindowMs({
+          env: this.env,
+          lane,
+          overrideRaw: undefined,
+        });
+        await this.persistState(state);
+        await maybeSetAlarm(this.state, {
+          queueDepth: state.queue.length,
+          hasInflight: state.inflight !== null,
+          auctionWindowMs,
+        });
+      }
       return new Response(
         JSON.stringify({
           ok: false,

@@ -340,6 +340,117 @@ describe("worker execution coordinator durable object", () => {
     expect(alarm - before).toBeGreaterThanOrEqual(800);
   });
 
+  test("keeps alarm timing based on active queue head lane", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      {
+        EXECUTION_AUCTION_WINDOW_FAST_MS: "250",
+        EXECUTION_AUCTION_WINDOW_SAFE_MS: "900",
+      } as Env,
+      { now: () => "2026-02-21T21:20:00.000Z" },
+    );
+    const enqueue = async (executionIntent: ExecutionIntent) =>
+      await coordinator.fetch(
+        new Request("https://internal/execution/intent", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            intent: executionIntent,
+            mode: "enqueue",
+          }),
+        }),
+      );
+
+    await enqueue(
+      intent({
+        intentId: "intent-fast-head",
+        receivedAt: "2026-02-21T21:19:58.000Z",
+        lane: "fast",
+      }),
+    );
+    const alarmFast = mock.readAlarm();
+    expect(alarmFast).not.toBeNull();
+
+    await enqueue(
+      intent({
+        intentId: "intent-safe-tail",
+        receivedAt: "2026-02-21T21:19:59.000Z",
+        lane: "safe",
+      }),
+    );
+    const alarmAfterSafeEnqueue = mock.readAlarm();
+    expect(alarmAfterSafeEnqueue).not.toBeNull();
+
+    if (alarmFast === null || alarmAfterSafeEnqueue === null) return;
+    expect(alarmAfterSafeEnqueue - alarmFast).toBeLessThan(350);
+  });
+
+  test("ack on expired lease persists recovered queue state", async () => {
+    let now = "2026-02-21T21:25:00.000Z";
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      {
+        EXECUTION_COORDINATOR_LEASE_MS: "1000",
+      } as Env,
+      { now: () => now },
+    );
+
+    const submit = await coordinator.fetch(
+      new Request("https://internal/execution/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: intent({
+            intentId: "intent-expired-ack",
+            receivedAt: "2026-02-21T21:24:58.000Z",
+          }),
+          mode: "inline",
+        }),
+      }),
+    );
+    const submitPayload = (await submit.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(submitPayload.result.accepted).toBe(true);
+
+    now = "2026-02-21T21:25:10.000Z";
+    const ack = await coordinator.fetch(
+      new Request("https://internal/execution/ack", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          decisionId: submitPayload.result.decision?.decisionId,
+        }),
+      }),
+    );
+    expect(ack.status).toBe(409);
+    const ackPayload = (await ack.json()) as {
+      recoveredExpiredInflight?: boolean;
+    };
+    expect(ackPayload.recoveredExpiredInflight).toBe(true);
+
+    const stateResponse = await coordinator.fetch(
+      new Request("https://internal/execution/state"),
+    );
+    const statePayload = (await stateResponse.json()) as {
+      ok: boolean;
+      state: {
+        inflight: { intent: { intentId: string } } | null;
+        queue: Array<{ intent: { intentId: string } }>;
+      };
+    };
+    expect(statePayload.ok).toBe(true);
+    expect(statePayload.state.inflight).toBeNull();
+    expect(
+      statePayload.state.queue.some(
+        (entry) => entry.intent.intentId === "intent-expired-ack",
+      ),
+    ).toBe(true);
+  });
+
   test("rejects unsupported execution route with clear reason", async () => {
     const mock = createMockDoState();
     const coordinator = new ExecutionCoordinator(mock.state, {} as Env, {
