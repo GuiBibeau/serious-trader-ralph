@@ -34,6 +34,7 @@ function intent(input: {
   intentId: string;
   receivedAt: string;
   adapter?: string;
+  lane?: "fast" | "protected" | "safe";
 }): ExecutionIntent {
   return {
     schemaVersion: "v1",
@@ -49,7 +50,7 @@ function intent(input: {
     reason: null,
     execution: {
       adapter: input.adapter ?? "jupiter",
-      params: null,
+      params: input.lane ? { lane: input.lane } : null,
     },
     policy: {
       simulateOnly: false,
@@ -90,7 +91,7 @@ describe("worker execution coordinator durable object", () => {
     expect(payload.result.accepted).toBe(true);
     expect(payload.result.reason).toBeNull();
     expect(payload.result.decision?.route).toBe("jupiter");
-    expect(mock.readAlarm()).toBeNull();
+    expect(mock.readAlarm()).not.toBeNull();
   });
 
   test("queue tick ordering is deterministic by receivedAt then intentId", async () => {
@@ -142,6 +143,312 @@ describe("worker execution coordinator durable object", () => {
     expect(tickPayload.result.accepted).toBe(true);
     expect(tickPayload.result.decision?.intentId).toBe("intent-a");
     expect(mock.readAlarm()).not.toBeNull();
+  });
+
+  test("keeps accepted decision in-flight until ack is received", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      {
+        EXECUTION_COORDINATOR_LEASE_MS: "60000",
+      } as Env,
+      { now: () => "2026-02-21T21:00:00.000Z" },
+    );
+
+    const first = await coordinator.fetch(
+      new Request("https://internal/execution/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: intent({
+            intentId: "intent-inflight",
+            receivedAt: "2026-02-21T20:59:59.000Z",
+          }),
+          mode: "inline",
+        }),
+      }),
+    );
+    expect(first.status).toBe(200);
+
+    const second = await coordinator.fetch(
+      new Request("https://internal/execution/auction/tick", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(second.status).toBe(200);
+    const payload = (await second.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.result.accepted).toBe(false);
+    expect(payload.result.reason).toBe("inflight-active");
+    expect(payload.result.inflightIntentId).toBe("intent-inflight");
+    expect(payload.result.leaseExpiresAt).toBeString();
+  });
+
+  test("ack clears in-flight decision and allows next queued dispatch", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(mock.state, {} as Env, {
+      now: () => "2026-02-21T21:05:00.000Z",
+    });
+    const enqueue = async (executionIntent: ExecutionIntent) =>
+      await coordinator.fetch(
+        new Request("https://internal/execution/intent", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            intent: executionIntent,
+            mode: "enqueue",
+          }),
+        }),
+      );
+
+    await enqueue(
+      intent({
+        intentId: "intent-ack-1",
+        receivedAt: "2026-02-21T21:04:58.000Z",
+      }),
+    );
+    await enqueue(
+      intent({
+        intentId: "intent-ack-2",
+        receivedAt: "2026-02-21T21:04:59.000Z",
+      }),
+    );
+
+    const firstTick = await coordinator.fetch(
+      new Request("https://internal/execution/auction/tick", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    );
+    const firstPayload = (await firstTick.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(firstPayload.result.accepted).toBe(true);
+    expect(firstPayload.result.decision?.intentId).toBe("intent-ack-1");
+
+    const ack = await coordinator.fetch(
+      new Request("https://internal/execution/ack", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          decisionId: firstPayload.result.decision?.decisionId,
+        }),
+      }),
+    );
+    expect(ack.status).toBe(200);
+
+    const secondTick = await coordinator.fetch(
+      new Request("https://internal/execution/auction/tick", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    );
+    const secondPayload = (await secondTick.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(secondPayload.result.accepted).toBe(true);
+    expect(secondPayload.result.decision?.intentId).toBe("intent-ack-2");
+  });
+
+  test("recovers expired in-flight decision by requeueing deterministically", async () => {
+    let now = "2026-02-21T21:10:00.000Z";
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      {
+        EXECUTION_COORDINATOR_LEASE_MS: "1000",
+      } as Env,
+      { now: () => now },
+    );
+
+    const first = await coordinator.fetch(
+      new Request("https://internal/execution/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: intent({
+            intentId: "intent-expire",
+            receivedAt: "2026-02-21T21:09:59.000Z",
+          }),
+          mode: "inline",
+        }),
+      }),
+    );
+    const firstPayload = (await first.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(firstPayload.result.accepted).toBe(true);
+
+    now = "2026-02-21T21:10:05.000Z";
+    const tick = await coordinator.fetch(
+      new Request("https://internal/execution/auction/tick", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    );
+    const tickPayload = (await tick.json()) as {
+      ok: boolean;
+      recoveredExpiredInflight?: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(tickPayload.ok).toBe(true);
+    expect(tickPayload.recoveredExpiredInflight).toBe(true);
+    expect(tickPayload.result.accepted).toBe(true);
+    expect(tickPayload.result.decision?.intentId).toBe("intent-expire");
+  });
+
+  test("applies lane-specific auction window defaults", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      {
+        EXECUTION_AUCTION_WINDOW_SAFE_MS: "900",
+        EXECUTION_AUCTION_WINDOW_MS: "250",
+      } as Env,
+      { now: () => "2026-02-21T21:15:00.000Z" },
+    );
+
+    const before = Date.now();
+    await coordinator.fetch(
+      new Request("https://internal/execution/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: intent({
+            intentId: "intent-safe-window",
+            receivedAt: "2026-02-21T21:14:59.000Z",
+            lane: "safe",
+          }),
+          mode: "enqueue",
+        }),
+      }),
+    );
+    const alarm = mock.readAlarm();
+    expect(alarm).not.toBeNull();
+    if (alarm === null) return;
+    expect(alarm - before).toBeGreaterThanOrEqual(800);
+  });
+
+  test("keeps alarm timing based on active queue head lane", async () => {
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      {
+        EXECUTION_AUCTION_WINDOW_FAST_MS: "250",
+        EXECUTION_AUCTION_WINDOW_SAFE_MS: "900",
+      } as Env,
+      { now: () => "2026-02-21T21:20:00.000Z" },
+    );
+    const enqueue = async (executionIntent: ExecutionIntent) =>
+      await coordinator.fetch(
+        new Request("https://internal/execution/intent", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            intent: executionIntent,
+            mode: "enqueue",
+          }),
+        }),
+      );
+
+    await enqueue(
+      intent({
+        intentId: "intent-fast-head",
+        receivedAt: "2026-02-21T21:19:58.000Z",
+        lane: "fast",
+      }),
+    );
+    const alarmFast = mock.readAlarm();
+    expect(alarmFast).not.toBeNull();
+
+    await enqueue(
+      intent({
+        intentId: "intent-safe-tail",
+        receivedAt: "2026-02-21T21:19:59.000Z",
+        lane: "safe",
+      }),
+    );
+    const alarmAfterSafeEnqueue = mock.readAlarm();
+    expect(alarmAfterSafeEnqueue).not.toBeNull();
+
+    if (alarmFast === null || alarmAfterSafeEnqueue === null) return;
+    expect(alarmAfterSafeEnqueue - alarmFast).toBeLessThan(350);
+  });
+
+  test("ack on expired lease persists recovered queue state", async () => {
+    let now = "2026-02-21T21:25:00.000Z";
+    const mock = createMockDoState();
+    const coordinator = new ExecutionCoordinator(
+      mock.state,
+      {
+        EXECUTION_COORDINATOR_LEASE_MS: "1000",
+      } as Env,
+      { now: () => now },
+    );
+
+    const submit = await coordinator.fetch(
+      new Request("https://internal/execution/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: intent({
+            intentId: "intent-expired-ack",
+            receivedAt: "2026-02-21T21:24:58.000Z",
+          }),
+          mode: "inline",
+        }),
+      }),
+    );
+    const submitPayload = (await submit.json()) as {
+      ok: boolean;
+      result: ExecutionCoordinatorDecisionResult;
+    };
+    expect(submitPayload.result.accepted).toBe(true);
+
+    now = "2026-02-21T21:25:10.000Z";
+    const ack = await coordinator.fetch(
+      new Request("https://internal/execution/ack", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          decisionId: submitPayload.result.decision?.decisionId,
+        }),
+      }),
+    );
+    expect(ack.status).toBe(409);
+    const ackPayload = (await ack.json()) as {
+      recoveredExpiredInflight?: boolean;
+    };
+    expect(ackPayload.recoveredExpiredInflight).toBe(true);
+
+    const stateResponse = await coordinator.fetch(
+      new Request("https://internal/execution/state"),
+    );
+    const statePayload = (await stateResponse.json()) as {
+      ok: boolean;
+      state: {
+        inflight: { intent: { intentId: string } } | null;
+        queue: Array<{ intent: { intentId: string } }>;
+      };
+    };
+    expect(statePayload.ok).toBe(true);
+    expect(statePayload.state.inflight).toBeNull();
+    expect(
+      statePayload.state.queue.some(
+        (entry) => entry.intent.intentId === "intent-expired-ack",
+      ),
+    ).toBe(true);
   });
 
   test("rejects unsupported execution route with clear reason", async () => {
