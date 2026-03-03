@@ -599,6 +599,94 @@ export default {
         );
       }
 
+      if (
+        request.method === "GET" &&
+        url.pathname.startsWith("/api/x402/exec/receipt/")
+      ) {
+        const requestId = url.pathname.slice("/api/x402/exec/receipt/".length);
+        if (!isValidExecRequestId(requestId)) {
+          return withCors(
+            json({ ok: false, error: "invalid-request-id" }, { status: 400 }),
+            env,
+          );
+        }
+
+        const latest = await getExecutionLatestStatus(
+          env.WAITLIST_DB,
+          requestId,
+        );
+        if (!latest) {
+          return withCors(
+            json({ ok: false, error: "not-found" }, { status: 404 }),
+            env,
+          );
+        }
+
+        const state = toExecSubmitState(latest.request.status);
+        const terminal = isExecSubmitTerminalState(state);
+        if (!latest.receipt) {
+          return withCors(
+            json({
+              ok: true,
+              requestId,
+              ready: false,
+              status: {
+                state,
+                terminal,
+                updatedAt: latest.request.updatedAt,
+              },
+            }),
+            env,
+          );
+        }
+
+        const attempts = await listExecutionAttempts(
+          env.WAITLIST_DB,
+          requestId,
+        );
+        const latestAttempt =
+          attempts.length > 0 ? attempts[attempts.length - 1] : null;
+        const provider =
+          latest.receipt.provider ?? latestAttempt?.provider ?? "unknown";
+        return withCors(
+          json({
+            ok: true,
+            requestId,
+            ready: true,
+            receipt: {
+              schemaVersion: "v1",
+              receiptId: latest.receipt.receiptId,
+              requestId,
+              mode: latest.request.mode,
+              lane: latest.request.lane,
+              actorType: latest.request.actorType,
+              provider,
+              generatedAt: latest.receipt.readyAt,
+              outcome: {
+                status: toExecReceiptOutcomeStatus(
+                  latest.receipt.finalizedStatus,
+                ),
+                signature: latest.receipt.signature,
+                errorCode: latest.receipt.errorCode,
+                errorMessage: latest.receipt.errorMessage,
+              },
+              trace: {
+                receivedAt: latest.request.receivedAt,
+                validatedAt: latest.request.validatedAt,
+                dispatchedAt: latestAttempt?.startedAt ?? null,
+                landedAt:
+                  latest.receipt.finalizedStatus === "landed" ||
+                  latest.receipt.finalizedStatus === "finalized"
+                    ? latest.receipt.readyAt
+                    : null,
+                terminalAt: latest.request.terminalAt,
+              },
+            },
+          }),
+          env,
+        );
+      }
+
       if (request.method === "POST" && url.pathname === "/api/waitlist") {
         const waitlistAuth = authorizeWaitlistWrite(request, env);
         if (!waitlistAuth.ok) {
@@ -3079,6 +3167,14 @@ function isExecSubmitTerminalState(state: ExecSubmitState): boolean {
     state === "failed" ||
     state === "expired"
   );
+}
+
+type ExecReceiptOutcomeStatus = "finalized" | "failed" | "expired";
+
+function toExecReceiptOutcomeStatus(status: string): ExecReceiptOutcomeStatus {
+  if (status === "expired") return "expired";
+  if (status === "landed" || status === "finalized") return "finalized";
+  return "failed";
 }
 
 function parsePerpsSymbol(value: string): string {
