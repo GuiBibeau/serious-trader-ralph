@@ -15,7 +15,7 @@ export function withCors(response: Response, env: Env) {
   headers.set("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
   headers.set(
     "access-control-allow-headers",
-    "content-type,authorization,payment-signature,x-payment",
+    "content-type,authorization,payment-signature,x-payment,idempotency-key",
   );
   headers.set(
     "access-control-expose-headers",
