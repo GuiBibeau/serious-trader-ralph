@@ -63,6 +63,8 @@ export type Env = {
   BALANCE_RPC_ENDPOINT?: string;
   JUPITER_BASE_URL?: string;
   JUPITER_API_KEY?: string;
+  HELIUS_SENDER_URL?: string;
+  HELIUS_API_KEY?: string;
   JITO_BLOCK_ENGINE_URL?: string;
   MAGICBLOCK_EPHEMERAL_ROLLUP_URL?: string;
   MAGICBLOCK_API_KEY?: string;
@@ -141,4 +143,6 @@ export type Env = {
   EXEC_LANE_PROTECTED_ADAPTER?: string;
   EXEC_LANE_SAFE_ADAPTER?: string;
   EXEC_LANE_SAFE_ALLOW_ANONYMOUS?: string;
+  EXEC_FAST_MAX_RETRIES?: string;
+  EXEC_FAST_RETRY_BASE_MS?: string;
 };
