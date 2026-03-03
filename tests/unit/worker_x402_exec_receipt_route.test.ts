@@ -110,7 +110,11 @@ function createSqliteD1Adapter(db: Database): D1Database {
   } as unknown as D1Database;
 }
 
-function createExecReceiptEnv(): { env: Env; sqlite: Database } {
+function createExecReceiptEnv(): {
+  env: Env;
+  sqlite: Database;
+  receiptWrites: Array<{ key: string; value: string }>;
+} {
   const sqlite = new Database(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON;");
   sqlite.exec(`
@@ -131,15 +135,30 @@ function createExecReceiptEnv(): { env: Env; sqlite: Database } {
   );
   sqlite.exec(readFileSync(migrationPath, "utf8"));
 
+  const receiptWrites: Array<{ key: string; value: string }> = [];
+  const logsBucket = {
+    async put(key: string, value: string) {
+      receiptWrites.push({ key, value });
+      return null;
+    },
+    async get() {
+      return null;
+    },
+    async head() {
+      return null;
+    },
+  } as unknown as R2Bucket;
+
   const env = createWorkerLiveEnv({
     overrides: {
       WAITLIST_DB: createSqliteD1Adapter(sqlite),
+      LOGS_BUCKET: logsBucket,
       PRIVY_APP_ID: "privy-app-id",
       X402_EXEC_SUBMIT_PRICE_USD: "0.01",
       EXEC_RELAY_VALIDATE_BLOCKHASH: "0",
     },
   });
-  return { env, sqlite };
+  return { env, sqlite, receiptWrites };
 }
 
 describe("worker x402 exec receipt route", () => {
@@ -238,7 +257,7 @@ describe("worker x402 exec receipt route", () => {
 
   test("returns canonical receipt when available", async () => {
     const relayPayload = buildRelaySignedPayload();
-    const { env, sqlite } = createExecReceiptEnv();
+    const { env, sqlite, receiptWrites } = createExecReceiptEnv();
     try {
       const submit = await worker.fetch(
         new Request("http://localhost/api/x402/exec/submit", {
@@ -386,6 +405,16 @@ describe("worker x402 exec receipt route", () => {
       expect(body.receipt?.immutability?.verifiedTxHash).toBe(
         body.receipt?.immutability?.receivedTxHash,
       );
+      expect(receiptWrites.length).toBe(1);
+      expect(receiptWrites[0]?.key).toBe(
+        `exec/v1/receipts/request_id=${submitBody.requestId}.json`,
+      );
+      const persisted = JSON.parse(String(receiptWrites[0]?.value ?? "{}")) as {
+        receiptId?: string;
+        requestId?: string;
+      };
+      expect(persisted.receiptId).toBe("exec_abcdef1234567890");
+      expect(persisted.requestId).toBe(submitBody.requestId);
     } finally {
       sqlite.close();
     }

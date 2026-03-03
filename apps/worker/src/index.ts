@@ -30,6 +30,10 @@ import {
 } from "./execution/idempotency";
 import { resolveExecutionLane } from "./execution/lane_resolver";
 import {
+  assembleCanonicalExecutionReceiptV1,
+  canonicalExecutionReceiptStorageKey,
+} from "./execution/receipt_assembler";
+import {
   createRelayImmutabilitySnapshot,
   readRelayImmutabilitySnapshot,
   verifyRelayImmutabilitySnapshot,
@@ -771,45 +775,30 @@ export default {
           env.WAITLIST_DB,
           requestId,
         );
-        const latestAttempt =
-          attempts.length > 0 ? attempts[attempts.length - 1] : null;
-        const provider =
-          latest.receipt.provider ?? latestAttempt?.provider ?? "unknown";
+        const canonicalReceipt = assembleCanonicalExecutionReceiptV1({
+          request: latest.request,
+          receipt: latest.receipt,
+          attempts,
+          immutability: relayImmutability,
+        });
+        if (env.LOGS_BUCKET) {
+          const key = canonicalExecutionReceiptStorageKey(requestId);
+          try {
+            await env.LOGS_BUCKET.put(key, JSON.stringify(canonicalReceipt));
+          } catch (error) {
+            console.warn("exec.receipt.persist.error", {
+              requestId,
+              key,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
         return withCors(
           json({
             ok: true,
             requestId,
             ready: true,
-            receipt: {
-              schemaVersion: "v1",
-              receiptId: latest.receipt.receiptId,
-              requestId,
-              mode: latest.request.mode,
-              lane: latest.request.lane,
-              actorType: latest.request.actorType,
-              provider,
-              generatedAt: latest.receipt.readyAt,
-              outcome: {
-                status: toExecReceiptOutcomeStatus(
-                  latest.receipt.finalizedStatus,
-                ),
-                signature: latest.receipt.signature,
-                errorCode: latest.receipt.errorCode,
-                errorMessage: latest.receipt.errorMessage,
-              },
-              trace: {
-                receivedAt: latest.request.receivedAt,
-                validatedAt: latest.request.validatedAt,
-                dispatchedAt: latestAttempt?.startedAt ?? null,
-                landedAt:
-                  latest.receipt.finalizedStatus === "landed" ||
-                  latest.receipt.finalizedStatus === "finalized"
-                    ? latest.receipt.readyAt
-                    : null,
-                terminalAt: latest.request.terminalAt,
-              },
-              ...(relayImmutability ? { immutability: relayImmutability } : {}),
-            },
+            receipt: canonicalReceipt,
           }),
           env,
         );
@@ -3297,14 +3286,6 @@ function isExecSubmitTerminalState(state: ExecSubmitState): boolean {
     state === "failed" ||
     state === "expired"
   );
-}
-
-type ExecReceiptOutcomeStatus = "finalized" | "failed" | "expired";
-
-function toExecReceiptOutcomeStatus(status: string): ExecReceiptOutcomeStatus {
-  if (status === "expired") return "expired";
-  if (status === "landed" || status === "finalized") return "finalized";
-  return "failed";
 }
 
 function parsePerpsSymbol(value: string): string {
