@@ -34,6 +34,80 @@ Status: draft contract for implementation gating (`X402-001`).
 - Caller sends execution intent for server-controlled Privy custody.
 - Ralph builds/signs/submits transaction server-side.
 
+## Copy/Paste Examples
+
+Set your API base:
+
+```bash
+API_BASE="https://dev.api.trader-ralph.com"
+```
+
+Relay-signed submit (x402 paid):
+
+```bash
+curl -X POST "$API_BASE/api/x402/exec/submit" \
+  -H "content-type: application/json" \
+  -H "Idempotency-Key: relay-001" \
+  -H "payment-signature: <solana_tx_signature>" \
+  -d '{
+    "schemaVersion": "v1",
+    "mode": "relay_signed",
+    "lane": "fast",
+    "metadata": {
+      "source": "external-agent",
+      "reason": "market-entry",
+      "clientRequestId": "relay-001"
+    },
+    "relaySigned": {
+      "encoding": "base64",
+      "signedTransaction": "AQABAgMEBQYH"
+    }
+  }'
+```
+
+Privy execute submit (trusted first-party path):
+
+```bash
+curl -X POST "$API_BASE/api/x402/exec/submit" \
+  -H "content-type: application/json" \
+  -H "Idempotency-Key: privy-001" \
+  -d '{
+    "schemaVersion": "v1",
+    "mode": "privy_execute",
+    "lane": "safe",
+    "metadata": {
+      "source": "terminal-ui",
+      "reason": "rebalance",
+      "clientRequestId": "privy-001"
+    },
+    "privyExecute": {
+      "intentType": "swap",
+      "wallet": "4Nd1mYjtY9p7jW3nX5z9r4s1v6u8t2q3m5n7p9r1s2t3",
+      "swap": {
+        "inputMint": "So11111111111111111111111111111111111111112",
+        "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amountAtomic": "100000000",
+        "slippageBps": 50
+      },
+      "options": {
+        "commitment": "confirmed"
+      }
+    }
+  }'
+```
+
+Status polling (public):
+
+```bash
+curl "$API_BASE/api/x402/exec/status/execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A"
+```
+
+Receipt polling (public):
+
+```bash
+curl "$API_BASE/api/x402/exec/receipt/execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A"
+```
+
 ## Error Envelope
 
 All non-2xx responses should use a common shape:
