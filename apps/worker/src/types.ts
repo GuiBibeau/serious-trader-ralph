@@ -86,6 +86,7 @@ export type Env = {
   X402_FACILITATOR_TIMEOUT_MS?: string;
   WAITLIST_WRITE_TOKEN?: string;
   X402_TRUSTED_ORIGINS?: string;
+  EXEC_API_KEYS?: string;
   X402_ENFORCE_ONCHAIN?: string;
   X402_MAX_TIMEOUT_SECONDS?: string;
   X402_EXEC_SUBMIT_PRICE_USD?: string;

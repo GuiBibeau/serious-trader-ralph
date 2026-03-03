@@ -470,6 +470,153 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("accepts relay_signed submit for configured api_key actor", async () => {
+    const relayPayload = buildRelaySignedPayload();
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_API_KEYS: "svc_relay:key-relay:relay_signed",
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-exec-api-key": "key-relay",
+            "idempotency-key": "idem-api-key-relay-1",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { requestId?: string };
+      expect(body.requestId).toBeString();
+      const row = sqlite
+        .query(
+          "SELECT actor_type as actorType, actor_id as actorId, mode FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(String(body.requestId)) as
+        | { actorType?: string; actorId?: string; mode?: string }
+        | undefined;
+      expect(row?.actorType).toBe("api_key_actor");
+      expect(row?.actorId).toBe("svc_relay");
+      expect(row?.mode).toBe("relay_signed");
+      expect(requireUserMock).not.toHaveBeenCalled();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("rejects api_key actor mode when not allowed by key config", async () => {
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_API_KEYS: "svc_relay:key-relay:relay_signed",
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-exec-api-key": "key-relay",
+            "idempotency-key": "idem-api-key-privy-1",
+          },
+          body: JSON.stringify(PRIVY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(403);
+      const body = (await response.json()) as {
+        error?: string;
+        reason?: string;
+      };
+      expect(body.error).toBe("actor-mode-not-allowed");
+      expect(body.reason).toBe("api-key-mode-not-enabled:privy_execute");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("accepts privy_execute contract path for api_key actor when enabled", async () => {
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_API_KEYS: "svc_exec:key-both:all",
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-exec-api-key": "key-both",
+            "idempotency-key": "idem-api-key-privy-2",
+          },
+          body: JSON.stringify(PRIVY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        requestId?: string;
+        status?: { state?: string };
+      };
+      expect(body.requestId).toBeString();
+      expect(body.status?.state).toBe("validated");
+      const row = sqlite
+        .query(
+          "SELECT actor_type as actorType, actor_id as actorId, mode FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(String(body.requestId)) as
+        | { actorType?: string; actorId?: string; mode?: string }
+        | undefined;
+      expect(row?.actorType).toBe("api_key_actor");
+      expect(row?.actorId).toBe("svc_exec");
+      expect(row?.mode).toBe("privy_execute");
+      expect(requireUserMock).not.toHaveBeenCalled();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("maps relay_signed submit with privy auth to privy_user actor", async () => {
+    const relayPayload = buildRelaySignedPayload();
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-relay-1",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { requestId?: string };
+      expect(body.requestId).toBeString();
+      const row = sqlite
+        .query(
+          "SELECT actor_type as actorType, actor_id as actorId, mode FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(String(body.requestId)) as
+        | { actorType?: string; actorId?: string; mode?: string }
+        | undefined;
+      expect(row?.actorType).toBe("privy_user");
+      expect(row?.actorId).toBe("user_1");
+      expect(row?.mode).toBe("relay_signed");
+      expect(requireUserMock).toHaveBeenCalled();
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("accepts privy_execute submit for authenticated user", async () => {
     const { env, sqlite } = createExecSubmitEnv();
     try {

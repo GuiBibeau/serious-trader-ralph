@@ -157,12 +157,124 @@ const DISCOVERY_DOC_PATHS = new Set([
   "/api/agent-registry/metadata.json",
 ]);
 const BEARER_RE = /^bearer\s+/i;
+type ExecutionActorMode = "relay_signed" | "privy_execute";
+type ExecApiKeyActor = {
+  actorId: string;
+  key: string;
+  modes: Set<ExecutionActorMode>;
+};
+type ResolvedExecApiKeyActor = {
+  actorId: string;
+  modes: Set<ExecutionActorMode>;
+  authSource: "x-exec-api-key" | "authorization";
+};
 
 function parseBearerToken(value: string | null): string | null {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
   if (!BEARER_RE.test(raw)) return null;
   return raw.replace(BEARER_RE, "").trim() || null;
+}
+
+function parseExecApiKeyModes(raw: string): Set<ExecutionActorMode> {
+  const modes = new Set<ExecutionActorMode>();
+  const normalized = raw
+    .split(/[|+]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  for (const mode of normalized) {
+    if (mode === "relay_signed" || mode === "relay") {
+      modes.add("relay_signed");
+      continue;
+    }
+    if (mode === "privy_execute" || mode === "privy") {
+      modes.add("privy_execute");
+      continue;
+    }
+    if (mode === "all") {
+      modes.add("relay_signed");
+      modes.add("privy_execute");
+    }
+  }
+  if (modes.size < 1) {
+    modes.add("relay_signed");
+  }
+  return modes;
+}
+
+function parseExecApiKeyActors(raw: unknown): ExecApiKeyActor[] {
+  const entries = String(raw ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const parsed: ExecApiKeyActor[] = [];
+  for (const entry of entries) {
+    let actorId = "";
+    let key = "";
+    let modesRaw = "";
+
+    if (entry.includes("=")) {
+      const [left, right] = entry.split("=", 2);
+      actorId = left?.trim() ?? "";
+      const rightParts = String(right ?? "")
+        .split(":")
+        .map((item) => item.trim());
+      key = rightParts[0] ?? "";
+      modesRaw = rightParts.slice(1).join("|");
+    } else {
+      const parts = entry.split(":").map((item) => item.trim());
+      actorId = parts[0] ?? "";
+      key = parts[1] ?? "";
+      modesRaw = parts.slice(2).join("|");
+    }
+
+    if (!actorId || !key) continue;
+    parsed.push({
+      actorId,
+      key,
+      modes: parseExecApiKeyModes(modesRaw),
+    });
+  }
+  return parsed;
+}
+
+function resolveExecApiKeyActor(
+  request: Request,
+  env: Env,
+): ResolvedExecApiKeyActor | null {
+  const candidates: Array<{
+    token: string;
+    source: "x-exec-api-key" | "authorization";
+  }> = [];
+  const headerToken = String(
+    request.headers.get("x-exec-api-key") ?? "",
+  ).trim();
+  if (headerToken) {
+    candidates.push({
+      token: headerToken,
+      source: "x-exec-api-key",
+    });
+  }
+  const bearerToken = parseBearerToken(request.headers.get("authorization"));
+  if (bearerToken) {
+    candidates.push({
+      token: bearerToken,
+      source: "authorization",
+    });
+  }
+  if (candidates.length < 1) return null;
+
+  const actors = parseExecApiKeyActors(env.EXEC_API_KEYS);
+  for (const candidate of candidates) {
+    const match = actors.find((item) => item.key === candidate.token);
+    if (!match) continue;
+    return {
+      actorId: match.actorId,
+      modes: new Set(match.modes),
+      authSource: candidate.source,
+    };
+  }
+  return null;
 }
 
 function readBooleanEnv(value: unknown, fallback = false): boolean {
@@ -517,8 +629,10 @@ const worker = {
           );
         }
 
-        let actorType: "anonymous_x402" | "privy_user" = "anonymous_x402";
+        let actorType: "anonymous_x402" | "privy_user" | "api_key_actor" =
+          "anonymous_x402";
         let actorId: string | null = null;
+        let actorAuthSource: string | null = null;
         const isRelaySigned = parsed.value.mode === "relay_signed";
         let submitMetadata = parsed.metadataForStorage;
         let relayImmutability: ReturnType<
@@ -529,31 +643,65 @@ const worker = {
           walletAddress: string;
           privyWalletId: string;
         } | null = null;
-        if (!isRelaySigned) {
-          let user = await requireOnboardedUser(request, env);
-          user = await ensureUserWallet(env, user);
-          if (!user.walletAddress || !user.privyWalletId) {
+        const apiKeyActor = resolveExecApiKeyActor(request, env);
+        if (apiKeyActor) {
+          if (!apiKeyActor.modes.has(parsed.value.mode)) {
             return withCors(
               json(
-                { ok: false, error: "user-wallet-missing" },
-                { status: 503 },
+                {
+                  ok: false,
+                  error: "actor-mode-not-allowed",
+                  reason: `api-key-mode-not-enabled:${parsed.value.mode}`,
+                },
+                { status: 403 },
               ),
               env,
             );
           }
-          if (parsed.value.privyExecute.wallet !== user.walletAddress) {
-            return withCors(
-              json({ ok: false, error: "invalid-request" }, { status: 400 }),
-              env,
-            );
+          actorType = "api_key_actor";
+          actorId = apiKeyActor.actorId;
+          actorAuthSource = `api-key:${apiKeyActor.authSource}`;
+        }
+
+        if (!isRelaySigned) {
+          if (actorType !== "api_key_actor") {
+            let user = await requireOnboardedUser(request, env);
+            user = await ensureUserWallet(env, user);
+            if (!user.walletAddress || !user.privyWalletId) {
+              return withCors(
+                json(
+                  { ok: false, error: "user-wallet-missing" },
+                  { status: 503 },
+                ),
+                env,
+              );
+            }
+            if (parsed.value.privyExecute.wallet !== user.walletAddress) {
+              return withCors(
+                json({ ok: false, error: "invalid-request" }, { status: 400 }),
+                env,
+              );
+            }
+            actorType = "privy_user";
+            actorId = user.id;
+            actorAuthSource = "authorization";
+            privyActorContext = {
+              userId: user.id,
+              walletAddress: user.walletAddress,
+              privyWalletId: user.privyWalletId,
+            };
           }
-          actorType = "privy_user";
-          actorId = user.id;
-          privyActorContext = {
-            userId: user.id,
-            walletAddress: user.walletAddress,
-            privyWalletId: user.privyWalletId,
-          };
+        } else if (actorType !== "api_key_actor") {
+          const relayPrivyActor = await maybeResolvePrivyActorContext(
+            request,
+            env,
+          );
+          if (relayPrivyActor) {
+            actorType = "privy_user";
+            actorId = relayPrivyActor.userId;
+            actorAuthSource = "authorization";
+            privyActorContext = relayPrivyActor;
+          }
         }
 
         const laneResolution = resolveExecutionLane({
@@ -578,6 +726,12 @@ const worker = {
         submitMetadata = {
           ...(submitMetadata ?? {}),
           laneResolution: laneResolution.metadata,
+          actor: {
+            type: actorType,
+            id: actorId,
+            mode: parsed.value.mode,
+            ...(actorAuthSource ? { authSource: actorAuthSource } : {}),
+          },
         };
 
         if (isRelaySigned) {
@@ -3334,6 +3488,32 @@ async function requireOnboardedUser(
   const existing = await findUserByPrivyUserId(env, auth.privyUserId);
   if (existing) return existing;
   return await upsertUser(env, auth.privyUserId);
+}
+
+async function maybeResolvePrivyActorContext(
+  request: Request,
+  env: Env,
+): Promise<{
+  userId: string;
+  walletAddress: string;
+  privyWalletId: string;
+} | null> {
+  const hasAuthorization = Boolean(
+    String(request.headers.get("authorization") ?? "").trim(),
+  );
+  if (!hasAuthorization) return null;
+  try {
+    let user = await requireOnboardedUser(request, env);
+    user = await ensureUserWallet(env, user);
+    if (!user.walletAddress || !user.privyWalletId) return null;
+    return {
+      userId: user.id,
+      walletAddress: user.walletAddress,
+      privyWalletId: user.privyWalletId,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function ensureUserWallet(env: Env, user: UserRow): Promise<UserRow> {
