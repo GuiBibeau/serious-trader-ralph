@@ -17,6 +17,7 @@ function createEnv(overrides?: Partial<Env>): Env {
     X402_ASSET_MINT: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
     X402_ENFORCE_ONCHAIN: "0",
     X402_MAX_TIMEOUT_SECONDS: "60",
+    X402_EXEC_SUBMIT_PRICE_USD: "0.01",
     X402_MARKET_SNAPSHOT_PRICE_USD: "0.01",
     X402_MARKET_SNAPSHOT_V2_PRICE_USD: "0.01",
     X402_MARKET_TOKEN_BALANCE_PRICE_USD: "0.01",
@@ -49,6 +50,10 @@ describe("worker x402 helpers", () => {
   test("routes require payment when signature is absent", async () => {
     const env = createEnv();
     const routes = [
+      {
+        key: "exec_submit",
+        path: "/api/x402/exec/submit",
+      },
       {
         key: "market_ohlcv",
         path: "/api/x402/read/market_ohlcv",

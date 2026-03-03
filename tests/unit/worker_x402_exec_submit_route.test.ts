@@ -1,0 +1,370 @@
+import { Database } from "bun:sqlite";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import type { Env } from "../../apps/worker/src/types";
+import {
+  createExecutionContextStub,
+  createWorkerLiveEnv,
+  MAINNET_USDC_MINT,
+  SOL_MINT,
+} from "../integration/_worker_live_test_utils";
+
+const requireUserMock = mock(async () => ({
+  privyUserId: "did:privy:user_1",
+  email: "user@example.com",
+}));
+const findUserByPrivyUserIdMock = mock(async () => ({
+  id: "user_1",
+  privyUserId: "did:privy:user_1",
+  onboardingStatus: "active",
+  profile: null,
+  signerType: "privy",
+  privyWalletId: "wallet_1",
+  walletAddress: "11111111111111111111111111111111",
+  walletMigratedAt: "2026-03-03T00:00:00.000Z",
+  experienceLevel: "beginner",
+  levelSource: "auto",
+  onboardingCompletedAt: "2026-03-03T00:00:00.000Z",
+  onboardingVersion: 1,
+  feedSeedVersion: 1,
+  degenAcknowledgedAt: null,
+  createdAt: "2026-03-03T00:00:00.000Z",
+}));
+const upsertUserMock = mock(async () =>
+  findUserByPrivyUserIdMock("did:privy:user_1"),
+);
+const setUserWalletMock = mock(async () => {});
+const setUserProfileMock = mock(async () => {});
+const setUserOnboardingStatusMock = mock(async () => {});
+const setUserExperienceMock = mock(async () => {});
+const createPrivySolanaWalletMock = mock(async () => ({
+  walletId: "wallet_new",
+  address: "11111111111111111111111111111111",
+}));
+const getPrivyWalletAddressByIdMock = mock(
+  async () => "11111111111111111111111111111111",
+);
+const getPrivyWalletAddressMock = mock(
+  async () => "11111111111111111111111111111111",
+);
+const getPrivyUserByIdMock = mock(async () => ({
+  id: "did:privy:user_1",
+  linked_accounts: [],
+}));
+const signTransactionWithPrivyByIdMock = mock(async () => "signed-tx");
+
+mock.module("../../apps/worker/src/auth", () => ({
+  requireUser: requireUserMock,
+}));
+mock.module("../../apps/worker/src/users_db", () => ({
+  findUserByPrivyUserId: findUserByPrivyUserIdMock,
+  upsertUser: upsertUserMock,
+  setUserWallet: setUserWalletMock,
+  setUserProfile: setUserProfileMock,
+  setUserOnboardingStatus: setUserOnboardingStatusMock,
+  setUserExperience: setUserExperienceMock,
+}));
+mock.module("../../apps/worker/src/privy", () => ({
+  createPrivySolanaWallet: createPrivySolanaWalletMock,
+  getPrivyWalletAddressById: getPrivyWalletAddressByIdMock,
+  getPrivyWalletAddress: getPrivyWalletAddressMock,
+  getPrivyUserById: getPrivyUserByIdMock,
+  signTransactionWithPrivyById: signTransactionWithPrivyByIdMock,
+}));
+
+const worker = (await import("../../apps/worker/src/index")).default;
+
+function createSqliteD1Adapter(db: Database): D1Database {
+  return {
+    prepare(sql: string) {
+      return {
+        bind(...params: unknown[]) {
+          return {
+            async run() {
+              const statement = db.query(sql);
+              const result = statement.run(...(params as never[])) as {
+                changes?: number;
+              };
+              return {
+                meta: {
+                  changes:
+                    typeof result.changes === "number" ? result.changes : 0,
+                },
+              };
+            },
+            async first() {
+              const statement = db.query(sql);
+              return (statement.get(...(params as never[])) as unknown) ?? null;
+            },
+            async all() {
+              const statement = db.query(sql);
+              return {
+                results: (statement.all(...(params as never[])) ??
+                  []) as unknown[],
+              };
+            },
+          };
+        },
+      };
+    },
+  } as unknown as D1Database;
+}
+
+function createExecSubmitEnv(): { env: Env; sqlite: Database } {
+  const sqlite = new Database(":memory:");
+  sqlite.exec("PRAGMA foreign_keys = ON;");
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS waitlist (
+      email TEXT PRIMARY KEY,
+      source TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  sqlite
+    .query("INSERT INTO waitlist (email, source) VALUES (?1, ?2)")
+    .run("user@example.com", "unit-test");
+  const migrationPath = resolve(
+    import.meta.dir,
+    "..",
+    "..",
+    "apps/worker/migrations/0025_execution_fabric.sql",
+  );
+  sqlite.exec(readFileSync(migrationPath, "utf8"));
+
+  const env = createWorkerLiveEnv({
+    overrides: {
+      WAITLIST_DB: createSqliteD1Adapter(sqlite),
+      PRIVY_APP_ID: "privy-app-id",
+      X402_EXEC_SUBMIT_PRICE_USD: "0.01",
+    },
+  });
+  return { env, sqlite };
+}
+
+const RELAY_PAYLOAD = {
+  schemaVersion: "v1",
+  mode: "relay_signed",
+  lane: "fast",
+  relaySigned: {
+    encoding: "base64",
+    signedTransaction: "QUFBQUFBQUFBQUFBQUFBQQ==",
+  },
+};
+
+const PRIVY_PAYLOAD = {
+  schemaVersion: "v1",
+  mode: "privy_execute",
+  lane: "protected",
+  privyExecute: {
+    intentType: "swap",
+    wallet: "11111111111111111111111111111111",
+    swap: {
+      inputMint: SOL_MINT,
+      outputMint: MAINNET_USDC_MINT,
+      amountAtomic: "1000000",
+      slippageBps: 50,
+    },
+  },
+};
+
+describe("worker x402 exec submit scaffold route", () => {
+  beforeEach(() => {
+    requireUserMock.mockClear();
+    findUserByPrivyUserIdMock.mockClear();
+    upsertUserMock.mockClear();
+    setUserWalletMock.mockClear();
+    setUserProfileMock.mockClear();
+    setUserOnboardingStatusMock.mockClear();
+    setUserExperienceMock.mockClear();
+    createPrivySolanaWalletMock.mockClear();
+    getPrivyWalletAddressByIdMock.mockClear();
+    getPrivyWalletAddressMock.mockClear();
+    getPrivyUserByIdMock.mockClear();
+    signTransactionWithPrivyByIdMock.mockClear();
+  });
+
+  test("requires payment for anonymous relay_signed submits", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-1",
+          },
+          body: JSON.stringify(RELAY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(402);
+      const payload = (await response.json()) as { error?: string };
+      expect(payload.error).toBe("payment-required");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("accepts relay_signed submit with payment and returns deterministic replay", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const first = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-2",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(RELAY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as {
+        ok?: boolean;
+        requestId?: string;
+        status?: { state?: string; terminal?: boolean };
+      };
+      expect(firstBody.ok).toBe(true);
+      expect(firstBody.requestId).toMatch(/^execreq_[A-Za-z0-9]{16,}$/);
+      expect(firstBody.status?.state).toBe("validated");
+      expect(firstBody.status?.terminal).toBe(false);
+      expect(first.headers.get("payment-response")).toBeString();
+
+      const second = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-2",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(RELAY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as {
+        requestId?: string;
+      };
+      expect(secondBody.requestId).toBe(firstBody.requestId);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("rejects same idempotency key with different payload", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-3",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify(RELAY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-3",
+            "payment-signature": "unit-signed-payment",
+          },
+          body: JSON.stringify({
+            ...RELAY_PAYLOAD,
+            relaySigned: {
+              ...RELAY_PAYLOAD.relaySigned,
+              signedTransaction: "QkJCQkJCQkJCQkJCQkJCQg==",
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(409);
+      const body = (await response.json()) as {
+        error?: string;
+        reason?: string;
+      };
+      expect(body.error).toBe("invalid-request");
+      expect(body.reason).toBe("idempotency-key-conflict");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("accepts privy_execute submit for authenticated user", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-1",
+          },
+          body: JSON.stringify(PRIVY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        ok?: boolean;
+        status?: { state?: string };
+      };
+      expect(body.ok).toBe(true);
+      expect(body.status?.state).toBe("validated");
+      expect(requireUserMock).toHaveBeenCalled();
+      expect(response.headers.get("payment-response")).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("rejects privy_execute submit when wallet mismatches authenticated user", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-2",
+          },
+          body: JSON.stringify({
+            ...PRIVY_PAYLOAD,
+            privyExecute: {
+              ...PRIVY_PAYLOAD.privyExecute,
+              wallet: "So11111111111111111111111111111111111111112",
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error?: string };
+      expect(body.error).toBe("invalid-request");
+    } finally {
+      sqlite.close();
+    }
+  });
+});
