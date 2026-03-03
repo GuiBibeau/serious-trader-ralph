@@ -28,6 +28,7 @@ import {
   readIdempotencyKey,
   reserveExecutionSubmitRequest,
 } from "./execution/idempotency";
+import { resolveExecutionLane } from "./execution/lane_resolver";
 import {
   createRelayImmutabilitySnapshot,
   readRelayImmutabilitySnapshot,
@@ -395,6 +396,52 @@ export default {
         let relayImmutability: ReturnType<
           typeof readRelayImmutabilitySnapshot
         > = null;
+        if (!isRelaySigned) {
+          let user = await requireOnboardedUser(request, env);
+          user = await ensureUserWallet(env, user);
+          if (!user.walletAddress || !user.privyWalletId) {
+            return withCors(
+              json(
+                { ok: false, error: "user-wallet-missing" },
+                { status: 503 },
+              ),
+              env,
+            );
+          }
+          if (parsed.value.privyExecute.wallet !== user.walletAddress) {
+            return withCors(
+              json({ ok: false, error: "invalid-request" }, { status: 400 }),
+              env,
+            );
+          }
+          actorType = "privy_user";
+          actorId = user.id;
+        }
+
+        const laneResolution = resolveExecutionLane({
+          env,
+          requestedLane: parsed.value.lane,
+          mode: parsed.value.mode,
+          actorType,
+        });
+        if (!laneResolution.ok) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error: laneResolution.error,
+                reason: laneResolution.reason,
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+        submitMetadata = {
+          ...(submitMetadata ?? {}),
+          laneResolution: laneResolution.metadata,
+        };
+
         if (isRelaySigned) {
           let paymentRequired: Response | null = null;
           try {
@@ -461,26 +508,6 @@ export default {
             },
             relayImmutability,
           };
-        } else {
-          let user = await requireOnboardedUser(request, env);
-          user = await ensureUserWallet(env, user);
-          if (!user.walletAddress || !user.privyWalletId) {
-            return withCors(
-              json(
-                { ok: false, error: "user-wallet-missing" },
-                { status: 503 },
-              ),
-              env,
-            );
-          }
-          if (parsed.value.privyExecute.wallet !== user.walletAddress) {
-            return withCors(
-              json({ ok: false, error: "invalid-request" }, { status: 400 }),
-              env,
-            );
-          }
-          actorType = "privy_user";
-          actorId = user.id;
         }
 
         const payloadHash = await hashExecutionSubmitPayload(parsed.value);
@@ -491,7 +518,7 @@ export default {
           actorType,
           actorId,
           mode: parsed.value.mode,
-          lane: parsed.value.lane,
+          lane: laneResolution.lane,
           payloadHash,
           metadata: submitMetadata,
         });

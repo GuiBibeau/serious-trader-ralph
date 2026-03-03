@@ -201,6 +201,35 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("rejects unsupported safe lane for relay_signed submits", async () => {
+    const relayPayload = buildRelaySignedPayload({ lane: "safe" });
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-safe-lane",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as {
+        error?: string;
+        reason?: string;
+      };
+      expect(body.error).toBe("unsupported-lane");
+      expect(body.reason).toBe("lane-not-available-for-relay-signed");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("accepts relay_signed submit with payment and returns deterministic replay", async () => {
     const relayPayload = buildRelaySignedPayload();
     const { env, sqlite } = createExecSubmitEnv();
@@ -229,6 +258,19 @@ describe("worker x402 exec submit scaffold route", () => {
       expect(firstBody.status?.state).toBe("validated");
       expect(firstBody.status?.terminal).toBe(false);
       expect(first.headers.get("payment-response")).toBeString();
+      const row = sqlite
+        .query(
+          "SELECT lane, metadata_json as metadataJson FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(firstBody.requestId) as
+        | { lane?: string; metadataJson?: string }
+        | undefined;
+      expect(row?.lane).toBe("fast");
+      const metadata = JSON.parse(String(row?.metadataJson ?? "{}")) as {
+        laneResolution?: { lane?: string; adapter?: string };
+      };
+      expect(metadata.laneResolution?.lane).toBe("fast");
+      expect(metadata.laneResolution?.adapter).toBe("helius_sender");
 
       const second = await worker.fetch(
         new Request("http://localhost/api/x402/exec/submit", {
