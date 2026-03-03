@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/exec.receipt.response.v1.schema.json",
+  "title": "ExecReceiptResponseV1",
+  "type": "object",
+  "required": ["ok", "requestId", "ready"],
+  "additionalProperties": false,
+  "properties": {
+    "ok": { "const": true },
+    "requestId": {
+      "type": "string",
+      "pattern": "^execreq_[A-Za-z0-9_-]{8,}$"
+    },
+    "ready": { "type": "boolean" },
+    "status": {
+      "type": "object",
+      "required": ["state", "terminal", "updatedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "received",
+            "validated",
+            "queued",
+            "dispatched",
+            "landed",
+            "finalized",
+            "failed",
+            "expired"
+          ]
+        },
+        "terminal": { "type": "boolean" },
+        "updatedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "receiptId",
+        "requestId",
+        "mode",
+        "lane",
+        "actorType",
+        "generatedAt",
+        "outcome"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "const": "v1" },
+        "receiptId": { "type": "string", "pattern": "^exec_[A-Za-z0-9]{8,}$" },
+        "requestId": {
+          "type": "string",
+          "pattern": "^execreq_[A-Za-z0-9_-]{8,}$"
+        },
+        "mode": { "type": "string", "enum": ["relay_signed", "privy_execute"] },
+        "lane": { "type": "string", "enum": ["fast", "protected", "safe"] },
+        "actorType": {
+          "type": "string",
+          "enum": ["anonymous_x402", "privy_user", "api_key_actor"]
+        },
+        "provider": { "type": "string", "minLength": 1 },
+        "generatedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+        },
+        "outcome": {
+          "type": "object",
+          "required": ["status", "signature", "errorCode"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["finalized", "failed", "expired"]
+            },
+            "signature": {
+              "type": ["string", "null"],
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]{32,128}$"
+            },
+            "errorCode": {
+              "type": ["string", "null"],
+              "enum": [
+                null,
+                "payment-required",
+                "auth-required",
+                "invalid-request",
+                "invalid-transaction",
+                "policy-denied",
+                "unsupported-lane",
+                "insufficient-balance",
+                "venue-timeout",
+                "submission-failed",
+                "expired-blockhash",
+                "not-found",
+                "not-ready"
+              ]
+            },
+            "errorMessage": { "type": ["string", "null"] }
+          }
+        },
+        "trace": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "receivedAt": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+            },
+            "validatedAt": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+            },
+            "dispatchedAt": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+            },
+            "landedAt": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+            },
+            "terminalAt": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "ready": { "const": true } } },
+      "then": {
+        "required": ["receipt"],
+        "not": { "required": ["status"] }
+      }
+    },
+    {
+      "if": { "properties": { "ready": { "const": false } } },
+      "then": {
+        "required": ["status"],
+        "not": { "required": ["receipt"] }
+      }
+    }
+  ]
+}

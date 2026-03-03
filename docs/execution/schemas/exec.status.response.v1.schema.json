@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/exec.status.response.v1.schema.json",
+  "title": "ExecStatusResponseV1",
+  "type": "object",
+  "required": ["ok", "requestId", "status", "events"],
+  "additionalProperties": false,
+  "properties": {
+    "ok": { "const": true },
+    "requestId": {
+      "type": "string",
+      "pattern": "^execreq_[A-Za-z0-9_-]{8,}$"
+    },
+    "status": {
+      "type": "object",
+      "required": [
+        "state",
+        "terminal",
+        "mode",
+        "lane",
+        "actorType",
+        "receivedAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "received",
+            "validated",
+            "queued",
+            "dispatched",
+            "landed",
+            "finalized",
+            "failed",
+            "expired"
+          ]
+        },
+        "terminal": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["relay_signed", "privy_execute"] },
+        "lane": { "type": "string", "enum": ["fast", "protected", "safe"] },
+        "actorType": {
+          "type": "string",
+          "enum": ["anonymous_x402", "privy_user", "api_key_actor"]
+        },
+        "receivedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+        },
+        "updatedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+        },
+        "terminalAt": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+        },
+        "queueDepth": { "type": "integer", "minimum": 0 },
+        "queuePosition": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["state", "at"],
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "received",
+              "validated",
+              "queued",
+              "dispatched",
+              "landed",
+              "finalized",
+              "failed",
+              "expired"
+            ]
+          },
+          "at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T" },
+          "provider": { "type": "string" },
+          "attempt": { "type": "integer", "minimum": 0 },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["attempt", "provider", "state", "at"],
+        "additionalProperties": false,
+        "properties": {
+          "attempt": { "type": "integer", "minimum": 1 },
+          "provider": { "type": "string", "minLength": 1 },
+          "state": { "type": "string", "minLength": 1 },
+          "at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T" }
+        }
+      }
+    }
+  }
+}

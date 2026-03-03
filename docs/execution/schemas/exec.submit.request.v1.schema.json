@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/exec.submit.request.v1.schema.json",
+  "title": "ExecSubmitRequestV1",
+  "type": "object",
+  "required": ["schemaVersion", "mode", "lane"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "v1" },
+    "mode": { "type": "string", "enum": ["relay_signed", "privy_execute"] },
+    "lane": { "type": "string", "enum": ["fast", "protected", "safe"] },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "clientRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      }
+    },
+    "relaySigned": {
+      "type": "object",
+      "required": ["encoding", "signedTransaction"],
+      "additionalProperties": false,
+      "properties": {
+        "encoding": { "const": "base64" },
+        "signedTransaction": {
+          "type": "string",
+          "minLength": 16,
+          "pattern": "^[A-Za-z0-9+/=]+$"
+        }
+      }
+    },
+    "privyExecute": {
+      "type": "object",
+      "required": ["intentType", "wallet", "swap"],
+      "additionalProperties": false,
+      "properties": {
+        "intentType": { "const": "swap" },
+        "wallet": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 64,
+          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$"
+        },
+        "swap": {
+          "type": "object",
+          "required": [
+            "inputMint",
+            "outputMint",
+            "amountAtomic",
+            "slippageBps"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "inputMint": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 64,
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$"
+            },
+            "outputMint": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 64,
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$"
+            },
+            "amountAtomic": { "type": "string", "pattern": "^[0-9]+$" },
+            "slippageBps": { "type": "integer", "minimum": 1, "maximum": 5000 }
+          }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "simulateOnly": { "type": "boolean" },
+            "dryRun": { "type": "boolean" },
+            "commitment": {
+              "type": "string",
+              "enum": ["processed", "confirmed", "finalized"]
+            }
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": { "mode": { "const": "relay_signed" } },
+      "required": ["mode", "relaySigned"],
+      "not": { "required": ["privyExecute"] }
+    },
+    {
+      "properties": { "mode": { "const": "privy_execute" } },
+      "required": ["mode", "privyExecute"],
+      "not": { "required": ["relaySigned"] }
+    }
+  ]
+}
