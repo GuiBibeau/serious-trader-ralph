@@ -31,6 +31,8 @@ import {
 import {
   appendExecutionStatusEvent,
   getExecutionLatestStatus,
+  listExecutionAttempts,
+  listExecutionStatusEvents,
   updateExecutionRequestStatus,
 } from "./execution/repository";
 import { executeSwapViaRouter } from "./execution/router";
@@ -502,6 +504,99 @@ export default {
           url.pathname,
         );
         return withCors(settled, env);
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname.startsWith("/api/x402/exec/status/")
+      ) {
+        const requestId = url.pathname.slice("/api/x402/exec/status/".length);
+        if (!isValidExecRequestId(requestId)) {
+          return withCors(
+            json({ ok: false, error: "invalid-request-id" }, { status: 400 }),
+            env,
+          );
+        }
+
+        const latest = await getExecutionLatestStatus(
+          env.WAITLIST_DB,
+          requestId,
+        );
+        if (!latest) {
+          return withCors(
+            json({ ok: false, error: "not-found" }, { status: 404 }),
+            env,
+          );
+        }
+
+        const [events, attempts] = await Promise.all([
+          listExecutionStatusEvents(env.WAITLIST_DB, requestId, 500),
+          listExecutionAttempts(env.WAITLIST_DB, requestId),
+        ]);
+        const timelineEvents =
+          events.length > 0
+            ? events
+            : [
+                {
+                  eventId: "synthetic",
+                  requestId,
+                  seq: 1,
+                  status: latest.request.status,
+                  reason: latest.request.statusReason,
+                  details: null,
+                  createdAt: latest.request.updatedAt,
+                },
+              ];
+        const attemptsByState = new Map<string, (typeof attempts)[number]>();
+        for (const attempt of attempts) {
+          if (!attemptsByState.has(attempt.status)) {
+            attemptsByState.set(attempt.status, attempt);
+          }
+        }
+
+        const state = toExecSubmitState(latest.request.status);
+        const queueDepthRaw = Number(latest.request.metadata?.queueDepth);
+        const queuePositionRaw = Number(latest.request.metadata?.queuePosition);
+        return withCors(
+          json({
+            ok: true,
+            requestId,
+            status: {
+              state,
+              terminal: isExecSubmitTerminalState(state),
+              mode: latest.request.mode,
+              lane: latest.request.lane,
+              actorType: latest.request.actorType,
+              receivedAt: latest.request.receivedAt,
+              updatedAt: latest.request.updatedAt,
+              terminalAt: latest.request.terminalAt,
+              ...(Number.isFinite(queueDepthRaw) && queueDepthRaw >= 0
+                ? { queueDepth: Math.floor(queueDepthRaw) }
+                : {}),
+              ...(Number.isFinite(queuePositionRaw) && queuePositionRaw >= 0
+                ? { queuePosition: Math.floor(queuePositionRaw) }
+                : {}),
+            },
+            events: timelineEvents.map((event) => {
+              const mappedState = toExecSubmitState(event.status);
+              const attempt = attemptsByState.get(event.status);
+              return {
+                state: mappedState,
+                at: event.createdAt,
+                ...(attempt ? { provider: attempt.provider } : {}),
+                ...(attempt ? { attempt: attempt.attemptNo } : {}),
+                ...(event.reason ? { note: event.reason } : {}),
+              };
+            }),
+            attempts: attempts.map((attempt) => ({
+              attempt: attempt.attemptNo,
+              provider: attempt.provider,
+              state: attempt.status,
+              at: attempt.completedAt ?? attempt.startedAt,
+            })),
+          }),
+          env,
+        );
       }
 
       if (request.method === "POST" && url.pathname === "/api/waitlist") {
@@ -2961,6 +3056,10 @@ type ExecSubmitState =
 function newExecRequestId(): string {
   const token = crypto.randomUUID().replace(/-/g, "");
   return `execreq_${token}`;
+}
+
+function isValidExecRequestId(value: string): boolean {
+  return /^execreq_[A-Za-z0-9_-]{8,}$/.test(value);
 }
 
 function toExecSubmitState(status: string): ExecSubmitState {
