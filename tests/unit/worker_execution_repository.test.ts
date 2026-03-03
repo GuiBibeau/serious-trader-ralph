@@ -168,6 +168,55 @@ describe("worker execution repository", () => {
     });
   });
 
+  test("enforces lifecycle transition rules and supports landed->finalized", async () => {
+    await withExecutionRepo(async (_db, d1) => {
+      await createExecutionRequestIdempotent(d1, {
+        requestId: "req_2b",
+        idempotencyScope: "anonymous_x402:anon",
+        idempotencyKey: "idem_2b",
+        payloadHash: "payload_hash_2b",
+        actorType: "anonymous_x402",
+        actorId: "anon",
+        mode: "relay_signed",
+        lane: "fast",
+      });
+
+      await expect(
+        updateExecutionRequestStatus(d1, {
+          requestId: "req_2b",
+          status: "queued",
+          nowIso: "2026-03-03T00:01:00.000Z",
+        }),
+      ).rejects.toThrow(/illegal-execution-status-transition/);
+
+      await updateExecutionRequestStatus(d1, {
+        requestId: "req_2b",
+        status: "validated",
+        nowIso: "2026-03-03T00:01:01.000Z",
+      });
+      await updateExecutionRequestStatus(d1, {
+        requestId: "req_2b",
+        status: "dispatched",
+        nowIso: "2026-03-03T00:01:02.000Z",
+      });
+      const landed = await updateExecutionRequestStatus(d1, {
+        requestId: "req_2b",
+        status: "landed",
+        nowIso: "2026-03-03T00:01:03.000Z",
+      });
+      expect(landed?.terminalAt).toBe("2026-03-03T00:01:03.000Z");
+
+      const finalized = await updateExecutionRequestStatus(d1, {
+        requestId: "req_2b",
+        status: "finalized",
+        nowIso: "2026-03-03T00:01:04.000Z",
+      });
+      expect(finalized?.status).toBe("finalized");
+      // Terminal timestamp is first terminal state timestamp and should remain stable.
+      expect(finalized?.terminalAt).toBe("2026-03-03T00:01:03.000Z");
+    });
+  });
+
   test("terminalization helper prevents duplicate terminalization under concurrency", async () => {
     await withExecutionRepo(async (_db, d1) => {
       await createExecutionRequestIdempotent(d1, {

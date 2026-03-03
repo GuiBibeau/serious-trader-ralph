@@ -3281,8 +3281,10 @@ function isValidExecRequestId(value: string): boolean {
 function toExecSubmitState(status: string): ExecSubmitState {
   if (status === "received") return "received";
   if (status === "validated") return "validated";
+  if (status === "queued") return "queued";
   if (status === "dispatched") return "dispatched";
   if (status === "landed") return "landed";
+  if (status === "finalized") return "finalized";
   if (status === "expired") return "expired";
   if (status === "failed" || status === "rejected") return "failed";
   return "received";
