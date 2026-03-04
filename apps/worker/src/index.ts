@@ -26,7 +26,10 @@ import {
   readIdempotencyKey,
   reserveExecutionSubmitRequest,
 } from "./execution/idempotency";
-import { resolveExecutionLane } from "./execution/lane_resolver";
+import {
+  readExecutionLaneRoutingConfig,
+  resolveExecutionLane,
+} from "./execution/lane_resolver";
 import {
   DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS,
   readExecutionObservabilitySnapshot,
@@ -774,6 +777,44 @@ const worker = {
           json({
             ok: loopAHealth.status !== "error",
             loopA: loopAHealth,
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/x402/exec/health"
+      ) {
+        const loopAHealth = await readLoopAHealthFromKv(env);
+        const routing = readExecutionLaneRoutingConfig(env);
+        const hasLaneOnline =
+          routing.enabled.fast ||
+          routing.enabled.protected ||
+          routing.enabled.safe;
+        return withCors(
+          json({
+            ok: hasLaneOnline,
+            now: new Date().toISOString(),
+            api: {
+              ok: true,
+            },
+            loopA: loopAHealth ?? null,
+            lanes: {
+              fast: {
+                enabled: routing.enabled.fast,
+                adapter: routing.adapters.fast,
+              },
+              protected: {
+                enabled: routing.enabled.protected,
+                adapter: routing.adapters.protected,
+              },
+              safe: {
+                enabled: routing.enabled.safe,
+                adapter: routing.adapters.safe,
+                allowAnonymous: routing.allowAnonymousSafe,
+              },
+            },
           }),
           env,
         );

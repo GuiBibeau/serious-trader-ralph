@@ -58,6 +58,25 @@ function resolveLaneEnabledFlags(env: Env): Record<ExecutionLane, boolean> {
   };
 }
 
+export type ExecutionLaneRoutingConfig = {
+  adapters: Record<ExecutionLane, string>;
+  enabled: Record<ExecutionLane, boolean>;
+  allowAnonymousSafe: boolean;
+};
+
+export function readExecutionLaneRoutingConfig(
+  env: Env,
+): ExecutionLaneRoutingConfig {
+  return {
+    adapters: resolveLaneAdapters(env),
+    enabled: resolveLaneEnabledFlags(env),
+    allowAnonymousSafe: readBooleanFlag(
+      env.EXEC_LANE_SAFE_ALLOW_ANONYMOUS,
+      false,
+    ),
+  };
+}
+
 type LaneResolveResult =
   | {
       ok: true;
@@ -77,14 +96,9 @@ export function resolveExecutionLane(input: {
   mode: ExecutionMode;
   actorType: ExecutionActorType;
 }): LaneResolveResult {
-  const adapters = resolveLaneAdapters(input.env);
-  const enabledFlags = resolveLaneEnabledFlags(input.env);
-  const allowAnonymousSafe = readBooleanFlag(
-    input.env.EXEC_LANE_SAFE_ALLOW_ANONYMOUS,
-    false,
-  );
+  const routing = readExecutionLaneRoutingConfig(input.env);
 
-  if (!enabledFlags[input.requestedLane]) {
+  if (!routing.enabled[input.requestedLane]) {
     return {
       ok: false,
       error: "unsupported-lane",
@@ -100,7 +114,7 @@ export function resolveExecutionLane(input: {
         reason: "lane-not-available-for-relay-signed",
       };
     }
-    if (input.actorType === "anonymous_x402" && !allowAnonymousSafe) {
+    if (input.actorType === "anonymous_x402" && !routing.allowAnonymousSafe) {
       return {
         ok: false,
         error: "unsupported-lane",
@@ -112,10 +126,10 @@ export function resolveExecutionLane(input: {
   return {
     ok: true,
     lane: input.requestedLane,
-    adapter: adapters[input.requestedLane],
+    adapter: routing.adapters[input.requestedLane],
     metadata: {
       lane: input.requestedLane,
-      adapter: adapters[input.requestedLane],
+      adapter: routing.adapters[input.requestedLane],
       requestedByMode: input.mode,
       requestedByActor: input.actorType,
       mappedBy: "env",
