@@ -104,6 +104,19 @@ import {
   type TapeDisplayMode,
   type TapeSideFilter,
 } from "./components/trades-tape";
+import {
+  buildCustomWorkspaceLayoutStorageKey,
+  CUSTOM_WORKSPACE_ID_DEFAULT,
+  CUSTOM_WORKSPACE_MODULES,
+  type CustomWorkspaceStore,
+  createWorkspacePreset,
+  parseCustomWorkspaceStore,
+  readCustomWorkspaceStoreFromLocalStorage,
+  resolveActiveWorkspace,
+  sanitizeWorkspaceModules,
+  type WorkspaceModuleVisibility,
+  writeCustomWorkspaceStoreToLocalStorage,
+} from "./components/workspace-presets";
 import { useDashboard } from "./context";
 import {
   getTerminalModeCapabilities,
@@ -114,6 +127,7 @@ import {
   readTerminalModeFromProfile,
   resolveDefaultTerminalMode,
   type TerminalMode,
+  type TerminalModule,
   writeLocalTerminalMode,
 } from "./terminal-modes";
 
@@ -191,6 +205,26 @@ const PANEL_ACTION_BY_ID: Record<
   positions: "focusPositions",
   account_risk: "focusRisk",
 };
+
+const CUSTOM_MODULE_LABELS: Record<TerminalModule, string> = {
+  market: "Market",
+  wallet: "Wallet",
+  macro_radar: "Macro Radar",
+  macro_fred: "Macro FRED",
+  macro_etf: "Macro ETF",
+  macro_stablecoin: "Stablecoin",
+  macro_oil: "Oil",
+};
+
+function buildModeLayoutStorageKey(input: {
+  mode: TerminalMode;
+  workspaceId: string;
+}): string {
+  if (input.mode === "custom") {
+    return buildCustomWorkspaceLayoutStorageKey(input.workspaceId);
+  }
+  return `dashboard-grid-layouts:v6:${input.mode}`;
+}
 
 const FundingModal = dynamic(
   () => import("../funding-modal").then((mod) => mod.FundingModal),
@@ -375,6 +409,10 @@ function ControlRoom() {
   const [ladderPrefill, setLadderPrefill] = useState<LadderPrefill | null>(
     null,
   );
+  const [customWorkspaceStore, setCustomWorkspaceStore] =
+    useState<CustomWorkspaceStore>(() =>
+      readCustomWorkspaceStoreFromLocalStorage(),
+    );
   const [focusedPanelId, setFocusedPanelId] =
     useState<TerminalFocusablePanelId | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -387,19 +425,47 @@ function ControlRoom() {
   const terminalModeRef = useRef<TerminalMode>(terminalMode);
   const fallbackModePersistControllerRef = useRef<AbortController | null>(null);
   const modeCapabilities = getTerminalModeCapabilities(terminalMode);
+  const activeCustomWorkspace = useMemo(
+    () => resolveActiveWorkspace(customWorkspaceStore),
+    [customWorkspaceStore],
+  );
+  const customWorkspaceModules = useMemo<WorkspaceModuleVisibility>(
+    () => sanitizeWorkspaceModules(activeCustomWorkspace.modules),
+    [activeCustomWorkspace.modules],
+  );
+  const isCustomMode = terminalMode === "custom";
   const canQuickTrade = modeAllowsAction(terminalMode, "quick_trade");
   const canMacroTrade = modeAllowsAction(terminalMode, "macro_trade");
   const canLayoutEdit = modeAllowsAction(terminalMode, "layout_edit");
-  const showMarketModule = modeShowsModule(terminalMode, "market");
-  const showWalletModule = modeShowsModule(terminalMode, "wallet");
-  const showMacroRadarModule = modeShowsModule(terminalMode, "macro_radar");
-  const showMacroFredModule = modeShowsModule(terminalMode, "macro_fred");
-  const showMacroEtfModule = modeShowsModule(terminalMode, "macro_etf");
-  const showMacroStablecoinModule = modeShowsModule(
-    terminalMode,
-    "macro_stablecoin",
+  const showMarketModule =
+    modeShowsModule(terminalMode, "market") &&
+    (!isCustomMode || customWorkspaceModules.market);
+  const showWalletModule =
+    modeShowsModule(terminalMode, "wallet") &&
+    (!isCustomMode || customWorkspaceModules.wallet);
+  const showMacroRadarModule =
+    modeShowsModule(terminalMode, "macro_radar") &&
+    (!isCustomMode || customWorkspaceModules.macro_radar);
+  const showMacroFredModule =
+    modeShowsModule(terminalMode, "macro_fred") &&
+    (!isCustomMode || customWorkspaceModules.macro_fred);
+  const showMacroEtfModule =
+    modeShowsModule(terminalMode, "macro_etf") &&
+    (!isCustomMode || customWorkspaceModules.macro_etf);
+  const showMacroStablecoinModule =
+    modeShowsModule(terminalMode, "macro_stablecoin") &&
+    (!isCustomMode || customWorkspaceModules.macro_stablecoin);
+  const showMacroOilModule =
+    modeShowsModule(terminalMode, "macro_oil") &&
+    (!isCustomMode || customWorkspaceModules.macro_oil);
+  const layoutStorageKey = useMemo(
+    () =>
+      buildModeLayoutStorageKey({
+        mode: terminalMode,
+        workspaceId: activeCustomWorkspace.id,
+      }),
+    [activeCustomWorkspace.id, terminalMode],
   );
-  const showMacroOilModule = modeShowsModule(terminalMode, "macro_oil");
   const hotkeyProfile = useMemo(
     () => TERMINAL_HOTKEY_PROFILES[hotkeyProfileId],
     [hotkeyProfileId],
@@ -444,10 +510,149 @@ function ControlRoom() {
   }, [tradeOpen]);
 
   const resetDashboardLayout = useCallback(() => {
-    clearDashboardGridLayouts();
+    clearDashboardGridLayouts(layoutStorageKey);
     setHasCustomGridLayout(false);
     setGridRevision((value) => value + 1);
-  }, []);
+  }, [layoutStorageKey]);
+
+  const updateCustomWorkspaceStore = useCallback(
+    (
+      updater: (current: CustomWorkspaceStore) => CustomWorkspaceStore,
+    ): void => {
+      setCustomWorkspaceStore((current) => {
+        const next = parseCustomWorkspaceStore(updater(current));
+        writeCustomWorkspaceStoreToLocalStorage(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const setActiveCustomWorkspace = useCallback(
+    (workspaceId: string): void => {
+      updateCustomWorkspaceStore((current) => ({
+        ...current,
+        activeId: workspaceId,
+      }));
+    },
+    [updateCustomWorkspaceStore],
+  );
+
+  const createCustomWorkspace = useCallback((): void => {
+    const suggested = `Workspace ${customWorkspaceStore.presets.length + 1}`;
+    const raw = window.prompt("New workspace name", suggested);
+    if (raw === null) return;
+    const name = raw.trim() || suggested;
+    const nowIso = new Date().toISOString();
+    const preset = createWorkspacePreset({
+      name,
+      nowIso,
+      modules: customWorkspaceModules,
+    });
+    const sourceKey = buildCustomWorkspaceLayoutStorageKey(
+      activeCustomWorkspace.id,
+    );
+    const targetKey = buildCustomWorkspaceLayoutStorageKey(preset.id);
+    if (sourceKey !== targetKey) {
+      try {
+        const source = window.localStorage.getItem(sourceKey);
+        if (source) {
+          window.localStorage.setItem(targetKey, source);
+        } else {
+          clearDashboardGridLayouts(targetKey);
+        }
+      } catch {
+        // Ignore storage failures while still creating preset metadata.
+      }
+    }
+    updateCustomWorkspaceStore((current) => ({
+      ...current,
+      activeId: preset.id,
+      presets: [...current.presets, preset],
+    }));
+    setGridRevision((value) => value + 1);
+  }, [
+    activeCustomWorkspace.id,
+    customWorkspaceModules,
+    customWorkspaceStore.presets.length,
+    updateCustomWorkspaceStore,
+  ]);
+
+  const renameCustomWorkspace = useCallback((): void => {
+    const active = activeCustomWorkspace;
+    const raw = window.prompt("Rename workspace", active.name);
+    if (raw === null) return;
+    const name = raw.trim();
+    if (!name) return;
+    updateCustomWorkspaceStore((current) => ({
+      ...current,
+      presets: current.presets.map((preset) =>
+        preset.id === active.id
+          ? {
+              ...preset,
+              name,
+              updatedAtIso: new Date().toISOString(),
+            }
+          : preset,
+      ),
+    }));
+  }, [activeCustomWorkspace, updateCustomWorkspaceStore]);
+
+  const deleteCustomWorkspace = useCallback((): void => {
+    const active = activeCustomWorkspace;
+    if (active.id === CUSTOM_WORKSPACE_ID_DEFAULT) {
+      window.alert("Default workspace cannot be deleted.");
+      return;
+    }
+    if (customWorkspaceStore.presets.length <= 1) return;
+    const confirmed = window.confirm(
+      `Delete workspace "${active.name}" and its saved layout?`,
+    );
+    if (!confirmed) return;
+    clearDashboardGridLayouts(buildCustomWorkspaceLayoutStorageKey(active.id));
+    updateCustomWorkspaceStore((current) => {
+      const remaining = current.presets.filter(
+        (preset) => preset.id !== active.id,
+      );
+      const fallback =
+        remaining[0] ??
+        createWorkspacePreset({
+          id: CUSTOM_WORKSPACE_ID_DEFAULT,
+          name: "Default workspace",
+        });
+      return {
+        activeId: fallback.id,
+        presets: remaining.length > 0 ? remaining : [fallback],
+      };
+    });
+    setGridRevision((value) => value + 1);
+  }, [
+    activeCustomWorkspace,
+    customWorkspaceStore.presets.length,
+    updateCustomWorkspaceStore,
+  ]);
+
+  const setCustomWorkspaceModuleEnabled = useCallback(
+    (module: TerminalModule, enabled: boolean): void => {
+      if (!isCustomMode) return;
+      updateCustomWorkspaceStore((current) => ({
+        ...current,
+        presets: current.presets.map((preset) => {
+          if (preset.id !== current.activeId) return preset;
+          const nextModules = sanitizeWorkspaceModules({
+            ...preset.modules,
+            [module]: enabled,
+          });
+          return {
+            ...preset,
+            modules: nextModules,
+            updatedAtIso: new Date().toISOString(),
+          };
+        }),
+      }));
+    },
+    [isCustomMode, updateCustomWorkspaceStore],
+  );
 
   const updateHotkeyProfile = useCallback(
     (nextProfile: TerminalHotkeyProfileId): void => {
@@ -502,8 +707,12 @@ function ControlRoom() {
   );
 
   useEffect(() => {
-    setHasCustomGridLayout(hasCustomDashboardGridLayouts());
+    setCustomWorkspaceStore(readCustomWorkspaceStoreFromLocalStorage());
   }, []);
+
+  useEffect(() => {
+    setHasCustomGridLayout(hasCustomDashboardGridLayouts(layoutStorageKey));
+  }, [layoutStorageKey]);
 
   const persistTerminalMode = useCallback(
     async (input: {
@@ -1385,13 +1594,90 @@ function ControlRoom() {
                     </button>
                   </div>
                 )}
+                {isCustomMode ? (
+                  <div className="pointer-events-none absolute right-2 top-10 z-20">
+                    <div className="pointer-events-auto w-[min(380px,90vw)] rounded border border-border/70 bg-paper/90 p-2 text-[11px] text-muted shadow-lg backdrop-blur">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="label">WORKSPACE_PRESET</p>
+                        <span className="text-[10px]">
+                          {customWorkspaceStore.presets.length} saved
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <select
+                          className="h-7 min-w-0 flex-1 rounded border border-border bg-paper px-2 text-[11px]"
+                          value={activeCustomWorkspace.id}
+                          onChange={(event) =>
+                            setActiveCustomWorkspace(event.target.value)
+                          }
+                          title="Switch workspace preset"
+                        >
+                          {customWorkspaceStore.presets.map((preset) => (
+                            <option key={preset.id} value={preset.id}>
+                              {preset.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className={cn(BTN_SECONDARY, "h-7 px-2 text-[10px]")}
+                          onClick={createCustomWorkspace}
+                          type="button"
+                        >
+                          New
+                        </button>
+                        <button
+                          className={cn(BTN_SECONDARY, "h-7 px-2 text-[10px]")}
+                          onClick={renameCustomWorkspace}
+                          type="button"
+                        >
+                          Rename
+                        </button>
+                        <button
+                          className={cn(BTN_SECONDARY, "h-7 px-2 text-[10px]")}
+                          onClick={deleteCustomWorkspace}
+                          type="button"
+                          disabled={
+                            activeCustomWorkspace.id ===
+                            CUSTOM_WORKSPACE_ID_DEFAULT
+                          }
+                        >
+                          Delete
+                        </button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {CUSTOM_WORKSPACE_MODULES.map((module) => (
+                          <label
+                            key={module}
+                            className="inline-flex items-center gap-1 rounded border border-border bg-surface px-2 py-1 text-[10px] uppercase tracking-wider"
+                          >
+                            <input
+                              className="h-3.5 w-3.5 accent-emerald-500"
+                              type="checkbox"
+                              checked={customWorkspaceModules[module]}
+                              onChange={(event) =>
+                                setCustomWorkspaceModuleEnabled(
+                                  module,
+                                  event.target.checked,
+                                )
+                              }
+                            />
+                            <span>{CUSTOM_MODULE_LABELS[module]}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 <DashboardGrid
-                  key={gridRevision}
+                  key={`${layoutStorageKey}:${gridRevision.toString()}`}
                   className="h-full w-full border border-border bg-border pb-1"
                   allowLayoutEditing={canLayoutEdit}
+                  storageKey={layoutStorageKey}
                   onLayoutChange={() =>
-                    setHasCustomGridLayout(hasCustomDashboardGridLayouts())
+                    setHasCustomGridLayout(
+                      hasCustomDashboardGridLayouts(layoutStorageKey),
+                    )
                   }
                 >
                   {showMarketModule ? (

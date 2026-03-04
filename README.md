@@ -33,6 +33,7 @@ It provides one execution fabric for:
 - Execution inspector drawer with timeline, attempts, and terminal receipt payload visibility
 - Global terminal status bar for stream/API/lane health, data staleness badges, and diagnostics links
 - Keyboard-first controls with configurable hotkey profiles, panel focus shortcuts, and command palette
+- Custom-mode workspace presets with module visibility toggles and per-workspace layout persistence
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:
