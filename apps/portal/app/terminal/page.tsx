@@ -24,6 +24,12 @@ import { MacroOilWidget } from "./components/macro-oil-widget";
 import { MacroRadarWidget } from "./components/macro-radar-widget";
 import { MacroStablecoinWidget } from "./components/macro-stablecoin-widget";
 import {
+  type RealtimeTradeTick,
+  type TerminalRealtimeState,
+  useTerminalRealtimeTransport,
+} from "./components/realtime-transport";
+import {
+  formatAgeMs,
   formatPrice,
   type MarketState,
   useMarketFeed,
@@ -486,6 +492,12 @@ function ControlRoom() {
   const hasWallet = wallet !== null;
   const selectedPair = getPairConfig(selectedPairId);
   const marketFeed = useMarketFeed(selectedPairId);
+  const realtimeTransport = useTerminalRealtimeTransport({
+    pairId: selectedPairId,
+    walletAddress: wallet?.walletAddress ?? null,
+    getAccessToken,
+    fallbackPrice: marketFeed.latestPrice,
+  });
 
   const openTradeTicket = useCallback(
     (intent: TradeIntent): void => {
@@ -769,7 +781,10 @@ function ControlRoom() {
                     key="orderbook"
                     className="flex flex-col overflow-hidden bg-surface"
                   >
-                    <OrderbookDepthPanel market={marketFeed} />
+                    <OrderbookDepthPanel
+                      market={marketFeed}
+                      realtime={realtimeTransport}
+                    />
                   </div>
                 ) : null}
 
@@ -792,7 +807,10 @@ function ControlRoom() {
                     key="positions"
                     className="flex flex-col overflow-hidden bg-surface"
                   >
-                    <PositionsOrdersFillsPanel entries={recentExecutions} />
+                    <PositionsOrdersFillsPanel
+                      entries={recentExecutions}
+                      realtime={realtimeTransport}
+                    />
                   </div>
                 ) : null}
 
@@ -805,6 +823,7 @@ function ControlRoom() {
                       pairId={selectedPairId}
                       tokenBalancesByMint={tokenBalancesByMint}
                       market={marketFeed}
+                      realtime={realtimeTransport}
                     />
                   </div>
                 ) : null}
@@ -902,30 +921,49 @@ const ChartPanel = memo(function ChartPanel(props: {
   );
 });
 
+function formatTransportBadge(realtime: TerminalRealtimeState): string {
+  if (realtime.mode === "poll") {
+    return realtime.isStale ? "poll stale" : "poll fallback";
+  }
+  if (realtime.health === "connecting") return "stream connecting";
+  if (realtime.isStale) return "stream stale";
+  return "stream live";
+}
+
 const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
   market: MarketState;
+  realtime: TerminalRealtimeState;
 }) {
-  const { market } = props;
+  const { market, realtime } = props;
   const lastPrice = market.latestPrice ?? null;
-  const basePrice =
+  const depth = realtime.depth;
+  const asks = depth?.asks ?? [];
+  const bids = depth?.bids ?? [];
+  const hasRealtimeDepth = Boolean(
+    depth && depth.asks.length > 0 && depth.bids.length > 0,
+  );
+  const fallbackBasePrice =
     Number.isFinite(lastPrice) && (lastPrice ?? 0) > 0
       ? (lastPrice as number)
       : null;
-  const levels = [0.05, 0.1, 0.15, 0.2, 0.25];
-  const asks =
-    basePrice === null
+  const fallbackLevels = [0.05, 0.1, 0.15, 0.2, 0.25];
+  const fallbackAsks =
+    fallbackBasePrice === null
       ? []
-      : levels.map((pct, index) => ({
-          price: basePrice * (1 + pct / 100),
+      : fallbackLevels.map((pct, index) => ({
+          price: fallbackBasePrice * (1 + pct / 100),
           size: 80 + index * 25,
         }));
-  const bids =
-    basePrice === null
+  const fallbackBids =
+    fallbackBasePrice === null
       ? []
-      : levels.map((pct, index) => ({
-          price: basePrice * (1 - pct / 100),
+      : fallbackLevels.map((pct, index) => ({
+          price: fallbackBasePrice * (1 - pct / 100),
           size: 75 + index * 22,
         }));
+  const renderedAsks = hasRealtimeDepth ? asks : fallbackAsks;
+  const renderedBids = hasRealtimeDepth ? bids : fallbackBids;
+  const statusLabel = formatTransportBadge(realtime);
 
   return (
     <>
@@ -933,9 +971,23 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
         <p className="label dashboard-drag-handle cursor-move select-none">
           ORDERBOOK_DEPTH
         </p>
-        <span className="text-[10px] font-mono text-muted">
-          {market.lastUpdatedMs ? "live" : "warming"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "rounded border px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider",
+              realtime.mode === "poll"
+                ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                : realtime.isStale
+                  ? "border-red-500/40 bg-red-500/10 text-red-300"
+                  : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+            )}
+          >
+            {statusLabel}
+          </span>
+          <span className="text-[10px] font-mono text-muted">
+            {formatAgeMs(realtime.lastEventMs ?? market.lastUpdatedMs)}
+          </span>
+        </div>
       </div>
       <div className="flex-1 overflow-auto p-3 text-[11px] font-mono">
         <div className="grid grid-cols-2 gap-3">
@@ -944,10 +996,10 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
               Asks
             </p>
             <div className="space-y-1">
-              {asks.length === 0 ? (
+              {renderedAsks.length === 0 ? (
                 <p className="text-muted">Waiting for market depth...</p>
               ) : null}
-              {asks.map((row) => (
+              {renderedAsks.map((row) => (
                 <div
                   key={`ask-${row.price.toFixed(6)}`}
                   className="flex items-center justify-between rounded border border-border/50 bg-red-500/5 px-2 py-1"
@@ -963,10 +1015,10 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
               Bids
             </p>
             <div className="space-y-1">
-              {bids.length === 0 ? (
+              {renderedBids.length === 0 ? (
                 <p className="text-muted">Waiting for market depth...</p>
               ) : null}
-              {bids.map((row) => (
+              {renderedBids.map((row) => (
                 <div
                   key={`bid-${row.price.toFixed(6)}`}
                   className="flex items-center justify-between rounded border border-border/50 bg-emerald-500/5 px-2 py-1"
@@ -1042,19 +1094,69 @@ const OrderEntryPanel = memo(function OrderEntryPanel(props: {
 const PositionsOrdersFillsPanel = memo(
   function PositionsOrdersFillsPanel(props: {
     entries: ExecutionActivityRow[];
+    realtime: TerminalRealtimeState;
   }) {
-    const { entries } = props;
+    const { entries, realtime } = props;
+    const tradeTape: RealtimeTradeTick[] = realtime.trades.slice(0, 8);
     return (
       <>
         <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
           <p className="label dashboard-drag-handle cursor-move select-none">
             POSITIONS_ORDERS_FILLS
           </p>
-          <span className="text-[10px] font-mono text-muted">
-            {entries.length} recent
-          </span>
+          <div className="flex items-center gap-2 text-[10px] font-mono text-muted">
+            <span>{entries.length} recent</span>
+            <span
+              className={cn(
+                "rounded border px-1.5 py-0.5 uppercase tracking-wider",
+                realtime.mode === "poll"
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                  : realtime.isStale
+                    ? "border-red-500/40 bg-red-500/10 text-red-300"
+                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+              )}
+            >
+              {realtime.mode === "poll" ? "degraded" : "stream"}
+            </span>
+          </div>
         </div>
         <div className="flex-1 overflow-auto p-3 text-xs space-y-3">
+          <div className="rounded border border-border bg-subtle p-2">
+            <p className="text-[10px] uppercase tracking-wider text-muted">
+              Tape (Realtime)
+            </p>
+            <div className="mt-2 space-y-1.5">
+              {tradeTape.length === 0 ? (
+                <p className="text-muted">
+                  Waiting for transport events ({formatTransportBadge(realtime)}
+                  ).
+                </p>
+              ) : null}
+              {tradeTape.map((trade) => (
+                <div
+                  key={`tape-${trade.seq}`}
+                  className="grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded border border-border/60 px-2 py-1"
+                >
+                  <p
+                    className={cn(
+                      "text-[10px] uppercase",
+                      trade.side === "buy"
+                        ? "text-emerald-300"
+                        : "text-red-300",
+                    )}
+                  >
+                    {trade.side}
+                  </p>
+                  <p className="font-mono text-[11px] text-ink">
+                    {trade.price.toFixed(4)}
+                  </p>
+                  <p className="text-[10px] text-muted">
+                    {trade.size.toFixed(2)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
           <div className="rounded border border-border bg-subtle p-2">
             <p className="text-[10px] uppercase tracking-wider text-muted">
               Open Positions
@@ -1106,8 +1208,9 @@ const AccountRiskPanel = memo(function AccountRiskPanel(props: {
   pairId: PairId;
   tokenBalancesByMint: Record<string, string>;
   market: MarketState;
+  realtime: TerminalRealtimeState;
 }) {
-  const { pairId, tokenBalancesByMint, market } = props;
+  const { pairId, tokenBalancesByMint, market, realtime } = props;
   const pair = getPairConfig(pairId);
   const baseToken = TOKEN_CONFIGS[pair.baseSymbol];
   const quoteToken = TOKEN_CONFIGS[pair.quoteSymbol];
@@ -1136,6 +1239,17 @@ const AccountRiskPanel = memo(function AccountRiskPanel(props: {
       <div className="flex-1 overflow-auto p-3 text-xs space-y-2">
         <div className="rounded border border-border bg-subtle px-2 py-1.5">
           <p className="text-[10px] text-muted uppercase tracking-wider">
+            Transport
+          </p>
+          <p className="mt-1 font-mono text-ink">
+            {formatTransportBadge(realtime)}
+          </p>
+          <p className="text-[10px] text-muted">
+            Last event: {formatAgeMs(realtime.lastEventMs)}
+          </p>
+        </div>
+        <div className="rounded border border-border bg-subtle px-2 py-1.5">
+          <p className="text-[10px] text-muted uppercase tracking-wider">
             Balances
           </p>
           <p className="mt-1 font-mono text-ink">
@@ -1144,6 +1258,11 @@ const AccountRiskPanel = memo(function AccountRiskPanel(props: {
           <p className="font-mono text-ink">
             {quoteDisplay} {quoteToken.symbol}
           </p>
+          {realtime.account ? (
+            <p className="text-[10px] text-muted">
+              Stream snapshot seq {realtime.account.seq}
+            </p>
+          ) : null}
         </div>
         <div className="rounded border border-border bg-subtle px-2 py-1.5">
           <p className="text-[10px] text-muted uppercase tracking-wider">
