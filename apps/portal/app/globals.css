@@ -10,7 +10,7 @@
   /* Deep background */
   --color-surface: #111111;
   /* Slightly lighter background for cards */
-  --color-muted: #a1a1aa;
+  --color-muted: #cbd5e1;
   /* Muted text */
   --color-border: rgba(255, 255, 255, 0.1);
   --color-border-strong: rgba(255, 255, 255, 0.2);
@@ -95,7 +95,7 @@
     --color-ink: #f0f6fc;
     --color-paper: #0a0a0a;
     --color-surface: #111111;
-    --color-muted: #a1a1aa;
+    --color-muted: #cbd5e1;
     --color-border: rgba(255, 255, 255, 0.1);
     --color-border-strong: rgba(255, 255, 255, 0.2);
     --color-subtle: rgba(255, 255, 255, 0.03);
