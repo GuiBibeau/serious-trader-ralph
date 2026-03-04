@@ -29,7 +29,7 @@ interface DashboardGridProps {
   allowLayoutEditing?: boolean;
 }
 
-const DASHBOARD_LAYOUT_STORAGE_KEY = "dashboard-grid-layouts:v3";
+const DASHBOARD_LAYOUT_STORAGE_KEY = "dashboard-grid-layouts:v4";
 const LAYOUT_BREAKPOINTS = ["lg", "md", "sm"] as const;
 
 type LayoutBreakpoint = (typeof LAYOUT_BREAKPOINTS)[number];
@@ -45,31 +45,40 @@ type DashboardLayouts = Record<string, Layout[]>;
 
 const DEFAULT_DASHBOARD_LAYOUTS: Record<LayoutBreakpoint, Layout[]> = {
   lg: [
-    { i: "market", x: 0, y: 0, w: 12, h: 4 },
-    { i: "wallet", x: 0, y: 4, w: 4, h: 3 },
-    { i: "macro_radar", x: 4, y: 4, w: 4, h: 3 },
-    { i: "macro_fred", x: 8, y: 4, w: 4, h: 3 },
-    { i: "macro_etf", x: 0, y: 7, w: 4, h: 3 },
-    { i: "macro_stablecoin", x: 4, y: 7, w: 4, h: 3 },
-    { i: "macro_oil", x: 8, y: 7, w: 4, h: 3 },
+    { i: "chart", x: 0, y: 0, w: 7, h: 6 },
+    { i: "orderbook", x: 7, y: 0, w: 3, h: 3 },
+    { i: "order_entry", x: 10, y: 0, w: 2, h: 3 },
+    { i: "positions", x: 7, y: 3, w: 5, h: 3 },
+    { i: "account_risk", x: 0, y: 6, w: 4, h: 3 },
+    { i: "macro_radar", x: 4, y: 6, w: 4, h: 3 },
+    { i: "macro_fred", x: 8, y: 6, w: 4, h: 3 },
+    { i: "macro_etf", x: 0, y: 9, w: 4, h: 3 },
+    { i: "macro_stablecoin", x: 4, y: 9, w: 4, h: 3 },
+    { i: "macro_oil", x: 8, y: 9, w: 4, h: 3 },
   ],
   md: [
-    { i: "market", x: 0, y: 0, w: 10, h: 4 },
-    { i: "wallet", x: 0, y: 4, w: 10, h: 3 },
-    { i: "macro_radar", x: 0, y: 7, w: 5, h: 3 },
-    { i: "macro_fred", x: 5, y: 7, w: 5, h: 3 },
-    { i: "macro_etf", x: 0, y: 10, w: 5, h: 3 },
-    { i: "macro_stablecoin", x: 5, y: 10, w: 5, h: 3 },
-    { i: "macro_oil", x: 0, y: 13, w: 10, h: 3 },
+    { i: "chart", x: 0, y: 0, w: 6, h: 6 },
+    { i: "orderbook", x: 6, y: 0, w: 2, h: 3 },
+    { i: "order_entry", x: 8, y: 0, w: 2, h: 3 },
+    { i: "positions", x: 6, y: 3, w: 4, h: 3 },
+    { i: "account_risk", x: 0, y: 6, w: 5, h: 3 },
+    { i: "macro_radar", x: 5, y: 6, w: 5, h: 3 },
+    { i: "macro_fred", x: 0, y: 9, w: 5, h: 3 },
+    { i: "macro_etf", x: 5, y: 9, w: 5, h: 3 },
+    { i: "macro_stablecoin", x: 0, y: 12, w: 5, h: 3 },
+    { i: "macro_oil", x: 5, y: 12, w: 5, h: 3 },
   ],
   sm: [
-    { i: "market", x: 0, y: 0, w: 6, h: 4 },
-    { i: "wallet", x: 0, y: 4, w: 6, h: 2 },
-    { i: "macro_radar", x: 0, y: 6, w: 6, h: 3 },
-    { i: "macro_fred", x: 0, y: 9, w: 6, h: 3 },
-    { i: "macro_etf", x: 0, y: 12, w: 6, h: 3 },
-    { i: "macro_stablecoin", x: 0, y: 15, w: 6, h: 3 },
-    { i: "macro_oil", x: 0, y: 18, w: 6, h: 3 },
+    { i: "chart", x: 0, y: 0, w: 6, h: 5 },
+    { i: "orderbook", x: 0, y: 5, w: 3, h: 3 },
+    { i: "order_entry", x: 3, y: 5, w: 3, h: 3 },
+    { i: "positions", x: 0, y: 8, w: 6, h: 3 },
+    { i: "account_risk", x: 0, y: 11, w: 6, h: 3 },
+    { i: "macro_radar", x: 0, y: 14, w: 6, h: 3 },
+    { i: "macro_fred", x: 0, y: 17, w: 6, h: 3 },
+    { i: "macro_etf", x: 0, y: 20, w: 6, h: 3 },
+    { i: "macro_stablecoin", x: 0, y: 23, w: 6, h: 3 },
+    { i: "macro_oil", x: 0, y: 26, w: 6, h: 3 },
   ],
 };
 
