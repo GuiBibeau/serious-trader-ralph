@@ -12,13 +12,11 @@ import {
 } from "react";
 import { toast } from "sonner";
 import {
-  ApiError,
-  apiBase,
-  apiFetchJson,
-  BTN_PRIMARY,
-  BTN_SECONDARY,
-  isRecord,
-} from "../../lib";
+  createExecutionClient,
+  describeExecutionClientError,
+  newExecutionIdempotencyKey,
+} from "../../execution-client";
+import { apiBase, BTN_PRIMARY, BTN_SECONDARY, isRecord } from "../../lib";
 import type { TradeIntent } from "./trade-intent";
 
 type TradeTicketModalProps = {
@@ -58,113 +56,9 @@ const BEARER_RE = /^bearer\s+/i;
 const EXEC_POLL_INTERVAL_MS = 1200;
 const EXEC_POLL_TIMEOUT_MS = 45000;
 
-type ExecTerminalResult = {
-  status: string;
-  signature: string | null;
-};
-
 type CloseModalOptions = {
   cancelExecution?: boolean;
 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
-function newIdempotencyKey(): string {
-  const prefix = "trade";
-  const ts = Date.now().toString(36);
-  const token =
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
-      : Math.random().toString(36).slice(2, 14);
-  return `${prefix}-${ts}-${token}`;
-}
-
-function parseExecSubmitAck(payload: unknown): {
-  requestId: string;
-  state: string;
-} | null {
-  if (!isRecord(payload) || payload.ok !== true) return null;
-  const requestId = String(payload.requestId ?? "").trim();
-  const status = isRecord(payload.status) ? payload.status : null;
-  const state = String(status?.state ?? "").trim();
-  if (!requestId || !state) return null;
-  return { requestId, state };
-}
-
-function parseExecStatusSnapshot(payload: unknown): {
-  state: string;
-  terminal: boolean;
-} | null {
-  if (!isRecord(payload) || payload.ok !== true) return null;
-  const status = isRecord(payload.status) ? payload.status : null;
-  const state = String(status?.state ?? "").trim();
-  const terminal = status?.terminal === true;
-  if (!state) return null;
-  return { state, terminal };
-}
-
-function parseExecReceipt(payload: unknown): {
-  ready: boolean;
-  outcomeStatus: string | null;
-  signature: string | null;
-  errorCode: string | null;
-  errorMessage: string | null;
-} | null {
-  if (!isRecord(payload) || payload.ok !== true) return null;
-  const ready = payload.ready === true;
-  if (!ready) {
-    return {
-      ready: false,
-      outcomeStatus: null,
-      signature: null,
-      errorCode: null,
-      errorMessage: null,
-    };
-  }
-  const receipt = isRecord(payload.receipt) ? payload.receipt : null;
-  const outcome = receipt && isRecord(receipt.outcome) ? receipt.outcome : null;
-  return {
-    ready: true,
-    outcomeStatus: String(outcome?.status ?? "").trim() || null,
-    signature:
-      typeof outcome?.signature === "string" && outcome.signature.trim()
-        ? outcome.signature.trim()
-        : null,
-    errorCode:
-      typeof outcome?.errorCode === "string" && outcome.errorCode.trim()
-        ? outcome.errorCode.trim()
-        : null,
-    errorMessage:
-      typeof outcome?.errorMessage === "string" && outcome.errorMessage.trim()
-        ? outcome.errorMessage.trim()
-        : null,
-  };
-}
-
-function isExecSuccessStatus(status: string): boolean {
-  return status === "landed" || status === "finalized";
-}
-
-function describeExecError(
-  error: unknown,
-  fallback = "execution-failed",
-): string {
-  if (error instanceof ApiError) {
-    if (isRecord(error.data)) {
-      const reason = String(error.data.reason ?? "").trim();
-      const detail = String(error.data.error ?? "").trim();
-      if (reason) return `${detail || error.message}:${reason}`;
-      if (detail) return detail;
-    }
-    return error.message || fallback;
-  }
-  if (error instanceof Error && error.message.trim()) return error.message;
-  return fallback;
-}
 
 function parseUiAmountToAtomic(value: string, decimals: number): string | null {
   const trimmed = value.trim();
@@ -546,14 +440,14 @@ export function TradeTicketModal({
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
 
-      const idempotencyKey = newIdempotencyKey();
-      const submitPayload = await apiFetchJson("/api/x402/exec/submit", token, {
-        method: "POST",
-        headers: {
-          "Idempotency-Key": idempotencyKey,
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
+      const executionClient = createExecutionClient({
+        authToken: token,
+        pollIntervalMs: EXEC_POLL_INTERVAL_MS,
+        pollTimeoutMs: EXEC_POLL_TIMEOUT_MS,
+      });
+      const idempotencyKey = newExecutionIdempotencyKey("trade");
+      const submitAck = await executionClient.submit(
+        {
           schemaVersion: "v1",
           mode: "privy_execute",
           lane: "safe",
@@ -575,13 +469,12 @@ export function TradeTicketModal({
               commitment: "confirmed",
             },
           },
-        }),
-      });
-
-      const submitAck = parseExecSubmitAck(submitPayload);
-      if (!submitAck) {
-        throw new Error("invalid-exec-submit-response");
-      }
+        },
+        {
+          idempotencyKey,
+          signal: controller.signal,
+        },
+      );
 
       continueExecutionOnUnmountRef.current = true;
       closeModal();
@@ -591,65 +484,10 @@ export function TradeTicketModal({
       });
       executeToastIdRef.current = execToastId;
 
-      const startedAtMs = Date.now();
-      let latestState = submitAck.state;
-      let terminal: ExecTerminalResult | null = null;
-      while (Date.now() - startedAtMs < EXEC_POLL_TIMEOUT_MS) {
-        if (controller.signal.aborted) {
-          throw new Error("execution-cancelled");
-        }
-
-        const statusPayload = await apiFetchJson(
-          `/api/x402/exec/status/${submitAck.requestId}`,
-          token,
-          {
-            method: "GET",
-            signal: controller.signal,
-          },
-        );
-        const statusSnapshot = parseExecStatusSnapshot(statusPayload);
-        if (!statusSnapshot) throw new Error("invalid-exec-status-response");
-
-        latestState = statusSnapshot.state;
-        if (statusSnapshot.terminal) {
-          const receiptPayload = await apiFetchJson(
-            `/api/x402/exec/receipt/${submitAck.requestId}`,
-            token,
-            {
-              method: "GET",
-              signal: controller.signal,
-            },
-          );
-          const receipt = parseExecReceipt(receiptPayload);
-          if (!receipt) throw new Error("invalid-exec-receipt-response");
-
-          if (receipt.ready) {
-            const outcomeStatus =
-              receipt.outcomeStatus?.toLowerCase() || latestState.toLowerCase();
-            if (isExecSuccessStatus(outcomeStatus)) {
-              terminal = {
-                status: outcomeStatus,
-                signature: receipt.signature,
-              };
-              break;
-            }
-            const failureReason =
-              receipt.errorCode ??
-              receipt.errorMessage ??
-              `execution-${outcomeStatus}`;
-            throw new Error(failureReason);
-          }
-          if (latestState === "failed" || latestState === "expired") {
-            throw new Error(`execution-${latestState}`);
-          }
-        }
-
-        await sleep(EXEC_POLL_INTERVAL_MS);
-      }
-
-      if (!terminal) {
-        throw new Error(`execution-timeout:${latestState}`);
-      }
+      const terminal = await executionClient.waitForTerminalReceipt({
+        requestId: submitAck.requestId,
+        signal: controller.signal,
+      });
 
       onTradeComplete?.({
         inputMint: intent.inputMint,
@@ -673,7 +511,7 @@ export function TradeTicketModal({
       executeToastIdRef.current = null;
     } catch (error) {
       if (executeAbortRef.current?.signal.aborted) return;
-      const message = describeExecError(error, "execution-failed");
+      const message = describeExecutionClientError(error, "execution-failed");
       if (executeToastIdRef.current !== null || execToastId !== null) {
         toast.error("Trade execution failed", {
           id: executeToastIdRef.current ?? execToastId ?? undefined,
