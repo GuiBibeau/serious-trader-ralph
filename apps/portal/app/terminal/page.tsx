@@ -1318,8 +1318,8 @@ const TradesTapePanel = memo(function TradesTapePanel(props: {
     [displayMode, displayedTrades, minSize, sideFilter],
   );
   const missedCount = useMemo(
-    () => countMissingTradeTicks(filteredTrades),
-    [filteredTrades],
+    () => countMissingTradeTicks(displayedTrades),
+    [displayedTrades],
   );
 
   const togglePaused = useCallback(() => {
