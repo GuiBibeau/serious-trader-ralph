@@ -72,3 +72,15 @@ jobs:
           WALLET_KEYFILE: ${{ secrets.WALLET_KEYFILE }}
           JUPITER_BASE_URL: ${{ secrets.JUPITER_BASE_URL }}
         run: bun run test:integration
+
+  terminal-e2e-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+      - name: Install deps
+        run: bun install
+      - name: Run terminal execution E2E suite
+        run: bun run test:e2e

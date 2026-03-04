@@ -29,6 +29,7 @@
     "test": "bun test",
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
+    "test:e2e": "bun test tests/integration/terminal_execution_e2e.integration.test.ts",
     "test:integration:worker:live": "RUN_INTEGRATION_TESTS=1 RUN_WORKER_LIVE_TESTS=1 bun test tests/integration/worker_x402_live.integration.test.ts",
     "agent-registry:validate": "bun run scripts/agent_registry/sync.ts --step validate",
     "agent-registry:sync": "bun run scripts/agent_registry/sync.ts",

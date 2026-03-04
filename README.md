@@ -142,5 +142,6 @@ bun run agent-registry:sync -- --lane production --step all
 ```bash
 bun run test:unit
 bun run test:integration
+bun run test:e2e
 bun run test:integration:worker:live
 ```
