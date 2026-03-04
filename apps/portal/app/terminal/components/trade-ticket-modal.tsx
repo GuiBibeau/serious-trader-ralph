@@ -21,6 +21,7 @@ import {
   type AccountRiskSnapshot,
   evaluatePreSubmitRisk,
 } from "./account-risk";
+import { formatHotkeyChord, matchesHotkey } from "./terminal-hotkeys";
 import type { TradeIntent } from "./trade-intent";
 
 type TradeTicketModalProps = {
@@ -29,10 +30,19 @@ type TradeTicketModalProps = {
   walletAddress: string | null;
   tokenBalancesByMint?: Record<string, string> | null;
   riskSnapshot?: AccountRiskSnapshot | null;
+  hotkeyBindings?: TradeTicketHotkeyBindings;
   getAccessToken: () => Promise<string | null>;
   onClose: () => void;
   onTradeComplete?: (trade: TradeTicketCompletion) => void;
   onOrderQueued?: (order: QueuedTerminalOrder) => void;
+};
+
+type TradeTicketHotkeyBindings = {
+  submit: string;
+  cancel: string;
+  preset1: string;
+  preset2: string;
+  preset3: string;
 };
 
 export type TradeTicketCompletion = {
@@ -110,6 +120,13 @@ const MAX_PRIORITY_MICRO_LAMPORTS = 2_000_000;
 const DEFAULT_EXECUTION_LANE: ExecutionLane = "safe";
 const DEFAULT_SIMULATION_PREFERENCE: SimulationPreference = "auto";
 const DEFAULT_PRIORITY_LEVEL: PriorityLevel = "normal";
+const DEFAULT_TRADE_TICKET_HOTKEY_BINDINGS: TradeTicketHotkeyBindings = {
+  submit: "mod+enter",
+  cancel: "escape",
+  preset1: "alt+1",
+  preset2: "alt+2",
+  preset3: "alt+3",
+};
 const PRIORITY_MICRO_LAMPORTS_BY_LEVEL: Record<PriorityLevel, number> = {
   normal: 5_000,
   high: 50_000,
@@ -206,6 +223,13 @@ function toBoundedSlippage(value: string, fallback: number): number {
   const raw = Number(value);
   if (!Number.isFinite(raw)) return fallback;
   return Math.max(1, Math.min(5000, Math.floor(raw)));
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 function areQuoteStatesEqual(a: QuoteState, b: QuoteState): boolean {
@@ -355,6 +379,7 @@ export function TradeTicketModal({
   walletAddress,
   tokenBalancesByMint,
   riskSnapshot,
+  hotkeyBindings = DEFAULT_TRADE_TICKET_HOTKEY_BINDINGS,
   getAccessToken,
   onClose,
   onTradeComplete,
@@ -442,15 +467,6 @@ export function TradeTicketModal({
       }
     };
   }, [dismissExecuteToast]);
-
-  useEffect(() => {
-    if (!open) return;
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") cancelAndCloseModal();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [cancelAndCloseModal, open]);
 
   useEffect(() => {
     if (!open || !intent) return;
@@ -1016,6 +1032,74 @@ export function TradeTicketModal({
     setSlippageInput(MAX_SLIPPAGE_BPS);
   }, []);
 
+  const canExecuteTrade =
+    submitStatus !== "submitting" &&
+    submitStatus !== "tracking" &&
+    quote.status === "ready" &&
+    Boolean(quote.inAmountAtomic) &&
+    orderValidationErrors.length < 1 &&
+    executionQualityErrors.length < 1 &&
+    !preSubmitRisk.blocked;
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent): void {
+      if (matchesHotkey(event, hotkeyBindings.cancel)) {
+        event.preventDefault();
+        cancelAndCloseModal();
+        return;
+      }
+
+      const typing = isTypingTarget(event.target);
+      if (typing && !event.altKey && !event.metaKey && !event.ctrlKey) {
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.submit)) {
+        if (!canExecuteTrade) return;
+        event.preventDefault();
+        void executeTrade();
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.preset1)) {
+        const preset = amountPresets[0] ?? null;
+        if (!preset) return;
+        event.preventDefault();
+        setAmountUi(preset);
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.preset2)) {
+        const preset = amountPresets[1] ?? null;
+        if (!preset) return;
+        event.preventDefault();
+        setAmountUi(preset);
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.preset3)) {
+        const preset = amountPresets[2] ?? null;
+        if (!preset) return;
+        event.preventDefault();
+        setAmountUi(preset);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    amountPresets,
+    cancelAndCloseModal,
+    canExecuteTrade,
+    executeTrade,
+    hotkeyBindings.cancel,
+    hotkeyBindings.preset1,
+    hotkeyBindings.preset2,
+    hotkeyBindings.preset3,
+    hotkeyBindings.submit,
+    open,
+  ]);
+
   if (!intent) return null;
   if (!open) return null;
 
@@ -1133,15 +1217,7 @@ export function TradeTicketModal({
               className={`${BTN_PRIMARY} !py-2 !px-4 text-xs min-w-[8.5rem]`}
               onClick={() => void executeTrade()}
               type="button"
-              disabled={
-                submitStatus === "submitting" ||
-                submitStatus === "tracking" ||
-                quote.status !== "ready" ||
-                !quote.inAmountAtomic ||
-                orderValidationErrors.length > 0 ||
-                executionQualityErrors.length > 0 ||
-                preSubmitRisk.blocked
-              }
+              disabled={!canExecuteTrade}
             >
               {submitStatus === "submitting" || submitStatus === "tracking"
                 ? submitStatus === "tracking"
@@ -1150,6 +1226,13 @@ export function TradeTicketModal({
                 : `Execute ${intent.direction === "buy" ? "Buy" : "Sell"}`}
             </button>
           </div>
+          <p className="text-[10px] text-muted text-right">
+            {formatHotkeyChord(hotkeyBindings.submit)} submit •{" "}
+            {formatHotkeyChord(hotkeyBindings.cancel)} cancel •{" "}
+            {formatHotkeyChord(hotkeyBindings.preset1)}/
+            {formatHotkeyChord(hotkeyBindings.preset2)}/
+            {formatHotkeyChord(hotkeyBindings.preset3)} presets
+          </p>
         </div>
       </div>
     </div>
