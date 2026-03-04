@@ -1244,11 +1244,25 @@ const worker = {
         ) {
           const swap = parsed.value.privyExecute.swap;
           const options = parsed.value.privyExecute.options ?? {};
+          const requestedRequireSimulation =
+            typeof options.requireSimulation === "boolean"
+              ? options.requireSimulation
+              : null;
+          const effectiveRequireSimulation =
+            submitPolicyRuntime?.requireSimulation === true ||
+            requestedRequireSimulation === true;
           const executionParams: Record<string, unknown> = {
             lane: laneResolution.lane,
           };
-          if (submitPolicyRuntime?.requireSimulation) {
+          if (requestedRequireSimulation === false) {
+            executionParams.requireSimulation = false;
+          }
+          if (effectiveRequireSimulation) {
             executionParams.requireSimulation = true;
+          }
+          if (typeof options.priorityMicroLamports === "number") {
+            executionParams.priorityMicroLamports =
+              options.priorityMicroLamports;
           }
           const execution = {
             adapter: laneResolution.adapter,
@@ -1266,10 +1280,21 @@ const worker = {
 
           const attemptId = newExecutionAttemptId();
           const attemptStartedAt = new Date().toISOString();
+          const qualityMetadata = {
+            lane: laneResolution.lane,
+            slippageBps: swap.slippageBps,
+            requestedRequireSimulation,
+            effectiveRequireSimulation,
+            priorityMicroLamports:
+              typeof options.priorityMicroLamports === "number"
+                ? options.priorityMicroLamports
+                : null,
+          };
           let providerResponse: Record<string, unknown> | null = {
             route: laneResolution.adapter,
             lane: laneResolution.lane,
             mode: parsed.value.mode,
+            quality: qualityMetadata,
           };
 
           try {
@@ -1405,6 +1430,7 @@ const worker = {
                 route: laneResolution.adapter,
                 resultStatus: result.status,
                 outcome: terminalStatus,
+                quality: qualityMetadata,
                 quote: {
                   inputMint: swap.inputMint,
                   outputMint: swap.outputMint,
@@ -1474,6 +1500,7 @@ const worker = {
                 mode: parsed.value.mode,
                 route: laneResolution.adapter,
                 outcome: terminalStatus,
+                quality: qualityMetadata,
               },
               readyAt: failedAt,
             });

@@ -21,7 +21,9 @@ const VALID_PRIVY_SUBMIT = {
     },
     options: {
       simulateOnly: true,
+      requireSimulation: true,
       dryRun: false,
+      priorityMicroLamports: 50000,
       commitment: "confirmed",
     },
   },
@@ -36,6 +38,10 @@ describe("exec submit contract: privy_execute", () => {
     expect(parsed.value.privyExecute?.intentType).toBe("swap");
     expect(parsed.value.privyExecute?.swap.amountAtomic).toBe("1000000");
     expect(parsed.value.privyExecute?.options?.simulateOnly).toBe(true);
+    expect(parsed.value.privyExecute?.options?.requireSimulation).toBe(true);
+    expect(parsed.value.privyExecute?.options?.priorityMicroLamports).toBe(
+      50000,
+    );
     expect(parsed.value.privyExecute?.options?.commitment).toBe("confirmed");
     expect(parsed.metadataForStorage).toEqual({
       source: "terminal-ui",
@@ -105,6 +111,21 @@ describe("exec submit contract: privy_execute", () => {
       },
     });
     expect(invalidOptionShape).toEqual({
+      ok: false,
+      error: "invalid-request",
+    });
+
+    const invalidPriorityBounds = parseExecSubmitPayload({
+      ...VALID_PRIVY_SUBMIT,
+      privyExecute: {
+        ...VALID_PRIVY_SUBMIT.privyExecute,
+        options: {
+          ...VALID_PRIVY_SUBMIT.privyExecute.options,
+          priorityMicroLamports: 2_000_001,
+        },
+      },
+    });
+    expect(invalidPriorityBounds).toEqual({
       ok: false,
       error: "invalid-request",
     });
