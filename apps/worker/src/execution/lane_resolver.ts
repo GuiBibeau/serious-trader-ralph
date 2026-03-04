@@ -50,6 +50,14 @@ function resolveLaneAdapters(env: Env): Record<ExecutionLane, string> {
   };
 }
 
+function resolveLaneEnabledFlags(env: Env): Record<ExecutionLane, boolean> {
+  return {
+    fast: readBooleanFlag(env.EXEC_LANE_FAST_ENABLED, true),
+    protected: readBooleanFlag(env.EXEC_LANE_PROTECTED_ENABLED, true),
+    safe: readBooleanFlag(env.EXEC_LANE_SAFE_ENABLED, true),
+  };
+}
+
 type LaneResolveResult =
   | {
       ok: true;
@@ -70,10 +78,19 @@ export function resolveExecutionLane(input: {
   actorType: ExecutionActorType;
 }): LaneResolveResult {
   const adapters = resolveLaneAdapters(input.env);
+  const enabledFlags = resolveLaneEnabledFlags(input.env);
   const allowAnonymousSafe = readBooleanFlag(
     input.env.EXEC_LANE_SAFE_ALLOW_ANONYMOUS,
     false,
   );
+
+  if (!enabledFlags[input.requestedLane]) {
+    return {
+      ok: false,
+      error: "unsupported-lane",
+      reason: "lane-disabled-by-operator",
+    };
+  }
 
   if (input.requestedLane === "safe") {
     if (input.mode === "relay_signed") {

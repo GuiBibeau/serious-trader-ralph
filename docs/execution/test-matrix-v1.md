@@ -17,6 +17,9 @@ Phase 2 coverage for execution fabric reliability, failure classes, and load beh
   - `tests/unit/worker_execution_helius_sender.test.ts`
   - `tests/unit/worker_execution_jito_bundle.test.ts`
   - `tests/unit/worker_execution_router.test.ts`
+- Lane kill-switch behavior:
+  - `tests/unit/worker_execution_lane_resolver.test.ts`
+  - `tests/unit/worker_x402_exec_submit_route.test.ts`
 - Blockhash expiry handling:
   - `tests/unit/worker_execution_helius_sender.test.ts`
   - `tests/unit/worker_execution_error_taxonomy.test.ts`
@@ -36,3 +39,8 @@ The suite writes a benchmark artifact to:
 - `.tmp/execution-benchmarks/phase2-load-benchmark.json`
 
 CI uploads this file as an artifact for release go/no-go review.
+
+## Operations Artifacts
+
+- `docs/execution/operations-runbook-v1.md`
+- `docs/execution/tabletop-simulation-2026-03-03.md`
