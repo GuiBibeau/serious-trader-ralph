@@ -23,6 +23,14 @@ import {
   findNearestDepthPoint,
 } from "./components/depth-chart";
 import {
+  buildFillLedgerCsv,
+  type FillLedgerRow,
+  type FillLedgerSideFilter,
+  type FillLedgerStatusFilter,
+  filterFillLedgerRows,
+  paginateFillLedgerRows,
+} from "./components/fills-ledger";
+import {
   buildLivePositions,
   type PositionFill,
   summarizeLivePositions,
@@ -89,13 +97,19 @@ type Balances = BalanceResponse;
 type ExecutionActivityRow = {
   id: string;
   ts: number;
+  requestId: string;
+  receiptId: string | null;
   pairId: PairId;
   direction: "buy" | "sell";
   leg: string;
+  lane: "fast" | "protected" | "safe";
   baseFilledUi: number;
   quoteFilledUi: number;
   fillPrice: number | null;
+  feeUi: number | null;
+  feeSymbol: string | null;
   status: string;
+  provider: string | null;
   signature: string | null;
   qualitySummary: string;
 };
@@ -220,6 +234,8 @@ function parseOpenOrderExecutionMarker(reason: string): {
   if (!orderId) return null;
   return { orderId, fraction };
 }
+
+const FILLS_LEDGER_PAGE_SIZE = 8;
 
 export default function AppPage() {
   if (!process.env.NEXT_PUBLIC_PRIVY_APP_ID) {
@@ -819,17 +835,23 @@ function ControlRoom() {
         const entry: ExecutionActivityRow = {
           id: crypto.randomUUID(),
           ts: Date.now(),
+          requestId: trade.requestId,
+          receiptId: trade.receiptId,
           pairId: trade.pairId,
           direction: trade.direction,
           leg: `${trade.inputSymbol} -> ${trade.outputSymbol}`,
+          lane: trade.lane,
           baseFilledUi: trade.baseFilledUi,
           quoteFilledUi: trade.quoteFilledUi,
           fillPrice: trade.fillPrice,
+          feeUi: trade.feeUi,
+          feeSymbol: trade.feeSymbol,
           status: trade.status,
+          provider: trade.provider,
           signature: trade.signature,
           qualitySummary: `lane ${trade.lane} • sim ${trade.simulationPreference} • slip ${trade.slippageBps} bps • prio ${trade.priorityLevel}`,
         };
-        return [entry, ...current].slice(0, 30);
+        return [entry, ...current].slice(0, 250);
       });
       void refreshWalletBalances();
     },
@@ -1943,6 +1965,80 @@ const PositionsOrdersFillsPanel = memo(
       }
       return "border-red-500/40 bg-red-500/10 text-red-300";
     }, []);
+    const [ledgerSide, setLedgerSide] = useState<FillLedgerSideFilter>("all");
+    const [ledgerPair, setLedgerPair] = useState<PairId | "all">("all");
+    const [ledgerStatus, setLedgerStatus] =
+      useState<FillLedgerStatusFilter>("all");
+    const [ledgerQuery, setLedgerQuery] = useState("");
+    const [ledgerPage, setLedgerPage] = useState(1);
+    const ledgerRows = useMemo<FillLedgerRow[]>(
+      () =>
+        entries.map((entry) => ({
+          id: entry.id,
+          ts: entry.ts,
+          requestId: entry.requestId,
+          receiptId: entry.receiptId,
+          pairId: entry.pairId,
+          side: entry.direction,
+          sizeBaseUi: entry.baseFilledUi,
+          quoteFilledUi: entry.quoteFilledUi,
+          price: entry.fillPrice,
+          feeUi: entry.feeUi,
+          feeSymbol: entry.feeSymbol,
+          status: entry.status,
+          provider: entry.provider,
+          signature: entry.signature,
+        })),
+      [entries],
+    );
+    const filteredLedgerRows = useMemo(
+      () =>
+        filterFillLedgerRows(ledgerRows, {
+          side: ledgerSide,
+          pairId: ledgerPair,
+          status: ledgerStatus,
+          query: ledgerQuery,
+        }),
+      [ledgerPair, ledgerQuery, ledgerRows, ledgerSide, ledgerStatus],
+    );
+    const ledgerPageCount = Math.max(
+      1,
+      Math.ceil(filteredLedgerRows.length / FILLS_LEDGER_PAGE_SIZE),
+    );
+    useEffect(() => {
+      setLedgerPage((current) => Math.min(current, ledgerPageCount));
+    }, [ledgerPageCount]);
+    const pagedLedgerRows = useMemo(
+      () =>
+        paginateFillLedgerRows(
+          filteredLedgerRows,
+          ledgerPage,
+          FILLS_LEDGER_PAGE_SIZE,
+        ),
+      [filteredLedgerRows, ledgerPage],
+    );
+    const exportLedgerCsv = useCallback(() => {
+      if (filteredLedgerRows.length === 0) return;
+      const csv = buildFillLedgerCsv(filteredLedgerRows);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = `terminal-fills-ledger-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(href);
+    }, [filteredLedgerRows]);
+    const formatLedgerFee = useCallback((entry: FillLedgerRow): string => {
+      if (entry.feeUi === null || !Number.isFinite(entry.feeUi)) return "--";
+      return `${entry.feeUi.toFixed(6)} ${entry.feeSymbol ?? ""}`.trim();
+    }, []);
+    const shortExecutionId = useCallback((value: string | null): string => {
+      if (!value) return "--";
+      if (value.length <= 16) return value;
+      return `${value.slice(0, 8)}...${value.slice(-6)}`;
+    }, []);
 
     return (
       <>
@@ -2226,47 +2322,181 @@ const PositionsOrdersFillsPanel = memo(
             </div>
           </div>
           <div className="rounded border border-border bg-subtle p-2">
-            <p className="text-[10px] uppercase tracking-wider text-muted">
-              Recent Activity
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                Fills Ledger
+              </p>
+              <button
+                className={cn(
+                  BTN_SECONDARY,
+                  "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                  filteredLedgerRows.length === 0 &&
+                    "opacity-60 pointer-events-none",
+                )}
+                onClick={exportLedgerCsv}
+                type="button"
+                disabled={filteredLedgerRows.length === 0}
+              >
+                Export CSV
+              </button>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-muted">
+                Side
+                <select
+                  className="h-7 rounded border border-border bg-paper px-1.5 text-[11px] text-ink"
+                  value={ledgerSide}
+                  onChange={(event) => {
+                    setLedgerSide(event.target.value as FillLedgerSideFilter);
+                    setLedgerPage(1);
+                  }}
+                >
+                  <option value="all">All</option>
+                  <option value="buy">Buy</option>
+                  <option value="sell">Sell</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-muted">
+                Pair
+                <select
+                  className="h-7 rounded border border-border bg-paper px-1.5 text-[11px] text-ink"
+                  value={ledgerPair}
+                  onChange={(event) => {
+                    setLedgerPair(event.target.value as PairId | "all");
+                    setLedgerPage(1);
+                  }}
+                >
+                  <option value="all">All</option>
+                  {SUPPORTED_PAIRS.map((pair) => (
+                    <option key={`ledger-pair-${pair.id}`} value={pair.id}>
+                      {pair.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-muted">
+                Status
+                <select
+                  className="h-7 rounded border border-border bg-paper px-1.5 text-[11px] text-ink"
+                  value={ledgerStatus}
+                  onChange={(event) => {
+                    setLedgerStatus(
+                      event.target.value as FillLedgerStatusFilter,
+                    );
+                    setLedgerPage(1);
+                  }}
+                >
+                  <option value="all">All</option>
+                  <option value="successful">Successful</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-muted">
+                Search
+                <input
+                  className="h-7 rounded border border-border bg-paper px-1.5 text-[11px] text-ink"
+                  placeholder="request/signature/provider"
+                  value={ledgerQuery}
+                  onChange={(event) => {
+                    setLedgerQuery(event.target.value);
+                    setLedgerPage(1);
+                  }}
+                />
+              </label>
+            </div>
             <div className="mt-2 space-y-1.5">
-              {entries.length === 0 ? (
-                <p className="text-muted">No fills yet in this session.</p>
+              {filteredLedgerRows.length === 0 ? (
+                <p className="text-muted">
+                  No fills match current filters for this session.
+                </p>
               ) : null}
-              {entries.slice(0, 8).map((entry) => (
+              {pagedLedgerRows.map((entry) => (
                 <div
-                  key={entry.id}
+                  key={`fill-ledger-${entry.id}`}
                   className="grid grid-cols-[1fr_auto] gap-2 rounded border border-border/60 px-2 py-1"
                 >
                   <div className="min-w-0">
                     <p className="font-mono text-[11px] text-ink truncate">
-                      {entry.pairId} • {entry.leg}
+                      {entry.pairId} • {entry.side.toUpperCase()}{" "}
+                      {entry.sizeBaseUi.toFixed(4)}{" "}
+                      {getPairConfig(entry.pairId).baseSymbol} @{" "}
+                      {entry.price === null ? "--" : entry.price.toFixed(4)}
                     </p>
                     <p className="text-[10px] text-muted">
-                      {new Date(entry.ts).toLocaleTimeString()}
+                      {new Date(entry.ts).toLocaleTimeString()} • Fee{" "}
+                      {formatLedgerFee(entry)}
                     </p>
                     <p className="text-[10px] text-muted truncate">
-                      {entry.qualitySummary}
-                    </p>
-                    <p className="text-[10px] text-muted">
-                      {entry.direction.toUpperCase()}{" "}
-                      {entry.baseFilledUi.toFixed(4)}{" "}
-                      {getPairConfig(entry.pairId).baseSymbol} @{" "}
-                      {entry.fillPrice === null
-                        ? "--"
-                        : entry.fillPrice.toFixed(4)}
+                      req {shortExecutionId(entry.requestId)} • rcpt{" "}
+                      {shortExecutionId(entry.receiptId)} •{" "}
+                      {entry.provider ?? "provider --"}
                     </p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-[10px] uppercase text-muted">
+                  <div className="flex flex-col items-end gap-1">
+                    <span className="text-[10px] uppercase text-muted">
                       {entry.status}
-                    </p>
-                    <p className="text-[10px] text-muted">
-                      {entry.signature ? "landed" : "tracking"}
-                    </p>
+                    </span>
+                    <a
+                      className="text-[10px] text-ink underline underline-offset-2"
+                      href={`/api/x402/exec/status/${encodeURIComponent(entry.requestId)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Status
+                    </a>
+                    <a
+                      className="text-[10px] text-ink underline underline-offset-2"
+                      href={`/api/x402/exec/receipt/${encodeURIComponent(entry.requestId)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Receipt
+                    </a>
                   </div>
                 </div>
               ))}
+            </div>
+            <div className="mt-2 flex items-center justify-between text-[10px] text-muted">
+              <span>
+                Showing {pagedLedgerRows.length} of {filteredLedgerRows.length}{" "}
+                fills
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  className={cn(
+                    BTN_SECONDARY,
+                    "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                    ledgerPage <= 1 && "opacity-60 pointer-events-none",
+                  )}
+                  onClick={() =>
+                    setLedgerPage((current) => Math.max(1, current - 1))
+                  }
+                  type="button"
+                  disabled={ledgerPage <= 1}
+                >
+                  Prev
+                </button>
+                <span>
+                  Page {ledgerPage} / {ledgerPageCount}
+                </span>
+                <button
+                  className={cn(
+                    BTN_SECONDARY,
+                    "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                    ledgerPage >= ledgerPageCount &&
+                      "opacity-60 pointer-events-none",
+                  )}
+                  onClick={() =>
+                    setLedgerPage((current) =>
+                      Math.min(ledgerPageCount, current + 1),
+                    )
+                  }
+                  type="button"
+                  disabled={ledgerPage >= ledgerPageCount}
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </div>
         </div>

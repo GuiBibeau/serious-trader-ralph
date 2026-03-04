@@ -28,6 +28,7 @@ It provides one execution fabric for:
 - Execution quality controls in ticket (lane, simulation preference, slippage, priority fee hints) with terminal activity surfacing
 - Live positions panel with session PnL/risk badges and quick reduce/close actions wired to execution intents
 - Open orders panel with pending/working/partial state, amend/cancel flows, and execute-now actions
+- Fills ledger with request/receipt linkage, side/pair/status/query filters, pagination, and CSV export
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:
@@ -74,6 +75,7 @@ bun run dev:local
 - Operations runbook: `docs/execution/operations-runbook-v1.md`
 - Rollout plan: `docs/execution/rollout-plan-v1.md`
 - Tabletop simulation record: `docs/execution/tabletop-simulation-2026-03-03.md`
+- Fills ledger CSV format: `docs/execution/terminal-fills-ledger-export-v1.md`
 
 ### x402 API
 

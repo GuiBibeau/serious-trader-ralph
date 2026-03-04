@@ -87,8 +87,11 @@ export type ExecutionStatusSnapshot = {
 export type ExecutionReceiptSnapshot = {
   requestId: string;
   ready: boolean;
+  receiptId: string | null;
+  provider: string | null;
   outcomeStatus: string | null;
   signature: string | null;
+  networkFeeLamports: string | null;
   errorCode: string | null;
   errorMessage: string | null;
 };
@@ -97,6 +100,9 @@ export type ExecutionTerminalResult = {
   requestId: string;
   status: string;
   signature: string | null;
+  receiptId: string | null;
+  provider: string | null;
+  networkFeeLamports: string | null;
 };
 
 export type ExecutionTransportRequest = {
@@ -316,6 +322,16 @@ function parseStatusSnapshot(payload: unknown): ExecutionStatusSnapshot {
   };
 }
 
+function parseOptionalAtomicString(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value).toString();
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
 function parseReceiptSnapshot(payload: unknown): ExecutionReceiptSnapshot {
   if (!isRecord(payload) || payload.ok !== true) {
     throw new ExecutionClientError({
@@ -341,8 +357,11 @@ function parseReceiptSnapshot(payload: unknown): ExecutionReceiptSnapshot {
     return {
       requestId,
       ready: false,
+      receiptId: null,
+      provider: null,
       outcomeStatus: null,
       signature: null,
+      networkFeeLamports: null,
       errorCode: null,
       errorMessage: null,
     };
@@ -350,14 +369,27 @@ function parseReceiptSnapshot(payload: unknown): ExecutionReceiptSnapshot {
 
   const receipt = isRecord(payload.receipt) ? payload.receipt : null;
   const outcome = receipt && isRecord(receipt.outcome) ? receipt.outcome : null;
+  const networkFeeLamports =
+    parseOptionalAtomicString(outcome?.networkFeeLamports) ??
+    parseOptionalAtomicString(outcome?.feeLamports) ??
+    parseOptionalAtomicString(receipt?.networkFeeLamports);
   return {
     requestId,
     ready: true,
+    receiptId:
+      typeof receipt?.receiptId === "string" && receipt.receiptId.trim()
+        ? receipt.receiptId.trim()
+        : null,
+    provider:
+      typeof receipt?.provider === "string" && receipt.provider.trim()
+        ? receipt.provider.trim()
+        : null,
     outcomeStatus: String(outcome?.status ?? "").trim() || null,
     signature:
       typeof outcome?.signature === "string" && outcome.signature.trim()
         ? outcome.signature.trim()
         : null,
+    networkFeeLamports,
     errorCode:
       typeof outcome?.errorCode === "string" && outcome.errorCode.trim()
         ? outcome.errorCode.trim()
@@ -650,6 +682,9 @@ export function createExecutionClient(options: ExecutionClientOptions) {
             requestId: input.requestId,
             status: outcomeStatus,
             signature: receiptSnapshot.signature,
+            receiptId: receiptSnapshot.receiptId,
+            provider: receiptSnapshot.provider,
+            networkFeeLamports: receiptSnapshot.networkFeeLamports,
           };
         }
 
