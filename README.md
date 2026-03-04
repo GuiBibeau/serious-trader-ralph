@@ -35,6 +35,7 @@ It provides one execution fabric for:
 - Keyboard-first controls with configurable hotkey profiles, panel focus shortcuts, and command palette
 - Custom-mode workspace presets with module visibility toggles and per-workspace layout persistence
 - Degen mode module pack (watchlist + event hooks) with mandatory risk acknowledgement before submit
+- Virtualized orderbook/tape/fills rendering plus terminal frame/render performance budget instrumentation
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:

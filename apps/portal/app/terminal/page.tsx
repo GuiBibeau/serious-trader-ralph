@@ -37,7 +37,6 @@ import {
   type FillLedgerSideFilter,
   type FillLedgerStatusFilter,
   filterFillLedgerRows,
-  paginateFillLedgerRows,
 } from "./components/fills-ledger";
 import {
   buildLivePositions,
@@ -87,6 +86,7 @@ import {
   type TerminalHotkeyBindings,
   type TerminalHotkeyProfileId,
 } from "./components/terminal-hotkeys";
+import { useTerminalRenderPerformance } from "./components/terminal-performance";
 import { TerminalStatusBar } from "./components/terminal-status-bar";
 import { createTradeIntent, type TradeIntent } from "./components/trade-intent";
 import {
@@ -106,6 +106,7 @@ import {
   type TapeDisplayMode,
   type TapeSideFilter,
 } from "./components/trades-tape";
+import { VirtualList } from "./components/virtual-list";
 import {
   buildCustomWorkspaceLayoutStorageKey,
   CUSTOM_WORKSPACE_ID_DEFAULT,
@@ -343,7 +344,6 @@ function parseOpenOrderExecutionMarker(reason: string): {
   return { orderId, fraction };
 }
 
-const FILLS_LEDGER_PAGE_SIZE = 8;
 const ACCOUNT_RISK_THRESHOLDS = resolveAccountRiskThresholds();
 
 export default function AppPage() {
@@ -934,6 +934,7 @@ function ControlRoom() {
   const hasWallet = wallet !== null;
   const selectedPair = getPairConfig(selectedPairId);
   const marketFeed = useMarketFeed(selectedPairId);
+  const renderPerformance = useTerminalRenderPerformance(5000);
   const realtimeTransport = useTerminalRealtimeTransport({
     pairId: selectedPairId,
     walletAddress: wallet?.walletAddress ?? null,
@@ -1578,6 +1579,7 @@ function ControlRoom() {
               <TerminalStatusBar
                 realtime={realtimeTransport}
                 market={marketFeed}
+                renderPerformance={renderPerformance}
               />
               {isDegenMode ? (
                 <div className="rounded border border-red-500/40 bg-gradient-to-r from-red-500/15 via-orange-500/10 to-transparent px-3 py-2 text-[11px] text-red-100">
@@ -2121,6 +2123,30 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
     depthChart.imbalance === null
       ? "--"
       : `${(depthChart.imbalance * 100).toFixed(1)}%`;
+  const sourceSeq = depth?.seq ?? 0;
+  const ladderRows = useMemo(
+    () => [
+      ...ladder.asks.map((row) => ({
+        kind: "ask" as const,
+        id: `ask-${row.price.toFixed(8)}`,
+        row,
+      })),
+      ...(ladder.bestAsk && ladder.bestBid
+        ? [
+            {
+              kind: "mid" as const,
+              id: `mid-${sourceSeq.toString()}`,
+            },
+          ]
+        : []),
+      ...ladder.bids.map((row) => ({
+        kind: "bid" as const,
+        id: `bid-${row.price.toFixed(8)}`,
+        row,
+      })),
+    ],
+    [ladder.asks, ladder.bestAsk, ladder.bestBid, ladder.bids, sourceSeq],
+  );
 
   return (
     <>
@@ -2259,94 +2285,81 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
           <span>Size</span>
           <span>Cum</span>
         </div>
-        <div className="space-y-1">
-          {ladder.asks.length === 0 && ladder.bids.length === 0 ? (
+        <div>
+          {ladderRows.length === 0 ? (
             <p className="rounded border border-border/50 bg-subtle px-2 py-2 text-muted">
               Waiting for market depth...
             </p>
           ) : null}
-          {ladder.asks.map((row) => {
-            const nextPrefillSide = "buy";
-            const sourceSeq = depth?.seq ?? 0;
-            const active =
-              selectedPrefill?.side === nextPrefillSide &&
-              selectedPrefill.price === row.price &&
-              selectedPrefill.seq === sourceSeq;
-            return (
-              <button
-                key={`ask-${row.price}`}
-                className={cn(
-                  "grid w-full grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded border px-2 py-1 text-left transition-colors",
-                  "border-red-500/20 bg-red-500/5 hover:bg-red-500/10",
-                  active && "border-red-400 bg-red-500/15",
-                )}
-                onClick={() =>
-                  onPrefill({
-                    side: nextPrefillSide,
-                    price: row.price,
-                    size: row.size,
-                    seq: sourceSeq,
-                    ts: depth?.ts ?? Date.now(),
-                  })
+          {ladderRows.length > 0 ? (
+            <VirtualList
+              className="overflow-y-auto rounded border border-border/50 bg-subtle/40"
+              items={ladderRows}
+              itemHeight={36}
+              viewportHeight={312}
+              keyForItem={(item) => item.id}
+              renderItem={(item) => {
+                if (item.kind === "mid") {
+                  return (
+                    <div className="px-1 py-0.5">
+                      <div className="rounded border border-border/70 bg-paper/80 px-2 py-1 text-center text-[10px] uppercase tracking-wider text-muted">
+                        top: bid {ladder.bestBid?.price.toFixed(4) ?? "--"} /
+                        ask {ladder.bestAsk?.price.toFixed(4) ?? "--"}
+                      </div>
+                    </div>
+                  );
                 }
-                type="button"
-              >
-                <span className="text-[10px] uppercase text-red-300">
-                  ask {row.isTopOfBook ? "*" : ""}
-                </span>
-                <span className="text-red-300">{row.price.toFixed(4)}</span>
-                <span className="text-muted">{row.size.toFixed(2)}</span>
-                <span className="text-muted">
-                  {row.cumulativeSize.toFixed(2)}
-                </span>
-              </button>
-            );
-          })}
 
-          {ladder.bestAsk && ladder.bestBid ? (
-            <div className="rounded border border-border/70 bg-paper/80 px-2 py-1 text-center text-[10px] uppercase tracking-wider text-muted">
-              top: bid {ladder.bestBid.price.toFixed(4)} / ask{" "}
-              {ladder.bestAsk.price.toFixed(4)}
-            </div>
+                const row = item.row;
+                const side = item.kind === "ask" ? "buy" : "sell";
+                const active =
+                  selectedPrefill?.side === side &&
+                  selectedPrefill.price === row.price &&
+                  selectedPrefill.seq === sourceSeq;
+                const toneClass =
+                  item.kind === "ask"
+                    ? "border-red-500/20 bg-red-500/5 hover:bg-red-500/10"
+                    : "border-emerald-500/20 bg-emerald-500/5 hover:bg-emerald-500/10";
+                const activeClass =
+                  item.kind === "ask"
+                    ? "border-red-400 bg-red-500/15"
+                    : "border-emerald-400 bg-emerald-500/15";
+                const textClass =
+                  item.kind === "ask" ? "text-red-300" : "text-emerald-300";
+
+                return (
+                  <div className="px-1 py-0.5">
+                    <button
+                      className={cn(
+                        "grid w-full grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded border px-2 py-1 text-left transition-colors",
+                        toneClass,
+                        active && activeClass,
+                      )}
+                      onClick={() =>
+                        onPrefill({
+                          side,
+                          price: row.price,
+                          size: row.size,
+                          seq: sourceSeq,
+                          ts: depth?.ts ?? Date.now(),
+                        })
+                      }
+                      type="button"
+                    >
+                      <span className={cn("text-[10px] uppercase", textClass)}>
+                        {item.kind} {row.isTopOfBook ? "*" : ""}
+                      </span>
+                      <span className={textClass}>{row.price.toFixed(4)}</span>
+                      <span className="text-muted">{row.size.toFixed(2)}</span>
+                      <span className="text-muted">
+                        {row.cumulativeSize.toFixed(2)}
+                      </span>
+                    </button>
+                  </div>
+                );
+              }}
+            />
           ) : null}
-
-          {ladder.bids.map((row) => {
-            const nextPrefillSide = "sell";
-            const sourceSeq = depth?.seq ?? 0;
-            const active =
-              selectedPrefill?.side === nextPrefillSide &&
-              selectedPrefill.price === row.price &&
-              selectedPrefill.seq === sourceSeq;
-            return (
-              <button
-                key={`bid-${row.price}`}
-                className={cn(
-                  "grid w-full grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded border px-2 py-1 text-left transition-colors",
-                  "border-emerald-500/20 bg-emerald-500/5 hover:bg-emerald-500/10",
-                  active && "border-emerald-400 bg-emerald-500/15",
-                )}
-                onClick={() =>
-                  onPrefill({
-                    side: nextPrefillSide,
-                    price: row.price,
-                    size: row.size,
-                    seq: sourceSeq,
-                    ts: depth?.ts ?? Date.now(),
-                  })
-                }
-                type="button"
-              >
-                <span className="text-[10px] uppercase text-emerald-300">
-                  bid {row.isTopOfBook ? "*" : ""}
-                </span>
-                <span className="text-emerald-300">{row.price.toFixed(4)}</span>
-                <span className="text-muted">{row.size.toFixed(2)}</span>
-                <span className="text-muted">
-                  {row.cumulativeSize.toFixed(2)}
-                </span>
-              </button>
-            );
-          })}
         </div>
       </div>
     </>
@@ -2481,6 +2494,7 @@ const TradesTapePanel = memo(function TradesTapePanel(props: {
     () => countMissingTradeTicks(displayedTrades),
     [displayedTrades],
   );
+  const tapeRowHeight = displayMode === "compact" ? 32 : 34;
 
   const togglePaused = useCallback(() => {
     setPaused((current) => {
@@ -2572,38 +2586,52 @@ const TradesTapePanel = memo(function TradesTapePanel(props: {
             {displayMode === "compact" ? "Expanded" : "Compact"}
           </button>
         </div>
-        <div className="space-y-1">
+        <div>
           {filteredTrades.length === 0 ? (
             <p className="rounded border border-border/50 bg-subtle px-2 py-2 text-muted">
               No trades matching current tape filters.
             </p>
           ) : null}
-          {filteredTrades.map((trade) => (
-            <div
-              key={`tape-${trade.seq}`}
-              className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded border border-border/60 px-2 py-1"
-            >
-              <p
-                className={cn(
-                  "text-[10px] uppercase",
-                  trade.side === "buy" ? "text-emerald-300" : "text-red-300",
-                )}
-              >
-                {trade.side}
-              </p>
-              <p className="font-mono text-[11px] text-ink">
-                {trade.price.toFixed(4)}
-              </p>
-              <p className="text-[10px] text-muted">{trade.size.toFixed(2)}</p>
-              {displayMode === "expanded" ? (
-                <p className="text-[10px] text-muted">
-                  {new Date(trade.ts).toLocaleTimeString()}
-                </p>
-              ) : (
-                <p className="text-[10px] text-muted">#{trade.seq}</p>
+          {filteredTrades.length > 0 ? (
+            <VirtualList
+              className="overflow-y-auto rounded border border-border/50 bg-subtle/40"
+              items={filteredTrades}
+              itemHeight={tapeRowHeight}
+              viewportHeight={292}
+              keyForItem={(trade) => `tape-${trade.seq.toString()}`}
+              renderItem={(trade) => (
+                <div className="px-1 py-0.5">
+                  <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded border border-border/60 px-2 py-1">
+                    <p
+                      className={cn(
+                        "text-[10px] uppercase",
+                        trade.side === "buy"
+                          ? "text-emerald-300"
+                          : "text-red-300",
+                      )}
+                    >
+                      {trade.side}
+                    </p>
+                    <p className="font-mono text-[11px] text-ink">
+                      {trade.price.toFixed(4)}
+                    </p>
+                    <p className="text-[10px] text-muted">
+                      {trade.size.toFixed(2)}
+                    </p>
+                    {displayMode === "expanded" ? (
+                      <p className="text-[10px] text-muted">
+                        {new Date(trade.ts).toLocaleTimeString()}
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-muted">
+                        #{trade.seq.toString()}
+                      </p>
+                    )}
+                  </div>
+                </div>
               )}
-            </div>
-          ))}
+            />
+          ) : null}
         </div>
       </div>
     </>
@@ -2757,7 +2785,6 @@ const PositionsOrdersFillsPanel = memo(
     const [ledgerStatus, setLedgerStatus] =
       useState<FillLedgerStatusFilter>("all");
     const [ledgerQuery, setLedgerQuery] = useState("");
-    const [ledgerPage, setLedgerPage] = useState(1);
     const [inspectorOpen, setInspectorOpen] = useState(false);
     const [inspectorRequestId, setInspectorRequestId] = useState<string | null>(
       null,
@@ -2791,22 +2818,6 @@ const PositionsOrdersFillsPanel = memo(
           query: ledgerQuery,
         }),
       [ledgerPair, ledgerQuery, ledgerRows, ledgerSide, ledgerStatus],
-    );
-    const ledgerPageCount = Math.max(
-      1,
-      Math.ceil(filteredLedgerRows.length / FILLS_LEDGER_PAGE_SIZE),
-    );
-    useEffect(() => {
-      setLedgerPage((current) => Math.min(current, ledgerPageCount));
-    }, [ledgerPageCount]);
-    const pagedLedgerRows = useMemo(
-      () =>
-        paginateFillLedgerRows(
-          filteredLedgerRows,
-          ledgerPage,
-          FILLS_LEDGER_PAGE_SIZE,
-        ),
-      [filteredLedgerRows, ledgerPage],
     );
     const exportLedgerCsv = useCallback(() => {
       if (filteredLedgerRows.length === 0) return;
@@ -3146,7 +3157,6 @@ const PositionsOrdersFillsPanel = memo(
                   value={ledgerSide}
                   onChange={(event) => {
                     setLedgerSide(event.target.value as FillLedgerSideFilter);
-                    setLedgerPage(1);
                   }}
                 >
                   <option value="all">All</option>
@@ -3161,7 +3171,6 @@ const PositionsOrdersFillsPanel = memo(
                   value={ledgerPair}
                   onChange={(event) => {
                     setLedgerPair(event.target.value as PairId | "all");
-                    setLedgerPage(1);
                   }}
                 >
                   <option value="all">All</option>
@@ -3181,7 +3190,6 @@ const PositionsOrdersFillsPanel = memo(
                     setLedgerStatus(
                       event.target.value as FillLedgerStatusFilter,
                     );
-                    setLedgerPage(1);
                   }}
                 >
                   <option value="all">All</option>
@@ -3195,100 +3203,71 @@ const PositionsOrdersFillsPanel = memo(
                   className="h-7 rounded border border-border bg-paper px-1.5 text-[11px] text-ink"
                   placeholder="request/signature/provider"
                   value={ledgerQuery}
-                  onChange={(event) => {
-                    setLedgerQuery(event.target.value);
-                    setLedgerPage(1);
-                  }}
+                  onChange={(event) => setLedgerQuery(event.target.value)}
                 />
               </label>
             </div>
-            <div className="mt-2 space-y-1.5">
+            <div className="mt-2">
               {filteredLedgerRows.length === 0 ? (
                 <p className="text-muted">
                   No fills match current filters for this session.
                 </p>
               ) : null}
-              {pagedLedgerRows.map((entry) => (
-                <div
-                  key={`fill-ledger-${entry.id}`}
-                  className="grid grid-cols-[1fr_auto] gap-2 rounded border border-border/60 px-2 py-1"
-                >
-                  <div className="min-w-0">
-                    <p className="font-mono text-[11px] text-ink truncate">
-                      {entry.pairId} • {entry.side.toUpperCase()}{" "}
-                      {entry.sizeBaseUi.toFixed(4)}{" "}
-                      {getPairConfig(entry.pairId).baseSymbol} @{" "}
-                      {entry.price === null ? "--" : entry.price.toFixed(4)}
-                    </p>
-                    <p className="text-[10px] text-muted">
-                      {new Date(entry.ts).toLocaleTimeString()} • Fee{" "}
-                      {formatLedgerFee(entry)}
-                    </p>
-                    <p className="text-[10px] text-muted truncate">
-                      req {shortExecutionId(entry.requestId)} • rcpt{" "}
-                      {shortExecutionId(entry.receiptId)} •{" "}
-                      {entry.provider ?? "provider --"}
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <span className="text-[10px] uppercase text-muted">
-                      {entry.status}
-                    </span>
-                    <button
-                      className={cn(
-                        BTN_SECONDARY,
-                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
-                      )}
-                      onClick={() => openInspector(entry.requestId)}
-                      type="button"
-                    >
-                      Inspect
-                    </button>
-                  </div>
-                </div>
-              ))}
+              {filteredLedgerRows.length > 0 ? (
+                <VirtualList
+                  className="overflow-y-auto rounded border border-border/50 bg-subtle/30"
+                  items={filteredLedgerRows}
+                  itemHeight={68}
+                  viewportHeight={276}
+                  keyForItem={(entry) => `fill-ledger-${entry.id}`}
+                  renderItem={(entry) => (
+                    <div className="px-1 py-0.5">
+                      <div className="grid grid-cols-[1fr_auto] gap-2 rounded border border-border/60 px-2 py-1">
+                        <div className="min-w-0">
+                          <p className="font-mono text-[11px] text-ink truncate">
+                            {entry.pairId} • {entry.side.toUpperCase()}{" "}
+                            {entry.sizeBaseUi.toFixed(4)}{" "}
+                            {getPairConfig(entry.pairId).baseSymbol} @{" "}
+                            {entry.price === null
+                              ? "--"
+                              : entry.price.toFixed(4)}
+                          </p>
+                          <p className="text-[10px] text-muted">
+                            {new Date(entry.ts).toLocaleTimeString()} • Fee{" "}
+                            {formatLedgerFee(entry)}
+                          </p>
+                          <p className="text-[10px] text-muted truncate">
+                            req {shortExecutionId(entry.requestId)} • rcpt{" "}
+                            {shortExecutionId(entry.receiptId)} •{" "}
+                            {entry.provider ?? "provider --"}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="text-[10px] uppercase text-muted">
+                            {entry.status}
+                          </span>
+                          <button
+                            className={cn(
+                              BTN_SECONDARY,
+                              "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                            )}
+                            onClick={() => openInspector(entry.requestId)}
+                            type="button"
+                          >
+                            Inspect
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                />
+              ) : null}
             </div>
             <div className="mt-2 flex items-center justify-between text-[10px] text-muted">
               <span>
-                Showing {pagedLedgerRows.length} of {filteredLedgerRows.length}{" "}
-                fills
+                Showing {filteredLedgerRows.length} fills (virtualized)
               </span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  className={cn(
-                    BTN_SECONDARY,
-                    "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
-                    ledgerPage <= 1 && "opacity-60 pointer-events-none",
-                  )}
-                  onClick={() =>
-                    setLedgerPage((current) => Math.max(1, current - 1))
-                  }
-                  type="button"
-                  disabled={ledgerPage <= 1}
-                >
-                  Prev
-                </button>
-                <span>
-                  Page {ledgerPage} / {ledgerPageCount}
-                </span>
-                <button
-                  className={cn(
-                    BTN_SECONDARY,
-                    "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
-                    ledgerPage >= ledgerPageCount &&
-                      "opacity-60 pointer-events-none",
-                  )}
-                  onClick={() =>
-                    setLedgerPage((current) =>
-                      Math.min(ledgerPageCount, current + 1),
-                    )
-                  }
-                  type="button"
-                  disabled={ledgerPage >= ledgerPageCount}
-                >
-                  Next
-                </button>
-              </div>
+              <span>Windowed render active</span>
             </div>
           </div>
         </div>
