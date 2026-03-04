@@ -51,6 +51,14 @@ import {
 } from "./terminal-modes";
 
 type Balances = BalanceResponse;
+type ExecutionActivityRow = {
+  id: string;
+  ts: number;
+  pairId: PairId;
+  leg: string;
+  status: string;
+  signature: string | null;
+};
 
 const FundingModal = dynamic(
   () => import("../funding-modal").then((mod) => mod.FundingModal),
@@ -213,6 +221,9 @@ function ControlRoom() {
     string,
     unknown
   > | null>(null);
+  const [recentExecutions, setRecentExecutions] = useState<
+    ExecutionActivityRow[]
+  >([]);
   const terminalModeRef = useRef<TerminalMode>(terminalMode);
   const fallbackModePersistControllerRef = useRef<AbortController | null>(null);
   const modeCapabilities = getTerminalModeCapabilities(terminalMode);
@@ -474,6 +485,7 @@ function ControlRoom() {
 
   const hasWallet = wallet !== null;
   const selectedPair = getPairConfig(selectedPairId);
+  const marketFeed = useMarketFeed(selectedPairId);
 
   const openTradeTicket = useCallback(
     (intent: TradeIntent): void => {
@@ -588,9 +600,20 @@ function ControlRoom() {
   const handleTradeComplete = useCallback(
     (trade: TradeTicketCompletion): void => {
       applyOptimisticTradeBalances(trade);
+      setRecentExecutions((current) => {
+        const entry: ExecutionActivityRow = {
+          id: crypto.randomUUID(),
+          ts: Date.now(),
+          pairId: selectedPairId,
+          leg: `${trade.inputSymbol} -> ${trade.outputSymbol}`,
+          status: trade.status,
+          signature: trade.signature,
+        };
+        return [entry, ...current].slice(0, 30);
+      });
       void refreshWalletBalances();
     },
-    [applyOptimisticTradeBalances, refreshWalletBalances],
+    [applyOptimisticTradeBalances, refreshWalletBalances, selectedPairId],
   );
 
   useEffect(() => {
@@ -730,12 +753,33 @@ function ControlRoom() {
               >
                 {showMarketModule ? (
                   <div
-                    key="market"
+                    key="chart"
                     className="flex flex-col overflow-hidden bg-surface"
                   >
-                    <MarketMonitorCard
+                    <ChartPanel
                       pairId={selectedPairId}
+                      market={marketFeed}
                       onPairChange={setSelectedPairId}
+                    />
+                  </div>
+                ) : null}
+
+                {showMarketModule ? (
+                  <div
+                    key="orderbook"
+                    className="flex flex-col overflow-hidden bg-surface"
+                  >
+                    <OrderbookDepthPanel market={marketFeed} />
+                  </div>
+                ) : null}
+
+                {showMarketModule ? (
+                  <div
+                    key="order_entry"
+                    className="flex flex-col overflow-hidden bg-surface"
+                  >
+                    <OrderEntryPanel
+                      pairId={selectedPairId}
                       onBuy={openMarketBuyTrade}
                       onSell={openMarketSellTrade}
                       tradingEnabled={canQuickTrade}
@@ -743,14 +787,24 @@ function ControlRoom() {
                   </div>
                 ) : null}
 
-                {showWalletModule ? (
+                {showMarketModule ? (
                   <div
-                    key="wallet"
+                    key="positions"
                     className="flex flex-col overflow-hidden bg-surface"
                   >
-                    <WalletMonitorCard
+                    <PositionsOrdersFillsPanel entries={recentExecutions} />
+                  </div>
+                ) : null}
+
+                {showWalletModule ? (
+                  <div
+                    key="account_risk"
+                    className="flex flex-col overflow-hidden bg-surface"
+                  >
+                    <AccountRiskPanel
                       pairId={selectedPairId}
                       tokenBalancesByMint={tokenBalancesByMint}
+                      market={marketFeed}
                     />
                   </div>
                 ) : null}
@@ -797,23 +851,20 @@ function ControlRoom() {
   );
 }
 
-const MarketMonitorCard = memo(function MarketMonitorCard(props: {
+const ChartPanel = memo(function ChartPanel(props: {
   pairId: PairId;
+  market: MarketState;
   onPairChange: (pairId: PairId) => void;
-  onBuy: () => void;
-  onSell: () => void;
-  tradingEnabled: boolean;
 }) {
-  const { pairId, onPairChange, onBuy, onSell, tradingEnabled } = props;
+  const { pairId, market, onPairChange } = props;
   const pair = getPairConfig(pairId);
-  const marketFeed = useMarketFeed(pairId);
   const pairLabel = `${pair.baseSymbol}/${pair.quoteSymbol}`;
   return (
     <>
       <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
         <p className="label flex items-center gap-2 dashboard-drag-handle cursor-move select-none">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          MARKET_MONITOR
+          CHART
         </p>
         <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider">
           <select
@@ -831,43 +882,19 @@ const MarketMonitorCard = memo(function MarketMonitorCard(props: {
           <span
             className={cn(
               "tabular-nums",
-              (marketFeed.change24hPct ?? 0) >= 0
+              (market.change24hPct ?? 0) >= 0
                 ? "text-emerald-400"
                 : "text-red-400",
             )}
           >
-            {formatPrice(marketFeed.latestPrice)} {pair.quoteSymbol}
+            {formatPrice(market.latestPrice)} {pair.quoteSymbol}
           </span>
-          <button
-            className={cn(
-              BTN_SECONDARY,
-              "!h-6 !px-2 !py-0 text-[10px] !rounded",
-              !tradingEnabled && "opacity-60 pointer-events-none",
-            )}
-            onClick={onBuy}
-            type="button"
-            disabled={!tradingEnabled}
-          >
-            Buy
-          </button>
-          <button
-            className={cn(
-              BTN_SECONDARY,
-              "!h-6 !px-2 !py-0 text-[10px] !rounded",
-              !tradingEnabled && "opacity-60 pointer-events-none",
-            )}
-            onClick={onSell}
-            type="button"
-            disabled={!tradingEnabled}
-          >
-            Sell
-          </button>
         </div>
       </div>
       <div className="flex-1 relative bg-[var(--color-chart-bg)]">
         <MarketChart
           className="opacity-80"
-          market={marketFeed}
+          market={market}
           pairLabel={pairLabel}
         />
       </div>
@@ -875,11 +902,212 @@ const MarketMonitorCard = memo(function MarketMonitorCard(props: {
   );
 });
 
-const WalletMonitorCard = memo(function WalletMonitorCard(props: {
+const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
+  market: MarketState;
+}) {
+  const { market } = props;
+  const lastPrice = market.latestPrice ?? null;
+  const basePrice =
+    Number.isFinite(lastPrice) && (lastPrice ?? 0) > 0
+      ? (lastPrice as number)
+      : null;
+  const levels = [0.05, 0.1, 0.15, 0.2, 0.25];
+  const asks =
+    basePrice === null
+      ? []
+      : levels.map((pct, index) => ({
+          price: basePrice * (1 + pct / 100),
+          size: 80 + index * 25,
+        }));
+  const bids =
+    basePrice === null
+      ? []
+      : levels.map((pct, index) => ({
+          price: basePrice * (1 - pct / 100),
+          size: 75 + index * 22,
+        }));
+
+  return (
+    <>
+      <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
+        <p className="label dashboard-drag-handle cursor-move select-none">
+          ORDERBOOK_DEPTH
+        </p>
+        <span className="text-[10px] font-mono text-muted">
+          {market.lastUpdatedMs ? "live" : "warming"}
+        </span>
+      </div>
+      <div className="flex-1 overflow-auto p-3 text-[11px] font-mono">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="mb-1 text-[10px] uppercase tracking-wider text-red-300">
+              Asks
+            </p>
+            <div className="space-y-1">
+              {asks.length === 0 ? (
+                <p className="text-muted">Waiting for market depth...</p>
+              ) : null}
+              {asks.map((row) => (
+                <div
+                  key={`ask-${row.price.toFixed(6)}`}
+                  className="flex items-center justify-between rounded border border-border/50 bg-red-500/5 px-2 py-1"
+                >
+                  <span className="text-red-300">{row.price.toFixed(2)}</span>
+                  <span className="text-muted">{row.size.toFixed(0)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="mb-1 text-[10px] uppercase tracking-wider text-emerald-300">
+              Bids
+            </p>
+            <div className="space-y-1">
+              {bids.length === 0 ? (
+                <p className="text-muted">Waiting for market depth...</p>
+              ) : null}
+              {bids.map((row) => (
+                <div
+                  key={`bid-${row.price.toFixed(6)}`}
+                  className="flex items-center justify-between rounded border border-border/50 bg-emerald-500/5 px-2 py-1"
+                >
+                  <span className="text-emerald-300">
+                    {row.price.toFixed(2)}
+                  </span>
+                  <span className="text-muted">{row.size.toFixed(0)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+});
+
+const OrderEntryPanel = memo(function OrderEntryPanel(props: {
+  pairId: PairId;
+  onBuy: () => void;
+  onSell: () => void;
+  tradingEnabled: boolean;
+}) {
+  const { pairId, onBuy, onSell, tradingEnabled } = props;
+  return (
+    <>
+      <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
+        <p className="label dashboard-drag-handle cursor-move select-none">
+          ORDER_ENTRY
+        </p>
+        <span className="text-[10px] font-mono text-emerald-400">{pairId}</span>
+      </div>
+      <div className="flex-1 p-3 text-xs space-y-3">
+        <div className="rounded border border-border bg-subtle p-2">
+          <p className="text-[10px] uppercase tracking-wider text-muted">
+            Execution
+          </p>
+          <p className="mt-1 font-mono text-sm text-ink">Market • IOC</p>
+          <p className="text-[10px] text-muted">Routing: fast lane default</p>
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <button
+            className={cn(
+              BTN_SECONDARY,
+              "!h-8 !rounded !text-xs bg-emerald-500/10 border-emerald-500/30 text-emerald-300",
+              !tradingEnabled && "opacity-60 pointer-events-none",
+            )}
+            onClick={onBuy}
+            type="button"
+            disabled={!tradingEnabled}
+          >
+            Buy / Lift
+          </button>
+          <button
+            className={cn(
+              BTN_SECONDARY,
+              "!h-8 !rounded !text-xs bg-red-500/10 border-red-500/30 text-red-300",
+              !tradingEnabled && "opacity-60 pointer-events-none",
+            )}
+            onClick={onSell}
+            type="button"
+            disabled={!tradingEnabled}
+          >
+            Sell / Hit
+          </button>
+        </div>
+      </div>
+    </>
+  );
+});
+
+const PositionsOrdersFillsPanel = memo(
+  function PositionsOrdersFillsPanel(props: {
+    entries: ExecutionActivityRow[];
+  }) {
+    const { entries } = props;
+    return (
+      <>
+        <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
+          <p className="label dashboard-drag-handle cursor-move select-none">
+            POSITIONS_ORDERS_FILLS
+          </p>
+          <span className="text-[10px] font-mono text-muted">
+            {entries.length} recent
+          </span>
+        </div>
+        <div className="flex-1 overflow-auto p-3 text-xs space-y-3">
+          <div className="rounded border border-border bg-subtle p-2">
+            <p className="text-[10px] uppercase tracking-wider text-muted">
+              Open Positions
+            </p>
+            <p className="mt-1 text-muted">
+              Position netting is not enabled yet for this lane.
+            </p>
+          </div>
+          <div className="rounded border border-border bg-subtle p-2">
+            <p className="text-[10px] uppercase tracking-wider text-muted">
+              Recent Activity
+            </p>
+            <div className="mt-2 space-y-1.5">
+              {entries.length === 0 ? (
+                <p className="text-muted">No fills yet in this session.</p>
+              ) : null}
+              {entries.slice(0, 8).map((entry) => (
+                <div
+                  key={entry.id}
+                  className="grid grid-cols-[1fr_auto] gap-2 rounded border border-border/60 px-2 py-1"
+                >
+                  <div className="min-w-0">
+                    <p className="font-mono text-[11px] text-ink truncate">
+                      {entry.pairId} • {entry.leg}
+                    </p>
+                    <p className="text-[10px] text-muted">
+                      {new Date(entry.ts).toLocaleTimeString()}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] uppercase text-muted">
+                      {entry.status}
+                    </p>
+                    <p className="text-[10px] text-muted">
+                      {entry.signature ? "landed" : "tracking"}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  },
+);
+
+const AccountRiskPanel = memo(function AccountRiskPanel(props: {
   pairId: PairId;
   tokenBalancesByMint: Record<string, string>;
+  market: MarketState;
 }) {
-  const { pairId, tokenBalancesByMint } = props;
+  const { pairId, tokenBalancesByMint, market } = props;
   const pair = getPairConfig(pairId);
   const baseToken = TOKEN_CONFIGS[pair.baseSymbol];
   const quoteToken = TOKEN_CONFIGS[pair.quoteSymbol];
@@ -890,38 +1118,54 @@ const WalletMonitorCard = memo(function WalletMonitorCard(props: {
     quoteAtomic,
     quoteToken.decimals,
   );
+  const baseQty = Number(baseDisplay);
+  const riskExposure =
+    Number.isFinite(baseQty) && Number.isFinite(market.latestPrice ?? NaN)
+      ? baseQty * Number(market.latestPrice)
+      : null;
+  const change24h = market.change24hPct ?? null;
 
   return (
     <>
       <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
-        <p className="label text-[10px] text-muted dashboard-drag-handle cursor-move select-none">
-          WALLET_MONITOR
+        <p className="label dashboard-drag-handle cursor-move select-none">
+          ACCOUNT_RISK
         </p>
-        <span className="text-[10px] uppercase tracking-wider text-emerald-400 font-mono">
-          {pair.id}
-        </span>
+        <span className="text-[10px] font-mono text-emerald-400">{pairId}</span>
       </div>
-      <div className="flex-1 p-4 grid grid-cols-2 gap-4 place-content-center">
-        <div className="space-y-1">
+      <div className="flex-1 overflow-auto p-3 text-xs space-y-2">
+        <div className="rounded border border-border bg-subtle px-2 py-1.5">
           <p className="text-[10px] text-muted uppercase tracking-wider">
-            {baseToken.symbol} Balance
+            Balances
           </p>
-          <p className="text-2xl font-mono font-medium text-ink">
-            {baseDisplay}
-            <span className="text-sm text-muted ml-1 font-sans">
-              {baseToken.symbol}
-            </span>
+          <p className="mt-1 font-mono text-ink">
+            {baseDisplay} {baseToken.symbol}
+          </p>
+          <p className="font-mono text-ink">
+            {quoteDisplay} {quoteToken.symbol}
           </p>
         </div>
-        <div className="space-y-1">
+        <div className="rounded border border-border bg-subtle px-2 py-1.5">
           <p className="text-[10px] text-muted uppercase tracking-wider">
-            {quoteToken.symbol} Balance
+            Risk
           </p>
-          <p className="text-2xl font-mono font-medium text-ink">
-            {quoteDisplay}
-            <span className="text-sm text-muted ml-1 font-sans">
-              {quoteToken.symbol}
-            </span>
+          <p className="mt-1 font-mono text-ink">
+            Exposure:{" "}
+            {riskExposure === null || !Number.isFinite(riskExposure)
+              ? "--"
+              : `${riskExposure.toFixed(2)} ${quoteToken.symbol}`}
+          </p>
+          <p
+            className={cn(
+              "font-mono",
+              change24h === null
+                ? "text-muted"
+                : change24h >= 0
+                  ? "text-emerald-300"
+                  : "text-red-300",
+            )}
+          >
+            24h change: {change24h === null ? "--" : `${change24h.toFixed(2)}%`}
           </p>
         </div>
       </div>
