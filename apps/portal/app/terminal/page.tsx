@@ -18,6 +18,10 @@ import {
   DashboardGrid,
   hasCustomDashboardGridLayouts,
 } from "./components/dashboard-grid";
+import {
+  buildDepthChartModel,
+  findNearestDepthPoint,
+} from "./components/depth-chart";
 import { MacroEtfWidget } from "./components/macro-etf-widget";
 import { MacroFredWidget } from "./components/macro-fred-widget";
 import { MacroOilWidget } from "./components/macro-oil-widget";
@@ -1001,6 +1005,7 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
 }) {
   const { market, realtime, selectedPrefill, onPrefill } = props;
   const [groupingBps, setGroupingBps] = useState(5);
+  const [hoverPrice, setHoverPrice] = useState<number | null>(null);
   const lastPrice = market.latestPrice ?? null;
   const depth = realtime.depth;
   const asks = depth?.asks ?? [];
@@ -1045,6 +1050,104 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
       ? "--"
       : `${ladder.spreadAbs.toFixed(4)} (${ladder.spreadBps.toFixed(2)} bps)`;
   const groupingOptions = [2, 5, 10, 25];
+  const depthChart = useMemo(
+    () =>
+      buildDepthChartModel({
+        bids: ladder.bids,
+        asks: ladder.asks,
+        sequence: depth?.seq ?? null,
+      }),
+    [depth?.seq, ladder.asks, ladder.bids],
+  );
+  const chartSpec = useMemo(() => {
+    const width = 320;
+    const height = 140;
+    const padLeft = 28;
+    const padRight = 10;
+    const padTop = 8;
+    const padBottom = 20;
+
+    const bidLow = depthChart.bids[depthChart.bids.length - 1]?.price ?? null;
+    const bidHigh = depthChart.bids[0]?.price ?? null;
+    const askLow = depthChart.asks[0]?.price ?? null;
+    const askHigh = depthChart.asks[depthChart.asks.length - 1]?.price ?? null;
+
+    const minPrice = Math.min(
+      bidLow ?? Number.POSITIVE_INFINITY,
+      askLow ?? Number.POSITIVE_INFINITY,
+    );
+    const maxPrice = Math.max(
+      bidHigh ?? Number.NEGATIVE_INFINITY,
+      askHigh ?? Number.NEGATIVE_INFINITY,
+    );
+    const maxCumulative = Math.max(
+      depthChart.totalBidSize,
+      depthChart.totalAskSize,
+      1,
+    );
+    if (
+      !Number.isFinite(minPrice) ||
+      !Number.isFinite(maxPrice) ||
+      maxPrice <= minPrice
+    ) {
+      return null;
+    }
+
+    const innerWidth = width - padLeft - padRight;
+    const innerHeight = height - padTop - padBottom;
+    const xForPrice = (price: number): number =>
+      padLeft + ((price - minPrice) / (maxPrice - minPrice)) * innerWidth;
+    const yForCumulative = (cumulative: number): number =>
+      padTop + (1 - cumulative / maxCumulative) * innerHeight;
+    const toPath = (
+      points: Array<{ price: number; cumulativeSize: number }>,
+    ): string =>
+      points
+        .map((point, index) => {
+          const x = xForPrice(point.price).toFixed(2);
+          const y = yForCumulative(point.cumulativeSize).toFixed(2);
+          return `${index === 0 ? "M" : "L"} ${x} ${y}`;
+        })
+        .join(" ");
+
+    return {
+      width,
+      height,
+      padLeft,
+      padRight,
+      padTop,
+      padBottom,
+      minPrice,
+      maxPrice,
+      innerWidth,
+      bidPath: toPath(depthChart.bids),
+      askPath: toPath(depthChart.asks),
+      xForPrice,
+    };
+  }, [
+    depthChart.asks,
+    depthChart.bids,
+    depthChart.totalAskSize,
+    depthChart.totalBidSize,
+  ]);
+  const hoverBidPoint = useMemo(
+    () =>
+      hoverPrice === null
+        ? null
+        : findNearestDepthPoint(depthChart.bids, hoverPrice),
+    [depthChart.bids, hoverPrice],
+  );
+  const hoverAskPoint = useMemo(
+    () =>
+      hoverPrice === null
+        ? null
+        : findNearestDepthPoint(depthChart.asks, hoverPrice),
+    [depthChart.asks, hoverPrice],
+  );
+  const imbalanceLabel =
+    depthChart.imbalance === null
+      ? "--"
+      : `${(depthChart.imbalance * 100).toFixed(1)}%`;
 
   return (
     <>
@@ -1092,6 +1195,90 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
               ))}
             </select>
           </div>
+        </div>
+        <div className="mb-2 rounded border border-border/60 bg-subtle px-2 py-1.5">
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-muted">
+            <span>Depth chart</span>
+            <span>
+              seq {depthChart.sequence ?? "--"} • imbalance {imbalanceLabel}
+            </span>
+          </div>
+          {chartSpec ? (
+            <>
+              <svg
+                className="h-[130px] w-full rounded border border-border/40 bg-paper/70"
+                viewBox={`0 0 ${chartSpec.width} ${chartSpec.height}`}
+                onMouseLeave={() => setHoverPrice(null)}
+                onMouseMove={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const rawX = event.clientX - rect.left;
+                  const clampedX = Math.max(
+                    chartSpec.padLeft,
+                    Math.min(rawX, chartSpec.width - chartSpec.padRight),
+                  );
+                  const ratio =
+                    (clampedX - chartSpec.padLeft) / chartSpec.innerWidth;
+                  const price =
+                    chartSpec.minPrice +
+                    ratio * (chartSpec.maxPrice - chartSpec.minPrice);
+                  setHoverPrice(price);
+                }}
+              >
+                <title>Cumulative bid and ask depth chart</title>
+                <path
+                  d={chartSpec.bidPath}
+                  fill="none"
+                  stroke="rgba(16,185,129,0.95)"
+                  strokeWidth="2"
+                />
+                <path
+                  d={chartSpec.askPath}
+                  fill="none"
+                  stroke="rgba(248,113,113,0.95)"
+                  strokeWidth="2"
+                />
+                {hoverPrice !== null ? (
+                  <line
+                    x1={chartSpec.xForPrice(hoverPrice)}
+                    x2={chartSpec.xForPrice(hoverPrice)}
+                    y1={chartSpec.padTop}
+                    y2={chartSpec.height - chartSpec.padBottom}
+                    stroke="rgba(148,163,184,0.7)"
+                    strokeWidth="1"
+                    strokeDasharray="3 3"
+                  />
+                ) : null}
+              </svg>
+              <div className="mt-1 grid grid-cols-2 gap-2 text-[10px] text-muted">
+                <p>
+                  Hover price:{" "}
+                  {hoverPrice === null ? "--" : hoverPrice.toFixed(4)}
+                </p>
+                <p className="text-right">
+                  Spread:{" "}
+                  {depthChart.spreadAbs === null
+                    ? "--"
+                    : depthChart.spreadAbs.toFixed(4)}
+                </p>
+                <p>
+                  Bid cum:{" "}
+                  {hoverBidPoint
+                    ? hoverBidPoint.cumulativeSize.toFixed(2)
+                    : "--"}
+                </p>
+                <p className="text-right">
+                  Ask cum:{" "}
+                  {hoverAskPoint
+                    ? hoverAskPoint.cumulativeSize.toFixed(2)
+                    : "--"}
+                </p>
+              </div>
+            </>
+          ) : (
+            <p className="rounded border border-border/40 bg-paper/70 px-2 py-2 text-[10px] text-muted">
+              Not enough depth points to render synchronized chart.
+            </p>
+          )}
         </div>
         <div className="grid grid-cols-[auto_1fr_auto_auto] gap-2 px-1 pb-1 text-[10px] uppercase tracking-wider text-muted">
           <span>Side</span>

@@ -22,6 +22,7 @@ It provides one execution fabric for:
 - Realtime terminal transport with stream reconnect + polling fallback + staleness badges
 - Live orderbook ladder with grouped levels, spread view, and click-to-prefill order context
 - Dedicated trades tape panel with side/size filters, pause-resume, and compact/expanded modes
+- Synchronized depth chart overlays with cumulative curves, spread, and imbalance annotations
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:
