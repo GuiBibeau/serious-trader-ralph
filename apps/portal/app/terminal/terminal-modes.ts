@@ -12,7 +12,9 @@ export type TerminalModule =
   | "macro_fred"
   | "macro_etf"
   | "macro_stablecoin"
-  | "macro_oil";
+  | "macro_oil"
+  | "degen_watchlist"
+  | "degen_event_hooks";
 
 export type TerminalAction = "quick_trade" | "macro_trade" | "layout_edit";
 
@@ -48,6 +50,8 @@ const TERMINAL_MODE_CAPABILITIES: Record<
       "macro_etf",
       "macro_stablecoin",
       "macro_oil",
+      "degen_watchlist",
+      "degen_event_hooks",
     ],
     actions: {
       quick_trade: true,
@@ -66,6 +70,8 @@ const TERMINAL_MODE_CAPABILITIES: Record<
       "macro_etf",
       "macro_stablecoin",
       "macro_oil",
+      "degen_watchlist",
+      "degen_event_hooks",
     ],
     actions: {
       quick_trade: true,

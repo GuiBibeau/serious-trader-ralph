@@ -24,6 +24,8 @@ import {
   DashboardGrid,
   hasCustomDashboardGridLayouts,
 } from "./components/dashboard-grid";
+import { DegenEventHooksWidget } from "./components/degen-event-hooks-widget";
+import { DegenWatchlistWidget } from "./components/degen-watchlist-widget";
 import {
   buildDepthChartModel,
   findNearestDepthPoint,
@@ -214,6 +216,8 @@ const CUSTOM_MODULE_LABELS: Record<TerminalModule, string> = {
   macro_etf: "Macro ETF",
   macro_stablecoin: "Stablecoin",
   macro_oil: "Oil",
+  degen_watchlist: "Degen Watchlist",
+  degen_event_hooks: "Event Hooks",
 };
 
 function buildModeLayoutStorageKey(input: {
@@ -434,6 +438,7 @@ function ControlRoom() {
     [activeCustomWorkspace.modules],
   );
   const isCustomMode = terminalMode === "custom";
+  const isDegenMode = terminalMode === "degen";
   const canQuickTrade = modeAllowsAction(terminalMode, "quick_trade");
   const canMacroTrade = modeAllowsAction(terminalMode, "macro_trade");
   const canLayoutEdit = modeAllowsAction(terminalMode, "layout_edit");
@@ -458,6 +463,12 @@ function ControlRoom() {
   const showMacroOilModule =
     modeShowsModule(terminalMode, "macro_oil") &&
     (!isCustomMode || customWorkspaceModules.macro_oil);
+  const showDegenWatchlistModule =
+    modeShowsModule(terminalMode, "degen_watchlist") &&
+    (!isCustomMode || customWorkspaceModules.degen_watchlist);
+  const showDegenEventHooksModule =
+    modeShowsModule(terminalMode, "degen_event_hooks") &&
+    (!isCustomMode || customWorkspaceModules.degen_event_hooks);
   const layoutStorageKey = useMemo(
     () =>
       buildModeLayoutStorageKey({
@@ -1523,6 +1534,18 @@ function ControlRoom() {
           walletAddress={wallet?.walletAddress ?? null}
           tokenBalancesByMint={tokenBalancesByMint}
           riskSnapshot={accountRiskSnapshot}
+          riskAcknowledgement={
+            isDegenMode
+              ? {
+                  required: true,
+                  title: "DEGEN_MODE_CONFIRMATION",
+                  message:
+                    "Degen mode enables rapid volatility execution. Confirm risk acknowledgement before submit.",
+                  confirmationLabel:
+                    "I confirm this order is intentionally high risk.",
+                }
+              : undefined
+          }
           hotkeyBindings={tradeTicketHotkeys}
           getAccessToken={getAccessToken}
           onClose={() => setTradeOpen(false)}
@@ -1556,6 +1579,26 @@ function ControlRoom() {
                 realtime={realtimeTransport}
                 market={marketFeed}
               />
+              {isDegenMode ? (
+                <div className="rounded border border-red-500/40 bg-gradient-to-r from-red-500/15 via-orange-500/10 to-transparent px-3 py-2 text-[11px] text-red-100">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-semibold uppercase tracking-wider">
+                      Degen Mode Active
+                    </p>
+                    <button
+                      className={cn(BTN_SECONDARY, "h-6 px-2 text-[10px]")}
+                      onClick={() => handleTerminalModeChange("regular")}
+                      type="button"
+                    >
+                      Exit Degen
+                    </button>
+                  </div>
+                  <p className="mt-1 text-red-200/90">
+                    High-volatility modules are enabled. Trade ticket execution
+                    requires explicit risk acknowledgement.
+                  </p>
+                </div>
+              ) : null}
               <div className="relative min-h-0 flex-1">
                 <div className="pointer-events-none absolute left-2 top-2 z-20 hidden sm:flex sm:items-center sm:gap-1.5">
                   <div
@@ -1829,6 +1872,32 @@ function ControlRoom() {
                   {showMacroOilModule ? (
                     <div key="macro_oil" className="overflow-hidden">
                       <MacroOilWidget />
+                    </div>
+                  ) : null}
+                  {showDegenWatchlistModule ? (
+                    <div
+                      key="degen_watchlist"
+                      className="flex flex-col overflow-hidden bg-surface"
+                    >
+                      <DegenWatchlistWidget
+                        selectedPairId={selectedPairId}
+                        market={marketFeed}
+                        tradingEnabled={canQuickTrade}
+                        onPairFocus={handlePairChange}
+                        onTradeAction={openTradeTicket}
+                      />
+                    </div>
+                  ) : null}
+                  {showDegenEventHooksModule ? (
+                    <div
+                      key="degen_event_hooks"
+                      className="flex flex-col overflow-hidden bg-surface"
+                    >
+                      <DegenEventHooksWidget
+                        selectedPairId={selectedPairId}
+                        tradingEnabled={canQuickTrade}
+                        onTradeAction={openTradeTicket}
+                      />
                     </div>
                   ) : null}
                 </DashboardGrid>

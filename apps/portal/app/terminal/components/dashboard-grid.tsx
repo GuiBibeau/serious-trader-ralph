@@ -57,6 +57,8 @@ const DEFAULT_DASHBOARD_LAYOUTS: Record<LayoutBreakpoint, Layout[]> = {
     { i: "macro_etf", x: 0, y: 9, w: 4, h: 3 },
     { i: "macro_stablecoin", x: 4, y: 9, w: 4, h: 3 },
     { i: "macro_oil", x: 8, y: 9, w: 4, h: 3 },
+    { i: "degen_watchlist", x: 0, y: 12, w: 6, h: 3 },
+    { i: "degen_event_hooks", x: 6, y: 12, w: 6, h: 3 },
   ],
   md: [
     { i: "chart", x: 0, y: 0, w: 6, h: 6 },
@@ -70,6 +72,8 @@ const DEFAULT_DASHBOARD_LAYOUTS: Record<LayoutBreakpoint, Layout[]> = {
     { i: "macro_etf", x: 5, y: 9, w: 5, h: 3 },
     { i: "macro_stablecoin", x: 0, y: 12, w: 5, h: 3 },
     { i: "macro_oil", x: 5, y: 12, w: 5, h: 3 },
+    { i: "degen_watchlist", x: 0, y: 15, w: 5, h: 3 },
+    { i: "degen_event_hooks", x: 5, y: 15, w: 5, h: 3 },
   ],
   sm: [
     { i: "chart", x: 0, y: 0, w: 6, h: 5 },
@@ -83,6 +87,8 @@ const DEFAULT_DASHBOARD_LAYOUTS: Record<LayoutBreakpoint, Layout[]> = {
     { i: "macro_etf", x: 0, y: 23, w: 6, h: 3 },
     { i: "macro_stablecoin", x: 0, y: 26, w: 6, h: 3 },
     { i: "macro_oil", x: 0, y: 29, w: 6, h: 3 },
+    { i: "degen_watchlist", x: 0, y: 32, w: 6, h: 3 },
+    { i: "degen_event_hooks", x: 0, y: 35, w: 6, h: 3 },
   ],
 };
 
