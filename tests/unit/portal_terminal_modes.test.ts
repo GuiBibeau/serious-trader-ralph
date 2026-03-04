@@ -58,8 +58,11 @@ describe("portal terminal modes", () => {
     expect(modeShowsModule("regular", "macro_stablecoin")).toBe(false);
     expect(modeShowsModule("regular", "macro_radar")).toBe(true);
     expect(modeAllowsAction("regular", "macro_trade")).toBe(false);
+    expect(modeShowsModule("regular", "degen_watchlist")).toBe(false);
 
     expect(modeShowsModule("degen", "macro_stablecoin")).toBe(true);
+    expect(modeShowsModule("degen", "degen_watchlist")).toBe(true);
+    expect(modeShowsModule("degen", "degen_event_hooks")).toBe(true);
     expect(modeAllowsAction("degen", "macro_trade")).toBe(true);
     expect(modeAllowsAction("degen", "layout_edit")).toBe(true);
   });

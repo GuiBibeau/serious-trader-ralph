@@ -30,6 +30,12 @@ type TradeTicketModalProps = {
   walletAddress: string | null;
   tokenBalancesByMint?: Record<string, string> | null;
   riskSnapshot?: AccountRiskSnapshot | null;
+  riskAcknowledgement?: {
+    required: boolean;
+    title?: string;
+    message?: string;
+    confirmationLabel?: string;
+  };
   hotkeyBindings?: TradeTicketHotkeyBindings;
   getAccessToken: () => Promise<string | null>;
   onClose: () => void;
@@ -379,6 +385,7 @@ export function TradeTicketModal({
   walletAddress,
   tokenBalancesByMint,
   riskSnapshot,
+  riskAcknowledgement,
   hotkeyBindings = DEFAULT_TRADE_TICKET_HOTKEY_BINDINGS,
   getAccessToken,
   onClose,
@@ -410,6 +417,7 @@ export function TradeTicketModal({
     "idle" | "submitting" | "tracking" | "error"
   >("idle");
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
+  const [riskConfirmed, setRiskConfirmed] = useState(false);
   const [isQuoteTransitionPending, startQuoteTransition] = useTransition();
 
   const quoteAbortRef = useRef<AbortController | null>(null);
@@ -489,6 +497,7 @@ export function TradeTicketModal({
     setQuote(EMPTY_QUOTE);
     setSubmitStatus("idle");
     setSubmitMessage(null);
+    setRiskConfirmed(false);
   }, [open, intent]);
 
   const deferredAmountUi = useDeferredValue(amountUi);
@@ -754,6 +763,14 @@ export function TradeTicketModal({
       setSubmitMessage(preSubmitRisk.message ?? "risk-guard-blocked");
       return;
     }
+    if (riskAcknowledgement?.required && !riskConfirmed) {
+      setSubmitStatus("error");
+      setSubmitMessage(
+        riskAcknowledgement.message ??
+          "degen-risk-confirmation-required-before-submit",
+      );
+      return;
+    }
     if (!walletAddress) {
       setSubmitStatus("error");
       setSubmitMessage("wallet-unavailable");
@@ -980,6 +997,9 @@ export function TradeTicketModal({
     orderType,
     orderValidationErrors,
     preSubmitRisk,
+    riskAcknowledgement?.message,
+    riskAcknowledgement?.required,
+    riskConfirmed,
     executionLane,
     executionQualityErrors,
     postOnly,
@@ -1037,6 +1057,7 @@ export function TradeTicketModal({
     submitStatus !== "tracking" &&
     quote.status === "ready" &&
     Boolean(quote.inAmountAtomic) &&
+    (!riskAcknowledgement?.required || riskConfirmed) &&
     orderValidationErrors.length < 1 &&
     executionQualityErrors.length < 1 &&
     !preSubmitRisk.blocked;
@@ -1135,6 +1156,15 @@ export function TradeTicketModal({
             snapshot={riskSnapshot ?? null}
             preSubmitRisk={preSubmitRisk}
           />
+          {riskAcknowledgement?.required ? (
+            <DegenRiskAcknowledgeCard
+              title={riskAcknowledgement.title}
+              message={riskAcknowledgement.message}
+              confirmationLabel={riskAcknowledgement.confirmationLabel}
+              confirmed={riskConfirmed}
+              onConfirmedChange={setRiskConfirmed}
+            />
+          ) : null}
           <TradeInputsSection
             amountUi={amountUi}
             amountPresets={amountPresets}
@@ -1330,6 +1360,38 @@ const TradeRiskContextCard = memo(function TradeRiskContextCard(props: {
           {preSubmitRisk.message}
         </p>
       ) : null}
+    </div>
+  );
+});
+
+const DegenRiskAcknowledgeCard = memo(function DegenRiskAcknowledgeCard(props: {
+  title?: string;
+  message?: string;
+  confirmationLabel?: string;
+  confirmed: boolean;
+  onConfirmedChange: (next: boolean) => void;
+}) {
+  const { title, message, confirmationLabel, confirmed, onConfirmedChange } =
+    props;
+  return (
+    <div className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+      <p className="label">{title ?? "DEGEN_RISK_ACKNOWLEDGEMENT"}</p>
+      <p className="mt-1 text-[11px]">
+        {message ??
+          "This path is configured for high-volatility execution. Confirm risk posture before dispatch."}
+      </p>
+      <label className="mt-2 inline-flex items-center gap-1.5 text-[11px]">
+        <input
+          className="h-3.5 w-3.5 accent-red-500"
+          type="checkbox"
+          checked={confirmed}
+          onChange={(event) => onConfirmedChange(event.target.checked)}
+        />
+        <span>
+          {confirmationLabel ??
+            "I understand this is Degen mode and accept higher execution risk."}
+        </span>
+      </label>
     </div>
   );
 });

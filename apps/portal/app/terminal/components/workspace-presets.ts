@@ -26,6 +26,8 @@ export const CUSTOM_WORKSPACE_MODULES: readonly TerminalModule[] = [
   "macro_etf",
   "macro_stablecoin",
   "macro_oil",
+  "degen_watchlist",
+  "degen_event_hooks",
 ];
 
 export function defaultWorkspaceModules(): WorkspaceModuleVisibility {
@@ -37,6 +39,8 @@ export function defaultWorkspaceModules(): WorkspaceModuleVisibility {
     macro_etf: true,
     macro_stablecoin: true,
     macro_oil: true,
+    degen_watchlist: true,
+    degen_event_hooks: true,
   };
 }
 
@@ -54,6 +58,8 @@ export function sanitizeWorkspaceModules(
     macro_etf: record.macro_etf === true,
     macro_stablecoin: record.macro_stablecoin === true,
     macro_oil: record.macro_oil === true,
+    degen_watchlist: record.degen_watchlist === true,
+    degen_event_hooks: record.degen_event_hooks === true,
   };
 
   if (Object.values(next).some(Boolean)) return next;
