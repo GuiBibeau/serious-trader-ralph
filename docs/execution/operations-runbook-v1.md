@@ -9,6 +9,8 @@ This runbook covers Phase 2 execution operations for:
 
 Rollout sequencing and revert gates are documented in
 `docs/execution/rollout-plan-v1.md`.
+Terminal UX cutover sequencing and cohort-mode gates are documented in
+`docs/execution/terminal-cutover-plan-v1.md`.
 
 ## Scope and Preconditions
 

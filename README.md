@@ -63,6 +63,9 @@ bun run dev:local
 Optional portal env:
 
 - `NEXT_PUBLIC_TERMINAL_DEFAULT_MODE=regular|degen|custom`
+- `NEXT_PUBLIC_TERMINAL_ALLOWED_MODES` (CSV from `regular,degen,custom`; default all)
+- `NEXT_PUBLIC_TERMINAL_DEGEN_COHORT=all|onboarded|experienced|degen_acknowledged`
+- `NEXT_PUBLIC_TERMINAL_CUSTOM_COHORT=all|onboarded|experienced|degen_acknowledged`
 - `NEXT_PUBLIC_TERMINAL_RISK_INITIAL_MARGIN_RATIO` (default `0.1`)
 - `NEXT_PUBLIC_TERMINAL_RISK_MAINT_MARGIN_RATIO` (default `0.05`)
 - `NEXT_PUBLIC_TERMINAL_RISK_CONCENTRATION_WARNING` (default `0.55`)
@@ -89,6 +92,7 @@ bun run dev:local
 - Fixtures: `docs/execution/fixtures/*`
 - Operations runbook: `docs/execution/operations-runbook-v1.md`
 - Rollout plan: `docs/execution/rollout-plan-v1.md`
+- Terminal cutover plan: `docs/execution/terminal-cutover-plan-v1.md`
 - Tabletop simulation record: `docs/execution/tabletop-simulation-2026-03-03.md`
 - Fills ledger CSV format: `docs/execution/terminal-fills-ledger-export-v1.md`
 

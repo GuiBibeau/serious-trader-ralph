@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   resolveDefaultTerminalMode,
+  TERMINAL_MODE_OPTIONS,
   type TerminalMode,
 } from "./terminal-modes";
 
@@ -24,6 +25,7 @@ type HeaderState = {
   showBalance: boolean;
   isRefreshing: boolean;
   terminalMode: TerminalMode;
+  terminalAllowedModes: readonly TerminalMode[];
   terminalModeSaving: boolean;
 };
 
@@ -36,6 +38,7 @@ type HeaderActions = {
   setShowFundButton: (show: boolean) => void;
   setShowBalance: (show: boolean) => void;
   setTerminalMode: (mode: TerminalMode) => void;
+  setTerminalAllowedModes: (modes: readonly TerminalMode[]) => void;
   setTerminalModeSaving: (saving: boolean) => void;
   setModeAction: (fn: ((mode: TerminalMode) => void) | null) => void;
 };
@@ -62,6 +65,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [terminalMode, setTerminalMode] = useState<TerminalMode>(() =>
     resolveDefaultTerminalMode(process.env.NEXT_PUBLIC_TERMINAL_DEFAULT_MODE),
   );
+  const [terminalAllowedModes, setTerminalAllowedModes] = useState<
+    readonly TerminalMode[]
+  >(TERMINAL_MODE_OPTIONS);
   const [terminalModeSaving, setTerminalModeSaving] = useState(false);
 
   const [onFund, setOnFund] = useState<(() => void) | undefined>(undefined);
@@ -101,6 +107,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setIsRefreshing,
       terminalMode,
       setTerminalMode,
+      terminalAllowedModes,
+      setTerminalAllowedModes,
       terminalModeSaving,
       setTerminalModeSaving,
       onFund,
@@ -117,6 +125,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       showBalance,
       isRefreshing,
       terminalMode,
+      terminalAllowedModes,
       terminalModeSaving,
       onFund,
       onRefresh,

@@ -23,6 +23,7 @@ interface DashboardHeaderProps {
   showFundButton?: boolean;
   showBalance?: boolean;
   terminalMode: TerminalMode;
+  allowedModes?: readonly TerminalMode[];
   terminalModeSaving?: boolean;
   onModeChange?: (mode: TerminalMode) => void;
 }
@@ -36,6 +37,7 @@ export function DashboardHeader({
   showFundButton = false,
   showBalance = false,
   terminalMode,
+  allowedModes = TERMINAL_MODE_OPTIONS,
   terminalModeSaving = false,
   onModeChange,
 }: DashboardHeaderProps) {
@@ -63,6 +65,7 @@ export function DashboardHeader({
           <div className="inline-flex h-8 shrink-0 items-center rounded-md border border-border bg-surface p-0.5">
             {TERMINAL_MODE_OPTIONS.map((modeOption) => {
               const active = modeOption === terminalMode;
+              const allowed = allowedModes.includes(modeOption);
               const modeView = getTerminalModeCapabilities(modeOption);
               return (
                 <button
@@ -72,12 +75,21 @@ export function DashboardHeader({
                     active
                       ? "bg-ink text-surface"
                       : "text-muted hover:text-ink hover:bg-paper",
+                    !allowed && !active && "opacity-50 cursor-not-allowed",
                     !onModeChange && "pointer-events-none opacity-60",
                   )}
-                  onClick={() => onModeChange?.(modeOption)}
-                  title={modeView.description}
+                  onClick={() => {
+                    if (!allowed) return;
+                    onModeChange?.(modeOption);
+                  }}
+                  title={
+                    allowed
+                      ? modeView.description
+                      : `${modeView.description} (rollout gated)`
+                  }
                   type="button"
                   aria-pressed={active}
+                  aria-disabled={!allowed}
                 >
                   {modeView.label}
                 </button>
