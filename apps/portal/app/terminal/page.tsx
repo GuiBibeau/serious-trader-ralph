@@ -3,7 +3,7 @@
 import { usePrivy } from "@privy-io/react-auth";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../cn";
 import {
   type AccountWallet,
@@ -213,6 +213,8 @@ function ControlRoom() {
     string,
     unknown
   > | null>(null);
+  const terminalModeRef = useRef<TerminalMode>(terminalMode);
+  const fallbackModePersistControllerRef = useRef<AbortController | null>(null);
   const modeCapabilities = getTerminalModeCapabilities(terminalMode);
   const canQuickTrade = modeAllowsAction(terminalMode, "quick_trade");
   const canMacroTrade = modeAllowsAction(terminalMode, "macro_trade");
@@ -227,6 +229,17 @@ function ControlRoom() {
     "macro_stablecoin",
   );
   const showMacroOilModule = modeShowsModule(terminalMode, "macro_oil");
+
+  useEffect(() => {
+    terminalModeRef.current = terminalMode;
+  }, [terminalMode]);
+
+  useEffect(
+    () => () => {
+      fallbackModePersistControllerRef.current?.abort();
+    },
+    [],
+  );
 
   const resetDashboardLayout = useCallback(() => {
     clearDashboardGridLayouts();
@@ -250,19 +263,47 @@ function ControlRoom() {
       const token = await getAccessToken();
       if (!token) return input.profileSnapshot;
 
-      const mergedProfile = mergeProfileWithTerminalMode(
-        input.profileSnapshot,
-        {
-          mode: input.mode,
-          source: input.source,
-        },
-      );
+      if (input.source === "manual") {
+        fallbackModePersistControllerRef.current?.abort();
+        fallbackModePersistControllerRef.current = null;
+      } else {
+        fallbackModePersistControllerRef.current?.abort();
+        fallbackModePersistControllerRef.current = new AbortController();
+      }
+      const signal = fallbackModePersistControllerRef.current?.signal;
+
+      if (input.source !== "manual" && terminalModeRef.current !== input.mode) {
+        return null;
+      }
+
+      let mergeBase = input.profileSnapshot;
+      try {
+        const latestPayload = await apiFetchJson("/api/me", token, {
+          method: "GET",
+          ...(signal ? { signal } : {}),
+        });
+        const latestProfile = parseUserProfile(latestPayload);
+        if (latestProfile) mergeBase = latestProfile;
+      } catch {
+        if (signal?.aborted) return null;
+      }
+
+      if (input.source !== "manual" && terminalModeRef.current !== input.mode) {
+        return null;
+      }
+
+      const mergedProfile = mergeProfileWithTerminalMode(mergeBase, {
+        mode: input.mode,
+        source: input.source,
+      });
       await apiFetchJson("/api/me/profile", token, {
         method: "PATCH",
         body: JSON.stringify({
           profile: mergedProfile,
         }),
+        ...(signal ? { signal } : {}),
       });
+      if (signal?.aborted) return null;
 
       if (input.emitTelemetry) {
         await apiFetchJson("/api/events", token, {
@@ -329,9 +370,13 @@ function ControlRoom() {
           source,
           previousMode: null,
           emitTelemetry: false,
-        }).then((mergedProfile) => {
-          if (mergedProfile) setUserProfile(mergedProfile);
-        });
+        })
+          .then((mergedProfile) => {
+            if (mergedProfile) setUserProfile(mergedProfile);
+          })
+          .catch(() => {
+            // Ignore fallback persistence failures.
+          });
       }
       setLoaded(true);
     } catch (error) {
