@@ -143,7 +143,7 @@ describe("execution fabric e2e load and reliability", () => {
   test("benchmarks concurrent relay submits and validates status/receipt consistency", async () => {
     const { env, sqlite } = createExecLoadEnv();
     try {
-      const concurrency = 40;
+      const concurrency = 100;
       const submits = await Promise.all(
         Array.from({ length: concurrency }, (_, idx) =>
           submitRelay(env, `load-relay-${idx}`),
