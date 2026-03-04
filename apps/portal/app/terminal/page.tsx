@@ -3,7 +3,7 @@
 import { usePrivy } from "@privy-io/react-auth";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../cn";
 import {
   type AccountWallet,
@@ -23,6 +23,7 @@ import { MacroFredWidget } from "./components/macro-fred-widget";
 import { MacroOilWidget } from "./components/macro-oil-widget";
 import { MacroRadarWidget } from "./components/macro-radar-widget";
 import { MacroStablecoinWidget } from "./components/macro-stablecoin-widget";
+import { buildOrderbookLadder } from "./components/orderbook-ladder";
 import {
   type RealtimeTradeTick,
   type TerminalRealtimeState,
@@ -64,6 +65,14 @@ type ExecutionActivityRow = {
   leg: string;
   status: string;
   signature: string | null;
+};
+
+type LadderPrefill = {
+  side: "buy" | "sell";
+  price: number;
+  size: number;
+  seq: number;
+  ts: number;
 };
 
 const FundingModal = dynamic(
@@ -230,6 +239,9 @@ function ControlRoom() {
   const [recentExecutions, setRecentExecutions] = useState<
     ExecutionActivityRow[]
   >([]);
+  const [ladderPrefill, setLadderPrefill] = useState<LadderPrefill | null>(
+    null,
+  );
   const terminalModeRef = useRef<TerminalMode>(terminalMode);
   const fallbackModePersistControllerRef = useRef<AbortController | null>(null);
   const modeCapabilities = getTerminalModeCapabilities(terminalMode);
@@ -498,6 +510,10 @@ function ControlRoom() {
     getAccessToken,
     fallbackPrice: marketFeed.latestPrice,
   });
+  const handlePairChange = useCallback((nextPairId: PairId): void => {
+    setSelectedPairId(nextPairId);
+    setLadderPrefill(null);
+  }, []);
 
   const openTradeTicket = useCallback(
     (intent: TradeIntent): void => {
@@ -511,23 +527,54 @@ function ControlRoom() {
     [hasWallet],
   );
 
+  const handleLadderPrefill = useCallback((nextPrefill: LadderPrefill) => {
+    setLadderPrefill((current) => {
+      if (
+        current &&
+        current.side === nextPrefill.side &&
+        current.seq === nextPrefill.seq &&
+        current.price === nextPrefill.price
+      ) {
+        return null;
+      }
+      return nextPrefill;
+    });
+  }, []);
+
+  const clearLadderPrefill = useCallback(() => {
+    setLadderPrefill(null);
+  }, []);
+
+  const buildActionReason = useCallback(
+    (action: "buy" | "sell"): string => {
+      const base =
+        action === "buy"
+          ? `Market action: buy ${selectedPair.baseSymbol}`
+          : `Market action: reduce ${selectedPair.baseSymbol}`;
+      if (!ladderPrefill) return base;
+      const modeLabel = ladderPrefill.side === action ? "prefill" : "offset";
+      return `${base} • ${modeLabel} ${ladderPrefill.price.toFixed(4)} x ${ladderPrefill.size.toFixed(2)}`;
+    },
+    [ladderPrefill, selectedPair.baseSymbol],
+  );
+
   const openMarketBuyTrade = useCallback(() => {
     if (!canQuickTrade) return;
     openTradeTicket(
       createTradeIntent("buy", "MARKET_MONITOR", selectedPairId, {
-        reason: `Market action: buy ${selectedPair.baseSymbol}`,
+        reason: buildActionReason("buy"),
       }),
     );
-  }, [canQuickTrade, openTradeTicket, selectedPair.baseSymbol, selectedPairId]);
+  }, [buildActionReason, canQuickTrade, openTradeTicket, selectedPairId]);
 
   const openMarketSellTrade = useCallback(() => {
     if (!canQuickTrade) return;
     openTradeTicket(
       createTradeIntent("sell", "MARKET_MONITOR", selectedPairId, {
-        reason: `Market action: reduce ${selectedPair.baseSymbol}`,
+        reason: buildActionReason("sell"),
       }),
     );
-  }, [canQuickTrade, openTradeTicket, selectedPair.baseSymbol, selectedPairId]);
+  }, [buildActionReason, canQuickTrade, openTradeTicket, selectedPairId]);
 
   const openFundingModal = useCallback(() => {
     setFundOpen(true);
@@ -771,7 +818,7 @@ function ControlRoom() {
                     <ChartPanel
                       pairId={selectedPairId}
                       market={marketFeed}
-                      onPairChange={setSelectedPairId}
+                      onPairChange={handlePairChange}
                     />
                   </div>
                 ) : null}
@@ -784,6 +831,8 @@ function ControlRoom() {
                     <OrderbookDepthPanel
                       market={marketFeed}
                       realtime={realtimeTransport}
+                      selectedPrefill={ladderPrefill}
+                      onPrefill={handleLadderPrefill}
                     />
                   </div>
                 ) : null}
@@ -798,6 +847,8 @@ function ControlRoom() {
                       onBuy={openMarketBuyTrade}
                       onSell={openMarketSellTrade}
                       tradingEnabled={canQuickTrade}
+                      prefill={ladderPrefill}
+                      onClearPrefill={clearLadderPrefill}
                     />
                   </div>
                 ) : null}
@@ -933,8 +984,11 @@ function formatTransportBadge(realtime: TerminalRealtimeState): string {
 const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
   market: MarketState;
   realtime: TerminalRealtimeState;
+  selectedPrefill: LadderPrefill | null;
+  onPrefill: (prefill: LadderPrefill) => void;
 }) {
-  const { market, realtime } = props;
+  const { market, realtime, selectedPrefill, onPrefill } = props;
+  const [groupingBps, setGroupingBps] = useState(5);
   const lastPrice = market.latestPrice ?? null;
   const depth = realtime.depth;
   const asks = depth?.asks ?? [];
@@ -963,7 +1017,22 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
         }));
   const renderedAsks = hasRealtimeDepth ? asks : fallbackAsks;
   const renderedBids = hasRealtimeDepth ? bids : fallbackBids;
+  const ladder = useMemo(
+    () =>
+      buildOrderbookLadder({
+        asks: renderedAsks,
+        bids: renderedBids,
+        groupingBps,
+        maxRows: 10,
+      }),
+    [groupingBps, renderedAsks, renderedBids],
+  );
   const statusLabel = formatTransportBadge(realtime);
+  const spreadLabel =
+    ladder.spreadAbs === null || ladder.spreadBps === null
+      ? "--"
+      : `${ladder.spreadAbs.toFixed(4)} (${ladder.spreadBps.toFixed(2)} bps)`;
+  const groupingOptions = [2, 5, 10, 25];
 
   return (
     <>
@@ -990,47 +1059,122 @@ const OrderbookDepthPanel = memo(function OrderbookDepthPanel(props: {
         </div>
       </div>
       <div className="flex-1 overflow-auto p-3 text-[11px] font-mono">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <p className="mb-1 text-[10px] uppercase tracking-wider text-red-300">
-              Asks
-            </p>
-            <div className="space-y-1">
-              {renderedAsks.length === 0 ? (
-                <p className="text-muted">Waiting for market depth...</p>
-              ) : null}
-              {renderedAsks.map((row) => (
-                <div
-                  key={`ask-${row.price.toFixed(6)}`}
-                  className="flex items-center justify-between rounded border border-border/50 bg-red-500/5 px-2 py-1"
-                >
-                  <span className="text-red-300">{row.price.toFixed(2)}</span>
-                  <span className="text-muted">{row.size.toFixed(0)}</span>
-                </div>
+        <div className="mb-2 flex items-center justify-between rounded border border-border/60 bg-subtle px-2 py-1.5">
+          <p className="text-[10px] uppercase tracking-wider text-muted">
+            spread {spreadLabel}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-muted">
+              group
+            </span>
+            <select
+              className="h-6 rounded border border-border bg-paper px-1.5 text-[10px] uppercase tracking-wider text-muted"
+              value={groupingBps}
+              onChange={(event) => setGroupingBps(Number(event.target.value))}
+              title="Group levels"
+            >
+              {groupingOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option} bps
+                </option>
               ))}
-            </div>
+            </select>
           </div>
-          <div>
-            <p className="mb-1 text-[10px] uppercase tracking-wider text-emerald-300">
-              Bids
+        </div>
+        <div className="grid grid-cols-[auto_1fr_auto_auto] gap-2 px-1 pb-1 text-[10px] uppercase tracking-wider text-muted">
+          <span>Side</span>
+          <span>Price</span>
+          <span>Size</span>
+          <span>Cum</span>
+        </div>
+        <div className="space-y-1">
+          {ladder.asks.length === 0 && ladder.bids.length === 0 ? (
+            <p className="rounded border border-border/50 bg-subtle px-2 py-2 text-muted">
+              Waiting for market depth...
             </p>
-            <div className="space-y-1">
-              {renderedBids.length === 0 ? (
-                <p className="text-muted">Waiting for market depth...</p>
-              ) : null}
-              {renderedBids.map((row) => (
-                <div
-                  key={`bid-${row.price.toFixed(6)}`}
-                  className="flex items-center justify-between rounded border border-border/50 bg-emerald-500/5 px-2 py-1"
-                >
-                  <span className="text-emerald-300">
-                    {row.price.toFixed(2)}
-                  </span>
-                  <span className="text-muted">{row.size.toFixed(0)}</span>
-                </div>
-              ))}
+          ) : null}
+          {ladder.asks.map((row) => {
+            const nextPrefillSide = "buy";
+            const sourceSeq = depth?.seq ?? 0;
+            const active =
+              selectedPrefill?.side === nextPrefillSide &&
+              selectedPrefill.price === row.price &&
+              selectedPrefill.seq === sourceSeq;
+            return (
+              <button
+                key={`ask-${row.price}`}
+                className={cn(
+                  "grid w-full grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded border px-2 py-1 text-left transition-colors",
+                  "border-red-500/20 bg-red-500/5 hover:bg-red-500/10",
+                  active && "border-red-400 bg-red-500/15",
+                )}
+                onClick={() =>
+                  onPrefill({
+                    side: nextPrefillSide,
+                    price: row.price,
+                    size: row.size,
+                    seq: sourceSeq,
+                    ts: depth?.ts ?? Date.now(),
+                  })
+                }
+                type="button"
+              >
+                <span className="text-[10px] uppercase text-red-300">
+                  ask {row.isTopOfBook ? "*" : ""}
+                </span>
+                <span className="text-red-300">{row.price.toFixed(4)}</span>
+                <span className="text-muted">{row.size.toFixed(2)}</span>
+                <span className="text-muted">
+                  {row.cumulativeSize.toFixed(2)}
+                </span>
+              </button>
+            );
+          })}
+
+          {ladder.bestAsk && ladder.bestBid ? (
+            <div className="rounded border border-border/70 bg-paper/80 px-2 py-1 text-center text-[10px] uppercase tracking-wider text-muted">
+              top: bid {ladder.bestBid.price.toFixed(4)} / ask{" "}
+              {ladder.bestAsk.price.toFixed(4)}
             </div>
-          </div>
+          ) : null}
+
+          {ladder.bids.map((row) => {
+            const nextPrefillSide = "sell";
+            const sourceSeq = depth?.seq ?? 0;
+            const active =
+              selectedPrefill?.side === nextPrefillSide &&
+              selectedPrefill.price === row.price &&
+              selectedPrefill.seq === sourceSeq;
+            return (
+              <button
+                key={`bid-${row.price}`}
+                className={cn(
+                  "grid w-full grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded border px-2 py-1 text-left transition-colors",
+                  "border-emerald-500/20 bg-emerald-500/5 hover:bg-emerald-500/10",
+                  active && "border-emerald-400 bg-emerald-500/15",
+                )}
+                onClick={() =>
+                  onPrefill({
+                    side: nextPrefillSide,
+                    price: row.price,
+                    size: row.size,
+                    seq: sourceSeq,
+                    ts: depth?.ts ?? Date.now(),
+                  })
+                }
+                type="button"
+              >
+                <span className="text-[10px] uppercase text-emerald-300">
+                  bid {row.isTopOfBook ? "*" : ""}
+                </span>
+                <span className="text-emerald-300">{row.price.toFixed(4)}</span>
+                <span className="text-muted">{row.size.toFixed(2)}</span>
+                <span className="text-muted">
+                  {row.cumulativeSize.toFixed(2)}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </>
@@ -1042,8 +1186,11 @@ const OrderEntryPanel = memo(function OrderEntryPanel(props: {
   onBuy: () => void;
   onSell: () => void;
   tradingEnabled: boolean;
+  prefill: LadderPrefill | null;
+  onClearPrefill: () => void;
 }) {
-  const { pairId, onBuy, onSell, tradingEnabled } = props;
+  const { pairId, onBuy, onSell, tradingEnabled, prefill, onClearPrefill } =
+    props;
   return (
     <>
       <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
@@ -1059,6 +1206,27 @@ const OrderEntryPanel = memo(function OrderEntryPanel(props: {
           </p>
           <p className="mt-1 font-mono text-sm text-ink">Market • IOC</p>
           <p className="text-[10px] text-muted">Routing: fast lane default</p>
+          {prefill ? (
+            <div className="mt-2 rounded border border-border/70 bg-paper/80 px-2 py-1.5">
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                Prefill
+              </p>
+              <p className="mt-1 font-mono text-[11px] text-ink">
+                {prefill.side.toUpperCase()} {prefill.price.toFixed(4)} x{" "}
+                {prefill.size.toFixed(2)}
+              </p>
+              <button
+                className={cn(
+                  BTN_SECONDARY,
+                  "mt-2 h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                )}
+                onClick={onClearPrefill}
+                type="button"
+              >
+                Clear prefill
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="grid grid-cols-1 gap-2">
           <button

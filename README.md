@@ -20,6 +20,7 @@ It provides one execution fabric for:
 - Terminal modes (`Regular`, `Degen`, `Custom`) with profile persistence
 - Exchange-grade shell regions (chart, depth, order entry, positions/fills, account/risk)
 - Realtime terminal transport with stream reconnect + polling fallback + staleness badges
+- Live orderbook ladder with grouped levels, spread view, and click-to-prefill order context
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:
