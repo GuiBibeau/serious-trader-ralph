@@ -29,6 +29,7 @@ It provides one execution fabric for:
 - Live positions panel with session PnL/risk badges and quick reduce/close actions wired to execution intents
 - Open orders panel with pending/working/partial state, amend/cancel flows, and execute-now actions
 - Fills ledger with request/receipt linkage, side/pair/status/query filters, pagination, and CSV export
+- Account risk panel with equity/margin/concentration/liquidation warnings and pre-submit exposure guardrails
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:
@@ -55,6 +56,13 @@ bun run dev:local
 Optional portal env:
 
 - `NEXT_PUBLIC_TERMINAL_DEFAULT_MODE=regular|degen|custom`
+- `NEXT_PUBLIC_TERMINAL_RISK_INITIAL_MARGIN_RATIO` (default `0.1`)
+- `NEXT_PUBLIC_TERMINAL_RISK_MAINT_MARGIN_RATIO` (default `0.05`)
+- `NEXT_PUBLIC_TERMINAL_RISK_CONCENTRATION_WARNING` (default `0.55`)
+- `NEXT_PUBLIC_TERMINAL_RISK_CONCENTRATION_CRITICAL` (default `0.75`)
+- `NEXT_PUBLIC_TERMINAL_RISK_LIQ_WARNING_BUFFER_PCT` (default `15`)
+- `NEXT_PUBLIC_TERMINAL_RISK_LIQ_CRITICAL_BUFFER_PCT` (default `5`)
+- `NEXT_PUBLIC_TERMINAL_RISK_MIN_EQUITY_QUOTE` (default `25`)
 
 ### Worker only
 

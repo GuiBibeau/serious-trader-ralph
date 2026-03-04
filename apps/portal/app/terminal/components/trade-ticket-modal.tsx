@@ -17,6 +17,10 @@ import {
   newExecutionIdempotencyKey,
 } from "../../execution-client";
 import { apiBase, BTN_PRIMARY, BTN_SECONDARY, isRecord } from "../../lib";
+import {
+  type AccountRiskSnapshot,
+  evaluatePreSubmitRisk,
+} from "./account-risk";
 import type { TradeIntent } from "./trade-intent";
 
 type TradeTicketModalProps = {
@@ -24,6 +28,7 @@ type TradeTicketModalProps = {
   intent: TradeIntent | null;
   walletAddress: string | null;
   tokenBalancesByMint?: Record<string, string> | null;
+  riskSnapshot?: AccountRiskSnapshot | null;
   getAccessToken: () => Promise<string | null>;
   onClose: () => void;
   onTradeComplete?: (trade: TradeTicketCompletion) => void;
@@ -349,6 +354,7 @@ export function TradeTicketModal({
   intent,
   walletAddress,
   tokenBalancesByMint,
+  riskSnapshot,
   getAccessToken,
   onClose,
   onTradeComplete,
@@ -567,6 +573,15 @@ export function TradeTicketModal({
       triggerPriceAtomic,
     ],
   );
+  const preSubmitRisk = useMemo(
+    () =>
+      evaluatePreSubmitRisk({
+        snapshot: riskSnapshot,
+        direction: intent?.direction ?? "buy",
+        reduceOnly,
+      }),
+    [intent?.direction, reduceOnly, riskSnapshot],
+  );
 
   const refreshQuote = useCallback(async (): Promise<void> => {
     if (!intent || !open) return;
@@ -716,6 +731,11 @@ export function TradeTicketModal({
           executionQualityErrors[0] ??
           "invalid-order-config",
       );
+      return;
+    }
+    if (preSubmitRisk.blocked) {
+      setSubmitStatus("error");
+      setSubmitMessage(preSubmitRisk.message ?? "risk-guard-blocked");
       return;
     }
     if (!walletAddress) {
@@ -943,6 +963,7 @@ export function TradeTicketModal({
     onTradeComplete,
     orderType,
     orderValidationErrors,
+    preSubmitRisk,
     executionLane,
     executionQualityErrors,
     postOnly,
@@ -1026,6 +1047,10 @@ export function TradeTicketModal({
 
         <div className="p-6 space-y-4">
           <TradeIdentityCard intent={intent} walletAddress={walletAddress} />
+          <TradeRiskContextCard
+            snapshot={riskSnapshot ?? null}
+            preSubmitRisk={preSubmitRisk}
+          />
           <TradeInputsSection
             amountUi={amountUi}
             amountPresets={amountPresets}
@@ -1114,7 +1139,8 @@ export function TradeTicketModal({
                 quote.status !== "ready" ||
                 !quote.inAmountAtomic ||
                 orderValidationErrors.length > 0 ||
-                executionQualityErrors.length > 0
+                executionQualityErrors.length > 0 ||
+                preSubmitRisk.blocked
               }
             >
               {submitStatus === "submitting" || submitStatus === "tracking"
@@ -1153,6 +1179,74 @@ const TradeIdentityCard = memo(function TradeIdentityCard(props: {
             : "--"}
         </span>
       </div>
+    </div>
+  );
+});
+
+const TradeRiskContextCard = memo(function TradeRiskContextCard(props: {
+  snapshot: AccountRiskSnapshot | null;
+  preSubmitRisk: { blocked: boolean; message: string | null };
+}) {
+  const { snapshot, preSubmitRisk } = props;
+  if (!snapshot) {
+    return (
+      <div className="rounded border border-border bg-subtle px-3 py-2 text-xs text-muted">
+        Risk context unavailable.
+      </div>
+    );
+  }
+
+  const highlightClass =
+    snapshot.liquidationRiskLevel === "critical" ||
+    snapshot.concentrationLevel === "critical"
+      ? "border-red-500/40 bg-red-500/10 text-red-200"
+      : snapshot.liquidationRiskLevel === "warning" ||
+          snapshot.concentrationLevel === "warning"
+        ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
+        : "border-border bg-subtle text-ink";
+  const formatNumber = (value: number | null, digits = 2): string =>
+    value === null || !Number.isFinite(value) ? "--" : value.toFixed(digits);
+
+  return (
+    <div className={`rounded border px-3 py-2 text-xs ${highlightClass}`}>
+      <p className="label">RISK_CONTEXT</p>
+      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+        <p>
+          Equity:{" "}
+          <span className="font-mono">
+            {formatNumber(snapshot.equityQuote)}
+          </span>
+        </p>
+        <p className="text-right">
+          Used margin:{" "}
+          <span className="font-mono">
+            {formatNumber(snapshot.usedMarginQuote)}
+          </span>
+        </p>
+        <p>
+          Maint ratio:{" "}
+          <span className="font-mono">
+            {formatNumber(snapshot.maintenanceRatio, 2)}x
+          </span>
+        </p>
+        <p className="text-right">
+          Liq buffer:{" "}
+          <span className="font-mono">
+            {formatNumber(snapshot.liquidationBufferPct, 2)}%
+          </span>
+        </p>
+      </div>
+      {preSubmitRisk.message ? (
+        <p
+          className={
+            preSubmitRisk.blocked
+              ? "mt-1.5 text-[11px] text-red-300"
+              : "mt-1.5 text-[11px] text-amber-200"
+          }
+        >
+          {preSubmitRisk.message}
+        </p>
+      ) : null}
     </div>
   );
 });
