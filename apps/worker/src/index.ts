@@ -147,7 +147,8 @@ type ExperienceEventName =
   | "level_assigned_auto"
   | "level_overridden_manual"
   | "degen_acknowledged"
-  | "terminal_opened_from_consumer";
+  | "terminal_opened_from_consumer"
+  | "terminal_mode_changed";
 
 const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
   "onboarding_started",
@@ -157,6 +158,7 @@ const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
   "level_overridden_manual",
   "degen_acknowledged",
   "terminal_opened_from_consumer",
+  "terminal_mode_changed",
 ]);
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

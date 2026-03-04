@@ -12,6 +12,7 @@ type MacroRadarWidgetProps = {
 export function MacroRadarWidget({ onTradeAction }: MacroRadarWidgetProps) {
   const feed = useMacroSignals();
   const data = feed.data;
+  const tradeEnabled = typeof onTradeAction === "function";
 
   const verdictClass =
     data?.verdict === "BUY"
@@ -83,7 +84,10 @@ export function MacroRadarWidget({ onTradeAction }: MacroRadarWidgetProps) {
 
             <div className="flex gap-2">
               <button
-                className={`${BTN_SECONDARY} !h-7 !px-2.5 !py-0 text-[10px]`}
+                className={cn(
+                  `${BTN_SECONDARY} !h-7 !px-2.5 !py-0 text-[10px]`,
+                  !tradeEnabled && "opacity-60 pointer-events-none",
+                )}
                 onClick={() =>
                   onTradeAction?.(
                     createSolUsdcIntent("buy", "MACRO_RADAR", {
@@ -92,11 +96,15 @@ export function MacroRadarWidget({ onTradeAction }: MacroRadarWidgetProps) {
                   )
                 }
                 type="button"
+                disabled={!tradeEnabled}
               >
                 Buy SOL
               </button>
               <button
-                className={`${BTN_SECONDARY} !h-7 !px-2.5 !py-0 text-[10px]`}
+                className={cn(
+                  `${BTN_SECONDARY} !h-7 !px-2.5 !py-0 text-[10px]`,
+                  !tradeEnabled && "opacity-60 pointer-events-none",
+                )}
                 onClick={() =>
                   onTradeAction?.(
                     createSolUsdcIntent("sell", "MACRO_RADAR", {
@@ -105,6 +113,7 @@ export function MacroRadarWidget({ onTradeAction }: MacroRadarWidgetProps) {
                   )
                 }
                 type="button"
+                disabled={!tradeEnabled}
               >
                 Sell SOL
               </button>
