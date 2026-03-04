@@ -27,6 +27,7 @@ It provides one execution fabric for:
 - Advanced trade ticket with market/limit/trigger modes, TIF/flags, quantity modes, and TP/SL bracket validation
 - Execution quality controls in ticket (lane, simulation preference, slippage, priority fee hints) with terminal activity surfacing
 - Live positions panel with session PnL/risk badges and quick reduce/close actions wired to execution intents
+- Open orders panel with pending/working/partial state, amend/cancel flows, and execute-now actions
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:

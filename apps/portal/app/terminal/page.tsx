@@ -32,6 +32,16 @@ import { MacroFredWidget } from "./components/macro-fred-widget";
 import { MacroOilWidget } from "./components/macro-oil-widget";
 import { MacroRadarWidget } from "./components/macro-radar-widget";
 import { MacroStablecoinWidget } from "./components/macro-stablecoin-widget";
+import {
+  amendOpenOrder as applyAmendOpenOrder,
+  cancelAllOpenOrders as applyCancelAllOpenOrders,
+  cancelOpenOrder as applyCancelOpenOrder,
+  executeOpenOrderSlice,
+  type OpenOrderRow,
+  type OpenOrderStatus,
+  promotePendingOrders,
+  queueOpenOrder,
+} from "./components/open-orders";
 import { buildOrderbookLadder } from "./components/orderbook-ladder";
 import {
   type RealtimeTradeTick,
@@ -52,7 +62,10 @@ import {
   SUPPORTED_PAIRS,
   TOKEN_CONFIGS,
 } from "./components/trade-pairs";
-import type { TradeTicketCompletion } from "./components/trade-ticket-modal";
+import type {
+  QueuedTerminalOrder,
+  TradeTicketCompletion,
+} from "./components/trade-ticket-modal";
 import {
   countMissingTradeTicks,
   filterTradeTicks,
@@ -196,6 +209,18 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+function parseOpenOrderExecutionMarker(reason: string): {
+  orderId: string;
+  fraction: 0.5 | 1;
+} | null {
+  const match = reason.match(/\[order:([A-Za-z0-9_-]+);fraction:(0\.5|1)\]/);
+  if (!match) return null;
+  const orderId = match[1] ?? "";
+  const fraction = match[2] === "0.5" ? 0.5 : 1;
+  if (!orderId) return null;
+  return { orderId, fraction };
+}
+
 export default function AppPage() {
   if (!process.env.NEXT_PUBLIC_PRIVY_APP_ID) {
     return (
@@ -259,6 +284,7 @@ function ControlRoom() {
   const [recentExecutions, setRecentExecutions] = useState<
     ExecutionActivityRow[]
   >([]);
+  const [openOrders, setOpenOrders] = useState<OpenOrderRow[]>([]);
   const [ladderPrefill, setLadderPrefill] = useState<LadderPrefill | null>(
     null,
   );
@@ -547,6 +573,104 @@ function ControlRoom() {
     [hasWallet],
   );
 
+  const handleOrderQueued = useCallback((order: QueuedTerminalOrder): void => {
+    setOpenOrders((current) => queueOpenOrder(current, order));
+  }, []);
+
+  const cancelOpenOrder = useCallback((orderId: string): void => {
+    setOpenOrders((current) =>
+      applyCancelOpenOrder(current, orderId, Date.now()),
+    );
+  }, []);
+
+  const cancelAllOpenOrders = useCallback((): void => {
+    if (openOrders.length === 0) return;
+    setOpenOrders((current) => applyCancelAllOpenOrders(current, Date.now()));
+  }, [openOrders.length]);
+
+  const amendOpenOrder = useCallback(
+    (orderId: string): void => {
+      const target = openOrders.find((order) => order.id === orderId);
+      if (!target) return;
+
+      const amountRaw = window.prompt(
+        "Amend remaining amount",
+        target.remainingAmountUi,
+      );
+      if (amountRaw === null) return;
+      const nextPriceRaw =
+        target.orderType === "limit"
+          ? window.prompt("Amend limit price", target.limitPriceUi ?? "")
+          : window.prompt("Amend trigger price", target.triggerPriceUi ?? "");
+      if (nextPriceRaw === null) return;
+      setOpenOrders(
+        (current) =>
+          applyAmendOpenOrder({
+            current,
+            orderId,
+            amountUi: amountRaw,
+            priceUi: nextPriceRaw,
+            now: Date.now(),
+          }).next,
+      );
+    },
+    [openOrders],
+  );
+
+  const executeOpenOrder = useCallback(
+    (input: { orderId: string; fraction: 0.5 | 1 }): void => {
+      const target = openOrders.find((order) => order.id === input.orderId);
+      if (!target) return;
+      const execution = executeOpenOrderSlice({
+        current: openOrders,
+        orderId: input.orderId,
+        fraction: input.fraction,
+        now: Date.now(),
+      });
+      if (!execution.ok) {
+        setOpenOrders(execution.next);
+        return;
+      }
+
+      const now = Date.now();
+      openTradeTicket(
+        createTradeIntent(
+          target.direction,
+          "OPEN_ORDERS_PANEL",
+          target.pairId,
+          {
+            reason: `${target.orderType.toUpperCase()} order manual execution [order:${target.id};fraction:${input.fraction}]`,
+            amountUi: execution.executeAmountUi,
+            slippageBps: target.slippageBps,
+          },
+        ),
+      );
+
+      setOpenOrders((current) =>
+        current.map((order) =>
+          order.id === input.orderId
+            ? {
+                ...order,
+                status: "working",
+                updatedAt: now,
+                lastError: null,
+              }
+            : order,
+        ),
+      );
+    },
+    [openOrders, openTradeTicket],
+  );
+
+  useEffect(() => {
+    if (openOrders.length === 0) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setOpenOrders((current) => promotePendingOrders(current, now));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [openOrders.length]);
+
   const handleLadderPrefill = useCallback((nextPrefill: LadderPrefill) => {
     setLadderPrefill((current) => {
       if (
@@ -679,6 +803,18 @@ function ControlRoom() {
   const handleTradeComplete = useCallback(
     (trade: TradeTicketCompletion): void => {
       applyOptimisticTradeBalances(trade);
+      const openOrderExecution = parseOpenOrderExecutionMarker(trade.reason);
+      if (openOrderExecution) {
+        setOpenOrders(
+          (current) =>
+            executeOpenOrderSlice({
+              current,
+              orderId: openOrderExecution.orderId,
+              fraction: openOrderExecution.fraction,
+              now: Date.now(),
+            }).next,
+        );
+      }
       setRecentExecutions((current) => {
         const entry: ExecutionActivityRow = {
           id: crypto.randomUUID(),
@@ -783,6 +919,7 @@ function ControlRoom() {
           getAccessToken={getAccessToken}
           onClose={() => setTradeOpen(false)}
           onTradeComplete={handleTradeComplete}
+          onOrderQueued={handleOrderQueued}
         />
       ) : null}
 
@@ -894,11 +1031,16 @@ function ControlRoom() {
                   >
                     <PositionsOrdersFillsPanel
                       entries={recentExecutions}
+                      openOrders={openOrders}
                       selectedPairId={selectedPairId}
                       selectedPairMark={marketFeed.latestPrice}
                       tokenBalancesByMint={tokenBalancesByMint}
                       tradingEnabled={canQuickTrade}
                       onQuickAction={openTradeTicket}
+                      onCancelOrder={cancelOpenOrder}
+                      onCancelAllOrders={cancelAllOpenOrders}
+                      onAmendOrder={amendOpenOrder}
+                      onExecuteOrder={executeOpenOrder}
                     />
                   </div>
                 ) : null}
@@ -1662,19 +1804,29 @@ const TradesTapePanel = memo(function TradesTapePanel(props: {
 const PositionsOrdersFillsPanel = memo(
   function PositionsOrdersFillsPanel(props: {
     entries: ExecutionActivityRow[];
+    openOrders: OpenOrderRow[];
     selectedPairId: PairId;
     selectedPairMark: number | null;
     tokenBalancesByMint: Record<string, string>;
     tradingEnabled: boolean;
     onQuickAction: (intent: TradeIntent) => void;
+    onCancelOrder: (orderId: string) => void;
+    onCancelAllOrders: () => void;
+    onAmendOrder: (orderId: string) => void;
+    onExecuteOrder: (input: { orderId: string; fraction: 0.5 | 1 }) => void;
   }) {
     const {
       entries,
+      openOrders,
       selectedPairId,
       selectedPairMark,
       tokenBalancesByMint,
       tradingEnabled,
       onQuickAction,
+      onCancelOrder,
+      onCancelAllOrders,
+      onAmendOrder,
+      onExecuteOrder,
     } = props;
     const markByPair = useMemo(
       () =>
@@ -1776,6 +1928,21 @@ const PositionsOrdersFillsPanel = memo(
       },
       [],
     );
+    const orderStatusClass = useCallback((status: OpenOrderStatus) => {
+      if (status === "pending") {
+        return "border-sky-500/40 bg-sky-500/10 text-sky-300";
+      }
+      if (status === "working") {
+        return "border-emerald-500/40 bg-emerald-500/10 text-emerald-300";
+      }
+      if (status === "partial") {
+        return "border-amber-500/40 bg-amber-500/10 text-amber-300";
+      }
+      if (status === "cancelled") {
+        return "border-border bg-paper text-muted";
+      }
+      return "border-red-500/40 bg-red-500/10 text-red-300";
+    }, []);
 
     return (
       <>
@@ -1811,6 +1978,129 @@ const PositionsOrdersFillsPanel = memo(
             >
               Realized: {formatSignedPnl(totals.realizedPnl)} USDC
             </p>
+          </div>
+          <div className="rounded border border-border bg-subtle p-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                Open Orders
+              </p>
+              <button
+                className={cn(
+                  BTN_SECONDARY,
+                  "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                  openOrders.length === 0 && "opacity-60 pointer-events-none",
+                )}
+                onClick={onCancelAllOrders}
+                type="button"
+                disabled={openOrders.length === 0}
+              >
+                Cancel all
+              </button>
+            </div>
+            <div className="mt-2 space-y-1.5">
+              {openOrders.length === 0 ? (
+                <p className="text-muted">No pending or working orders.</p>
+              ) : null}
+              {openOrders.map((order) => (
+                <div
+                  key={`open-order-${order.id}`}
+                  className="rounded border border-border/60 px-2 py-1.5 space-y-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-mono text-[11px] text-ink truncate">
+                        {order.pairId} • {order.direction.toUpperCase()} •{" "}
+                        {order.orderType.toUpperCase()}
+                      </p>
+                      <p className="text-[10px] text-muted">
+                        Remaining {order.remainingAmountUi} •{" "}
+                        {order.orderType === "limit"
+                          ? `LMT ${order.limitPriceUi ?? "--"}`
+                          : `TRG ${order.triggerPriceUi ?? "--"}`}{" "}
+                        • {order.timeInForce.toUpperCase()}
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        "rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                        orderStatusClass(order.status),
+                      )}
+                    >
+                      {order.status}
+                    </span>
+                  </div>
+                  {order.lastError ? (
+                    <p className="text-[10px] text-red-300">
+                      action-error: {order.lastError}
+                    </p>
+                  ) : null}
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                        (!tradingEnabled ||
+                          order.status === "cancelled" ||
+                          order.status === "failed") &&
+                          "opacity-60 pointer-events-none",
+                      )}
+                      onClick={() =>
+                        onExecuteOrder({ orderId: order.id, fraction: 0.5 })
+                      }
+                      type="button"
+                      disabled={
+                        !tradingEnabled ||
+                        order.status === "cancelled" ||
+                        order.status === "failed"
+                      }
+                    >
+                      Exec 50%
+                    </button>
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                        (!tradingEnabled ||
+                          order.status === "cancelled" ||
+                          order.status === "failed") &&
+                          "opacity-60 pointer-events-none",
+                      )}
+                      onClick={() =>
+                        onExecuteOrder({ orderId: order.id, fraction: 1 })
+                      }
+                      type="button"
+                      disabled={
+                        !tradingEnabled ||
+                        order.status === "cancelled" ||
+                        order.status === "failed"
+                      }
+                    >
+                      Execute all
+                    </button>
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                      )}
+                      onClick={() => onAmendOrder(order.id)}
+                      type="button"
+                    >
+                      Amend
+                    </button>
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                      )}
+                      onClick={() => onCancelOrder(order.id)}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
           <div className="rounded border border-border bg-subtle p-2">
             <p className="text-[10px] uppercase tracking-wider text-muted">

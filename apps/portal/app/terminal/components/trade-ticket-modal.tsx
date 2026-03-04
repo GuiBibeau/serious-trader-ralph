@@ -27,11 +27,14 @@ type TradeTicketModalProps = {
   getAccessToken: () => Promise<string | null>;
   onClose: () => void;
   onTradeComplete?: (trade: TradeTicketCompletion) => void;
+  onOrderQueued?: (order: QueuedTerminalOrder) => void;
 };
 
 export type TradeTicketCompletion = {
   pairId: TradeIntent["pairId"];
   direction: TradeIntent["direction"];
+  source: string;
+  reason: string;
   inputMint: string;
   outputMint: string;
   inputSymbol: string;
@@ -48,6 +51,26 @@ export type TradeTicketCompletion = {
   slippageBps: number;
   priorityLevel: PriorityLevel;
   priorityMicroLamports: number;
+};
+
+export type QueuedTerminalOrder = {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  pairId: TradeIntent["pairId"];
+  direction: TradeIntent["direction"];
+  source: string;
+  reason: string;
+  orderType: "limit" | "trigger";
+  timeInForce: TimeInForce;
+  amountUi: string;
+  remainingAmountUi: string;
+  slippageBps: number;
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  priorityLevel: PriorityLevel;
+  limitPriceUi: string | null;
+  triggerPriceUi: string | null;
 };
 
 type QuoteState = {
@@ -316,6 +339,7 @@ export function TradeTicketModal({
   getAccessToken,
   onClose,
   onTradeComplete,
+  onOrderQueued,
 }: TradeTicketModalProps) {
   const [amountUi, setAmountUi] = useState("");
   const [slippageInput, setSlippageInput] = useState("50");
@@ -719,6 +743,49 @@ export function TradeTicketModal({
       ...(takeProfitPriceAtomic ? { takeProfitPriceAtomic } : {}),
       ...(stopLossPriceAtomic ? { stopLossPriceAtomic } : {}),
     };
+
+    if (orderType === "limit" || orderType === "trigger") {
+      if (!onOrderQueued) {
+        setSubmitStatus("error");
+        setSubmitMessage("open-orders-panel-unavailable");
+        return;
+      }
+      const amountForOrder = amountUi.trim();
+      if (!amountForOrder) {
+        setSubmitStatus("error");
+        setSubmitMessage("order-amount-required");
+        return;
+      }
+      const now = Date.now();
+      onOrderQueued({
+        id: crypto.randomUUID(),
+        createdAt: now,
+        updatedAt: now,
+        pairId: intent.pairId,
+        direction: intent.direction,
+        source: intent.source,
+        reason: intent.reason,
+        orderType,
+        timeInForce,
+        amountUi: amountForOrder,
+        remainingAmountUi: amountForOrder,
+        slippageBps: boundedSlippageBps,
+        lane: executionLane,
+        simulationPreference,
+        priorityLevel,
+        limitPriceUi:
+          orderType === "limit" ? limitPriceUi.trim() || null : null,
+        triggerPriceUi:
+          orderType === "trigger" ? triggerPriceUi.trim() || null : null,
+      });
+      closeModal();
+      toast.success(`${orderType.toUpperCase()} order queued`, {
+        description: `${intent.pairId} • ${amountForOrder} ${intent.inputSymbol}`,
+        position: "bottom-right",
+        duration: 3500,
+      });
+      return;
+    }
     setSubmitStatus("submitting");
     setSubmitMessage(null);
     let execToastId: string | number | null = null;
@@ -793,6 +860,8 @@ export function TradeTicketModal({
       onTradeComplete?.({
         pairId: intent.pairId,
         direction: intent.direction,
+        source: intent.source,
+        reason: intent.reason,
         inputMint: intent.inputMint,
         outputMint: intent.outputMint,
         inputSymbol: intent.inputSymbol,
@@ -845,11 +914,14 @@ export function TradeTicketModal({
       setSubmitMessage(message);
     }
   }, [
+    amountUi,
     closeModal,
     dismissExecuteToast,
     getAccessToken,
     intent,
     limitPriceAtomic,
+    limitPriceUi,
+    onOrderQueued,
     onTradeComplete,
     orderType,
     orderValidationErrors,
@@ -869,6 +941,7 @@ export function TradeTicketModal({
     takeProfitPriceAtomic,
     timeInForce,
     triggerPriceAtomic,
+    triggerPriceUi,
     walletAddress,
   ]);
 
