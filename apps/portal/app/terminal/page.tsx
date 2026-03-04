@@ -69,6 +69,22 @@ import {
   type MarketState,
   useMarketFeed,
 } from "./components/sol-market-feed";
+import {
+  TerminalCommandPalette,
+  type TerminalCommandPaletteCommand,
+} from "./components/terminal-command-palette";
+import {
+  DEFAULT_TERMINAL_HOTKEY_PROFILE_ID,
+  formatHotkeyChord,
+  matchesHotkey,
+  resolveTerminalHotkeyProfileId,
+  TERMINAL_HOTKEY_ACTION_LABELS,
+  TERMINAL_HOTKEY_PROFILE_STORAGE_KEY,
+  TERMINAL_HOTKEY_PROFILES,
+  type TerminalHotkeyAction,
+  type TerminalHotkeyBindings,
+  type TerminalHotkeyProfileId,
+} from "./components/terminal-hotkeys";
 import { TerminalStatusBar } from "./components/terminal-status-bar";
 import { createTradeIntent, type TradeIntent } from "./components/trade-intent";
 import {
@@ -128,6 +144,52 @@ type LadderPrefill = {
   size: number;
   seq: number;
   ts: number;
+};
+
+type TerminalFocusablePanelId =
+  | "chart"
+  | "orderbook"
+  | "order_entry"
+  | "trades_tape"
+  | "positions"
+  | "account_risk";
+
+const FOCUSABLE_PANEL_ORDER: readonly TerminalFocusablePanelId[] = [
+  "chart",
+  "orderbook",
+  "order_entry",
+  "trades_tape",
+  "positions",
+  "account_risk",
+];
+
+const FOCUSABLE_PANEL_LABELS: Record<TerminalFocusablePanelId, string> = {
+  chart: "Chart panel",
+  orderbook: "Orderbook panel",
+  order_entry: "Order entry panel",
+  trades_tape: "Trades tape panel",
+  positions: "Positions panel",
+  account_risk: "Account risk panel",
+};
+
+const PANEL_ACTION_BY_ID: Record<
+  TerminalFocusablePanelId,
+  Extract<
+    TerminalHotkeyAction,
+    | "focusChart"
+    | "focusOrderbook"
+    | "focusOrderEntry"
+    | "focusTradesTape"
+    | "focusPositions"
+    | "focusRisk"
+  >
+> = {
+  chart: "focusChart",
+  orderbook: "focusOrderbook",
+  order_entry: "focusOrderEntry",
+  trades_tape: "focusTradesTape",
+  positions: "focusPositions",
+  account_risk: "focusRisk",
 };
 
 const FundingModal = dynamic(
@@ -313,6 +375,15 @@ function ControlRoom() {
   const [ladderPrefill, setLadderPrefill] = useState<LadderPrefill | null>(
     null,
   );
+  const [focusedPanelId, setFocusedPanelId] =
+    useState<TerminalFocusablePanelId | null>(null);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [hotkeyProfileId, setHotkeyProfileId] =
+    useState<TerminalHotkeyProfileId>(DEFAULT_TERMINAL_HOTKEY_PROFILE_ID);
+  const panelRefs = useRef<
+    Partial<Record<TerminalFocusablePanelId, HTMLDivElement | null>>
+  >({});
+  const panelFocusTimerRef = useRef<number | null>(null);
   const terminalModeRef = useRef<TerminalMode>(terminalMode);
   const fallbackModePersistControllerRef = useRef<AbortController | null>(null);
   const modeCapabilities = getTerminalModeCapabilities(terminalMode);
@@ -329,6 +400,22 @@ function ControlRoom() {
     "macro_stablecoin",
   );
   const showMacroOilModule = modeShowsModule(terminalMode, "macro_oil");
+  const hotkeyProfile = useMemo(
+    () => TERMINAL_HOTKEY_PROFILES[hotkeyProfileId],
+    [hotkeyProfileId],
+  );
+  const hotkeyBindings: TerminalHotkeyBindings = hotkeyProfile.bindings;
+  const panelVisibility = useMemo<Record<TerminalFocusablePanelId, boolean>>(
+    () => ({
+      chart: showMarketModule,
+      orderbook: showMarketModule,
+      order_entry: showMarketModule,
+      trades_tape: showMarketModule,
+      positions: showMarketModule,
+      account_risk: showWalletModule,
+    }),
+    [showMarketModule, showWalletModule],
+  );
 
   useEffect(() => {
     terminalModeRef.current = terminalMode;
@@ -337,15 +424,82 @@ function ControlRoom() {
   useEffect(
     () => () => {
       fallbackModePersistControllerRef.current?.abort();
+      if (panelFocusTimerRef.current !== null) {
+        window.clearTimeout(panelFocusTimerRef.current);
+      }
     },
     [],
   );
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(
+      TERMINAL_HOTKEY_PROFILE_STORAGE_KEY,
+    );
+    setHotkeyProfileId(resolveTerminalHotkeyProfileId(stored));
+  }, []);
+
+  useEffect(() => {
+    if (!tradeOpen) return;
+    setCommandPaletteOpen(false);
+  }, [tradeOpen]);
 
   const resetDashboardLayout = useCallback(() => {
     clearDashboardGridLayouts();
     setHasCustomGridLayout(false);
     setGridRevision((value) => value + 1);
   }, []);
+
+  const updateHotkeyProfile = useCallback(
+    (nextProfile: TerminalHotkeyProfileId): void => {
+      setHotkeyProfileId(nextProfile);
+      window.localStorage.setItem(
+        TERMINAL_HOTKEY_PROFILE_STORAGE_KEY,
+        nextProfile,
+      );
+    },
+    [],
+  );
+
+  const setPanelRef = useCallback(
+    (panelId: TerminalFocusablePanelId) =>
+      (node: HTMLDivElement | null): void => {
+        panelRefs.current[panelId] = node;
+      },
+    [],
+  );
+
+  const focusPanel = useCallback(
+    (panelId: TerminalFocusablePanelId): boolean => {
+      const node = panelRefs.current[panelId];
+      if (!node) return false;
+      node.focus({ preventScroll: true });
+      node.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+        behavior: "smooth",
+      });
+      setFocusedPanelId(panelId);
+      if (panelFocusTimerRef.current !== null) {
+        window.clearTimeout(panelFocusTimerRef.current);
+      }
+      panelFocusTimerRef.current = window.setTimeout(() => {
+        setFocusedPanelId((current) => (current === panelId ? null : current));
+        panelFocusTimerRef.current = null;
+      }, 1600);
+      return true;
+    },
+    [],
+  );
+
+  const panelClassName = useCallback(
+    (panelId: TerminalFocusablePanelId, baseClassName: string) =>
+      cn(
+        baseClassName,
+        "outline-none focus:ring-2 focus:ring-inset focus:ring-emerald-400/80",
+        focusedPanelId === panelId && "ring-2 ring-inset ring-emerald-500/60",
+      ),
+    [focusedPanelId],
+  );
 
   useEffect(() => {
     setHasCustomGridLayout(hasCustomDashboardGridLayouts());
@@ -424,21 +578,6 @@ function ControlRoom() {
     },
     [authenticated, getAccessToken],
   );
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent): void {
-      if (!canLayoutEdit) return;
-      if (isTypingTarget(event.target)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key.toLowerCase() !== "r") return;
-      event.preventDefault();
-      resetDashboardLayout();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [canLayoutEdit, resetDashboardLayout]);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!authenticated) return;
@@ -811,6 +950,90 @@ function ControlRoom() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const focusHotkeyActions: Array<{
+      panelId: TerminalFocusablePanelId;
+      action: TerminalHotkeyAction;
+    }> = FOCUSABLE_PANEL_ORDER.map((panelId) => ({
+      panelId,
+      action: PANEL_ACTION_BY_ID[panelId],
+    }));
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (matchesHotkey(event, hotkeyBindings.openPalette)) {
+        event.preventDefault();
+        setCommandPaletteOpen((current) => !current);
+        return;
+      }
+
+      if (commandPaletteOpen) return;
+      if (tradeOpen) return;
+      if (isTypingTarget(event.target)) return;
+
+      if (matchesHotkey(event, hotkeyBindings.quickBuy)) {
+        if (!canQuickTrade) return;
+        event.preventDefault();
+        openMarketBuyTrade();
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.quickSell)) {
+        if (!canQuickTrade) return;
+        event.preventDefault();
+        openMarketSellTrade();
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.resetLayout)) {
+        if (!canLayoutEdit) return;
+        event.preventDefault();
+        resetDashboardLayout();
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.refreshWallet)) {
+        event.preventDefault();
+        triggerRefresh();
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.openFunding)) {
+        if (!wallet) return;
+        event.preventDefault();
+        openFundingModal();
+        return;
+      }
+
+      for (const focusAction of focusHotkeyActions) {
+        if (!panelVisibility[focusAction.panelId]) continue;
+        const chord = hotkeyBindings[focusAction.action];
+        if (!matchesHotkey(event, chord)) continue;
+        event.preventDefault();
+        focusPanel(focusAction.panelId);
+        return;
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [
+    canLayoutEdit,
+    canQuickTrade,
+    commandPaletteOpen,
+    focusPanel,
+    hotkeyBindings,
+    openFundingModal,
+    openMarketBuyTrade,
+    openMarketSellTrade,
+    panelVisibility,
+    resetDashboardLayout,
+    tradeOpen,
+    triggerRefresh,
+    wallet,
+  ]);
+
   const applyOptimisticTradeBalances = useCallback(
     (trade: TradeTicketCompletion): void => {
       const inAmount = parseAtomic(trade.inAmountAtomic);
@@ -963,6 +1186,118 @@ function ControlRoom() {
     triggerRefresh,
   ]);
 
+  const tradeTicketHotkeys = useMemo(
+    () => ({
+      submit: hotkeyBindings.tradeSubmit,
+      cancel: hotkeyBindings.tradeCancel,
+      preset1: hotkeyBindings.tradePreset1,
+      preset2: hotkeyBindings.tradePreset2,
+      preset3: hotkeyBindings.tradePreset3,
+    }),
+    [hotkeyBindings],
+  );
+
+  const commandPaletteCommands = useMemo<
+    TerminalCommandPaletteCommand[]
+  >(() => {
+    const commands: TerminalCommandPaletteCommand[] = [
+      {
+        id: "buy-ticket",
+        title: TERMINAL_HOTKEY_ACTION_LABELS.quickBuy,
+        description: `Open ${selectedPairId} buy ticket`,
+        hotkey: hotkeyBindings.quickBuy,
+        keywords: ["trade", "buy", "execute"],
+        disabled: !canQuickTrade,
+        onSelect: openMarketBuyTrade,
+      },
+      {
+        id: "sell-ticket",
+        title: TERMINAL_HOTKEY_ACTION_LABELS.quickSell,
+        description: `Open ${selectedPairId} sell ticket`,
+        hotkey: hotkeyBindings.quickSell,
+        keywords: ["trade", "sell", "execute"],
+        disabled: !canQuickTrade,
+        onSelect: openMarketSellTrade,
+      },
+      {
+        id: "refresh-data",
+        title: TERMINAL_HOTKEY_ACTION_LABELS.refreshWallet,
+        description: "Reload profile, wallet balances, and mode state",
+        hotkey: hotkeyBindings.refreshWallet,
+        keywords: ["refresh", "wallet", "reload"],
+        onSelect: triggerRefresh,
+      },
+      {
+        id: "open-funding",
+        title: TERMINAL_HOTKEY_ACTION_LABELS.openFunding,
+        description: "Open Privy funding modal",
+        hotkey: hotkeyBindings.openFunding,
+        keywords: ["fund", "wallet", "deposit"],
+        disabled: !wallet,
+        onSelect: openFundingModal,
+      },
+      {
+        id: "reset-layout",
+        title: TERMINAL_HOTKEY_ACTION_LABELS.resetLayout,
+        description: "Reset terminal grid to default panel layout",
+        hotkey: hotkeyBindings.resetLayout,
+        keywords: ["layout", "grid", "reset"],
+        disabled: !canLayoutEdit,
+        onSelect: resetDashboardLayout,
+      },
+    ];
+
+    for (const panelId of FOCUSABLE_PANEL_ORDER) {
+      const action = PANEL_ACTION_BY_ID[panelId];
+      commands.push({
+        id: `focus-${panelId}`,
+        title: TERMINAL_HOTKEY_ACTION_LABELS[action],
+        description: FOCUSABLE_PANEL_LABELS[panelId],
+        hotkey: hotkeyBindings[action],
+        keywords: ["focus", "panel", panelId.replaceAll("_", " ")],
+        disabled: !panelVisibility[panelId],
+        onSelect: () => {
+          focusPanel(panelId);
+        },
+      });
+    }
+
+    commands.push(
+      {
+        id: "profile-standard",
+        title: "Switch hotkeys: Standard",
+        description: TERMINAL_HOTKEY_PROFILES.standard.description,
+        keywords: ["profile", "hotkeys", "standard"],
+        disabled: hotkeyProfileId === "standard",
+        onSelect: () => updateHotkeyProfile("standard"),
+      },
+      {
+        id: "profile-precision",
+        title: "Switch hotkeys: Precision",
+        description: TERMINAL_HOTKEY_PROFILES.precision.description,
+        keywords: ["profile", "hotkeys", "precision"],
+        disabled: hotkeyProfileId === "precision",
+        onSelect: () => updateHotkeyProfile("precision"),
+      },
+    );
+    return commands;
+  }, [
+    canLayoutEdit,
+    canQuickTrade,
+    focusPanel,
+    hotkeyBindings,
+    hotkeyProfileId,
+    openFundingModal,
+    openMarketBuyTrade,
+    openMarketSellTrade,
+    resetDashboardLayout,
+    panelVisibility,
+    selectedPairId,
+    triggerRefresh,
+    updateHotkeyProfile,
+    wallet,
+  ]);
+
   return (
     <>
       {wallet && fundOpen ? (
@@ -979,12 +1314,20 @@ function ControlRoom() {
           walletAddress={wallet?.walletAddress ?? null}
           tokenBalancesByMint={tokenBalancesByMint}
           riskSnapshot={accountRiskSnapshot}
+          hotkeyBindings={tradeTicketHotkeys}
           getAccessToken={getAccessToken}
           onClose={() => setTradeOpen(false)}
           onTradeComplete={handleTradeComplete}
           onOrderQueued={handleOrderQueued}
         />
       ) : null}
+      <TerminalCommandPalette
+        open={commandPaletteOpen}
+        commands={commandPaletteCommands}
+        hotkeyProfileId={hotkeyProfileId}
+        onClose={() => setCommandPaletteOpen(false)}
+        onHotkeyProfileChange={updateHotkeyProfile}
+      />
 
       <section className="flex-1 min-h-0 w-full">
         <div className="w-full h-full min-h-0">
@@ -1005,7 +1348,7 @@ function ControlRoom() {
                 market={marketFeed}
               />
               <div className="relative min-h-0 flex-1">
-                <div className="pointer-events-none absolute left-2 top-2 z-20 hidden sm:block">
+                <div className="pointer-events-none absolute left-2 top-2 z-20 hidden sm:flex sm:items-center sm:gap-1.5">
                   <div
                     className="rounded border border-border/70 bg-paper/90 px-2.5 py-1 text-[11px] text-muted backdrop-blur"
                     title={modeCapabilities.description}
@@ -1015,6 +1358,17 @@ function ControlRoom() {
                       {modeCapabilities.label}
                     </span>
                   </div>
+                  <button
+                    className={cn(
+                      BTN_SECONDARY,
+                      "pointer-events-auto h-7 border-border/70 bg-paper/90 px-2.5 text-[11px] backdrop-blur",
+                    )}
+                    onClick={() => setCommandPaletteOpen(true)}
+                    title="Open command palette"
+                    type="button"
+                  >
+                    Cmd • {formatHotkeyChord(hotkeyBindings.openPalette)}
+                  </button>
                 </div>
                 {hasCustomGridLayout && canLayoutEdit && (
                   <div className="pointer-events-none absolute right-2 top-2 z-20">
@@ -1024,7 +1378,7 @@ function ControlRoom() {
                         "pointer-events-auto h-7 border-border/70 bg-paper/90 px-2.5 text-[11px] backdrop-blur",
                       )}
                       onClick={resetDashboardLayout}
-                      title="Reorganize layout (R)"
+                      title={`Reorganize layout (${formatHotkeyChord(hotkeyBindings.resetLayout)})`}
                       type="button"
                     >
                       Reset layout
@@ -1043,7 +1397,12 @@ function ControlRoom() {
                   {showMarketModule ? (
                     <div
                       key="chart"
-                      className="flex flex-col overflow-hidden bg-surface"
+                      ref={setPanelRef("chart")}
+                      tabIndex={-1}
+                      className={panelClassName(
+                        "chart",
+                        "flex flex-col overflow-hidden bg-surface",
+                      )}
                     >
                       <ChartPanel
                         pairId={selectedPairId}
@@ -1056,7 +1415,12 @@ function ControlRoom() {
                   {showMarketModule ? (
                     <div
                       key="orderbook"
-                      className="flex flex-col overflow-hidden bg-surface"
+                      ref={setPanelRef("orderbook")}
+                      tabIndex={-1}
+                      className={panelClassName(
+                        "orderbook",
+                        "flex flex-col overflow-hidden bg-surface",
+                      )}
                     >
                       <OrderbookDepthPanel
                         market={marketFeed}
@@ -1070,7 +1434,12 @@ function ControlRoom() {
                   {showMarketModule ? (
                     <div
                       key="order_entry"
-                      className="flex flex-col overflow-hidden bg-surface"
+                      ref={setPanelRef("order_entry")}
+                      tabIndex={-1}
+                      className={panelClassName(
+                        "order_entry",
+                        "flex flex-col overflow-hidden bg-surface",
+                      )}
                     >
                       <OrderEntryPanel
                         pairId={selectedPairId}
@@ -1086,7 +1455,12 @@ function ControlRoom() {
                   {showMarketModule ? (
                     <div
                       key="trades_tape"
-                      className="flex flex-col overflow-hidden bg-surface"
+                      ref={setPanelRef("trades_tape")}
+                      tabIndex={-1}
+                      className={panelClassName(
+                        "trades_tape",
+                        "flex flex-col overflow-hidden bg-surface",
+                      )}
                     >
                       <TradesTapePanel realtime={realtimeTransport} />
                     </div>
@@ -1095,7 +1469,12 @@ function ControlRoom() {
                   {showMarketModule ? (
                     <div
                       key="positions"
-                      className="flex flex-col overflow-hidden bg-surface"
+                      ref={setPanelRef("positions")}
+                      tabIndex={-1}
+                      className={panelClassName(
+                        "positions",
+                        "flex flex-col overflow-hidden bg-surface",
+                      )}
                     >
                       <PositionsOrdersFillsPanel
                         entries={recentExecutions}
@@ -1116,7 +1495,12 @@ function ControlRoom() {
                   {showWalletModule ? (
                     <div
                       key="account_risk"
-                      className="flex flex-col overflow-hidden bg-surface"
+                      ref={setPanelRef("account_risk")}
+                      tabIndex={-1}
+                      className={panelClassName(
+                        "account_risk",
+                        "flex flex-col overflow-hidden bg-surface",
+                      )}
                     >
                       <AccountRiskPanel
                         pairId={selectedPairId}
