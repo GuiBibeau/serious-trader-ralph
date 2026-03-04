@@ -44,6 +44,12 @@ import {
   TOKEN_CONFIGS,
 } from "./components/trade-pairs";
 import type { TradeTicketCompletion } from "./components/trade-ticket-modal";
+import {
+  countMissingTradeTicks,
+  filterTradeTicks,
+  type TapeDisplayMode,
+  type TapeSideFilter,
+} from "./components/trades-tape";
 import { useDashboard } from "./context";
 import {
   getTerminalModeCapabilities,
@@ -855,13 +861,19 @@ function ControlRoom() {
 
                 {showMarketModule ? (
                   <div
+                    key="trades_tape"
+                    className="flex flex-col overflow-hidden bg-surface"
+                  >
+                    <TradesTapePanel realtime={realtimeTransport} />
+                  </div>
+                ) : null}
+
+                {showMarketModule ? (
+                  <div
                     key="positions"
                     className="flex flex-col overflow-hidden bg-surface"
                   >
-                    <PositionsOrdersFillsPanel
-                      entries={recentExecutions}
-                      realtime={realtimeTransport}
-                    />
+                    <PositionsOrdersFillsPanel entries={recentExecutions} />
                   </div>
                 ) : null}
 
@@ -1259,72 +1271,201 @@ const OrderEntryPanel = memo(function OrderEntryPanel(props: {
   );
 });
 
+const TradesTapePanel = memo(function TradesTapePanel(props: {
+  realtime: TerminalRealtimeState;
+}) {
+  const { realtime } = props;
+  const [paused, setPaused] = useState(false);
+  const [sideFilter, setSideFilter] = useState<TapeSideFilter>("all");
+  const [minSize, setMinSize] = useState(0);
+  const [displayMode, setDisplayMode] = useState<TapeDisplayMode>("compact");
+  const [displayedTrades, setDisplayedTrades] = useState<RealtimeTradeTick[]>(
+    () => realtime.trades.slice(0, 80),
+  );
+  const [bufferedCount, setBufferedCount] = useState(0);
+  const latestHeadSeqRef = useRef<number | null>(
+    realtime.trades[0]?.seq ?? null,
+  );
+
+  useEffect(() => {
+    const currentHeadSeq = realtime.trades[0]?.seq ?? null;
+    const previousHeadSeq = latestHeadSeqRef.current;
+    latestHeadSeqRef.current = currentHeadSeq;
+
+    if (paused) {
+      if (
+        currentHeadSeq !== null &&
+        previousHeadSeq !== null &&
+        currentHeadSeq > previousHeadSeq
+      ) {
+        setBufferedCount((count) => count + (currentHeadSeq - previousHeadSeq));
+      }
+      return;
+    }
+
+    setDisplayedTrades(realtime.trades.slice(0, 80));
+    setBufferedCount(0);
+  }, [paused, realtime.trades]);
+
+  const filteredTrades = useMemo(
+    () =>
+      filterTradeTicks({
+        trades: displayedTrades,
+        side: sideFilter,
+        minSize,
+        mode: displayMode,
+      }),
+    [displayMode, displayedTrades, minSize, sideFilter],
+  );
+  const missedCount = useMemo(
+    () => countMissingTradeTicks(filteredTrades),
+    [filteredTrades],
+  );
+
+  const togglePaused = useCallback(() => {
+    setPaused((current) => {
+      const next = !current;
+      if (!next) {
+        setDisplayedTrades(realtime.trades.slice(0, 80));
+        setBufferedCount(0);
+      }
+      return next;
+    });
+  }, [realtime.trades]);
+
+  return (
+    <>
+      <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
+        <p className="label dashboard-drag-handle cursor-move select-none">
+          TRADES_TAPE
+        </p>
+        <div className="flex items-center gap-1.5 text-[10px] font-mono">
+          <button
+            className={cn(
+              BTN_SECONDARY,
+              "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+              paused && "border-amber-500/40 bg-amber-500/10 text-amber-300",
+            )}
+            onClick={togglePaused}
+            type="button"
+          >
+            {paused ? "Resume" : "Pause"}
+          </button>
+          <span
+            className={cn(
+              "rounded border px-1.5 py-0.5 uppercase tracking-wider",
+              realtime.mode === "poll"
+                ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                : realtime.isStale
+                  ? "border-red-500/40 bg-red-500/10 text-red-300"
+                  : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+            )}
+          >
+            {realtime.mode === "poll" ? "fallback" : "stream"}
+          </span>
+        </div>
+      </div>
+      <div className="flex-1 overflow-auto p-3 text-xs space-y-2">
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            className="h-7 rounded border border-border bg-paper px-2 text-[10px] uppercase tracking-wider text-muted"
+            value={sideFilter}
+            onChange={(event) =>
+              setSideFilter(event.target.value as TapeSideFilter)
+            }
+            title="Filter side"
+          >
+            <option value="all">All sides</option>
+            <option value="buy">Buys</option>
+            <option value="sell">Sells</option>
+          </select>
+          <select
+            className="h-7 rounded border border-border bg-paper px-2 text-[10px] uppercase tracking-wider text-muted"
+            value={String(minSize)}
+            onChange={(event) => setMinSize(Number(event.target.value))}
+            title="Minimum size"
+          >
+            <option value="0">Min size 0</option>
+            <option value="10">Min size 10</option>
+            <option value="20">Min size 20</option>
+            <option value="30">Min size 30</option>
+          </select>
+        </div>
+        <div className="flex items-center justify-between rounded border border-border/60 bg-subtle px-2 py-1.5">
+          <div className="flex items-center gap-2 text-[10px] text-muted uppercase tracking-wider">
+            <span>{displayedTrades.length} cached</span>
+            {bufferedCount > 0 ? <span>{bufferedCount} buffered</span> : null}
+            {missedCount > 0 ? <span>{missedCount} missed</span> : null}
+          </div>
+          <button
+            className={cn(
+              BTN_SECONDARY,
+              "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+            )}
+            onClick={() =>
+              setDisplayMode((current) =>
+                current === "compact" ? "expanded" : "compact",
+              )
+            }
+            type="button"
+          >
+            {displayMode === "compact" ? "Expanded" : "Compact"}
+          </button>
+        </div>
+        <div className="space-y-1">
+          {filteredTrades.length === 0 ? (
+            <p className="rounded border border-border/50 bg-subtle px-2 py-2 text-muted">
+              No trades matching current tape filters.
+            </p>
+          ) : null}
+          {filteredTrades.map((trade) => (
+            <div
+              key={`tape-${trade.seq}`}
+              className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded border border-border/60 px-2 py-1"
+            >
+              <p
+                className={cn(
+                  "text-[10px] uppercase",
+                  trade.side === "buy" ? "text-emerald-300" : "text-red-300",
+                )}
+              >
+                {trade.side}
+              </p>
+              <p className="font-mono text-[11px] text-ink">
+                {trade.price.toFixed(4)}
+              </p>
+              <p className="text-[10px] text-muted">{trade.size.toFixed(2)}</p>
+              {displayMode === "expanded" ? (
+                <p className="text-[10px] text-muted">
+                  {new Date(trade.ts).toLocaleTimeString()}
+                </p>
+              ) : (
+                <p className="text-[10px] text-muted">#{trade.seq}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+});
+
 const PositionsOrdersFillsPanel = memo(
   function PositionsOrdersFillsPanel(props: {
     entries: ExecutionActivityRow[];
-    realtime: TerminalRealtimeState;
   }) {
-    const { entries, realtime } = props;
-    const tradeTape: RealtimeTradeTick[] = realtime.trades.slice(0, 8);
+    const { entries } = props;
     return (
       <>
         <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
           <p className="label dashboard-drag-handle cursor-move select-none">
             POSITIONS_ORDERS_FILLS
           </p>
-          <div className="flex items-center gap-2 text-[10px] font-mono text-muted">
-            <span>{entries.length} recent</span>
-            <span
-              className={cn(
-                "rounded border px-1.5 py-0.5 uppercase tracking-wider",
-                realtime.mode === "poll"
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-                  : realtime.isStale
-                    ? "border-red-500/40 bg-red-500/10 text-red-300"
-                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-              )}
-            >
-              {realtime.mode === "poll" ? "degraded" : "stream"}
-            </span>
-          </div>
+          <span className="text-[10px] font-mono text-muted">
+            {entries.length} recent
+          </span>
         </div>
         <div className="flex-1 overflow-auto p-3 text-xs space-y-3">
-          <div className="rounded border border-border bg-subtle p-2">
-            <p className="text-[10px] uppercase tracking-wider text-muted">
-              Tape (Realtime)
-            </p>
-            <div className="mt-2 space-y-1.5">
-              {tradeTape.length === 0 ? (
-                <p className="text-muted">
-                  Waiting for transport events ({formatTransportBadge(realtime)}
-                  ).
-                </p>
-              ) : null}
-              {tradeTape.map((trade) => (
-                <div
-                  key={`tape-${trade.seq}`}
-                  className="grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded border border-border/60 px-2 py-1"
-                >
-                  <p
-                    className={cn(
-                      "text-[10px] uppercase",
-                      trade.side === "buy"
-                        ? "text-emerald-300"
-                        : "text-red-300",
-                    )}
-                  >
-                    {trade.side}
-                  </p>
-                  <p className="font-mono text-[11px] text-ink">
-                    {trade.price.toFixed(4)}
-                  </p>
-                  <p className="text-[10px] text-muted">
-                    {trade.size.toFixed(2)}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
           <div className="rounded border border-border bg-subtle p-2">
             <p className="text-[10px] uppercase tracking-wider text-muted">
               Open Positions
