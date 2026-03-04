@@ -5,10 +5,18 @@ import { cn } from "../../cn";
 import { apiBase, isRecord } from "../../lib";
 import type { TerminalRealtimeState } from "./realtime-transport";
 import type { MarketState } from "./sol-market-feed";
+import type {
+  TerminalRenderBudgetResult,
+  TerminalRenderSnapshot,
+} from "./terminal-performance";
 
 type TerminalStatusBarProps = {
   realtime: TerminalRealtimeState;
   market: MarketState;
+  renderPerformance?: {
+    snapshot: TerminalRenderSnapshot | null;
+    budget: TerminalRenderBudgetResult | null;
+  };
 };
 
 type LaneHealth = {
@@ -88,7 +96,7 @@ function healthChipClass(level: "good" | "warn" | "bad"): string {
 export const TerminalStatusBar = memo(function TerminalStatusBar(
   props: TerminalStatusBarProps,
 ) {
-  const { realtime, market } = props;
+  const { realtime, market, renderPerformance } = props;
   const [execHealth, setExecHealth] = useState<ExecHealthSnapshot | null>(null);
   const [execHealthError, setExecHealthError] = useState<string | null>(null);
 
@@ -144,6 +152,8 @@ export const TerminalStatusBar = memo(function TerminalStatusBar(
     timeSkewMs !== null && Math.abs(timeSkewMs) > TIME_SKEW_WARNING_MS
       ? "warn"
       : "good";
+  const perfLevel: "good" | "warn" | "bad" =
+    renderPerformance?.budget?.level ?? "good";
 
   const laneSummary = useMemo(() => {
     if (!execHealth) return "lanes --";
@@ -214,6 +224,17 @@ export const TerminalStatusBar = memo(function TerminalStatusBar(
             {timeSkewMs === null
               ? "--"
               : `${Math.round(timeSkewMs / 1000).toString()}s`}
+          </span>
+          <span
+            className={cn(
+              "rounded border px-1.5 py-0.5 uppercase tracking-wider",
+              healthChipClass(perfLevel),
+            )}
+          >
+            perf{" "}
+            {renderPerformance?.snapshot
+              ? `${Math.round(renderPerformance.snapshot.fps).toString()}fps`
+              : "--"}
           </span>
           <span className="text-muted">{laneSummary}</span>
           {realtime.reason ? (
