@@ -208,9 +208,12 @@ describe("portal execution client", () => {
             requestId: "execreq_retry1234567890",
             ready: true,
             receipt: {
+              receiptId: "execrcpt_retry123",
+              provider: "jito",
               outcome: {
                 status: "finalized",
                 signature: "sig_retry",
+                networkFeeLamports: "5000",
               },
             },
           },
@@ -235,6 +238,9 @@ describe("portal execution client", () => {
     });
     expect(terminal.status).toBe("finalized");
     expect(terminal.signature).toBe("sig_retry");
+    expect(terminal.receiptId).toBe("execrcpt_retry123");
+    expect(terminal.provider).toBe("jito");
+    expect(terminal.networkFeeLamports).toBe("5000");
     expect(statusCalls).toBe(2);
     expect(receiptCalls).toBe(1);
   });

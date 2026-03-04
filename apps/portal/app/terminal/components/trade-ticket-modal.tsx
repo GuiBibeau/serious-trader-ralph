@@ -35,6 +35,9 @@ export type TradeTicketCompletion = {
   direction: TradeIntent["direction"];
   source: string;
   reason: string;
+  requestId: string;
+  receiptId: string | null;
+  provider: string | null;
   inputMint: string;
   outputMint: string;
   inputSymbol: string;
@@ -44,6 +47,8 @@ export type TradeTicketCompletion = {
   baseFilledUi: number;
   quoteFilledUi: number;
   fillPrice: number | null;
+  feeUi: number | null;
+  feeSymbol: string | null;
   status: string;
   signature: string | null;
   lane: ExecutionLane;
@@ -157,6 +162,14 @@ function atomicToUiNumber(
   const ui = formatAtomicToUi(atomicRaw, decimals, 9);
   if (!ui) return null;
   const parsed = Number(ui);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+function lamportsToSolUi(lamports: string | null): number | null {
+  const formatted = formatAtomicToUi(lamports, 9, 9);
+  if (!formatted) return null;
+  const parsed = Number(formatted);
   if (!Number.isFinite(parsed)) return null;
   return parsed;
 }
@@ -862,6 +875,9 @@ export function TradeTicketModal({
         direction: intent.direction,
         source: intent.source,
         reason: intent.reason,
+        requestId: terminal.requestId,
+        receiptId: terminal.receiptId,
+        provider: terminal.provider,
         inputMint: intent.inputMint,
         outputMint: intent.outputMint,
         inputSymbol: intent.inputSymbol,
@@ -871,6 +887,8 @@ export function TradeTicketModal({
         baseFilledUi,
         quoteFilledUi,
         fillPrice,
+        feeUi: lamportsToSolUi(terminal.networkFeeLamports),
+        feeSymbol: terminal.networkFeeLamports ? "SOL" : null,
         status: terminal.status,
         signature: terminal.signature,
         lane: executionLane,
