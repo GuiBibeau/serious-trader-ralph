@@ -38,6 +38,12 @@ export function DashboardShellClient({ children }: { children: ReactNode }) {
   return (
     <DashboardProvider>
       <main className="min-h-screen bg-paper text-ink flex flex-col">
+        <a
+          href="#terminal-main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 rounded border border-border bg-paper px-3 py-2 text-xs"
+        >
+          Skip to terminal content
+        </a>
         <ConnectedHeader />
         <div className="flex-1 min-h-0 flex flex-col">{children}</div>
       </main>

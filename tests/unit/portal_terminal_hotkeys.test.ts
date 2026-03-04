@@ -3,6 +3,7 @@ import {
   formatHotkeyChord,
   matchesHotkey,
   resolveTerminalHotkeyProfileId,
+  toAriaKeyShortcuts,
 } from "../../apps/portal/app/terminal/components/terminal-hotkeys";
 
 describe("portal terminal hotkey helpers", () => {
@@ -63,6 +64,8 @@ describe("portal terminal hotkey helpers", () => {
   test("formats display labels and resolves profile ids", () => {
     expect(formatHotkeyChord("mod+enter")).toBe("Cmd/Ctrl+Enter");
     expect(formatHotkeyChord("alt+1")).toBe("Alt+1");
+    expect(toAriaKeyShortcuts("mod+k")).toBe("Control+K Meta+K");
+    expect(toAriaKeyShortcuts("shift+r")).toBe("Shift+R");
     expect(resolveTerminalHotkeyProfileId("precision")).toBe("precision");
     expect(resolveTerminalHotkeyProfileId("unknown")).toBe("standard");
   });

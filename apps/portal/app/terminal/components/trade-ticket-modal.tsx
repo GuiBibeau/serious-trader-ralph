@@ -21,7 +21,11 @@ import {
   type AccountRiskSnapshot,
   evaluatePreSubmitRisk,
 } from "./account-risk";
-import { formatHotkeyChord, matchesHotkey } from "./terminal-hotkeys";
+import {
+  formatHotkeyChord,
+  matchesHotkey,
+  toAriaKeyShortcuts,
+} from "./terminal-hotkeys";
 import type { TradeIntent } from "./trade-intent";
 
 type TradeTicketModalProps = {
@@ -1145,6 +1149,7 @@ export function TradeTicketModal({
             onClick={cancelAndCloseModal}
             type="button"
             aria-label="Close"
+            aria-keyshortcuts={toAriaKeyShortcuts(hotkeyBindings.cancel)}
           >
             &times;
           </button>
@@ -1240,6 +1245,7 @@ export function TradeTicketModal({
               className={`${BTN_SECONDARY} !py-2 !px-4 text-xs`}
               onClick={cancelAndCloseModal}
               type="button"
+              aria-keyshortcuts={toAriaKeyShortcuts(hotkeyBindings.cancel)}
             >
               Close
             </button>
@@ -1248,6 +1254,7 @@ export function TradeTicketModal({
               onClick={() => void executeTrade()}
               type="button"
               disabled={!canExecuteTrade}
+              aria-keyshortcuts={toAriaKeyShortcuts(hotkeyBindings.submit)}
             >
               {submitStatus === "submitting" || submitStatus === "tracking"
                 ? submitStatus === "tracking"

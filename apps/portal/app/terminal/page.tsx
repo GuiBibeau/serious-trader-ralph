@@ -85,6 +85,7 @@ import {
   type TerminalHotkeyAction,
   type TerminalHotkeyBindings,
   type TerminalHotkeyProfileId,
+  toAriaKeyShortcuts,
 } from "./components/terminal-hotkeys";
 import { useTerminalRenderPerformance } from "./components/terminal-performance";
 import { TerminalStatusBar } from "./components/terminal-status-bar";
@@ -1562,7 +1563,7 @@ function ControlRoom() {
         onHotkeyProfileChange={updateHotkeyProfile}
       />
 
-      <section className="flex-1 min-h-0 w-full">
+      <section id="terminal-main-content" className="flex-1 min-h-0 w-full">
         <div className="w-full h-full min-h-0">
           <PresenceCard show={Boolean(message)}>
             <div className="mb-4 rounded-md border-l-4 border-red-500 bg-red-500/10 p-3 text-sm text-red-400">
@@ -1620,6 +1621,9 @@ function ControlRoom() {
                     onClick={() => setCommandPaletteOpen(true)}
                     title="Open command palette"
                     type="button"
+                    aria-keyshortcuts={toAriaKeyShortcuts(
+                      hotkeyBindings.openPalette,
+                    )}
                   >
                     Cmd • {formatHotkeyChord(hotkeyBindings.openPalette)}
                   </button>
@@ -1634,6 +1638,9 @@ function ControlRoom() {
                       onClick={resetDashboardLayout}
                       title={`Reorganize layout (${formatHotkeyChord(hotkeyBindings.resetLayout)})`}
                       type="button"
+                      aria-keyshortcuts={toAriaKeyShortcuts(
+                        hotkeyBindings.resetLayout,
+                      )}
                     >
                       Reset layout
                     </button>
@@ -1776,6 +1783,8 @@ function ControlRoom() {
                         pairId={selectedPairId}
                         onBuy={openMarketBuyTrade}
                         onSell={openMarketSellTrade}
+                        quickBuyShortcut={hotkeyBindings.quickBuy}
+                        quickSellShortcut={hotkeyBindings.quickSell}
                         tradingEnabled={canQuickTrade}
                         prefill={ladderPrefill}
                         onClearPrefill={clearLadderPrefill}
@@ -2370,12 +2379,22 @@ const OrderEntryPanel = memo(function OrderEntryPanel(props: {
   pairId: PairId;
   onBuy: () => void;
   onSell: () => void;
+  quickBuyShortcut?: string;
+  quickSellShortcut?: string;
   tradingEnabled: boolean;
   prefill: LadderPrefill | null;
   onClearPrefill: () => void;
 }) {
-  const { pairId, onBuy, onSell, tradingEnabled, prefill, onClearPrefill } =
-    props;
+  const {
+    pairId,
+    onBuy,
+    onSell,
+    quickBuyShortcut,
+    quickSellShortcut,
+    tradingEnabled,
+    prefill,
+    onClearPrefill,
+  } = props;
   return (
     <>
       <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
@@ -2423,6 +2442,16 @@ const OrderEntryPanel = memo(function OrderEntryPanel(props: {
             onClick={onBuy}
             type="button"
             disabled={!tradingEnabled}
+            aria-keyshortcuts={
+              quickBuyShortcut
+                ? toAriaKeyShortcuts(quickBuyShortcut)
+                : undefined
+            }
+            title={
+              quickBuyShortcut
+                ? `Hotkey: ${formatHotkeyChord(quickBuyShortcut)}`
+                : undefined
+            }
           >
             Buy / Lift
           </button>
@@ -2435,6 +2464,16 @@ const OrderEntryPanel = memo(function OrderEntryPanel(props: {
             onClick={onSell}
             type="button"
             disabled={!tradingEnabled}
+            aria-keyshortcuts={
+              quickSellShortcut
+                ? toAriaKeyShortcuts(quickSellShortcut)
+                : undefined
+            }
+            title={
+              quickSellShortcut
+                ? `Hotkey: ${formatHotkeyChord(quickSellShortcut)}`
+                : undefined
+            }
           >
             Sell / Hit
           </button>

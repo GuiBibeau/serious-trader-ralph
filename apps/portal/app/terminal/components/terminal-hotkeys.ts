@@ -163,6 +163,42 @@ export function formatHotkeyChord(chord: string): string {
   return labels.join("+");
 }
 
+export function toAriaKeyShortcuts(chord: string): string {
+  const tokens = chord
+    .split("+")
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length < 1) return "";
+
+  const modifiers = tokens.filter((token) =>
+    ["mod", "ctrl", "meta", "alt", "shift"].includes(token),
+  );
+  const keyToken = tokens.find(
+    (token) => !["mod", "ctrl", "meta", "alt", "shift"].includes(token),
+  );
+  if (!keyToken) return "";
+
+  const baseKey = keyToken.length === 1 ? keyToken.toUpperCase() : keyToken;
+  const baseMods = modifiers.filter((token) => token !== "mod");
+  const withBaseMods = [...baseMods];
+
+  if (modifiers.includes("mod")) {
+    const ctrlCombo = [...withBaseMods, "Control", baseKey].join("+");
+    const metaCombo = [...withBaseMods, "Meta", baseKey].join("+");
+    return `${ctrlCombo} ${metaCombo}`;
+  }
+
+  const normalizedMods = withBaseMods.map((token) => {
+    if (token === "ctrl") return "Control";
+    if (token === "meta") return "Meta";
+    if (token === "alt") return "Alt";
+    if (token === "shift") return "Shift";
+    return token;
+  });
+
+  return [...normalizedMods, baseKey].join("+");
+}
+
 export function matchesHotkey(event: HotkeyLikeEvent, chord: string): boolean {
   const tokens = chord
     .split("+")
