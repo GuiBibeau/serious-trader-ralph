@@ -16,6 +16,12 @@ import {
 } from "./execution/abuse_guard";
 import { ExecutionCoordinator } from "./execution/coordinator";
 import {
+  buildExecutionErrorEnvelope,
+  type CanonicalExecutionErrorCode,
+  executionErrorStatus,
+  normalizeExecutionErrorCode,
+} from "./execution/error_taxonomy";
+import {
   hashExecutionSubmitPayload,
   readIdempotencyKey,
   reserveExecutionSubmitRequest,
@@ -333,6 +339,32 @@ function asPolicyDeniedError(reason: string): Error {
   return new Error(`policy-denied:${reason}`);
 }
 
+function execErrorResponse(input: {
+  code: CanonicalExecutionErrorCode;
+  status?: number;
+  message?: string;
+  details?: Record<string, unknown> | null;
+  requestId?: string | null;
+  headers?: HeadersInit;
+}): Response {
+  const details =
+    input.details && Object.keys(input.details).length > 0
+      ? (input.details as unknown as Record<string, unknown>)
+      : null;
+  return json(
+    buildExecutionErrorEnvelope({
+      code: input.code,
+      ...(input.message ? { message: input.message } : {}),
+      ...(details ? { details: details as never } : {}),
+      ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+    }),
+    {
+      status: input.status ?? executionErrorStatus(input.code),
+      ...(input.headers ? { headers: input.headers } : {}),
+    },
+  );
+}
+
 function policyDeniedReason(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (value instanceof Error) {
@@ -383,10 +415,15 @@ function resolveTerminalFailureFromExecuteResult(
       statusReason: `policy-denied:${deniedReason}`,
     };
   }
+  const canonicalErrorCode = normalizeExecutionErrorCode({
+    statusHint: status,
+    error: err,
+    fallback: "submission-failed",
+  });
   return {
     terminalStatus: "failed",
-    errorCode: status,
-    statusReason: status,
+    errorCode: canonicalErrorCode,
+    statusReason: canonicalErrorCode,
   };
 }
 
@@ -635,24 +672,28 @@ const worker = {
         const payloadRead = await readExecSubmitPayloadWithLimits(request, env);
         if (!payloadRead.ok) {
           return withCors(
-            json(
-              {
-                ok: false,
-                error: payloadRead.error,
+            execErrorResponse({
+              code: "invalid-request",
+              status: payloadRead.status,
+              details: {
                 reason: payloadRead.reason,
                 abuse: {
                   payload: payloadRead.metadata,
                 },
               },
-              { status: payloadRead.status },
-            ),
+            }),
             env,
           );
         }
         const parsed = parseExecSubmitPayload(payloadRead.payload);
         if (!parsed.ok) {
           return withCors(
-            json({ ok: false, error: parsed.error }, { status: 400 }),
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: parsed.error,
+              },
+            }),
             env,
           );
         }
@@ -660,10 +701,12 @@ const worker = {
         const idempotencyKey = readIdempotencyKey(request);
         if (!idempotencyKey) {
           return withCors(
-            json(
-              { ok: false, error: "missing-idempotency-key" },
-              { status: 400 },
-            ),
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "missing-idempotency-key",
+              },
+            }),
             env,
           );
         }
@@ -696,14 +739,12 @@ const worker = {
         if (apiKeyActor) {
           if (!apiKeyActor.modes.has(parsed.value.mode)) {
             return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "actor-mode-not-allowed",
+              execErrorResponse({
+                code: "policy-denied",
+                details: {
                   reason: `api-key-mode-not-enabled:${parsed.value.mode}`,
                 },
-                { status: 403 },
-              ),
+              }),
               env,
             );
           }
@@ -718,16 +759,21 @@ const worker = {
             user = await ensureUserWallet(env, user);
             if (!user.walletAddress || !user.privyWalletId) {
               return withCors(
-                json(
-                  { ok: false, error: "user-wallet-missing" },
-                  { status: 503 },
-                ),
+                execErrorResponse({
+                  code: "submission-failed",
+                  status: 503,
+                  details: {
+                    reason: "user-wallet-missing",
+                  },
+                }),
                 env,
               );
             }
             if (parsed.value.privyExecute.wallet !== user.walletAddress) {
               return withCors(
-                json({ ok: false, error: "invalid-request" }, { status: 400 }),
+                execErrorResponse({
+                  code: "invalid-request",
+                }),
                 env,
               );
             }
@@ -769,12 +815,13 @@ const worker = {
             ...(abuseCheck.metadata ?? {}),
           });
           const denied = json(
-            {
-              ok: false,
-              error: abuseCheck.error,
-              reason: abuseCheck.reason,
-              abuse: abuseCheck.metadata,
-            },
+            buildExecutionErrorEnvelope({
+              code: abuseCheck.error,
+              details: {
+                reason: abuseCheck.reason,
+                abuse: abuseCheck.metadata,
+              } as never,
+            }),
             {
               status: abuseCheck.status,
               ...(abuseCheck.retryAfterSeconds
@@ -797,14 +844,12 @@ const worker = {
         });
         if (!laneResolution.ok) {
           return withCors(
-            json(
-              {
-                ok: false,
-                error: laneResolution.error,
+            execErrorResponse({
+              code: laneResolution.error,
+              details: {
                 reason: laneResolution.reason,
               },
-              { status: 400 },
-            ),
+            }),
             env,
           );
         }
@@ -838,11 +883,46 @@ const worker = {
                 ? error.message
                 : "x402-route-config-missing";
             return withCors(
-              json({ ok: false, error: message }, { status: 503 }),
+              execErrorResponse({
+                code: "submission-failed",
+                status: 503,
+                details: {
+                  reason: message,
+                },
+              }),
               env,
             );
           }
-          if (paymentRequired) return withCors(paymentRequired, env);
+          if (paymentRequired) {
+            if (paymentRequired.status === 402) {
+              const upstreamBody = (await paymentRequired
+                .clone()
+                .json()
+                .catch(() => null)) as {
+                reason?: string;
+                paymentRequired?: unknown;
+              } | null;
+              const normalized = json(
+                buildExecutionErrorEnvelope({
+                  code: "payment-required",
+                  details: {
+                    ...(upstreamBody?.reason
+                      ? { reason: upstreamBody.reason }
+                      : {}),
+                    ...(upstreamBody?.paymentRequired
+                      ? { paymentRequired: upstreamBody.paymentRequired }
+                      : {}),
+                  } as never,
+                }),
+                {
+                  status: 402,
+                  headers: paymentRequired.headers,
+                },
+              );
+              return withCors(normalized, env);
+            }
+            return withCors(paymentRequired, env);
+          }
           const billingMetadata = await buildExecSubmitBillingAuditMetadata(
             request,
             url.pathname,
@@ -861,15 +941,14 @@ const worker = {
         });
         if (!submitPolicy.ok) {
           return withCors(
-            json(
-              {
-                ok: false,
-                error: submitPolicy.error,
+            execErrorResponse({
+              code: submitPolicy.error,
+              status: submitPolicy.status,
+              details: {
                 reason: submitPolicy.reason,
                 policy: submitPolicy.metadata,
               },
-              { status: submitPolicy.status },
-            ),
+            }),
             env,
           );
         }
@@ -892,14 +971,12 @@ const worker = {
         if (isRelaySigned) {
           if (!relayValidationParsed) {
             return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "invalid-transaction",
+              execErrorResponse({
+                code: "invalid-transaction",
+                details: {
                   reason: "relay-validation-missing",
                 },
-                { status: 400 },
-              ),
+              }),
               env,
             );
           }
@@ -908,14 +985,12 @@ const worker = {
           });
           if (!relayImmutability) {
             return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "invalid-transaction",
+              execErrorResponse({
+                code: "invalid-transaction",
+                details: {
                   reason: "relay-immutability-hash-failed",
                 },
-                { status: 400 },
-              ),
+              }),
               env,
             );
           }
@@ -948,15 +1023,14 @@ const worker = {
 
         if (reservation.result === "conflict") {
           return withCors(
-            json(
-              {
-                ok: false,
-                error: "invalid-request",
+            execErrorResponse({
+              code: "invalid-request",
+              status: 409,
+              requestId: reservation.request.requestId,
+              details: {
                 reason: reservation.error,
-                requestId: reservation.request.requestId,
               },
-              { status: 409 },
-            ),
+            }),
             env,
           );
         }
@@ -976,19 +1050,16 @@ const worker = {
               });
             if (!immutabilityVerification.ok) {
               return withCors(
-                json(
-                  {
-                    ok: false,
-                    error: immutabilityVerification.error,
+                execErrorResponse({
+                  code: immutabilityVerification.error,
+                  status:
+                    immutabilityVerification.error === "policy-denied"
+                      ? 403
+                      : 400,
+                  details: {
                     reason: immutabilityVerification.reason,
                   },
-                  {
-                    status:
-                      immutabilityVerification.error === "policy-denied"
-                        ? 403
-                        : 400,
-                  },
-                ),
+                }),
                 env,
               );
             }
@@ -1210,10 +1281,13 @@ const worker = {
             const terminalStatus = deniedReason ? "rejected" : "failed";
             const errorCode = deniedReason
               ? "policy-denied"
-              : "execution-failed";
+              : normalizeExecutionErrorCode({
+                  error,
+                  fallback: "submission-failed",
+                });
             const statusReason = deniedReason
               ? `policy-denied:${deniedReason}`
-              : "execution-failed";
+              : errorCode;
             const errorMessage =
               executionErrorMessage(error) ?? "execution-submit-failed";
             await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
@@ -1305,7 +1379,12 @@ const worker = {
         const requestId = url.pathname.slice("/api/x402/exec/status/".length);
         if (!isValidExecRequestId(requestId)) {
           return withCors(
-            json({ ok: false, error: "invalid-request-id" }, { status: 400 }),
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "invalid-request-id",
+              },
+            }),
             env,
           );
         }
@@ -1316,7 +1395,10 @@ const worker = {
         );
         if (!latest) {
           return withCors(
-            json({ ok: false, error: "not-found" }, { status: 404 }),
+            execErrorResponse({
+              code: "not-found",
+              requestId,
+            }),
             env,
           );
         }
@@ -1402,7 +1484,12 @@ const worker = {
         const requestId = url.pathname.slice("/api/x402/exec/receipt/".length);
         if (!isValidExecRequestId(requestId)) {
           return withCors(
-            json({ ok: false, error: "invalid-request-id" }, { status: 400 }),
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "invalid-request-id",
+              },
+            }),
             env,
           );
         }
@@ -1413,7 +1500,10 @@ const worker = {
         );
         if (!latest) {
           return withCors(
-            json({ ok: false, error: "not-found" }, { status: 404 }),
+            execErrorResponse({
+              code: "not-found",
+              requestId,
+            }),
             env,
           );
         }
@@ -3488,6 +3578,35 @@ const worker = {
             /no such column/i.test(rawMessage)
           ? "d1-migrations-not-applied"
           : rawMessage;
+      if (url.pathname.startsWith("/api/x402/exec/")) {
+        const code = normalizeExecutionErrorCode({
+          error: message,
+          fallback: "submission-failed",
+        });
+        const forcedStatus =
+          message === "d1-migrations-not-applied" ||
+          message.startsWith("x402-route-config-")
+            ? 503
+            : undefined;
+        if ((forcedStatus ?? executionErrorStatus(code)) >= 500) {
+          console.error("api.error", {
+            method: request.method,
+            path: url.pathname,
+            message: rawMessage,
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+        }
+        return withCors(
+          execErrorResponse({
+            code,
+            ...(forcedStatus ? { status: forcedStatus } : {}),
+            details: {
+              reason: message,
+            },
+          }),
+          env,
+        );
+      }
       const status =
         message === "unauthorized"
           ? 401

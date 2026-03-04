@@ -186,7 +186,11 @@ describe("worker x402 exec receipt route", () => {
         createExecutionContextStub(),
       );
       expect(invalid.status).toBe(400);
-      expect((await invalid.json())?.error).toBe("invalid-request-id");
+      const invalidBody = (await invalid.json()) as {
+        error?: { code?: string; details?: { reason?: string } };
+      };
+      expect(invalidBody.error?.code).toBe("invalid-request");
+      expect(invalidBody.error?.details?.reason).toBe("invalid-request-id");
 
       const unknown = await worker.fetch(
         new Request(
@@ -196,7 +200,10 @@ describe("worker x402 exec receipt route", () => {
         createExecutionContextStub(),
       );
       expect(unknown.status).toBe(404);
-      expect((await unknown.json())?.error).toBe("not-found");
+      const unknownBody = (await unknown.json()) as {
+        error?: { code?: string };
+      };
+      expect(unknownBody.error?.code).toBe("not-found");
     } finally {
       sqlite.close();
     }

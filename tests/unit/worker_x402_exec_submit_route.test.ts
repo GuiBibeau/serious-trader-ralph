@@ -164,6 +164,52 @@ const PRIVY_PAYLOAD = {
   },
 };
 
+function execErrorCode(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const topLevel = (payload as { error?: unknown }).error;
+  if (typeof topLevel === "string") return topLevel;
+  if (!topLevel || typeof topLevel !== "object" || Array.isArray(topLevel)) {
+    return null;
+  }
+  const code = (topLevel as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function execErrorReason(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const topLevelReason = (payload as { reason?: unknown }).reason;
+  if (typeof topLevelReason === "string") return topLevelReason;
+  const topLevel = (payload as { error?: unknown }).error;
+  if (!topLevel || typeof topLevel !== "object" || Array.isArray(topLevel)) {
+    return null;
+  }
+  const details = (topLevel as { details?: unknown }).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === "string" ? reason : null;
+}
+
+function execErrorDetails(payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const topLevel = (payload as { error?: unknown }).error;
+  if (!topLevel || typeof topLevel !== "object" || Array.isArray(topLevel)) {
+    return null;
+  }
+  const details = (topLevel as { details?: unknown }).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+  return details as Record<string, unknown>;
+}
+
 describe("worker x402 exec submit scaffold route", () => {
   beforeEach(() => {
     requireUserMock.mockClear();
@@ -198,8 +244,8 @@ describe("worker x402 exec submit scaffold route", () => {
       );
 
       expect(response.status).toBe(402);
-      const payload = (await response.json()) as { error?: string };
-      expect(payload.error).toBe("payment-required");
+      const payload = await response.json();
+      expect(execErrorCode(payload)).toBe("payment-required");
       expect(response.headers.get("payment-required")).toBeString();
       expect(response.headers.get("payment-response")).toBeNull();
     } finally {
@@ -225,12 +271,9 @@ describe("worker x402 exec submit scaffold route", () => {
       );
 
       expect(response.status).toBe(400);
-      const body = (await response.json()) as {
-        error?: string;
-        reason?: string;
-      };
-      expect(body.error).toBe("unsupported-lane");
-      expect(body.reason).toBe("lane-not-available-for-relay-signed");
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("unsupported-lane");
+      expect(execErrorReason(body)).toBe("lane-not-available-for-relay-signed");
     } finally {
       sqlite.close();
     }
@@ -392,12 +435,9 @@ describe("worker x402 exec submit scaffold route", () => {
         createExecutionContextStub(),
       );
       expect(response.status).toBe(409);
-      const body = (await response.json()) as {
-        error?: string;
-        reason?: string;
-      };
-      expect(body.error).toBe("invalid-request");
-      expect(body.reason).toBe("idempotency-key-conflict");
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("invalid-request");
+      expect(execErrorReason(body)).toBe("idempotency-key-conflict");
     } finally {
       sqlite.close();
     }
@@ -459,12 +499,9 @@ describe("worker x402 exec submit scaffold route", () => {
         createExecutionContextStub(),
       );
       expect(replay.status).toBe(403);
-      const replayBody = (await replay.json()) as {
-        error?: string;
-        reason?: string;
-      };
-      expect(replayBody.error).toBe("policy-denied");
-      expect(replayBody.reason).toBe("relay-immutability-mismatch");
+      const replayBody = await replay.json();
+      expect(execErrorCode(replayBody)).toBe("policy-denied");
+      expect(execErrorReason(replayBody)).toBe("relay-immutability-mismatch");
     } finally {
       sqlite.close();
     }
@@ -528,12 +565,11 @@ describe("worker x402 exec submit scaffold route", () => {
         createExecutionContextStub(),
       );
       expect(response.status).toBe(403);
-      const body = (await response.json()) as {
-        error?: string;
-        reason?: string;
-      };
-      expect(body.error).toBe("actor-mode-not-allowed");
-      expect(body.reason).toBe("api-key-mode-not-enabled:privy_execute");
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("policy-denied");
+      expect(execErrorReason(body)).toBe(
+        "api-key-mode-not-enabled:privy_execute",
+      );
     } finally {
       sqlite.close();
     }
@@ -668,14 +704,12 @@ describe("worker x402 exec submit scaffold route", () => {
         createExecutionContextStub(),
       );
       expect(response.status).toBe(403);
-      const body = (await response.json()) as {
-        error?: string;
-        reason?: string;
-        policy?: { outcome?: string };
-      };
-      expect(body.error).toBe("policy-denied");
-      expect(body.reason).toBe("privy-wallet-not-allowlisted");
-      expect(body.policy?.outcome).toBe("deny");
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("policy-denied");
+      expect(execErrorReason(body)).toBe("privy-wallet-not-allowlisted");
+      const details = execErrorDetails(body);
+      const policy = details?.policy as { outcome?: string } | undefined;
+      expect(policy?.outcome).toBe("deny");
     } finally {
       sqlite.close();
     }
@@ -759,9 +793,9 @@ describe("worker x402 exec submit scaffold route", () => {
       );
       expect(second.status).toBe(429);
       expect(second.headers.get("retry-after")).toBe("60");
-      const body = (await second.json()) as { error?: string; reason?: string };
-      expect(body.error).toBe("policy-denied");
-      expect(body.reason).toBe("submit-ip-rate-limit-exceeded");
+      const body = await second.json();
+      expect(execErrorCode(body)).toBe("policy-denied");
+      expect(execErrorReason(body)).toBe("submit-ip-rate-limit-exceeded");
     } finally {
       sqlite.close();
     }
@@ -790,8 +824,8 @@ describe("worker x402 exec submit scaffold route", () => {
         createExecutionContextStub(),
       );
       expect(response.status).toBe(400);
-      const body = (await response.json()) as { error?: string };
-      expect(body.error).toBe("invalid-request");
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("invalid-request");
     } finally {
       sqlite.close();
     }
@@ -823,8 +857,8 @@ describe("worker x402 exec submit scaffold route", () => {
         createExecutionContextStub(),
       );
       expect(response.status).toBe(400);
-      const body = (await response.json()) as { error?: string };
-      expect(body.error).toBe("invalid-request");
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("invalid-request");
     } finally {
       sqlite.close();
     }
@@ -851,8 +885,9 @@ describe("worker x402 exec submit scaffold route", () => {
       );
 
       expect(response.status).toBe(503);
-      const payload = (await response.json()) as { error?: string };
-      expect(payload.error).toBe("x402-route-config-missing");
+      const payload = await response.json();
+      expect(execErrorCode(payload)).toBe("submission-failed");
+      expect(execErrorReason(payload)).toBe("x402-route-config-missing");
     } finally {
       sqlite.close();
     }
