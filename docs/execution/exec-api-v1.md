@@ -36,6 +36,15 @@ Status: draft contract for implementation gating (`X402-001`).
 
 ## Lane Semantics
 
+Actor-segment rollout controls:
+
+- `EXEC_ROLLOUT_INTERNAL_ENABLED` (api-key/internal actor segment)
+- `EXEC_ROLLOUT_TRUSTED_ENABLED` (privy/trusted actor segment)
+- `EXEC_ROLLOUT_EXTERNAL_ENABLED` (anonymous x402/external actor segment)
+
+When a segment is disabled, submit returns `policy-denied` with reason:
+`rollout-segment-disabled:<internal|trusted|external>`.
+
 Lane operator controls:
 
 - `EXEC_LANE_FAST_ENABLED` (default `1`)

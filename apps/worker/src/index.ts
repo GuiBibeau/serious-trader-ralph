@@ -56,6 +56,7 @@ import {
   updateExecutionRequestStatus,
   upsertExecutionReceiptIdempotent,
 } from "./execution/repository";
+import { evaluateExecutionRolloutGate } from "./execution/rollout_gate";
 import { executeSwapViaRouter } from "./execution/router";
 import { parseExecSubmitPayload } from "./execution/submit_contract";
 import {
@@ -921,6 +922,29 @@ const worker = {
             actorAuthSource = "authorization";
             privyActorContext = relayPrivyActor;
           }
+        }
+
+        const rolloutGate = evaluateExecutionRolloutGate({
+          env,
+          actorType,
+          mode: parsed.value.mode,
+        });
+        submitMetadata = {
+          ...(submitMetadata ?? {}),
+          rollout: rolloutGate.metadata,
+        };
+        if (!rolloutGate.ok) {
+          return withCors(
+            execErrorResponse({
+              code: rolloutGate.error,
+              status: 403,
+              details: {
+                reason: rolloutGate.reason,
+                rollout: rolloutGate.metadata,
+              },
+            }),
+            env,
+          );
         }
 
         const abuseCheck = await enforceExecSubmitAbuseGuard({
