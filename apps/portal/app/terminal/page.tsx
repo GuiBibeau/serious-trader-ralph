@@ -22,6 +22,11 @@ import {
   buildDepthChartModel,
   findNearestDepthPoint,
 } from "./components/depth-chart";
+import {
+  buildLivePositions,
+  type PositionFill,
+  summarizeLivePositions,
+} from "./components/live-positions";
 import { MacroEtfWidget } from "./components/macro-etf-widget";
 import { MacroFredWidget } from "./components/macro-fred-widget";
 import { MacroOilWidget } from "./components/macro-oil-widget";
@@ -72,7 +77,11 @@ type ExecutionActivityRow = {
   id: string;
   ts: number;
   pairId: PairId;
+  direction: "buy" | "sell";
   leg: string;
+  baseFilledUi: number;
+  quoteFilledUi: number;
+  fillPrice: number | null;
   status: string;
   signature: string | null;
   qualitySummary: string;
@@ -674,8 +683,12 @@ function ControlRoom() {
         const entry: ExecutionActivityRow = {
           id: crypto.randomUUID(),
           ts: Date.now(),
-          pairId: selectedPairId,
+          pairId: trade.pairId,
+          direction: trade.direction,
           leg: `${trade.inputSymbol} -> ${trade.outputSymbol}`,
+          baseFilledUi: trade.baseFilledUi,
+          quoteFilledUi: trade.quoteFilledUi,
+          fillPrice: trade.fillPrice,
           status: trade.status,
           signature: trade.signature,
           qualitySummary: `lane ${trade.lane} • sim ${trade.simulationPreference} • slip ${trade.slippageBps} bps • prio ${trade.priorityLevel}`,
@@ -684,7 +697,7 @@ function ControlRoom() {
       });
       void refreshWalletBalances();
     },
-    [applyOptimisticTradeBalances, refreshWalletBalances, selectedPairId],
+    [applyOptimisticTradeBalances, refreshWalletBalances],
   );
 
   useEffect(() => {
@@ -879,7 +892,14 @@ function ControlRoom() {
                     key="positions"
                     className="flex flex-col overflow-hidden bg-surface"
                   >
-                    <PositionsOrdersFillsPanel entries={recentExecutions} />
+                    <PositionsOrdersFillsPanel
+                      entries={recentExecutions}
+                      selectedPairId={selectedPairId}
+                      selectedPairMark={marketFeed.latestPrice}
+                      tokenBalancesByMint={tokenBalancesByMint}
+                      tradingEnabled={canQuickTrade}
+                      onQuickAction={openTradeTicket}
+                    />
                   </div>
                 ) : null}
 
@@ -1642,8 +1662,121 @@ const TradesTapePanel = memo(function TradesTapePanel(props: {
 const PositionsOrdersFillsPanel = memo(
   function PositionsOrdersFillsPanel(props: {
     entries: ExecutionActivityRow[];
+    selectedPairId: PairId;
+    selectedPairMark: number | null;
+    tokenBalancesByMint: Record<string, string>;
+    tradingEnabled: boolean;
+    onQuickAction: (intent: TradeIntent) => void;
   }) {
-    const { entries } = props;
+    const {
+      entries,
+      selectedPairId,
+      selectedPairMark,
+      tokenBalancesByMint,
+      tradingEnabled,
+      onQuickAction,
+    } = props;
+    const markByPair = useMemo(
+      () =>
+        ({
+          [selectedPairId]: selectedPairMark,
+        }) as Partial<Record<PairId, number | null>>,
+      [selectedPairId, selectedPairMark],
+    );
+    const quoteBalanceBySymbol = useMemo(() => {
+      const balances: Record<string, number | null> = {};
+      for (const [symbol, token] of Object.entries(TOKEN_CONFIGS)) {
+        const formatted = formatAtomicTokenBalance(
+          tokenBalancesByMint[token.mint] ?? "0",
+          token.decimals,
+          9,
+        );
+        const parsed = Number(formatted);
+        balances[symbol] = Number.isFinite(parsed) ? parsed : null;
+      }
+      return balances;
+    }, [tokenBalancesByMint]);
+    const fills = useMemo<PositionFill[]>(
+      () =>
+        entries.map((entry) => ({
+          id: entry.id,
+          ts: entry.ts,
+          pairId: entry.pairId,
+          direction: entry.direction,
+          status: entry.status,
+          signature: entry.signature,
+          baseFilledUi: entry.baseFilledUi,
+          quoteFilledUi: entry.quoteFilledUi,
+          fillPrice: entry.fillPrice,
+          qualitySummary: entry.qualitySummary,
+        })),
+      [entries],
+    );
+    const positions = useMemo(
+      () =>
+        buildLivePositions({
+          fills,
+          markByPair,
+          quoteBalanceBySymbol,
+        }),
+      [fills, markByPair, quoteBalanceBySymbol],
+    );
+    const totals = useMemo(
+      () => summarizeLivePositions(positions),
+      [positions],
+    );
+
+    const formatAmountUi = useCallback((value: number): string => {
+      const normalized = Number.isFinite(value) ? value : 0;
+      return normalized.toFixed(4).replace(/\.?0+$/, "") || "0";
+    }, []);
+
+    const openReduceIntent = useCallback(
+      (pairId: PairId, sizeBase: number) => {
+        if (!tradingEnabled) return;
+        const reduceSize = Math.max(sizeBase * 0.25, 0.0001);
+        onQuickAction(
+          createTradeIntent("sell", "POSITIONS_PANEL", pairId, {
+            reason: `Reduce 25% position size`,
+            amountUi: formatAmountUi(reduceSize),
+          }),
+        );
+      },
+      [formatAmountUi, onQuickAction, tradingEnabled],
+    );
+
+    const openCloseIntent = useCallback(
+      (pairId: PairId, sizeBase: number) => {
+        if (!tradingEnabled) return;
+        onQuickAction(
+          createTradeIntent("sell", "POSITIONS_PANEL", pairId, {
+            reason: "Close full position",
+            amountUi: formatAmountUi(sizeBase),
+          }),
+        );
+      },
+      [formatAmountUi, onQuickAction, tradingEnabled],
+    );
+
+    const formatSignedPnl = useCallback((value: number | null): string => {
+      if (value === null || !Number.isFinite(value)) return "--";
+      const sign = value >= 0 ? "+" : "";
+      return `${sign}${value.toFixed(2)}`;
+    }, []);
+
+    const riskBadgeClass = useCallback(
+      (riskLevel: "low" | "medium" | "high") => {
+        if (riskLevel === "high") {
+          return "border-red-500/40 bg-red-500/10 text-red-300";
+        }
+        if (riskLevel === "medium") {
+          return "border-amber-500/40 bg-amber-500/10 text-amber-300";
+        }
+        return "border-emerald-500/40 bg-emerald-500/10 text-emerald-300";
+      },
+      [],
+    );
+
     return (
       <>
         <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5 shrink-0">
@@ -1657,11 +1790,150 @@ const PositionsOrdersFillsPanel = memo(
         <div className="flex-1 overflow-auto p-3 text-xs space-y-3">
           <div className="rounded border border-border bg-subtle p-2">
             <p className="text-[10px] uppercase tracking-wider text-muted">
-              Open Positions
+              Position Totals (Session)
             </p>
-            <p className="mt-1 text-muted">
-              Position netting is not enabled yet for this lane.
+            <p className="mt-1 font-mono text-ink">
+              Notional: {totals.notional.toFixed(2)} USDC
             </p>
+            <p
+              className={cn(
+                "font-mono",
+                totals.unrealizedPnl >= 0 ? "text-emerald-300" : "text-red-300",
+              )}
+            >
+              Unrealized: {formatSignedPnl(totals.unrealizedPnl)} USDC
+            </p>
+            <p
+              className={cn(
+                "font-mono",
+                totals.realizedPnl >= 0 ? "text-emerald-300" : "text-red-300",
+              )}
+            >
+              Realized: {formatSignedPnl(totals.realizedPnl)} USDC
+            </p>
+          </div>
+          <div className="rounded border border-border bg-subtle p-2">
+            <p className="text-[10px] uppercase tracking-wider text-muted">
+              Live Positions
+            </p>
+            <div className="mt-2 space-y-1.5">
+              {positions.length === 0 ? (
+                <p className="text-muted">
+                  No open position from this session yet.
+                </p>
+              ) : null}
+              {positions.map((position) => (
+                <div
+                  key={`position-${position.pairId}`}
+                  className="rounded border border-border/60 px-2 py-1.5 space-y-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-mono text-[11px] text-ink truncate">
+                        {position.pairId} • {position.sizeBase.toFixed(4)}{" "}
+                        {position.baseSymbol}
+                      </p>
+                      <p className="text-[10px] text-muted">
+                        Entry{" "}
+                        {position.avgEntry === null
+                          ? "--"
+                          : position.avgEntry.toFixed(4)}{" "}
+                        • Mark{" "}
+                        {position.mark === null
+                          ? "--"
+                          : position.mark.toFixed(4)}
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        "rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                        riskBadgeClass(position.riskLevel),
+                      )}
+                    >
+                      {position.riskLevel} risk
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                    <p className="text-muted">
+                      Unrealized:{" "}
+                      <span
+                        className={
+                          (position.unrealizedPnl ?? 0) >= 0
+                            ? "text-emerald-300"
+                            : "text-red-300"
+                        }
+                      >
+                        {formatSignedPnl(position.unrealizedPnl)}
+                      </span>
+                    </p>
+                    <p className="text-muted text-right">
+                      Realized:{" "}
+                      <span
+                        className={
+                          position.realizedPnl >= 0
+                            ? "text-emerald-300"
+                            : "text-red-300"
+                        }
+                      >
+                        {formatSignedPnl(position.realizedPnl)}
+                      </span>
+                    </p>
+                    <p className="text-muted">
+                      Leverage:{" "}
+                      <span className="font-mono text-ink">
+                        {position.leverage === null
+                          ? "--"
+                          : `${position.leverage.toFixed(2)}x`}
+                      </span>
+                    </p>
+                    <p className="text-muted text-right truncate">
+                      {position.warning ?? "Risk within normal bounds."}
+                    </p>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                        !tradingEnabled && "opacity-60 pointer-events-none",
+                      )}
+                      onClick={() =>
+                        openReduceIntent(position.pairId, position.sizeBase)
+                      }
+                      type="button"
+                      disabled={!tradingEnabled}
+                    >
+                      Reduce 25%
+                    </button>
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                        !tradingEnabled && "opacity-60 pointer-events-none",
+                      )}
+                      onClick={() =>
+                        openCloseIntent(position.pairId, position.sizeBase)
+                      }
+                      type="button"
+                      disabled={!tradingEnabled}
+                    >
+                      Close
+                    </button>
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider opacity-60",
+                      )}
+                      type="button"
+                      disabled
+                      title="Reverse requires shorting/margin support."
+                    >
+                      Reverse
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
           <div className="rounded border border-border bg-subtle p-2">
             <p className="text-[10px] uppercase tracking-wider text-muted">
@@ -1685,6 +1957,14 @@ const PositionsOrdersFillsPanel = memo(
                     </p>
                     <p className="text-[10px] text-muted truncate">
                       {entry.qualitySummary}
+                    </p>
+                    <p className="text-[10px] text-muted">
+                      {entry.direction.toUpperCase()}{" "}
+                      {entry.baseFilledUi.toFixed(4)}{" "}
+                      {getPairConfig(entry.pairId).baseSymbol} @{" "}
+                      {entry.fillPrice === null
+                        ? "--"
+                        : entry.fillPrice.toFixed(4)}
                     </p>
                   </div>
                   <div className="text-right">

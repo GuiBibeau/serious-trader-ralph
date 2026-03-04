@@ -30,12 +30,17 @@ type TradeTicketModalProps = {
 };
 
 export type TradeTicketCompletion = {
+  pairId: TradeIntent["pairId"];
+  direction: TradeIntent["direction"];
   inputMint: string;
   outputMint: string;
   inputSymbol: string;
   outputSymbol: string;
   inAmountAtomic: string;
   outAmountAtomic: string;
+  baseFilledUi: number;
+  quoteFilledUi: number;
+  fillPrice: number | null;
   status: string;
   signature: string | null;
   lane: ExecutionLane;
@@ -120,6 +125,17 @@ function formatAtomicToUi(
   } catch {
     return null;
   }
+}
+
+function atomicToUiNumber(
+  atomicRaw: string | null,
+  decimals: number,
+): number | null {
+  const ui = formatAtomicToUi(atomicRaw, decimals, 9);
+  if (!ui) return null;
+  const parsed = Number(ui);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
 }
 
 function toPositiveAtomic(raw: string | null | undefined): string | null {
@@ -764,13 +780,28 @@ export function TradeTicketModal({
         signal: controller.signal,
       });
 
+      const inputUiAmount =
+        atomicToUiNumber(quote.inAmountAtomic, intent.inputDecimals) ?? 0;
+      const outputUiAmount =
+        atomicToUiNumber(quote.outAmountAtomic, intent.outputDecimals) ?? 0;
+      const baseFilledUi =
+        intent.direction === "buy" ? outputUiAmount : inputUiAmount;
+      const quoteFilledUi =
+        intent.direction === "buy" ? inputUiAmount : outputUiAmount;
+      const fillPrice = baseFilledUi > 0 ? quoteFilledUi / baseFilledUi : null;
+
       onTradeComplete?.({
+        pairId: intent.pairId,
+        direction: intent.direction,
         inputMint: intent.inputMint,
         outputMint: intent.outputMint,
         inputSymbol: intent.inputSymbol,
         outputSymbol: intent.outputSymbol,
         inAmountAtomic: quote.inAmountAtomic,
         outAmountAtomic: quote.outAmountAtomic,
+        baseFilledUi,
+        quoteFilledUi,
+        fillPrice,
         status: terminal.status,
         signature: terminal.signature,
         lane: executionLane,
