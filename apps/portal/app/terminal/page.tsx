@@ -69,6 +69,7 @@ import {
   type MarketState,
   useMarketFeed,
 } from "./components/sol-market-feed";
+import { TerminalStatusBar } from "./components/terminal-status-bar";
 import { createTradeIntent, type TradeIntent } from "./components/trade-intent";
 import {
   DEFAULT_PAIR_ID,
@@ -998,164 +999,170 @@ function ControlRoom() {
               <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-accent" />
             </div>
           ) : (
-            <div className="relative h-full">
-              <div className="pointer-events-none absolute left-2 top-2 z-20 hidden sm:block">
-                <div
-                  className="rounded border border-border/70 bg-paper/90 px-2.5 py-1 text-[11px] text-muted backdrop-blur"
-                  title={modeCapabilities.description}
+            <div className="flex h-full min-h-0 flex-col gap-1">
+              <TerminalStatusBar
+                realtime={realtimeTransport}
+                market={marketFeed}
+              />
+              <div className="relative min-h-0 flex-1">
+                <div className="pointer-events-none absolute left-2 top-2 z-20 hidden sm:block">
+                  <div
+                    className="rounded border border-border/70 bg-paper/90 px-2.5 py-1 text-[11px] text-muted backdrop-blur"
+                    title={modeCapabilities.description}
+                  >
+                    Mode:{" "}
+                    <span className="font-semibold text-ink">
+                      {modeCapabilities.label}
+                    </span>
+                  </div>
+                </div>
+                {hasCustomGridLayout && canLayoutEdit && (
+                  <div className="pointer-events-none absolute right-2 top-2 z-20">
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "pointer-events-auto h-7 border-border/70 bg-paper/90 px-2.5 text-[11px] backdrop-blur",
+                      )}
+                      onClick={resetDashboardLayout}
+                      title="Reorganize layout (R)"
+                      type="button"
+                    >
+                      Reset layout
+                    </button>
+                  </div>
+                )}
+
+                <DashboardGrid
+                  key={gridRevision}
+                  className="h-full w-full border border-border bg-border pb-1"
+                  allowLayoutEditing={canLayoutEdit}
+                  onLayoutChange={() =>
+                    setHasCustomGridLayout(hasCustomDashboardGridLayouts())
+                  }
                 >
-                  Mode:{" "}
-                  <span className="font-semibold text-ink">
-                    {modeCapabilities.label}
-                  </span>
-                </div>
+                  {showMarketModule ? (
+                    <div
+                      key="chart"
+                      className="flex flex-col overflow-hidden bg-surface"
+                    >
+                      <ChartPanel
+                        pairId={selectedPairId}
+                        market={marketFeed}
+                        onPairChange={handlePairChange}
+                      />
+                    </div>
+                  ) : null}
+
+                  {showMarketModule ? (
+                    <div
+                      key="orderbook"
+                      className="flex flex-col overflow-hidden bg-surface"
+                    >
+                      <OrderbookDepthPanel
+                        market={marketFeed}
+                        realtime={realtimeTransport}
+                        selectedPrefill={ladderPrefill}
+                        onPrefill={handleLadderPrefill}
+                      />
+                    </div>
+                  ) : null}
+
+                  {showMarketModule ? (
+                    <div
+                      key="order_entry"
+                      className="flex flex-col overflow-hidden bg-surface"
+                    >
+                      <OrderEntryPanel
+                        pairId={selectedPairId}
+                        onBuy={openMarketBuyTrade}
+                        onSell={openMarketSellTrade}
+                        tradingEnabled={canQuickTrade}
+                        prefill={ladderPrefill}
+                        onClearPrefill={clearLadderPrefill}
+                      />
+                    </div>
+                  ) : null}
+
+                  {showMarketModule ? (
+                    <div
+                      key="trades_tape"
+                      className="flex flex-col overflow-hidden bg-surface"
+                    >
+                      <TradesTapePanel realtime={realtimeTransport} />
+                    </div>
+                  ) : null}
+
+                  {showMarketModule ? (
+                    <div
+                      key="positions"
+                      className="flex flex-col overflow-hidden bg-surface"
+                    >
+                      <PositionsOrdersFillsPanel
+                        entries={recentExecutions}
+                        openOrders={openOrders}
+                        selectedPairId={selectedPairId}
+                        selectedPairMark={marketFeed.latestPrice}
+                        tokenBalancesByMint={tokenBalancesByMint}
+                        tradingEnabled={canQuickTrade}
+                        onQuickAction={openTradeTicket}
+                        onCancelOrder={cancelOpenOrder}
+                        onCancelAllOrders={cancelAllOpenOrders}
+                        onAmendOrder={amendOpenOrder}
+                        onExecuteOrder={executeOpenOrder}
+                      />
+                    </div>
+                  ) : null}
+
+                  {showWalletModule ? (
+                    <div
+                      key="account_risk"
+                      className="flex flex-col overflow-hidden bg-surface"
+                    >
+                      <AccountRiskPanel
+                        pairId={selectedPairId}
+                        tokenBalancesByMint={tokenBalancesByMint}
+                        market={marketFeed}
+                        realtime={realtimeTransport}
+                        snapshot={accountRiskSnapshot}
+                      />
+                    </div>
+                  ) : null}
+
+                  {showMacroRadarModule ? (
+                    <div key="macro_radar" className="overflow-hidden">
+                      <MacroRadarWidget
+                        onTradeAction={
+                          canMacroTrade ? openTradeTicket : undefined
+                        }
+                      />
+                    </div>
+                  ) : null}
+                  {showMacroFredModule ? (
+                    <div key="macro_fred" className="overflow-hidden">
+                      <MacroFredWidget />
+                    </div>
+                  ) : null}
+                  {showMacroEtfModule ? (
+                    <div key="macro_etf" className="overflow-hidden">
+                      <MacroEtfWidget />
+                    </div>
+                  ) : null}
+                  {showMacroStablecoinModule ? (
+                    <div key="macro_stablecoin" className="overflow-hidden">
+                      <MacroStablecoinWidget
+                        onTradeAction={
+                          canMacroTrade ? openTradeTicket : undefined
+                        }
+                      />
+                    </div>
+                  ) : null}
+                  {showMacroOilModule ? (
+                    <div key="macro_oil" className="overflow-hidden">
+                      <MacroOilWidget />
+                    </div>
+                  ) : null}
+                </DashboardGrid>
               </div>
-              {hasCustomGridLayout && canLayoutEdit && (
-                <div className="pointer-events-none absolute right-2 top-2 z-20">
-                  <button
-                    className={cn(
-                      BTN_SECONDARY,
-                      "pointer-events-auto h-7 border-border/70 bg-paper/90 px-2.5 text-[11px] backdrop-blur",
-                    )}
-                    onClick={resetDashboardLayout}
-                    title="Reorganize layout (R)"
-                    type="button"
-                  >
-                    Reset layout
-                  </button>
-                </div>
-              )}
-
-              <DashboardGrid
-                key={gridRevision}
-                className="w-full h-full border border-border bg-border pb-1"
-                allowLayoutEditing={canLayoutEdit}
-                onLayoutChange={() =>
-                  setHasCustomGridLayout(hasCustomDashboardGridLayouts())
-                }
-              >
-                {showMarketModule ? (
-                  <div
-                    key="chart"
-                    className="flex flex-col overflow-hidden bg-surface"
-                  >
-                    <ChartPanel
-                      pairId={selectedPairId}
-                      market={marketFeed}
-                      onPairChange={handlePairChange}
-                    />
-                  </div>
-                ) : null}
-
-                {showMarketModule ? (
-                  <div
-                    key="orderbook"
-                    className="flex flex-col overflow-hidden bg-surface"
-                  >
-                    <OrderbookDepthPanel
-                      market={marketFeed}
-                      realtime={realtimeTransport}
-                      selectedPrefill={ladderPrefill}
-                      onPrefill={handleLadderPrefill}
-                    />
-                  </div>
-                ) : null}
-
-                {showMarketModule ? (
-                  <div
-                    key="order_entry"
-                    className="flex flex-col overflow-hidden bg-surface"
-                  >
-                    <OrderEntryPanel
-                      pairId={selectedPairId}
-                      onBuy={openMarketBuyTrade}
-                      onSell={openMarketSellTrade}
-                      tradingEnabled={canQuickTrade}
-                      prefill={ladderPrefill}
-                      onClearPrefill={clearLadderPrefill}
-                    />
-                  </div>
-                ) : null}
-
-                {showMarketModule ? (
-                  <div
-                    key="trades_tape"
-                    className="flex flex-col overflow-hidden bg-surface"
-                  >
-                    <TradesTapePanel realtime={realtimeTransport} />
-                  </div>
-                ) : null}
-
-                {showMarketModule ? (
-                  <div
-                    key="positions"
-                    className="flex flex-col overflow-hidden bg-surface"
-                  >
-                    <PositionsOrdersFillsPanel
-                      entries={recentExecutions}
-                      openOrders={openOrders}
-                      selectedPairId={selectedPairId}
-                      selectedPairMark={marketFeed.latestPrice}
-                      tokenBalancesByMint={tokenBalancesByMint}
-                      tradingEnabled={canQuickTrade}
-                      onQuickAction={openTradeTicket}
-                      onCancelOrder={cancelOpenOrder}
-                      onCancelAllOrders={cancelAllOpenOrders}
-                      onAmendOrder={amendOpenOrder}
-                      onExecuteOrder={executeOpenOrder}
-                    />
-                  </div>
-                ) : null}
-
-                {showWalletModule ? (
-                  <div
-                    key="account_risk"
-                    className="flex flex-col overflow-hidden bg-surface"
-                  >
-                    <AccountRiskPanel
-                      pairId={selectedPairId}
-                      tokenBalancesByMint={tokenBalancesByMint}
-                      market={marketFeed}
-                      realtime={realtimeTransport}
-                      snapshot={accountRiskSnapshot}
-                    />
-                  </div>
-                ) : null}
-
-                {showMacroRadarModule ? (
-                  <div key="macro_radar" className="overflow-hidden">
-                    <MacroRadarWidget
-                      onTradeAction={
-                        canMacroTrade ? openTradeTicket : undefined
-                      }
-                    />
-                  </div>
-                ) : null}
-                {showMacroFredModule ? (
-                  <div key="macro_fred" className="overflow-hidden">
-                    <MacroFredWidget />
-                  </div>
-                ) : null}
-                {showMacroEtfModule ? (
-                  <div key="macro_etf" className="overflow-hidden">
-                    <MacroEtfWidget />
-                  </div>
-                ) : null}
-                {showMacroStablecoinModule ? (
-                  <div key="macro_stablecoin" className="overflow-hidden">
-                    <MacroStablecoinWidget
-                      onTradeAction={
-                        canMacroTrade ? openTradeTicket : undefined
-                      }
-                    />
-                  </div>
-                ) : null}
-                {showMacroOilModule ? (
-                  <div key="macro_oil" className="overflow-hidden">
-                    <MacroOilWidget />
-                  </div>
-                ) : null}
-              </DashboardGrid>
             </div>
           )}
         </div>
