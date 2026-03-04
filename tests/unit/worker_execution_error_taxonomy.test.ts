@@ -39,7 +39,14 @@ describe("execution error taxonomy", () => {
       }),
     ).toBe("submission-failed");
 
+    expect(
+      normalizeExecutionErrorCode({
+        error: new Error("waitlist-required"),
+      }),
+    ).toBe("policy-denied");
+
     expect(executionErrorStatus("venue-timeout")).toBe(504);
+    expect(executionErrorStatus("policy-denied")).toBe(403);
   });
 
   test("builds schema-valid uniform error envelope", () => {

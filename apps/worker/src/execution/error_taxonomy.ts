@@ -115,6 +115,14 @@ export function normalizeExecutionErrorCode(input: {
     return "invalid-request";
   }
   if (joined.includes("unsupported-lane")) return "unsupported-lane";
+  if (
+    joined.includes("waitlist-required") ||
+    joined.includes("waitlist-email-required") ||
+    joined.includes("manual-onboarding-required") ||
+    joined.includes("onboarding-not-complete")
+  ) {
+    return "policy-denied";
+  }
   if (joined.includes("policy-denied")) return "policy-denied";
   if (
     joined.includes("insufficient") &&
