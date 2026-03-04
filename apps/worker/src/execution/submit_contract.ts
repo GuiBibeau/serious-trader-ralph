@@ -98,7 +98,9 @@ function parsePrivyExecute(value: unknown): {
   };
   options?: {
     simulateOnly?: boolean;
+    requireSimulation?: boolean;
     dryRun?: boolean;
+    priorityMicroLamports?: number;
     commitment?: "processed" | "confirmed" | "finalized";
     orderType?: "market" | "limit" | "trigger";
     timeInForce?: "gtc" | "ioc" | "fok";
@@ -157,7 +159,9 @@ function parsePrivyExecute(value: unknown): {
   const options = isRecord(value.options) ? value.options : {};
   const optionKeys = new Set([
     "simulateOnly",
+    "requireSimulation",
     "dryRun",
+    "priorityMicroLamports",
     "commitment",
     "orderType",
     "timeInForce",
@@ -178,8 +182,24 @@ function parsePrivyExecute(value: unknown): {
   ) {
     return null;
   }
+  if (
+    options.requireSimulation !== undefined &&
+    typeof options.requireSimulation !== "boolean"
+  ) {
+    return null;
+  }
   if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
     return null;
+  }
+  if (options.priorityMicroLamports !== undefined) {
+    const priorityMicroLamports = Number(options.priorityMicroLamports);
+    if (
+      !Number.isInteger(priorityMicroLamports) ||
+      priorityMicroLamports < 0 ||
+      priorityMicroLamports > 2_000_000
+    ) {
+      return null;
+    }
   }
   if (
     options.commitment !== undefined &&
@@ -262,8 +282,16 @@ function parsePrivyExecute(value: unknown): {
             ...(options.simulateOnly !== undefined
               ? { simulateOnly: options.simulateOnly as boolean }
               : {}),
+            ...(options.requireSimulation !== undefined
+              ? { requireSimulation: options.requireSimulation as boolean }
+              : {}),
             ...(options.dryRun !== undefined
               ? { dryRun: options.dryRun as boolean }
+              : {}),
+            ...(options.priorityMicroLamports !== undefined
+              ? {
+                  priorityMicroLamports: Number(options.priorityMicroLamports),
+                }
               : {}),
             ...(options.commitment !== undefined
               ? {
@@ -342,7 +370,9 @@ export type ExecSubmitRequestV1 = {
     };
     options?: {
       simulateOnly?: boolean;
+      requireSimulation?: boolean;
       dryRun?: boolean;
+      priorityMicroLamports?: number;
       commitment?: "processed" | "confirmed" | "finalized";
       orderType?: "market" | "limit" | "trigger";
       timeInForce?: "gtc" | "ioc" | "fok";

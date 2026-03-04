@@ -75,6 +75,7 @@ type ExecutionActivityRow = {
   leg: string;
   status: string;
   signature: string | null;
+  qualitySummary: string;
 };
 
 type LadderPrefill = {
@@ -677,6 +678,7 @@ function ControlRoom() {
           leg: `${trade.inputSymbol} -> ${trade.outputSymbol}`,
           status: trade.status,
           signature: trade.signature,
+          qualitySummary: `lane ${trade.lane} • sim ${trade.simulationPreference} • slip ${trade.slippageBps} bps • prio ${trade.priorityLevel}`,
         };
         return [entry, ...current].slice(0, 30);
       });
@@ -1680,6 +1682,9 @@ const PositionsOrdersFillsPanel = memo(
                     </p>
                     <p className="text-[10px] text-muted">
                       {new Date(entry.ts).toLocaleTimeString()}
+                    </p>
+                    <p className="text-[10px] text-muted truncate">
+                      {entry.qualitySummary}
                     </p>
                   </div>
                   <div className="text-right">

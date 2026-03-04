@@ -38,6 +38,11 @@ export type TradeTicketCompletion = {
   outAmountAtomic: string;
   status: string;
   signature: string | null;
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  slippageBps: number;
+  priorityLevel: PriorityLevel;
+  priorityMicroLamports: number;
 };
 
 type QuoteState = {
@@ -53,6 +58,9 @@ type QuoteState = {
 type OrderType = "market" | "limit" | "trigger";
 type TimeInForce = "gtc" | "ioc" | "fok";
 type QuantityMode = "base" | "quote" | "notional";
+type ExecutionLane = "fast" | "protected" | "safe";
+type SimulationPreference = "auto" | "always" | "never";
+type PriorityLevel = "normal" | "high" | "urgent";
 
 const MIN_SLIPPAGE_BPS = "1";
 const MAX_SLIPPAGE_BPS = "5000";
@@ -60,6 +68,15 @@ const BEARER_RE = /^bearer\s+/i;
 const EXEC_POLL_INTERVAL_MS = 1200;
 const EXEC_POLL_TIMEOUT_MS = 45000;
 const ORDER_PRICE_DECIMALS = 6;
+const MAX_PRIORITY_MICRO_LAMPORTS = 2_000_000;
+const DEFAULT_EXECUTION_LANE: ExecutionLane = "safe";
+const DEFAULT_SIMULATION_PREFERENCE: SimulationPreference = "auto";
+const DEFAULT_PRIORITY_LEVEL: PriorityLevel = "normal";
+const PRIORITY_MICRO_LAMPORTS_BY_LEVEL: Record<PriorityLevel, number> = {
+  normal: 5_000,
+  high: 50_000,
+  urgent: 200_000,
+};
 
 type CloseModalOptions = {
   cancelExecution?: boolean;
@@ -223,6 +240,58 @@ export function validateOrderConfig(input: {
   return errors;
 }
 
+function qualityHint(input: {
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  priorityLevel: PriorityLevel;
+}): string {
+  const laneHint =
+    input.lane === "safe"
+      ? "Safe lane routes with stronger validation."
+      : input.lane === "protected"
+        ? "Protected lane prioritizes private execution."
+        : "Fast lane targets lowest latency routing.";
+  const simulationHint =
+    input.simulationPreference === "always"
+      ? "Simulation is always required before dispatch."
+      : input.simulationPreference === "never"
+        ? "Simulation is skipped unless policy enforces it."
+        : "Simulation follows lane and policy defaults.";
+  const priorityHint =
+    input.priorityLevel === "urgent"
+      ? "Urgent priority increases fee pressure for speed."
+      : input.priorityLevel === "high"
+        ? "High priority balances speed and fee spend."
+        : "Normal priority uses conservative fee settings.";
+  return `${laneHint} ${simulationHint} ${priorityHint}`;
+}
+
+export function validateExecutionQualityConfig(input: {
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  slippageBps: number;
+  priorityMicroLamports: number;
+}): string[] {
+  const errors: string[] = [];
+  if (input.lane === "safe" && input.simulationPreference === "never") {
+    errors.push("Safe lane requires simulation (choose auto or always).");
+  }
+  if (!Number.isInteger(input.slippageBps) || input.slippageBps < 1) {
+    errors.push("Slippage must be at least 1 bps.");
+  }
+  if (input.slippageBps > 5_000) {
+    errors.push("Slippage cannot exceed 5000 bps.");
+  }
+  if (
+    !Number.isInteger(input.priorityMicroLamports) ||
+    input.priorityMicroLamports < 0 ||
+    input.priorityMicroLamports > MAX_PRIORITY_MICRO_LAMPORTS
+  ) {
+    errors.push("Priority fee is outside allowed bounds.");
+  }
+  return errors;
+}
+
 export function TradeTicketModal({
   open,
   intent,
@@ -234,6 +303,14 @@ export function TradeTicketModal({
 }: TradeTicketModalProps) {
   const [amountUi, setAmountUi] = useState("");
   const [slippageInput, setSlippageInput] = useState("50");
+  const [executionLane, setExecutionLane] = useState<ExecutionLane>(
+    DEFAULT_EXECUTION_LANE,
+  );
+  const [simulationPreference, setSimulationPreference] =
+    useState<SimulationPreference>(DEFAULT_SIMULATION_PREFERENCE);
+  const [priorityLevel, setPriorityLevel] = useState<PriorityLevel>(
+    DEFAULT_PRIORITY_LEVEL,
+  );
   const [orderType, setOrderType] = useState<OrderType>("market");
   const [timeInForce, setTimeInForce] = useState<TimeInForce>("gtc");
   const [quantityMode, setQuantityMode] = useState<QuantityMode>("quote");
@@ -321,6 +398,9 @@ export function TradeTicketModal({
     quoteAbortRef.current?.abort();
     setAmountUi(intent.amountUi);
     setSlippageInput(String(intent.slippageBps));
+    setExecutionLane(DEFAULT_EXECUTION_LANE);
+    setSimulationPreference(DEFAULT_SIMULATION_PREFERENCE);
+    setPriorityLevel(DEFAULT_PRIORITY_LEVEL);
     setOrderType("market");
     setTimeInForce("gtc");
     setQuantityMode("quote");
@@ -355,6 +435,34 @@ export function TradeTicketModal({
   const resolvedSlippageBps = useMemo(
     () => toBoundedSlippage(deferredSlippageInput, intent?.slippageBps ?? 50),
     [deferredSlippageInput, intent?.slippageBps],
+  );
+  const priorityMicroLamports = useMemo(
+    () => PRIORITY_MICRO_LAMPORTS_BY_LEVEL[priorityLevel],
+    [priorityLevel],
+  );
+  const executionQualityHint = useMemo(
+    () =>
+      qualityHint({
+        lane: executionLane,
+        simulationPreference,
+        priorityLevel,
+      }),
+    [executionLane, priorityLevel, simulationPreference],
+  );
+  const executionQualityErrors = useMemo(
+    () =>
+      validateExecutionQualityConfig({
+        lane: executionLane,
+        simulationPreference,
+        slippageBps: resolvedSlippageBps,
+        priorityMicroLamports,
+      }),
+    [
+      executionLane,
+      priorityMicroLamports,
+      resolvedSlippageBps,
+      simulationPreference,
+    ],
   );
 
   const amountAtomicForValidation = useMemo(
@@ -548,9 +656,13 @@ export function TradeTicketModal({
 
   const executeTrade = useCallback(async (): Promise<void> => {
     if (!intent) return;
-    if (orderValidationErrors.length > 0) {
+    if (orderValidationErrors.length > 0 || executionQualityErrors.length > 0) {
       setSubmitStatus("error");
-      setSubmitMessage(orderValidationErrors[0] ?? "invalid-order-config");
+      setSubmitMessage(
+        orderValidationErrors[0] ??
+          executionQualityErrors[0] ??
+          "invalid-order-config",
+      );
       return;
     }
     if (!walletAddress) {
@@ -575,6 +687,12 @@ export function TradeTicketModal({
     );
     const options = {
       commitment: "confirmed" as const,
+      ...(simulationPreference === "always"
+        ? { requireSimulation: true }
+        : simulationPreference === "never"
+          ? { requireSimulation: false }
+          : {}),
+      priorityMicroLamports,
       orderType,
       timeInForce,
       reduceOnly,
@@ -609,10 +727,10 @@ export function TradeTicketModal({
         {
           schemaVersion: "v1",
           mode: "privy_execute",
-          lane: "safe",
+          lane: executionLane,
           metadata: {
             source: intent.source,
-            reason: `${intent.reason} • ${orderType}/${timeInForce}/${quantityMode}`,
+            reason: `${intent.reason} • ${orderType}/${timeInForce}/${quantityMode} • ${executionLane}/${simulationPreference}/${priorityLevel}`,
             clientRequestId: idempotencyKey,
           },
           privyExecute: {
@@ -655,6 +773,11 @@ export function TradeTicketModal({
         outAmountAtomic: quote.outAmountAtomic,
         status: terminal.status,
         signature: terminal.signature,
+        lane: executionLane,
+        simulationPreference,
+        slippageBps: boundedSlippageBps,
+        priorityLevel,
+        priorityMicroLamports,
       });
       toast.success("Trade executed", {
         id: execToastId ?? undefined,
@@ -699,7 +822,11 @@ export function TradeTicketModal({
     onTradeComplete,
     orderType,
     orderValidationErrors,
+    executionLane,
+    executionQualityErrors,
     postOnly,
+    priorityLevel,
+    priorityMicroLamports,
     quantityMode,
     quote.inAmountAtomic,
     quote.outAmountAtomic,
@@ -707,6 +834,7 @@ export function TradeTicketModal({
     resolvedSlippageBps,
     slippageInput,
     stopLossPriceAtomic,
+    simulationPreference,
     takeProfitPriceAtomic,
     timeInForce,
     triggerPriceAtomic,
@@ -793,6 +921,18 @@ export function TradeTicketModal({
             onSetSlippageMax={setSlippageMax}
             onRefreshQuote={refreshQuote}
           />
+          <ExecutionQualitySection
+            lane={executionLane}
+            simulationPreference={simulationPreference}
+            priorityLevel={priorityLevel}
+            priorityMicroLamports={priorityMicroLamports}
+            slippageBps={resolvedSlippageBps}
+            hint={executionQualityHint}
+            validationErrors={executionQualityErrors}
+            onLaneChange={setExecutionLane}
+            onSimulationPreferenceChange={setSimulationPreference}
+            onPriorityLevelChange={setPriorityLevel}
+          />
           <AdvancedOrderConfigSection
             orderType={orderType}
             timeInForce={timeInForce}
@@ -851,7 +991,8 @@ export function TradeTicketModal({
                 submitStatus === "tracking" ||
                 quote.status !== "ready" ||
                 !quote.inAmountAtomic ||
-                orderValidationErrors.length > 0
+                orderValidationErrors.length > 0 ||
+                executionQualityErrors.length > 0
               }
             >
               {submitStatus === "submitting" || submitStatus === "tracking"
@@ -1027,6 +1168,103 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
         />
       </div>
     </>
+  );
+});
+
+const ExecutionQualitySection = memo(function ExecutionQualitySection(props: {
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  priorityLevel: PriorityLevel;
+  priorityMicroLamports: number;
+  slippageBps: number;
+  hint: string;
+  validationErrors: string[];
+  onLaneChange: (value: ExecutionLane) => void;
+  onSimulationPreferenceChange: (value: SimulationPreference) => void;
+  onPriorityLevelChange: (value: PriorityLevel) => void;
+}) {
+  const {
+    lane,
+    simulationPreference,
+    priorityLevel,
+    priorityMicroLamports,
+    slippageBps,
+    hint,
+    validationErrors,
+    onLaneChange,
+    onSimulationPreferenceChange,
+    onPriorityLevelChange,
+  } = props;
+  return (
+    <div className="rounded border border-border bg-subtle px-3 py-2 text-xs space-y-3">
+      <p className="label">EXECUTION_QUALITY</p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <label className="space-y-1">
+          <span className="text-muted text-[10px] uppercase tracking-wider">
+            Lane
+          </span>
+          <select
+            className="input-field !py-2 font-mono"
+            value={lane}
+            onChange={(event) =>
+              onLaneChange(event.target.value as ExecutionLane)
+            }
+          >
+            <option value="fast">fast</option>
+            <option value="protected">protected</option>
+            <option value="safe">safe</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-muted text-[10px] uppercase tracking-wider">
+            Simulation
+          </span>
+          <select
+            className="input-field !py-2 font-mono"
+            value={simulationPreference}
+            onChange={(event) =>
+              onSimulationPreferenceChange(
+                event.target.value as SimulationPreference,
+              )
+            }
+          >
+            <option value="auto">auto</option>
+            <option value="always">always</option>
+            <option value="never">never</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-muted text-[10px] uppercase tracking-wider">
+            Priority
+          </span>
+          <select
+            className="input-field !py-2 font-mono"
+            value={priorityLevel}
+            onChange={(event) =>
+              onPriorityLevelChange(event.target.value as PriorityLevel)
+            }
+          >
+            <option value="normal">normal</option>
+            <option value="high">high</option>
+            <option value="urgent">urgent</option>
+          </select>
+        </label>
+      </div>
+      <div className="rounded border border-border/60 bg-paper/70 px-2 py-1.5 text-[10px] text-muted space-y-0.5">
+        <p>Slippage: {slippageBps} bps</p>
+        <p>
+          Priority fee: {priorityMicroLamports.toLocaleString()} u-lamports/CU
+        </p>
+        <p>{hint}</p>
+      </div>
+      {validationErrors.length > 0 ? (
+        <ul className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-300 space-y-1">
+          {validationErrors.map((error) => (
+            <li key={error}>• {error}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 });
 

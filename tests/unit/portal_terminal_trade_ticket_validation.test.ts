@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { validateOrderConfig } from "../../apps/portal/app/terminal/components/trade-ticket-modal";
+import {
+  validateExecutionQualityConfig,
+  validateOrderConfig,
+} from "../../apps/portal/app/terminal/components/trade-ticket-modal";
 
 describe("portal terminal advanced trade ticket validation", () => {
   test("rejects invalid limit and post-only combinations", () => {
@@ -33,6 +36,28 @@ describe("portal terminal advanced trade ticket validation", () => {
       takeProfitPriceAtomic: "1100000",
       stopLossPriceAtomic: "850000",
       bracketEnabled: true,
+    });
+    expect(errors).toHaveLength(0);
+  });
+
+  test("blocks invalid safe lane + no-simulation quality combo", () => {
+    const errors = validateExecutionQualityConfig({
+      lane: "safe",
+      simulationPreference: "never",
+      slippageBps: 50,
+      priorityMicroLamports: 5000,
+    });
+    expect(errors).toContain(
+      "Safe lane requires simulation (choose auto or always).",
+    );
+  });
+
+  test("accepts valid execution quality controls", () => {
+    const errors = validateExecutionQualityConfig({
+      lane: "protected",
+      simulationPreference: "always",
+      slippageBps: 120,
+      priorityMicroLamports: 200000,
     });
     expect(errors).toHaveLength(0);
   });

@@ -53,7 +53,9 @@ export type ExecutionSubmitPayload = {
     options?: {
       commitment?: "processed" | "confirmed" | "finalized";
       simulateOnly?: boolean;
+      requireSimulation?: boolean;
       dryRun?: boolean;
+      priorityMicroLamports?: number;
       orderType?: "market" | "limit" | "trigger";
       timeInForce?: "gtc" | "ioc" | "fok";
       reduceOnly?: boolean;
