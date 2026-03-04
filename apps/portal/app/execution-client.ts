@@ -54,6 +54,15 @@ export type ExecutionSubmitPayload = {
       commitment?: "processed" | "confirmed" | "finalized";
       simulateOnly?: boolean;
       dryRun?: boolean;
+      orderType?: "market" | "limit" | "trigger";
+      timeInForce?: "gtc" | "ioc" | "fok";
+      reduceOnly?: boolean;
+      postOnly?: boolean;
+      quantityMode?: "base" | "quote" | "notional";
+      limitPriceAtomic?: string;
+      triggerPriceAtomic?: string;
+      takeProfitPriceAtomic?: string;
+      stopLossPriceAtomic?: string;
     };
   };
 };

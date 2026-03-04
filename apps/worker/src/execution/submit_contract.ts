@@ -100,6 +100,15 @@ function parsePrivyExecute(value: unknown): {
     simulateOnly?: boolean;
     dryRun?: boolean;
     commitment?: "processed" | "confirmed" | "finalized";
+    orderType?: "market" | "limit" | "trigger";
+    timeInForce?: "gtc" | "ioc" | "fok";
+    reduceOnly?: boolean;
+    postOnly?: boolean;
+    quantityMode?: "base" | "quote" | "notional";
+    limitPriceAtomic?: string;
+    triggerPriceAtomic?: string;
+    takeProfitPriceAtomic?: string;
+    stopLossPriceAtomic?: string;
   };
 } | null {
   if (!isRecord(value)) return null;
@@ -146,7 +155,20 @@ function parsePrivyExecute(value: unknown): {
 
   if (value.options !== undefined && !isRecord(value.options)) return null;
   const options = isRecord(value.options) ? value.options : {};
-  const optionKeys = new Set(["simulateOnly", "dryRun", "commitment"]);
+  const optionKeys = new Set([
+    "simulateOnly",
+    "dryRun",
+    "commitment",
+    "orderType",
+    "timeInForce",
+    "reduceOnly",
+    "postOnly",
+    "quantityMode",
+    "limitPriceAtomic",
+    "triggerPriceAtomic",
+    "takeProfitPriceAtomic",
+    "stopLossPriceAtomic",
+  ]);
   for (const key of Object.keys(options)) {
     if (!optionKeys.has(key)) return null;
   }
@@ -164,6 +186,63 @@ function parsePrivyExecute(value: unknown): {
     options.commitment !== "processed" &&
     options.commitment !== "confirmed" &&
     options.commitment !== "finalized"
+  ) {
+    return null;
+  }
+  if (
+    options.orderType !== undefined &&
+    options.orderType !== "market" &&
+    options.orderType !== "limit" &&
+    options.orderType !== "trigger"
+  ) {
+    return null;
+  }
+  if (
+    options.timeInForce !== undefined &&
+    options.timeInForce !== "gtc" &&
+    options.timeInForce !== "ioc" &&
+    options.timeInForce !== "fok"
+  ) {
+    return null;
+  }
+  if (
+    options.reduceOnly !== undefined &&
+    typeof options.reduceOnly !== "boolean"
+  ) {
+    return null;
+  }
+  if (options.postOnly !== undefined && typeof options.postOnly !== "boolean") {
+    return null;
+  }
+  if (
+    options.quantityMode !== undefined &&
+    options.quantityMode !== "base" &&
+    options.quantityMode !== "quote" &&
+    options.quantityMode !== "notional"
+  ) {
+    return null;
+  }
+  if (
+    options.limitPriceAtomic !== undefined &&
+    !/^[1-9][0-9]*$/.test(String(options.limitPriceAtomic))
+  ) {
+    return null;
+  }
+  if (
+    options.triggerPriceAtomic !== undefined &&
+    !/^[1-9][0-9]*$/.test(String(options.triggerPriceAtomic))
+  ) {
+    return null;
+  }
+  if (
+    options.takeProfitPriceAtomic !== undefined &&
+    !/^[1-9][0-9]*$/.test(String(options.takeProfitPriceAtomic))
+  ) {
+    return null;
+  }
+  if (
+    options.stopLossPriceAtomic !== undefined &&
+    !/^[1-9][0-9]*$/.test(String(options.stopLossPriceAtomic))
   ) {
     return null;
   }
@@ -193,6 +272,45 @@ function parsePrivyExecute(value: unknown): {
                     | "confirmed"
                     | "finalized",
                 }
+              : {}),
+            ...(options.orderType !== undefined
+              ? {
+                  orderType: options.orderType as
+                    | "market"
+                    | "limit"
+                    | "trigger",
+                }
+              : {}),
+            ...(options.timeInForce !== undefined
+              ? {
+                  timeInForce: options.timeInForce as "gtc" | "ioc" | "fok",
+                }
+              : {}),
+            ...(options.reduceOnly !== undefined
+              ? { reduceOnly: options.reduceOnly as boolean }
+              : {}),
+            ...(options.postOnly !== undefined
+              ? { postOnly: options.postOnly as boolean }
+              : {}),
+            ...(options.quantityMode !== undefined
+              ? {
+                  quantityMode: options.quantityMode as
+                    | "base"
+                    | "quote"
+                    | "notional",
+                }
+              : {}),
+            ...(options.limitPriceAtomic !== undefined
+              ? { limitPriceAtomic: String(options.limitPriceAtomic) }
+              : {}),
+            ...(options.triggerPriceAtomic !== undefined
+              ? { triggerPriceAtomic: String(options.triggerPriceAtomic) }
+              : {}),
+            ...(options.takeProfitPriceAtomic !== undefined
+              ? { takeProfitPriceAtomic: String(options.takeProfitPriceAtomic) }
+              : {}),
+            ...(options.stopLossPriceAtomic !== undefined
+              ? { stopLossPriceAtomic: String(options.stopLossPriceAtomic) }
               : {}),
           },
         }
@@ -226,6 +344,15 @@ export type ExecSubmitRequestV1 = {
       simulateOnly?: boolean;
       dryRun?: boolean;
       commitment?: "processed" | "confirmed" | "finalized";
+      orderType?: "market" | "limit" | "trigger";
+      timeInForce?: "gtc" | "ioc" | "fok";
+      reduceOnly?: boolean;
+      postOnly?: boolean;
+      quantityMode?: "base" | "quote" | "notional";
+      limitPriceAtomic?: string;
+      triggerPriceAtomic?: string;
+      takeProfitPriceAtomic?: string;
+      stopLossPriceAtomic?: string;
     };
   };
 };

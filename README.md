@@ -24,6 +24,7 @@ It provides one execution fabric for:
 - Dedicated trades tape panel with side/size filters, pause-resume, and compact/expanded modes
 - Synchronized depth chart overlays with cumulative curves, spread, and imbalance annotations
 - Terminal-grade market chart controls (timeframes, line/candles, mark/index/reference overlays, keyboard cursor nav)
+- Advanced trade ticket with market/limit/trigger modes, TIF/flags, quantity modes, and TP/SL bracket validation
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:
