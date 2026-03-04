@@ -253,6 +253,33 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("denies anonymous relay submits when external rollout segment is disabled", async () => {
+    const relayPayload = buildRelaySignedPayload();
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_ROLLOUT_EXTERNAL_ENABLED: "0",
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-rollout-external-off-1",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("policy-denied");
+      expect(execErrorReason(body)).toBe("rollout-segment-disabled:external");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("rejects unsupported safe lane for relay_signed submits", async () => {
     const relayPayload = buildRelaySignedPayload({ lane: "safe" });
     const { env, sqlite } = createExecSubmitEnv();
@@ -707,6 +734,33 @@ describe("worker x402 exec submit scaffold route", () => {
       expect(body.status?.state).toBe("validated");
       expect(requireUserMock).toHaveBeenCalled();
       expect(response.headers.get("payment-response")).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("denies privy_execute submit when trusted rollout segment is disabled", async () => {
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_ROLLOUT_TRUSTED_ENABLED: "0",
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-rollout-trusted-off-1",
+          },
+          body: JSON.stringify(PRIVY_PAYLOAD),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("policy-denied");
+      expect(execErrorReason(body)).toBe("rollout-segment-disabled:trusted");
     } finally {
       sqlite.close();
     }

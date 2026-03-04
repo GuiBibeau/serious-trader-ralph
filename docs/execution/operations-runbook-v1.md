@@ -7,6 +7,9 @@ This runbook covers Phase 2 execution operations for:
 - queue saturation response
 - receipt reconciliation
 
+Rollout sequencing and revert gates are documented in
+`docs/execution/rollout-plan-v1.md`.
+
 ## Scope and Preconditions
 
 - Environments:
