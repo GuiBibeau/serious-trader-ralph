@@ -26,6 +26,7 @@ interface DashboardGridProps {
   children: ReactNode[];
   className?: string;
   onLayoutChange?: (layout: Layout[]) => void;
+  allowLayoutEditing?: boolean;
 }
 
 const DASHBOARD_LAYOUT_STORAGE_KEY = "dashboard-grid-layouts:v3";
@@ -171,6 +172,7 @@ export function DashboardGrid({
   children,
   className,
   onLayoutChange,
+  allowLayoutEditing = true,
 }: DashboardGridProps) {
   // Use the hook to get width
   const { width, containerRef, mounted } = useContainerWidth();
@@ -222,8 +224,8 @@ export function DashboardGrid({
           margin={[1, 1]}
           containerPadding={[0, 0]}
           onLayoutChange={handleLayoutChange}
-          isDraggable
-          isResizable
+          isDraggable={allowLayoutEditing}
+          isResizable={allowLayoutEditing}
           draggableHandle=".dashboard-drag-handle"
           draggableCancel=".no-drag"
         >

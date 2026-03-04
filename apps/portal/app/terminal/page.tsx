@@ -38,6 +38,17 @@ import {
 } from "./components/trade-pairs";
 import type { TradeTicketCompletion } from "./components/trade-ticket-modal";
 import { useDashboard } from "./context";
+import {
+  getTerminalModeCapabilities,
+  mergeProfileWithTerminalMode,
+  modeAllowsAction,
+  modeShowsModule,
+  readLocalTerminalMode,
+  readTerminalModeFromProfile,
+  resolveDefaultTerminalMode,
+  type TerminalMode,
+  writeLocalTerminalMode,
+} from "./terminal-modes";
 
 type Balances = BalanceResponse;
 
@@ -128,6 +139,13 @@ function parseAccountWallet(payload: unknown): AccountWallet | null {
   };
 }
 
+function parseUserProfile(payload: unknown): Record<string, unknown> | null {
+  if (!isRecord(payload)) return null;
+  const user = isRecord(payload.user) ? payload.user : null;
+  if (!user) return null;
+  return isRecord(user.profile) ? user.profile : null;
+}
+
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -187,6 +205,28 @@ function ControlRoom() {
   const [selectedPairId, setSelectedPairId] = useState<PairId>(DEFAULT_PAIR_ID);
   const [gridRevision, setGridRevision] = useState(0);
   const [hasCustomGridLayout, setHasCustomGridLayout] = useState(false);
+  const [terminalMode, setTerminalMode] = useState<TerminalMode>(() =>
+    resolveDefaultTerminalMode(process.env.NEXT_PUBLIC_TERMINAL_DEFAULT_MODE),
+  );
+  const [terminalModeSaving, setTerminalModeSaving] = useState(false);
+  const [userProfile, setUserProfile] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
+  const modeCapabilities = getTerminalModeCapabilities(terminalMode);
+  const canQuickTrade = modeAllowsAction(terminalMode, "quick_trade");
+  const canMacroTrade = modeAllowsAction(terminalMode, "macro_trade");
+  const canLayoutEdit = modeAllowsAction(terminalMode, "layout_edit");
+  const showMarketModule = modeShowsModule(terminalMode, "market");
+  const showWalletModule = modeShowsModule(terminalMode, "wallet");
+  const showMacroRadarModule = modeShowsModule(terminalMode, "macro_radar");
+  const showMacroFredModule = modeShowsModule(terminalMode, "macro_fred");
+  const showMacroEtfModule = modeShowsModule(terminalMode, "macro_etf");
+  const showMacroStablecoinModule = modeShowsModule(
+    terminalMode,
+    "macro_stablecoin",
+  );
+  const showMacroOilModule = modeShowsModule(terminalMode, "macro_oil");
 
   const resetDashboardLayout = useCallback(() => {
     clearDashboardGridLayouts();
@@ -198,8 +238,55 @@ function ControlRoom() {
     setHasCustomGridLayout(hasCustomDashboardGridLayouts());
   }, []);
 
+  const persistTerminalMode = useCallback(
+    async (input: {
+      mode: TerminalMode;
+      profileSnapshot: Record<string, unknown> | null;
+      source: "manual" | "local_fallback" | "default_fallback";
+      previousMode: TerminalMode | null;
+      emitTelemetry: boolean;
+    }): Promise<Record<string, unknown> | null> => {
+      if (!authenticated) return input.profileSnapshot;
+      const token = await getAccessToken();
+      if (!token) return input.profileSnapshot;
+
+      const mergedProfile = mergeProfileWithTerminalMode(
+        input.profileSnapshot,
+        {
+          mode: input.mode,
+          source: input.source,
+        },
+      );
+      await apiFetchJson("/api/me/profile", token, {
+        method: "PATCH",
+        body: JSON.stringify({
+          profile: mergedProfile,
+        }),
+      });
+
+      if (input.emitTelemetry) {
+        await apiFetchJson("/api/events", token, {
+          method: "POST",
+          body: JSON.stringify({
+            name: "terminal_mode_changed",
+            properties: {
+              from: input.previousMode,
+              to: input.mode,
+              source: input.source,
+            },
+          }),
+        }).catch(() => {
+          // Do not block UX on telemetry write failures.
+        });
+      }
+      return mergedProfile;
+    },
+    [authenticated, getAccessToken],
+  );
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
+      if (!canLayoutEdit) return;
       if (isTypingTarget(event.target)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key.toLowerCase() !== "r") return;
@@ -210,7 +297,7 @@ function ControlRoom() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [resetDashboardLayout]);
+  }, [canLayoutEdit, resetDashboardLayout]);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!authenticated) return;
@@ -223,6 +310,29 @@ function ControlRoom() {
 
       const walletRaw = isRecord(payload) ? payload.wallet : null;
       setWallet(parseAccountWallet(walletRaw));
+      const profile = parseUserProfile(payload);
+      setUserProfile(profile);
+      const serverMode = readTerminalModeFromProfile(profile);
+      const localMode = readLocalTerminalMode();
+      const defaultMode = resolveDefaultTerminalMode(
+        process.env.NEXT_PUBLIC_TERMINAL_DEFAULT_MODE,
+      );
+      const resolvedMode = serverMode ?? localMode ?? defaultMode;
+      setTerminalMode(resolvedMode);
+      // Keep local fallback synced with chosen mode.
+      writeLocalTerminalMode(resolvedMode);
+      if (!serverMode) {
+        const source = localMode ? "local_fallback" : "default_fallback";
+        void persistTerminalMode({
+          mode: resolvedMode,
+          profileSnapshot: profile,
+          source,
+          previousMode: null,
+          emitTelemetry: false,
+        }).then((mergedProfile) => {
+          if (mergedProfile) setUserProfile(mergedProfile);
+        });
+      }
       setLoaded(true);
     } catch (error) {
       setLoaded(true);
@@ -230,7 +340,7 @@ function ControlRoom() {
     } finally {
       setLoading(false);
     }
-  }, [authenticated, getAccessToken]);
+  }, [authenticated, getAccessToken, persistTerminalMode]);
 
   const refreshWalletBalances = useCallback(async (): Promise<void> => {
     if (!authenticated || !wallet) return;
@@ -333,24 +443,53 @@ function ControlRoom() {
   );
 
   const openMarketBuyTrade = useCallback(() => {
+    if (!canQuickTrade) return;
     openTradeTicket(
       createTradeIntent("buy", "MARKET_MONITOR", selectedPairId, {
         reason: `Market action: buy ${selectedPair.baseSymbol}`,
       }),
     );
-  }, [openTradeTicket, selectedPair.baseSymbol, selectedPairId]);
+  }, [canQuickTrade, openTradeTicket, selectedPair.baseSymbol, selectedPairId]);
 
   const openMarketSellTrade = useCallback(() => {
+    if (!canQuickTrade) return;
     openTradeTicket(
       createTradeIntent("sell", "MARKET_MONITOR", selectedPairId, {
         reason: `Market action: reduce ${selectedPair.baseSymbol}`,
       }),
     );
-  }, [openTradeTicket, selectedPair.baseSymbol, selectedPairId]);
+  }, [canQuickTrade, openTradeTicket, selectedPair.baseSymbol, selectedPairId]);
 
   const openFundingModal = useCallback(() => {
     setFundOpen(true);
   }, []);
+
+  const handleTerminalModeChange = useCallback(
+    (nextMode: TerminalMode): void => {
+      if (nextMode === terminalMode) return;
+      const previousMode = terminalMode;
+      setTerminalMode(nextMode);
+      writeLocalTerminalMode(nextMode);
+      setTerminalModeSaving(true);
+      void persistTerminalMode({
+        mode: nextMode,
+        profileSnapshot: userProfile,
+        source: "manual",
+        previousMode,
+        emitTelemetry: true,
+      })
+        .then((mergedProfile) => {
+          if (mergedProfile) setUserProfile(mergedProfile);
+        })
+        .catch(() => {
+          // Keep local mode active even if server persistence fails.
+        })
+        .finally(() => {
+          setTerminalModeSaving(false);
+        });
+    },
+    [persistTerminalMode, terminalMode, userProfile],
+  );
 
   const triggerRefresh = useCallback(() => {
     void refresh();
@@ -421,6 +560,9 @@ function ControlRoom() {
     setWalletBalances: setGlobalWalletBalances,
     setWalletBalanceError: setGlobalWalletBalanceError,
     setFundAction,
+    setTerminalMode: setGlobalTerminalMode,
+    setTerminalModeSaving: setGlobalTerminalModeSaving,
+    setModeAction,
     setRefreshAction,
     setIsRefreshing,
     setShowFundButton,
@@ -436,6 +578,9 @@ function ControlRoom() {
       setGlobalWalletBalanceError(null);
     }
     setFundAction(wallet ? openFundingModal : null);
+    setGlobalTerminalMode(terminalMode);
+    setGlobalTerminalModeSaving(terminalModeSaving);
+    setModeAction(handleTerminalModeChange);
     setRefreshAction(triggerRefresh);
     setIsRefreshing(loading);
     setShowFundButton(Boolean(wallet));
@@ -443,6 +588,7 @@ function ControlRoom() {
 
     return () => {
       setFundAction(null);
+      setModeAction(null);
       setRefreshAction(null);
     };
   }, [
@@ -453,11 +599,17 @@ function ControlRoom() {
     setGlobalWalletBalances,
     setGlobalWalletBalanceError,
     setFundAction,
+    setGlobalTerminalMode,
+    setGlobalTerminalModeSaving,
+    setModeAction,
     setRefreshAction,
     setIsRefreshing,
     setShowFundButton,
     setShowBalance,
     openFundingModal,
+    terminalMode,
+    terminalModeSaving,
+    handleTerminalModeChange,
     triggerRefresh,
   ]);
 
@@ -496,7 +648,18 @@ function ControlRoom() {
             </div>
           ) : (
             <div className="relative h-full">
-              {hasCustomGridLayout && (
+              <div className="pointer-events-none absolute left-2 top-2 z-20 hidden sm:block">
+                <div
+                  className="rounded border border-border/70 bg-paper/90 px-2.5 py-1 text-[11px] text-muted backdrop-blur"
+                  title={modeCapabilities.description}
+                >
+                  Mode:{" "}
+                  <span className="font-semibold text-ink">
+                    {modeCapabilities.label}
+                  </span>
+                </div>
+              </div>
+              {hasCustomGridLayout && canLayoutEdit && (
                 <div className="pointer-events-none absolute right-2 top-2 z-20">
                   <button
                     className={cn(
@@ -515,47 +678,71 @@ function ControlRoom() {
               <DashboardGrid
                 key={gridRevision}
                 className="w-full h-full border border-border bg-border pb-1"
+                allowLayoutEditing={canLayoutEdit}
                 onLayoutChange={() =>
                   setHasCustomGridLayout(hasCustomDashboardGridLayouts())
                 }
               >
-                <div
-                  key="market"
-                  className="flex flex-col overflow-hidden bg-surface"
-                >
-                  <MarketMonitorCard
-                    pairId={selectedPairId}
-                    onPairChange={setSelectedPairId}
-                    onBuy={openMarketBuyTrade}
-                    onSell={openMarketSellTrade}
-                  />
-                </div>
+                {showMarketModule ? (
+                  <div
+                    key="market"
+                    className="flex flex-col overflow-hidden bg-surface"
+                  >
+                    <MarketMonitorCard
+                      pairId={selectedPairId}
+                      onPairChange={setSelectedPairId}
+                      onBuy={openMarketBuyTrade}
+                      onSell={openMarketSellTrade}
+                      tradingEnabled={canQuickTrade}
+                    />
+                  </div>
+                ) : null}
 
-                <div
-                  key="wallet"
-                  className="flex flex-col overflow-hidden bg-surface"
-                >
-                  <WalletMonitorCard
-                    pairId={selectedPairId}
-                    tokenBalancesByMint={tokenBalancesByMint}
-                  />
-                </div>
+                {showWalletModule ? (
+                  <div
+                    key="wallet"
+                    className="flex flex-col overflow-hidden bg-surface"
+                  >
+                    <WalletMonitorCard
+                      pairId={selectedPairId}
+                      tokenBalancesByMint={tokenBalancesByMint}
+                    />
+                  </div>
+                ) : null}
 
-                <div key="macro_radar" className="overflow-hidden">
-                  <MacroRadarWidget onTradeAction={openTradeTicket} />
-                </div>
-                <div key="macro_fred" className="overflow-hidden">
-                  <MacroFredWidget />
-                </div>
-                <div key="macro_etf" className="overflow-hidden">
-                  <MacroEtfWidget />
-                </div>
-                <div key="macro_stablecoin" className="overflow-hidden">
-                  <MacroStablecoinWidget onTradeAction={openTradeTicket} />
-                </div>
-                <div key="macro_oil" className="overflow-hidden">
-                  <MacroOilWidget />
-                </div>
+                {showMacroRadarModule ? (
+                  <div key="macro_radar" className="overflow-hidden">
+                    <MacroRadarWidget
+                      onTradeAction={
+                        canMacroTrade ? openTradeTicket : undefined
+                      }
+                    />
+                  </div>
+                ) : null}
+                {showMacroFredModule ? (
+                  <div key="macro_fred" className="overflow-hidden">
+                    <MacroFredWidget />
+                  </div>
+                ) : null}
+                {showMacroEtfModule ? (
+                  <div key="macro_etf" className="overflow-hidden">
+                    <MacroEtfWidget />
+                  </div>
+                ) : null}
+                {showMacroStablecoinModule ? (
+                  <div key="macro_stablecoin" className="overflow-hidden">
+                    <MacroStablecoinWidget
+                      onTradeAction={
+                        canMacroTrade ? openTradeTicket : undefined
+                      }
+                    />
+                  </div>
+                ) : null}
+                {showMacroOilModule ? (
+                  <div key="macro_oil" className="overflow-hidden">
+                    <MacroOilWidget />
+                  </div>
+                ) : null}
               </DashboardGrid>
             </div>
           )}
@@ -570,8 +757,9 @@ const MarketMonitorCard = memo(function MarketMonitorCard(props: {
   onPairChange: (pairId: PairId) => void;
   onBuy: () => void;
   onSell: () => void;
+  tradingEnabled: boolean;
 }) {
-  const { pairId, onPairChange, onBuy, onSell } = props;
+  const { pairId, onPairChange, onBuy, onSell, tradingEnabled } = props;
   const pair = getPairConfig(pairId);
   const marketFeed = useMarketFeed(pairId);
   const pairLabel = `${pair.baseSymbol}/${pair.quoteSymbol}`;
@@ -609,9 +797,11 @@ const MarketMonitorCard = memo(function MarketMonitorCard(props: {
             className={cn(
               BTN_SECONDARY,
               "!h-6 !px-2 !py-0 text-[10px] !rounded",
+              !tradingEnabled && "opacity-60 pointer-events-none",
             )}
             onClick={onBuy}
             type="button"
+            disabled={!tradingEnabled}
           >
             Buy
           </button>
@@ -619,9 +809,11 @@ const MarketMonitorCard = memo(function MarketMonitorCard(props: {
             className={cn(
               BTN_SECONDARY,
               "!h-6 !px-2 !py-0 text-[10px] !rounded",
+              !tradingEnabled && "opacity-60 pointer-events-none",
             )}
             onClick={onSell}
             type="button"
+            disabled={!tradingEnabled}
           >
             Sell
           </button>

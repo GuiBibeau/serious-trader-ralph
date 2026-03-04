@@ -13,6 +13,9 @@ function ConnectedHeader() {
     isRefreshing,
     showFundButton,
     showBalance,
+    terminalMode,
+    terminalModeSaving,
+    onModeChange,
   } = useDashboard();
 
   return (
@@ -24,6 +27,9 @@ function ConnectedHeader() {
       isRefreshing={isRefreshing}
       showFundButton={showFundButton}
       showBalance={showBalance}
+      terminalMode={terminalMode}
+      terminalModeSaving={terminalModeSaving}
+      onModeChange={onModeChange}
     />
   );
 }

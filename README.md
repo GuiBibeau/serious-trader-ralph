@@ -17,6 +17,7 @@ It provides one execution fabric for:
 ## What Is Live
 
 - Terminal UI at `/terminal`
+- Terminal modes (`Regular`, `Degen`, `Custom`) with profile persistence
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:
@@ -39,6 +40,10 @@ bun run dev:local
 
 - Portal: `http://localhost:3000`
 - Worker health: `http://127.0.0.1:8888/api/health`
+
+Optional portal env:
+
+- `NEXT_PUBLIC_TERMINAL_DEFAULT_MODE=regular|degen|custom`
 
 ### Worker only
 
