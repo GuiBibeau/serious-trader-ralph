@@ -44,6 +44,34 @@ describe("exec submit contract: privy_execute", () => {
     });
   });
 
+  test("accepts advanced order options for privy_execute submits", () => {
+    const parsed = parseExecSubmitPayload({
+      ...VALID_PRIVY_SUBMIT,
+      privyExecute: {
+        ...VALID_PRIVY_SUBMIT.privyExecute,
+        options: {
+          ...VALID_PRIVY_SUBMIT.privyExecute.options,
+          orderType: "trigger",
+          timeInForce: "ioc",
+          reduceOnly: true,
+          postOnly: false,
+          quantityMode: "notional",
+          limitPriceAtomic: "1000000",
+          triggerPriceAtomic: "950000",
+          takeProfitPriceAtomic: "1200000",
+          stopLossPriceAtomic: "880000",
+        },
+      },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.privyExecute?.options?.orderType).toBe("trigger");
+    expect(parsed.value.privyExecute?.options?.quantityMode).toBe("notional");
+    expect(parsed.value.privyExecute?.options?.triggerPriceAtomic).toBe(
+      "950000",
+    );
+  });
+
   test("rejects invalid privy_execute payloads deterministically", () => {
     const invalidIntentType = parseExecSubmitPayload({
       ...VALID_PRIVY_SUBMIT,

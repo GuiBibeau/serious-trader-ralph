@@ -50,11 +50,16 @@ type QuoteState = {
   priceImpactPct: number | null;
 };
 
+type OrderType = "market" | "limit" | "trigger";
+type TimeInForce = "gtc" | "ioc" | "fok";
+type QuantityMode = "base" | "quote" | "notional";
+
 const MIN_SLIPPAGE_BPS = "1";
 const MAX_SLIPPAGE_BPS = "5000";
 const BEARER_RE = /^bearer\s+/i;
 const EXEC_POLL_INTERVAL_MS = 1200;
 const EXEC_POLL_TIMEOUT_MS = 45000;
+const ORDER_PRICE_DECIMALS = 6;
 
 type CloseModalOptions = {
   cancelExecution?: boolean;
@@ -151,6 +156,73 @@ const EMPTY_QUOTE: QuoteState = {
   priceImpactPct: null,
 };
 
+export function validateOrderConfig(input: {
+  orderType: OrderType;
+  timeInForce: TimeInForce;
+  reduceOnly: boolean;
+  postOnly: boolean;
+  quantityMode: QuantityMode;
+  amountAtomic: string | null;
+  limitPriceAtomic: string | null;
+  triggerPriceAtomic: string | null;
+  takeProfitPriceAtomic: string | null;
+  stopLossPriceAtomic: string | null;
+  bracketEnabled: boolean;
+}): string[] {
+  const errors: string[] = [];
+  if (!input.amountAtomic) {
+    errors.push("Amount must be greater than zero.");
+  }
+  if (input.orderType === "limit" && !input.limitPriceAtomic) {
+    errors.push("Limit orders require a limit price.");
+  }
+  if (input.orderType === "trigger" && !input.triggerPriceAtomic) {
+    errors.push("Trigger orders require a trigger price.");
+  }
+  if (
+    input.postOnly &&
+    (input.timeInForce === "ioc" || input.timeInForce === "fok")
+  ) {
+    errors.push("Post-only cannot be combined with IOC or FOK.");
+  }
+  if (input.orderType === "market" && input.postOnly) {
+    errors.push("Post-only is only valid for limit or trigger orders.");
+  }
+  if (
+    input.bracketEnabled &&
+    !input.takeProfitPriceAtomic &&
+    !input.stopLossPriceAtomic
+  ) {
+    errors.push("Bracket mode requires TP and/or SL price.");
+  }
+  if (
+    input.bracketEnabled &&
+    input.takeProfitPriceAtomic &&
+    input.stopLossPriceAtomic
+  ) {
+    try {
+      if (
+        BigInt(input.takeProfitPriceAtomic) ===
+        BigInt(input.stopLossPriceAtomic)
+      ) {
+        errors.push("TP and SL cannot be equal.");
+      }
+    } catch {
+      errors.push("Invalid TP/SL values.");
+    }
+  }
+  if (
+    input.quantityMode !== "quote" &&
+    input.orderType === "market" &&
+    input.reduceOnly
+  ) {
+    errors.push(
+      "Reduce-only market orders currently require quote quantity mode.",
+    );
+  }
+  return errors;
+}
+
 export function TradeTicketModal({
   open,
   intent,
@@ -162,6 +234,16 @@ export function TradeTicketModal({
 }: TradeTicketModalProps) {
   const [amountUi, setAmountUi] = useState("");
   const [slippageInput, setSlippageInput] = useState("50");
+  const [orderType, setOrderType] = useState<OrderType>("market");
+  const [timeInForce, setTimeInForce] = useState<TimeInForce>("gtc");
+  const [quantityMode, setQuantityMode] = useState<QuantityMode>("quote");
+  const [reduceOnly, setReduceOnly] = useState(false);
+  const [postOnly, setPostOnly] = useState(false);
+  const [limitPriceUi, setLimitPriceUi] = useState("");
+  const [triggerPriceUi, setTriggerPriceUi] = useState("");
+  const [takeProfitPriceUi, setTakeProfitPriceUi] = useState("");
+  const [stopLossPriceUi, setStopLossPriceUi] = useState("");
+  const [bracketEnabled, setBracketEnabled] = useState(false);
   const [quote, setQuote] = useState<QuoteState>(EMPTY_QUOTE);
   const [submitStatus, setSubmitStatus] = useState<
     "idle" | "submitting" | "tracking" | "error"
@@ -239,6 +321,16 @@ export function TradeTicketModal({
     quoteAbortRef.current?.abort();
     setAmountUi(intent.amountUi);
     setSlippageInput(String(intent.slippageBps));
+    setOrderType("market");
+    setTimeInForce("gtc");
+    setQuantityMode("quote");
+    setReduceOnly(false);
+    setPostOnly(false);
+    setLimitPriceUi("");
+    setTriggerPriceUi("");
+    setTakeProfitPriceUi("");
+    setStopLossPriceUi("");
+    setBracketEnabled(false);
     setQuote(EMPTY_QUOTE);
     setSubmitStatus("idle");
     setSubmitMessage(null);
@@ -263,6 +355,56 @@ export function TradeTicketModal({
   const resolvedSlippageBps = useMemo(
     () => toBoundedSlippage(deferredSlippageInput, intent?.slippageBps ?? 50),
     [deferredSlippageInput, intent?.slippageBps],
+  );
+
+  const amountAtomicForValidation = useMemo(
+    () => parseUiAmountToAtomic(deferredAmountUi, intent?.inputDecimals ?? 0),
+    [deferredAmountUi, intent?.inputDecimals],
+  );
+  const limitPriceAtomic = useMemo(
+    () => parseUiAmountToAtomic(limitPriceUi, ORDER_PRICE_DECIMALS),
+    [limitPriceUi],
+  );
+  const triggerPriceAtomic = useMemo(
+    () => parseUiAmountToAtomic(triggerPriceUi, ORDER_PRICE_DECIMALS),
+    [triggerPriceUi],
+  );
+  const takeProfitPriceAtomic = useMemo(
+    () => parseUiAmountToAtomic(takeProfitPriceUi, ORDER_PRICE_DECIMALS),
+    [takeProfitPriceUi],
+  );
+  const stopLossPriceAtomic = useMemo(
+    () => parseUiAmountToAtomic(stopLossPriceUi, ORDER_PRICE_DECIMALS),
+    [stopLossPriceUi],
+  );
+  const orderValidationErrors = useMemo(
+    () =>
+      validateOrderConfig({
+        orderType,
+        timeInForce,
+        reduceOnly,
+        postOnly,
+        quantityMode,
+        amountAtomic: amountAtomicForValidation,
+        limitPriceAtomic,
+        triggerPriceAtomic,
+        takeProfitPriceAtomic,
+        stopLossPriceAtomic,
+        bracketEnabled,
+      }),
+    [
+      amountAtomicForValidation,
+      bracketEnabled,
+      limitPriceAtomic,
+      orderType,
+      postOnly,
+      quantityMode,
+      reduceOnly,
+      stopLossPriceAtomic,
+      takeProfitPriceAtomic,
+      timeInForce,
+      triggerPriceAtomic,
+    ],
   );
 
   const refreshQuote = useCallback(async (): Promise<void> => {
@@ -406,6 +548,11 @@ export function TradeTicketModal({
 
   const executeTrade = useCallback(async (): Promise<void> => {
     if (!intent) return;
+    if (orderValidationErrors.length > 0) {
+      setSubmitStatus("error");
+      setSubmitMessage(orderValidationErrors[0] ?? "invalid-order-config");
+      return;
+    }
     if (!walletAddress) {
       setSubmitStatus("error");
       setSubmitMessage("wallet-unavailable");
@@ -426,6 +573,18 @@ export function TradeTicketModal({
       slippageInput,
       resolvedSlippageBps,
     );
+    const options = {
+      commitment: "confirmed" as const,
+      orderType,
+      timeInForce,
+      reduceOnly,
+      postOnly,
+      quantityMode,
+      ...(limitPriceAtomic ? { limitPriceAtomic } : {}),
+      ...(triggerPriceAtomic ? { triggerPriceAtomic } : {}),
+      ...(takeProfitPriceAtomic ? { takeProfitPriceAtomic } : {}),
+      ...(stopLossPriceAtomic ? { stopLossPriceAtomic } : {}),
+    };
     setSubmitStatus("submitting");
     setSubmitMessage(null);
     let execToastId: string | number | null = null;
@@ -453,7 +612,7 @@ export function TradeTicketModal({
           lane: "safe",
           metadata: {
             source: intent.source,
-            reason: intent.reason,
+            reason: `${intent.reason} • ${orderType}/${timeInForce}/${quantityMode}`,
             clientRequestId: idempotencyKey,
           },
           privyExecute: {
@@ -465,9 +624,7 @@ export function TradeTicketModal({
               amountAtomic: quote.inAmountAtomic,
               slippageBps: boundedSlippageBps,
             },
-            options: {
-              commitment: "confirmed",
-            },
+            options,
           },
         },
         {
@@ -538,11 +695,21 @@ export function TradeTicketModal({
     dismissExecuteToast,
     getAccessToken,
     intent,
+    limitPriceAtomic,
     onTradeComplete,
+    orderType,
+    orderValidationErrors,
+    postOnly,
+    quantityMode,
     quote.inAmountAtomic,
     quote.outAmountAtomic,
+    reduceOnly,
     resolvedSlippageBps,
     slippageInput,
+    stopLossPriceAtomic,
+    takeProfitPriceAtomic,
+    timeInForce,
+    triggerPriceAtomic,
     walletAddress,
   ]);
 
@@ -613,6 +780,7 @@ export function TradeTicketModal({
             amountUi={amountUi}
             amountPresets={amountPresets}
             inputSymbol={intent.inputSymbol}
+            quantityMode={quantityMode}
             amountMinValue={intent.inputMinAmountUi}
             amountMaxValue={maxAmountUi}
             slippageInput={slippageInput}
@@ -624,6 +792,29 @@ export function TradeTicketModal({
             onSetSlippageMin={setSlippageMin}
             onSetSlippageMax={setSlippageMax}
             onRefreshQuote={refreshQuote}
+          />
+          <AdvancedOrderConfigSection
+            orderType={orderType}
+            timeInForce={timeInForce}
+            quantityMode={quantityMode}
+            reduceOnly={reduceOnly}
+            postOnly={postOnly}
+            bracketEnabled={bracketEnabled}
+            limitPriceUi={limitPriceUi}
+            triggerPriceUi={triggerPriceUi}
+            takeProfitPriceUi={takeProfitPriceUi}
+            stopLossPriceUi={stopLossPriceUi}
+            validationErrors={orderValidationErrors}
+            onOrderTypeChange={setOrderType}
+            onTimeInForceChange={setTimeInForce}
+            onQuantityModeChange={setQuantityMode}
+            onReduceOnlyChange={setReduceOnly}
+            onPostOnlyChange={setPostOnly}
+            onBracketEnabledChange={setBracketEnabled}
+            onLimitPriceChange={setLimitPriceUi}
+            onTriggerPriceChange={setTriggerPriceUi}
+            onTakeProfitPriceChange={setTakeProfitPriceUi}
+            onStopLossPriceChange={setStopLossPriceUi}
           />
           <QuoteSummaryCard
             outputSymbol={intent.outputSymbol}
@@ -659,7 +850,8 @@ export function TradeTicketModal({
                 submitStatus === "submitting" ||
                 submitStatus === "tracking" ||
                 quote.status !== "ready" ||
-                !quote.inAmountAtomic
+                !quote.inAmountAtomic ||
+                orderValidationErrors.length > 0
               }
             >
               {submitStatus === "submitting" || submitStatus === "tracking"
@@ -706,6 +898,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
   amountUi: string;
   amountPresets: readonly string[];
   inputSymbol: string;
+  quantityMode: QuantityMode;
   amountMinValue: string;
   amountMaxValue: string | null;
   slippageInput: string;
@@ -722,6 +915,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
     amountUi,
     amountPresets,
     inputSymbol,
+    quantityMode,
     amountMinValue,
     amountMaxValue,
     slippageInput,
@@ -741,7 +935,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
       <div>
         <div className="mb-2 flex items-center justify-between gap-2">
           <label className="label block" htmlFor="trade-ticket-amount">
-            Amount ({inputSymbol})
+            Amount ({quantityMode === "quote" ? inputSymbol : quantityMode})
           </label>
           <div className="flex items-center gap-1.5">
             <button
@@ -835,6 +1029,217 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
     </>
   );
 });
+
+const AdvancedOrderConfigSection = memo(
+  function AdvancedOrderConfigSection(props: {
+    orderType: OrderType;
+    timeInForce: TimeInForce;
+    quantityMode: QuantityMode;
+    reduceOnly: boolean;
+    postOnly: boolean;
+    bracketEnabled: boolean;
+    limitPriceUi: string;
+    triggerPriceUi: string;
+    takeProfitPriceUi: string;
+    stopLossPriceUi: string;
+    validationErrors: string[];
+    onOrderTypeChange: (value: OrderType) => void;
+    onTimeInForceChange: (value: TimeInForce) => void;
+    onQuantityModeChange: (value: QuantityMode) => void;
+    onReduceOnlyChange: (value: boolean) => void;
+    onPostOnlyChange: (value: boolean) => void;
+    onBracketEnabledChange: (value: boolean) => void;
+    onLimitPriceChange: (value: string) => void;
+    onTriggerPriceChange: (value: string) => void;
+    onTakeProfitPriceChange: (value: string) => void;
+    onStopLossPriceChange: (value: string) => void;
+  }) {
+    const {
+      orderType,
+      timeInForce,
+      quantityMode,
+      reduceOnly,
+      postOnly,
+      bracketEnabled,
+      limitPriceUi,
+      triggerPriceUi,
+      takeProfitPriceUi,
+      stopLossPriceUi,
+      validationErrors,
+      onOrderTypeChange,
+      onTimeInForceChange,
+      onQuantityModeChange,
+      onReduceOnlyChange,
+      onPostOnlyChange,
+      onBracketEnabledChange,
+      onLimitPriceChange,
+      onTriggerPriceChange,
+      onTakeProfitPriceChange,
+      onStopLossPriceChange,
+    } = props;
+
+    return (
+      <div className="rounded border border-border bg-subtle px-3 py-2 text-xs space-y-3">
+        <p className="label">ADVANCED_ORDER_CONFIG</p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <label className="space-y-1">
+            <span className="text-muted text-[10px] uppercase tracking-wider">
+              Order Type
+            </span>
+            <select
+              className="input-field !py-2 font-mono"
+              value={orderType}
+              onChange={(event) =>
+                onOrderTypeChange(event.target.value as OrderType)
+              }
+            >
+              <option value="market">market</option>
+              <option value="limit">limit</option>
+              <option value="trigger">trigger</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted text-[10px] uppercase tracking-wider">
+              Time In Force
+            </span>
+            <select
+              className="input-field !py-2 font-mono"
+              value={timeInForce}
+              onChange={(event) =>
+                onTimeInForceChange(event.target.value as TimeInForce)
+              }
+            >
+              <option value="gtc">gtc</option>
+              <option value="ioc">ioc</option>
+              <option value="fok">fok</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted text-[10px] uppercase tracking-wider">
+              Quantity Mode
+            </span>
+            <select
+              className="input-field !py-2 font-mono"
+              value={quantityMode}
+              onChange={(event) =>
+                onQuantityModeChange(event.target.value as QuantityMode)
+              }
+            >
+              <option value="quote">quote</option>
+              <option value="base">base</option>
+              <option value="notional">notional</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+          <label className="flex items-center gap-2">
+            <input
+              checked={reduceOnly}
+              onChange={(event) => onReduceOnlyChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Reduce-only</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={postOnly}
+              onChange={(event) => onPostOnlyChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Post-only</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={bracketEnabled}
+              onChange={(event) => onBracketEnabledChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Bracket TP/SL</span>
+          </label>
+        </div>
+
+        {orderType !== "market" ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {orderType === "limit" ? (
+              <label className="space-y-1">
+                <span className="text-muted text-[10px] uppercase tracking-wider">
+                  Limit Price
+                </span>
+                <input
+                  className="input-field !py-2 font-mono"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={limitPriceUi}
+                  onChange={(event) => onLimitPriceChange(event.target.value)}
+                />
+              </label>
+            ) : null}
+            {orderType === "trigger" ? (
+              <label className="space-y-1">
+                <span className="text-muted text-[10px] uppercase tracking-wider">
+                  Trigger Price
+                </span>
+                <input
+                  className="input-field !py-2 font-mono"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={triggerPriceUi}
+                  onChange={(event) => onTriggerPriceChange(event.target.value)}
+                />
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+
+        {bracketEnabled ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label className="space-y-1">
+              <span className="text-muted text-[10px] uppercase tracking-wider">
+                Take Profit
+              </span>
+              <input
+                className="input-field !py-2 font-mono"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={takeProfitPriceUi}
+                onChange={(event) =>
+                  onTakeProfitPriceChange(event.target.value)
+                }
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted text-[10px] uppercase tracking-wider">
+                Stop Loss
+              </span>
+              <input
+                className="input-field !py-2 font-mono"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={stopLossPriceUi}
+                onChange={(event) => onStopLossPriceChange(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+
+        <p className="text-[10px] text-muted">
+          Quantity mode and order flags are mapped into the execution contract
+          options for policy-aware routing.
+        </p>
+
+        {validationErrors.length > 0 ? (
+          <ul className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-300 space-y-1">
+            {validationErrors.map((error) => (
+              <li key={error}>• {error}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    );
+  },
+);
 
 const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
   outputSymbol: string;
