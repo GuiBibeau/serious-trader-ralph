@@ -30,6 +30,7 @@ It provides one execution fabric for:
 - Open orders panel with pending/working/partial state, amend/cancel flows, and execute-now actions
 - Fills ledger with request/receipt linkage, side/pair/status/query filters, pagination, and CSV export
 - Account risk panel with equity/margin/concentration/liquidation warnings and pre-submit exposure guardrails
+- Execution inspector drawer with timeline, attempts, and terminal receipt payload visibility
 - Account-level Privy wallet model (one wallet per user)
 - x402 paid APIs (`/api/x402/read/*`, `/api/x402/exec/submit`)
 - Execution API scaffold:

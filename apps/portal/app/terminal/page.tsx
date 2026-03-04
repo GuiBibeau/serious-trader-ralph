@@ -28,6 +28,7 @@ import {
   buildDepthChartModel,
   findNearestDepthPoint,
 } from "./components/depth-chart";
+import { ExecutionInspectorDrawer } from "./components/execution-inspector-drawer";
 import {
   buildFillLedgerCsv,
   type FillLedgerRow,
@@ -2011,6 +2012,10 @@ const PositionsOrdersFillsPanel = memo(
       useState<FillLedgerStatusFilter>("all");
     const [ledgerQuery, setLedgerQuery] = useState("");
     const [ledgerPage, setLedgerPage] = useState(1);
+    const [inspectorOpen, setInspectorOpen] = useState(false);
+    const [inspectorRequestId, setInspectorRequestId] = useState<string | null>(
+      null,
+    );
     const ledgerRows = useMemo<FillLedgerRow[]>(
       () =>
         entries.map((entry) => ({
@@ -2078,6 +2083,13 @@ const PositionsOrdersFillsPanel = memo(
       if (!value) return "--";
       if (value.length <= 16) return value;
       return `${value.slice(0, 8)}...${value.slice(-6)}`;
+    }, []);
+    const openInspector = useCallback((requestId: string) => {
+      setInspectorRequestId(requestId);
+      setInspectorOpen(true);
+    }, []);
+    const closeInspector = useCallback(() => {
+      setInspectorOpen(false);
     }, []);
 
     return (
@@ -2476,22 +2488,16 @@ const PositionsOrdersFillsPanel = memo(
                     <span className="text-[10px] uppercase text-muted">
                       {entry.status}
                     </span>
-                    <a
-                      className="text-[10px] text-ink underline underline-offset-2"
-                      href={`/api/x402/exec/status/${encodeURIComponent(entry.requestId)}`}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                      )}
+                      onClick={() => openInspector(entry.requestId)}
+                      type="button"
                     >
-                      Status
-                    </a>
-                    <a
-                      className="text-[10px] text-ink underline underline-offset-2"
-                      href={`/api/x402/exec/receipt/${encodeURIComponent(entry.requestId)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Receipt
-                    </a>
+                      Inspect
+                    </button>
                   </div>
                 </div>
               ))}
@@ -2540,6 +2546,11 @@ const PositionsOrdersFillsPanel = memo(
             </div>
           </div>
         </div>
+        <ExecutionInspectorDrawer
+          open={inspectorOpen}
+          requestId={inspectorRequestId}
+          onClose={closeInspector}
+        />
       </>
     );
   },
