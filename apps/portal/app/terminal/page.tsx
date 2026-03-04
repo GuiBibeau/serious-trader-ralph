@@ -209,6 +209,18 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+function parseOpenOrderExecutionMarker(reason: string): {
+  orderId: string;
+  fraction: 0.5 | 1;
+} | null {
+  const match = reason.match(/\[order:([A-Za-z0-9_-]+);fraction:(0\.5|1)\]/);
+  if (!match) return null;
+  const orderId = match[1] ?? "";
+  const fraction = match[2] === "0.5" ? 0.5 : 1;
+  if (!orderId) return null;
+  return { orderId, fraction };
+}
+
 export default function AppPage() {
   if (!process.env.NEXT_PUBLIC_PRIVY_APP_ID) {
     return (
@@ -620,20 +632,32 @@ function ControlRoom() {
         return;
       }
 
+      const now = Date.now();
       openTradeTicket(
         createTradeIntent(
           target.direction,
           "OPEN_ORDERS_PANEL",
           target.pairId,
           {
-            reason: `${target.orderType.toUpperCase()} order manual execution`,
+            reason: `${target.orderType.toUpperCase()} order manual execution [order:${target.id};fraction:${input.fraction}]`,
             amountUi: execution.executeAmountUi,
             slippageBps: target.slippageBps,
           },
         ),
       );
 
-      setOpenOrders(execution.next);
+      setOpenOrders((current) =>
+        current.map((order) =>
+          order.id === input.orderId
+            ? {
+                ...order,
+                status: "working",
+                updatedAt: now,
+                lastError: null,
+              }
+            : order,
+        ),
+      );
     },
     [openOrders, openTradeTicket],
   );
@@ -779,6 +803,18 @@ function ControlRoom() {
   const handleTradeComplete = useCallback(
     (trade: TradeTicketCompletion): void => {
       applyOptimisticTradeBalances(trade);
+      const openOrderExecution = parseOpenOrderExecutionMarker(trade.reason);
+      if (openOrderExecution) {
+        setOpenOrders(
+          (current) =>
+            executeOpenOrderSlice({
+              current,
+              orderId: openOrderExecution.orderId,
+              fraction: openOrderExecution.fraction,
+              now: Date.now(),
+            }).next,
+        );
+      }
       setRecentExecutions((current) => {
         const entry: ExecutionActivityRow = {
           id: crypto.randomUUID(),
@@ -2003,13 +2039,20 @@ const PositionsOrdersFillsPanel = memo(
                       className={cn(
                         BTN_SECONDARY,
                         "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
-                        !tradingEnabled && "opacity-60 pointer-events-none",
+                        (!tradingEnabled ||
+                          order.status === "cancelled" ||
+                          order.status === "failed") &&
+                          "opacity-60 pointer-events-none",
                       )}
                       onClick={() =>
                         onExecuteOrder({ orderId: order.id, fraction: 0.5 })
                       }
                       type="button"
-                      disabled={!tradingEnabled}
+                      disabled={
+                        !tradingEnabled ||
+                        order.status === "cancelled" ||
+                        order.status === "failed"
+                      }
                     >
                       Exec 50%
                     </button>
@@ -2017,13 +2060,20 @@ const PositionsOrdersFillsPanel = memo(
                       className={cn(
                         BTN_SECONDARY,
                         "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
-                        !tradingEnabled && "opacity-60 pointer-events-none",
+                        (!tradingEnabled ||
+                          order.status === "cancelled" ||
+                          order.status === "failed") &&
+                          "opacity-60 pointer-events-none",
                       )}
                       onClick={() =>
                         onExecuteOrder({ orderId: order.id, fraction: 1 })
                       }
                       type="button"
-                      disabled={!tradingEnabled}
+                      disabled={
+                        !tradingEnabled ||
+                        order.status === "cancelled" ||
+                        order.status === "failed"
+                      }
                     >
                       Execute all
                     </button>

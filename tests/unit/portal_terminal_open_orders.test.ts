@@ -98,4 +98,43 @@ describe("portal terminal open orders lifecycle", () => {
       true,
     );
   });
+
+  test("rejects execute for cancelled or failed orders", () => {
+    const cancelledCurrent = cancelOpenOrder(
+      queueOpenOrder([], queuedOrder()),
+      "order_1",
+      9000,
+    );
+    const cancelledAttempt = executeOpenOrderSlice({
+      current: cancelledCurrent,
+      orderId: "order_1",
+      fraction: 1,
+      now: 9100,
+    });
+    expect(cancelledAttempt.ok).toBe(false);
+    if (cancelledAttempt.ok) return;
+    expect(cancelledAttempt.error).toBe("order-not-executable");
+    expect(cancelledAttempt.next[0]?.status).toBe("cancelled");
+
+    const queuedFailed = queueOpenOrder([], queuedOrder());
+    const firstFailed = queuedFailed[0];
+    if (!firstFailed) throw new Error("expected queued order");
+    const failedCurrent: OpenOrderRow[] = [
+      {
+        ...firstFailed,
+        status: "failed",
+        lastError: "test-failure",
+      },
+    ];
+    const failedAttempt = executeOpenOrderSlice({
+      current: failedCurrent,
+      orderId: "order_1",
+      fraction: 0.5,
+      now: 9200,
+    });
+    expect(failedAttempt.ok).toBe(false);
+    if (failedAttempt.ok) return;
+    expect(failedAttempt.error).toBe("order-not-executable");
+    expect(failedAttempt.next[0]?.status).toBe("failed");
+  });
 });

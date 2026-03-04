@@ -184,6 +184,13 @@ export function executeOpenOrderSlice(input: {
       next: [...input.current],
     };
   }
+  if (target.status === "cancelled" || target.status === "failed") {
+    return {
+      ok: false,
+      error: "order-not-executable",
+      next: [...input.current],
+    };
+  }
   const remaining = parseOrderAmountUi(target.remainingAmountUi);
   if (remaining === null) {
     const error = "invalid-order-amount";

@@ -33,6 +33,8 @@ type TradeTicketModalProps = {
 export type TradeTicketCompletion = {
   pairId: TradeIntent["pairId"];
   direction: TradeIntent["direction"];
+  source: string;
+  reason: string;
   inputMint: string;
   outputMint: string;
   inputSymbol: string;
@@ -858,6 +860,8 @@ export function TradeTicketModal({
       onTradeComplete?.({
         pairId: intent.pairId,
         direction: intent.direction,
+        source: intent.source,
+        reason: intent.reason,
         inputMint: intent.inputMint,
         outputMint: intent.outputMint,
         inputSymbol: intent.inputSymbol,
