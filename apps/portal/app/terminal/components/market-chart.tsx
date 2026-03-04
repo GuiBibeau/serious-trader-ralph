@@ -99,6 +99,7 @@ export function MarketChart({
   });
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
   const [keyboardIndex, setKeyboardIndex] = useState<number | null>(null);
+  const [chartActive, setChartActive] = useState(false);
   const gradientId = useId();
   const frameRef = useRef<number | null>(null);
   const pendingHoverRef = useRef<number | null>(null);
@@ -261,7 +262,8 @@ export function MarketChart({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
-      if (!hasData || isTypingTarget(event.target)) return;
+      if (!hasData || !chartActive || isTypingTarget(event.target)) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
       const key = event.key.toLowerCase();
       if (key === "arrowleft" || key === "arrowright") {
         event.preventDefault();
@@ -299,6 +301,7 @@ export function MarketChart({
     applyChartStyle,
     applyTimeframe,
     chart.last,
+    chartActive,
     hasData,
     setHoverRatioBatched,
   ]);
@@ -311,6 +314,7 @@ export function MarketChart({
       )}
       role="application"
       aria-label="Interactive market price chart"
+      onMouseEnter={() => setChartActive(true)}
       onMouseMove={(event) => {
         if (!hasData) return;
         const rect = event.currentTarget.getBoundingClientRect();
@@ -319,7 +323,10 @@ export function MarketChart({
         setKeyboardIndex(null);
         setHoverRatioBatched(Math.max(0, Math.min(1, ratio)));
       }}
-      onMouseLeave={() => setHoverRatioBatched(null)}
+      onMouseLeave={() => {
+        setChartActive(false);
+        setHoverRatioBatched(null);
+      }}
     >
       {/* Grid Background */}
       <div
