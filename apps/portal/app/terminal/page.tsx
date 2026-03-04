@@ -123,7 +123,10 @@ import {
 } from "./components/workspace-presets";
 import { useDashboard } from "./context";
 import {
+  coerceTerminalModeForRollout,
+  getRolloutAllowedTerminalModes,
   getTerminalModeCapabilities,
+  isTerminalModeAllowedByRollout,
   mergeProfileWithTerminalMode,
   modeAllowsAction,
   modeShowsModule,
@@ -131,6 +134,7 @@ import {
   readTerminalModeFromProfile,
   resolveDefaultTerminalMode,
   type TerminalMode,
+  type TerminalModeRolloutContext,
   type TerminalModule,
   writeLocalTerminalMode,
 } from "./terminal-modes";
@@ -326,6 +330,24 @@ function parseUserProfile(payload: unknown): Record<string, unknown> | null {
   return isRecord(user.profile) ? user.profile : null;
 }
 
+function parseTerminalRolloutContext(
+  payload: unknown,
+): TerminalModeRolloutContext | null {
+  if (!isRecord(payload)) return null;
+  const user = isRecord(payload.user) ? payload.user : null;
+  const experience = isRecord(payload.experience) ? payload.experience : null;
+  if (!user && !experience) return null;
+  return {
+    experienceLevel:
+      typeof experience?.level === "string" ? experience.level : null,
+    onboardingCompleted: experience?.onboardingCompleted === true,
+    degenAcknowledgedAt:
+      typeof user?.degenAcknowledgedAt === "string"
+        ? user.degenAcknowledgedAt
+        : null,
+  };
+}
+
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -407,6 +429,8 @@ function ControlRoom() {
     string,
     unknown
   > | null>(null);
+  const [terminalRolloutContext, setTerminalRolloutContext] =
+    useState<TerminalModeRolloutContext | null>(null);
   const [recentExecutions, setRecentExecutions] = useState<
     ExecutionActivityRow[]
   >([]);
@@ -429,6 +453,13 @@ function ControlRoom() {
   const panelFocusTimerRef = useRef<number | null>(null);
   const terminalModeRef = useRef<TerminalMode>(terminalMode);
   const fallbackModePersistControllerRef = useRef<AbortController | null>(null);
+  const rolloutAllowedModes = useMemo(
+    () =>
+      getRolloutAllowedTerminalModes({
+        context: terminalRolloutContext,
+      }),
+    [terminalRolloutContext],
+  );
   const modeCapabilities = getTerminalModeCapabilities(terminalMode);
   const activeCustomWorkspace = useMemo(
     () => resolveActiveWorkspace(customWorkspaceStore),
@@ -498,6 +529,16 @@ function ControlRoom() {
   useEffect(() => {
     terminalModeRef.current = terminalMode;
   }, [terminalMode]);
+
+  useEffect(() => {
+    const coerced = coerceTerminalModeForRollout(terminalMode, {
+      context: terminalRolloutContext,
+    });
+    if (coerced === terminalMode) return;
+    setTerminalMode(coerced);
+    writeLocalTerminalMode(coerced);
+    setMessage(`Mode ${terminalMode} is rollout-gated. Using ${coerced}.`);
+  }, [terminalMode, terminalRolloutContext]);
 
   useEffect(
     () => () => {
@@ -813,16 +854,26 @@ function ControlRoom() {
       setWallet(parseAccountWallet(walletRaw));
       const profile = parseUserProfile(payload);
       setUserProfile(profile);
+      const rolloutContext = parseTerminalRolloutContext(payload);
+      setTerminalRolloutContext(rolloutContext);
       const serverMode = readTerminalModeFromProfile(profile);
       const localMode = readLocalTerminalMode();
       const defaultMode = resolveDefaultTerminalMode(
         process.env.NEXT_PUBLIC_TERMINAL_DEFAULT_MODE,
       );
-      const resolvedMode = serverMode ?? localMode ?? defaultMode;
+      const requestedMode = serverMode ?? localMode ?? defaultMode;
+      const resolvedMode = coerceTerminalModeForRollout(requestedMode, {
+        context: rolloutContext,
+      });
       setTerminalMode(resolvedMode);
+      if (resolvedMode !== requestedMode) {
+        setMessage(
+          `Mode ${requestedMode} is rollout-gated. Using ${resolvedMode}.`,
+        );
+      }
       // Keep local fallback synced with chosen mode.
       writeLocalTerminalMode(resolvedMode);
-      if (!serverMode) {
+      if (!serverMode || resolvedMode !== requestedMode) {
         const source = localMode ? "local_fallback" : "default_fallback";
         void persistTerminalMode({
           mode: resolvedMode,
@@ -1144,6 +1195,18 @@ function ControlRoom() {
   const handleTerminalModeChange = useCallback(
     (nextMode: TerminalMode): void => {
       if (nextMode === terminalMode) return;
+      const allowed = isTerminalModeAllowedByRollout(nextMode, {
+        context: terminalRolloutContext,
+      });
+      if (!allowed) {
+        const fallback = coerceTerminalModeForRollout(nextMode, {
+          context: terminalRolloutContext,
+        });
+        setMessage(
+          `Mode ${nextMode} is rollout-gated for your cohort. Available: ${rolloutAllowedModes.join(", ")}. Using ${fallback}.`,
+        );
+        return;
+      }
       const previousMode = terminalMode;
       setTerminalMode(nextMode);
       writeLocalTerminalMode(nextMode);
@@ -1165,7 +1228,13 @@ function ControlRoom() {
           setTerminalModeSaving(false);
         });
     },
-    [persistTerminalMode, terminalMode, userProfile],
+    [
+      persistTerminalMode,
+      rolloutAllowedModes,
+      terminalMode,
+      terminalRolloutContext,
+      userProfile,
+    ],
   );
 
   const triggerRefresh = useCallback(() => {
@@ -1356,6 +1425,7 @@ function ControlRoom() {
     setWalletBalanceError: setGlobalWalletBalanceError,
     setFundAction,
     setTerminalMode: setGlobalTerminalMode,
+    setTerminalAllowedModes: setGlobalTerminalAllowedModes,
     setTerminalModeSaving: setGlobalTerminalModeSaving,
     setModeAction,
     setRefreshAction,
@@ -1374,6 +1444,7 @@ function ControlRoom() {
     }
     setFundAction(wallet ? openFundingModal : null);
     setGlobalTerminalMode(terminalMode);
+    setGlobalTerminalAllowedModes(rolloutAllowedModes);
     setGlobalTerminalModeSaving(terminalModeSaving);
     setModeAction(handleTerminalModeChange);
     setRefreshAction(triggerRefresh);
@@ -1395,6 +1466,7 @@ function ControlRoom() {
     setGlobalWalletBalanceError,
     setFundAction,
     setGlobalTerminalMode,
+    setGlobalTerminalAllowedModes,
     setGlobalTerminalModeSaving,
     setModeAction,
     setRefreshAction,
@@ -1402,6 +1474,7 @@ function ControlRoom() {
     setShowFundButton,
     setShowBalance,
     openFundingModal,
+    rolloutAllowedModes,
     terminalMode,
     terminalModeSaving,
     handleTerminalModeChange,

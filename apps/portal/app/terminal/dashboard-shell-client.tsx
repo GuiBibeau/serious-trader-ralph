@@ -14,6 +14,7 @@ function ConnectedHeader() {
     showFundButton,
     showBalance,
     terminalMode,
+    terminalAllowedModes,
     terminalModeSaving,
     onModeChange,
   } = useDashboard();
@@ -28,6 +29,7 @@ function ConnectedHeader() {
       showFundButton={showFundButton}
       showBalance={showBalance}
       terminalMode={terminalMode}
+      allowedModes={terminalAllowedModes}
       terminalModeSaving={terminalModeSaving}
       onModeChange={onModeChange}
     />
