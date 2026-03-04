@@ -53,6 +53,34 @@ describe("execution lane resolver", () => {
     expect(resolved.metadata.adapter).toBe("jito_protected");
   });
 
+  test("supports operator lane-disable toggles", () => {
+    const disabledFast = resolveExecutionLane({
+      env: {
+        EXEC_LANE_FAST_ENABLED: "0",
+      } as Env,
+      requestedLane: "fast",
+      mode: "relay_signed",
+      actorType: "anonymous_x402",
+    });
+    expect(disabledFast.ok).toBe(false);
+    if (disabledFast.ok) return;
+    expect(disabledFast.error).toBe("unsupported-lane");
+    expect(disabledFast.reason).toBe("lane-disabled-by-operator");
+
+    const disabledProtected = resolveExecutionLane({
+      env: {
+        EXEC_LANE_PROTECTED_ENABLED: "false",
+      } as Env,
+      requestedLane: "protected",
+      mode: "relay_signed",
+      actorType: "anonymous_x402",
+    });
+    expect(disabledProtected.ok).toBe(false);
+    if (disabledProtected.ok) return;
+    expect(disabledProtected.error).toBe("unsupported-lane");
+    expect(disabledProtected.reason).toBe("lane-disabled-by-operator");
+  });
+
   test("rejects safe lane for relay_signed mode", () => {
     const resolved = resolveExecutionLane({
       env: {} as Env,

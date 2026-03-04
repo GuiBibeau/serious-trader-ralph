@@ -78,3 +78,5 @@ Use the endpoint payload to build 4 panels per environment:
 - This endpoint is admin-only and should not be exposed in public discovery docs.
 - `duplicateRate` is defined as requests with more than one execution attempt over sampled requests.
 - If sample size is below `EXEC_OBS_ALERT_MIN_SAMPLE_SIZE`, alerts return `insufficient-data`.
+- Incident response procedures are documented in
+  `docs/execution/operations-runbook-v1.md`.

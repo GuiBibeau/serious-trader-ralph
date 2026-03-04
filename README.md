@@ -56,6 +56,8 @@ bun run dev:local
 - Contract doc: `docs/execution/exec-api-v1.md`
 - Schemas: `docs/execution/schemas/*`
 - Fixtures: `docs/execution/fixtures/*`
+- Operations runbook: `docs/execution/operations-runbook-v1.md`
+- Tabletop simulation record: `docs/execution/tabletop-simulation-2026-03-03.md`
 
 ### x402 API
 

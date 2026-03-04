@@ -402,6 +402,34 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("rejects disabled lane via operator kill switch", async () => {
+    const relayPayload = buildRelaySignedPayload({ lane: "protected" });
+    const { env, sqlite } = createExecSubmitEnv({
+      EXEC_LANE_PROTECTED_ENABLED: "0",
+    });
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "idem-anon-disabled-lane-1",
+          },
+          body: JSON.stringify(relayPayload),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("unsupported-lane");
+      expect(execErrorReason(body)).toBe("lane-disabled-by-operator");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("rejects same idempotency key with different payload", async () => {
     const relayPayload = buildRelaySignedPayload();
     const differentRelayPayload = buildRelaySignedPayload({ lamports: 2 });

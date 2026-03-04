@@ -36,6 +36,18 @@ Status: draft contract for implementation gating (`X402-001`).
 
 ## Lane Semantics
 
+Lane operator controls:
+
+- `EXEC_LANE_FAST_ENABLED` (default `1`)
+- `EXEC_LANE_PROTECTED_ENABLED` (default `1`)
+- `EXEC_LANE_SAFE_ENABLED` (default `1`)
+- `EXEC_LANE_FAST_ADAPTER` (default `helius_sender`)
+- `EXEC_LANE_PROTECTED_ADAPTER` (default `jito_bundle`)
+- `EXEC_LANE_SAFE_ADAPTER` (default `jupiter`)
+
+When a lane is disabled, submit returns `unsupported-lane` with reason
+`lane-disabled-by-operator`.
+
 ### `safe` lane (deterministic guardrails)
 
 - Available for `privy_execute` only (not `relay_signed`).
