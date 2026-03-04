@@ -46,6 +46,13 @@ jobs:
         run: bun install
       - name: Run unit tests
         run: bun run test:unit
+      - name: Upload execution benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-benchmarks-${{ github.run_id }}
+          path: .tmp/execution-benchmarks/*.json
+          if-no-files-found: ignore
 
   integration-tests:
     runs-on: ubuntu-latest
