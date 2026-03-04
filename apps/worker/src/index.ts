@@ -28,6 +28,10 @@ import {
 } from "./execution/idempotency";
 import { resolveExecutionLane } from "./execution/lane_resolver";
 import {
+  DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS,
+  readExecutionObservabilitySnapshot,
+} from "./execution/observability";
+import {
   evaluateExecutionSubmitPolicy,
   evaluatePrivyRuntimeBalancePolicy,
   type SubmitPolicyRuntime,
@@ -305,6 +309,28 @@ function readBooleanEnv(value: unknown, fallback = false): boolean {
   return fallback;
 }
 
+function readNumberEnv(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function parsePositiveIntParam(
+  raw: string | null,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number.parseInt(String(raw ?? "").trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
 function shouldSyncExecutePrivySubmit(env: Env): boolean {
   return readBooleanEnv(env.EXEC_PRIVY_SYNC_SUBMIT_ENABLED, false);
 }
@@ -450,6 +476,104 @@ function authorizeWaitlistWrite(
   }
 
   return { ok: true };
+}
+
+function authorizeAdminRoute(
+  request: Request,
+  env: Env,
+): { ok: true } | { ok: false; status: number; error: string } {
+  const configuredToken = String(env.ADMIN_TOKEN ?? "").trim();
+  if (!configuredToken) {
+    return {
+      ok: false,
+      status: 503,
+      error: "admin-auth-not-configured",
+    };
+  }
+
+  const token = parseBearerToken(request.headers.get("authorization"));
+  if (!token || token !== configuredToken) {
+    return {
+      ok: false,
+      status: 401,
+      error: "auth-required",
+    };
+  }
+
+  return { ok: true };
+}
+
+function readExecObservabilityThresholds(env: Env) {
+  return {
+    minSampleSize: Math.floor(
+      readNumberEnv(
+        env.EXEC_OBS_ALERT_MIN_SAMPLE_SIZE,
+        DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.minSampleSize,
+        1,
+        50_000,
+      ),
+    ),
+    failRateWarning: readNumberEnv(
+      env.EXEC_OBS_ALERT_FAIL_RATE_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.failRateWarning,
+      0,
+      1,
+    ),
+    failRateCritical: readNumberEnv(
+      env.EXEC_OBS_ALERT_FAIL_RATE_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.failRateCritical,
+      0,
+      1,
+    ),
+    expiryRateWarning: readNumberEnv(
+      env.EXEC_OBS_ALERT_EXPIRY_RATE_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.expiryRateWarning,
+      0,
+      1,
+    ),
+    expiryRateCritical: readNumberEnv(
+      env.EXEC_OBS_ALERT_EXPIRY_RATE_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.expiryRateCritical,
+      0,
+      1,
+    ),
+    dispatchP95WarningMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_DISPATCH_MS_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.dispatchP95WarningMs,
+      1,
+      3_600_000,
+    ),
+    dispatchP95CriticalMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_DISPATCH_MS_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.dispatchP95CriticalMs,
+      1,
+      3_600_000,
+    ),
+    landingP95WarningMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_LANDING_MS_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.landingP95WarningMs,
+      1,
+      7_200_000,
+    ),
+    landingP95CriticalMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_LANDING_MS_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.landingP95CriticalMs,
+      1,
+      7_200_000,
+    ),
+    finalizationP95WarningMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_FINALIZATION_MS_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.finalizationP95WarningMs,
+      1,
+      7_200_000,
+    ),
+    finalizationP95CriticalMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_FINALIZATION_MS_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.finalizationP95CriticalMs,
+      1,
+      7_200_000,
+    ),
+  };
 }
 
 function resolvePortalOriginForApiHost(hostname: string): string {
@@ -1560,6 +1684,50 @@ const worker = {
             requestId,
             ready: true,
             receipt: canonicalReceipt,
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/execution/observability"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const defaultWindowMinutes = Math.floor(
+          readNumberEnv(env.EXEC_OBS_DEFAULT_WINDOW_MINUTES, 60, 5, 10_080),
+        );
+        const defaultMaxRequests = Math.floor(
+          readNumberEnv(env.EXEC_OBS_MAX_REQUESTS, 5_000, 100, 20_000),
+        );
+        const windowMinutes = parsePositiveIntParam(
+          url.searchParams.get("windowMinutes"),
+          defaultWindowMinutes,
+          5,
+          10_080,
+        );
+        const maxRequests = parsePositiveIntParam(
+          url.searchParams.get("maxRequests"),
+          defaultMaxRequests,
+          100,
+          20_000,
+        );
+        const snapshot = await readExecutionObservabilitySnapshot({
+          db: env.WAITLIST_DB,
+          windowMinutes,
+          maxRequests,
+          thresholds: readExecObservabilityThresholds(env),
+        });
+        return withCors(
+          json({
+            ok: true,
+            ...snapshot,
           }),
           env,
         );
