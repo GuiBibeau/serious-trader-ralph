@@ -28,15 +28,13 @@ export function queueOpenOrder(
   current: readonly OpenOrderRow[],
   order: QueuedTerminalOrder,
 ): OpenOrderRow[] {
-  return [
-    {
-      ...order,
-      status: "pending",
-      initialAmountUi: order.amountUi,
-      lastError: null,
-    },
-    ...current,
-  ].slice(0, 64);
+  const nextOrder: OpenOrderRow = {
+    ...order,
+    status: "pending",
+    initialAmountUi: order.amountUi,
+    lastError: null,
+  };
+  return [nextOrder, ...current].slice(0, 64);
 }
 
 export function promotePendingOrders(
