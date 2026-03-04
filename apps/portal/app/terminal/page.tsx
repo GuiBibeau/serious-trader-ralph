@@ -14,6 +14,12 @@ import {
 } from "../lib";
 import { PresenceCard } from "../motion";
 import {
+  type AccountRiskLevel,
+  type AccountRiskSnapshot,
+  buildAccountRiskSnapshot,
+  resolveAccountRiskThresholds,
+} from "./components/account-risk";
+import {
   clearDashboardGridLayouts,
   DashboardGrid,
   hasCustomDashboardGridLayouts,
@@ -236,6 +242,7 @@ function parseOpenOrderExecutionMarker(reason: string): {
 }
 
 const FILLS_LEDGER_PAGE_SIZE = 8;
+const ACCOUNT_RISK_THRESHOLDS = resolveAccountRiskThresholds();
 
 export default function AppPage() {
   if (!process.env.NEXT_PUBLIC_PRIVY_APP_ID) {
@@ -572,6 +579,37 @@ function ControlRoom() {
     getAccessToken,
     fallbackPrice: marketFeed.latestPrice,
   });
+  const accountRiskSnapshot = useMemo<AccountRiskSnapshot>(() => {
+    const baseToken = TOKEN_CONFIGS[selectedPair.baseSymbol];
+    const quoteToken = TOKEN_CONFIGS[selectedPair.quoteSymbol];
+    const baseDisplay = formatAtomicTokenBalance(
+      tokenBalancesByMint[baseToken.mint] ?? "0",
+      baseToken.decimals,
+      9,
+    );
+    const quoteDisplay = formatAtomicTokenBalance(
+      tokenBalancesByMint[quoteToken.mint] ?? "0",
+      quoteToken.decimals,
+      9,
+    );
+    const baseQty = Number(baseDisplay);
+    const quoteQty = Number(quoteDisplay);
+    return buildAccountRiskSnapshot({
+      baseQty: Number.isFinite(baseQty) ? baseQty : null,
+      quoteQty: Number.isFinite(quoteQty) ? quoteQty : null,
+      markPrice:
+        marketFeed.latestPrice !== null &&
+        Number.isFinite(marketFeed.latestPrice)
+          ? marketFeed.latestPrice
+          : null,
+      thresholds: ACCOUNT_RISK_THRESHOLDS,
+    });
+  }, [
+    marketFeed.latestPrice,
+    selectedPair.baseSymbol,
+    selectedPair.quoteSymbol,
+    tokenBalancesByMint,
+  ]);
   const handlePairChange = useCallback((nextPairId: PairId): void => {
     setSelectedPairId(nextPairId);
     setLadderPrefill(null);
@@ -938,6 +976,7 @@ function ControlRoom() {
           intent={tradeIntent}
           walletAddress={wallet?.walletAddress ?? null}
           tokenBalancesByMint={tokenBalancesByMint}
+          riskSnapshot={accountRiskSnapshot}
           getAccessToken={getAccessToken}
           onClose={() => setTradeOpen(false)}
           onTradeComplete={handleTradeComplete}
@@ -1077,6 +1116,7 @@ function ControlRoom() {
                       tokenBalancesByMint={tokenBalancesByMint}
                       market={marketFeed}
                       realtime={realtimeTransport}
+                      snapshot={accountRiskSnapshot}
                     />
                   </div>
                 ) : null}
@@ -2510,8 +2550,9 @@ const AccountRiskPanel = memo(function AccountRiskPanel(props: {
   tokenBalancesByMint: Record<string, string>;
   market: MarketState;
   realtime: TerminalRealtimeState;
+  snapshot: AccountRiskSnapshot;
 }) {
-  const { pairId, tokenBalancesByMint, market, realtime } = props;
+  const { pairId, tokenBalancesByMint, market, realtime, snapshot } = props;
   const pair = getPairConfig(pairId);
   const baseToken = TOKEN_CONFIGS[pair.baseSymbol];
   const quoteToken = TOKEN_CONFIGS[pair.quoteSymbol];
@@ -2522,12 +2563,20 @@ const AccountRiskPanel = memo(function AccountRiskPanel(props: {
     quoteAtomic,
     quoteToken.decimals,
   );
-  const baseQty = Number(baseDisplay);
-  const riskExposure =
-    Number.isFinite(baseQty) && Number.isFinite(market.latestPrice ?? NaN)
-      ? baseQty * Number(market.latestPrice)
-      : null;
   const change24h = market.change24hPct ?? null;
+  const formatQuote = (value: number | null): string =>
+    value === null || !Number.isFinite(value)
+      ? "--"
+      : `${value.toFixed(2)} ${quoteToken.symbol}`;
+  const formatRatio = (value: number | null): string =>
+    value === null || !Number.isFinite(value) ? "--" : `${value.toFixed(2)}x`;
+  const formatPct = (value: number | null): string =>
+    value === null || !Number.isFinite(value) ? "--" : `${value.toFixed(2)}%`;
+  const riskClass = (level: AccountRiskLevel): string => {
+    if (level === "critical") return "text-red-300";
+    if (level === "warning") return "text-amber-300";
+    return "text-emerald-300";
+  };
 
   return (
     <>
@@ -2567,13 +2616,28 @@ const AccountRiskPanel = memo(function AccountRiskPanel(props: {
         </div>
         <div className="rounded border border-border bg-subtle px-2 py-1.5">
           <p className="text-[10px] text-muted uppercase tracking-wider">
-            Risk
+            Margin + Exposure
           </p>
           <p className="mt-1 font-mono text-ink">
-            Exposure:{" "}
-            {riskExposure === null || !Number.isFinite(riskExposure)
-              ? "--"
-              : `${riskExposure.toFixed(2)} ${quoteToken.symbol}`}
+            Equity: {formatQuote(snapshot.equityQuote)}
+          </p>
+          <p className="font-mono text-ink">
+            Used margin: {formatQuote(snapshot.usedMarginQuote)}
+          </p>
+          <p className="font-mono text-ink">
+            Free collateral: {formatQuote(snapshot.freeCollateralQuote)}
+          </p>
+          <p className="font-mono text-ink">
+            Maint requirement:{" "}
+            {formatQuote(snapshot.maintenanceRequirementQuote)}
+          </p>
+          <p className="font-mono text-ink">
+            Maintenance ratio: {formatRatio(snapshot.maintenanceRatio)}
+          </p>
+          <p
+            className={cn("font-mono", riskClass(snapshot.concentrationLevel))}
+          >
+            Concentration: {formatPct(snapshot.concentrationRatio)}
           </p>
           <p
             className={cn(
@@ -2587,6 +2651,48 @@ const AccountRiskPanel = memo(function AccountRiskPanel(props: {
           >
             24h change: {change24h === null ? "--" : `${change24h.toFixed(2)}%`}
           </p>
+        </div>
+        <div className="rounded border border-border bg-subtle px-2 py-1.5">
+          <p className="text-[10px] text-muted uppercase tracking-wider">
+            Liquidation Awareness
+          </p>
+          <p
+            className={cn(
+              "mt-1 font-mono",
+              riskClass(snapshot.liquidationRiskLevel),
+            )}
+          >
+            Buffer: {formatPct(snapshot.liquidationBufferPct)}
+          </p>
+          <p
+            className={cn(
+              "font-mono",
+              snapshot.blockNewExposure ? "text-red-300" : "text-emerald-300",
+            )}
+          >
+            New exposure: {snapshot.blockNewExposure ? "restricted" : "allowed"}
+          </p>
+          <p className="text-[10px] text-muted">
+            Thresholds • init{" "}
+            {(snapshot.thresholds.initialMarginRatio * 100).toFixed(1)}% • maint{" "}
+            {(snapshot.thresholds.maintenanceMarginRatio * 100).toFixed(1)}% •
+            conc warn{" "}
+            {(snapshot.thresholds.concentrationWarningRatio * 100).toFixed(0)}%
+          </p>
+          {snapshot.warnings.length === 0 ? (
+            <p className="text-[10px] text-emerald-300">
+              No active risk warnings.
+            </p>
+          ) : (
+            snapshot.warnings.slice(0, 2).map((warning) => (
+              <p
+                key={`risk-warning-${warning}`}
+                className="text-[10px] text-amber-300"
+              >
+                {warning}
+              </p>
+            ))
+          )}
         </div>
       </div>
     </>
