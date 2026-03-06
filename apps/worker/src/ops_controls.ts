@@ -142,16 +142,20 @@ async function readOpsControlRaw(env: Env): Promise<OpsControlJson | null> {
   if (!env.CONFIG_KV || typeof env.CONFIG_KV.get !== "function") {
     return null;
   }
-  const raw = await env.CONFIG_KV.get(OPS_CONTROL_KV_KEY, "json");
-  if (typeof raw === "string" && raw.trim()) {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      return isRecord(parsed) ? parsed : null;
-    } catch {
-      return null;
+  try {
+    const raw = await env.CONFIG_KV.get(OPS_CONTROL_KV_KEY, "json");
+    if (typeof raw === "string" && raw.trim()) {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        return isRecord(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
     }
+    return isRecord(raw) ? raw : null;
+  } catch {
+    return null;
   }
-  return isRecord(raw) ? raw : null;
 }
 
 export async function readOpsControlSnapshot(
