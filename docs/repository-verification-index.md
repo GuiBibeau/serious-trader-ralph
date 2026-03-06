@@ -215,6 +215,23 @@ Expected result:
 - preview health includes every open PR with a `<!-- pr-preview -->` comment
 - runner health reports either a valid heartbeat or `not-configured`
 
+### 6b. Runner verification
+
+Run a single GitHub issue poll:
+
+```bash
+bun run runner:once
+```
+
+Expected result:
+
+- the runner only selects issues carrying both `harness` and `agent-ready`
+- each claimed issue receives `agent-running` while execution is active
+- worktrees are created under `.tmp/runner/worktrees/issue-<number>-<slug>`
+- `.harness/runner-heartbeat.json` updates with current status, concurrency, and
+  active run count
+- successful runs open or update a PR and switch the issue to `human-review`
+
 ### 7. Canary verification
 
 Production execution canary behavior:
