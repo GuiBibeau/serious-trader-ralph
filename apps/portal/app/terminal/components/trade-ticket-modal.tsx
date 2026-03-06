@@ -1129,7 +1129,10 @@ export function TradeTicketModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[6px]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[6px]"
+      data-testid="trade-ticket-modal"
+    >
       <button
         aria-label="Close trade ticket"
         className="absolute inset-0"
@@ -1251,6 +1254,7 @@ export function TradeTicketModal({
             </button>
             <button
               className={`${BTN_PRIMARY} !py-2 !px-4 text-xs min-w-[8.5rem]`}
+              data-testid="trade-ticket-submit"
               onClick={() => void executeTrade()}
               type="button"
               disabled={!canExecuteTrade}
@@ -1474,6 +1478,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
           <input
             id="trade-ticket-amount"
             className="input-field !py-2.5 font-mono"
+            data-testid="trade-ticket-amount-input"
             inputMode="decimal"
             placeholder={amountPresets[1] ?? amountPresets[0] ?? "1"}
             value={amountUi}
@@ -1528,6 +1533,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
         <input
           id="trade-ticket-slippage"
           className="input-field !py-2.5 font-mono"
+          data-testid="trade-ticket-slippage-input"
           inputMode="numeric"
           min={1}
           max={5000}
@@ -1695,6 +1701,7 @@ const AdvancedOrderConfigSection = memo(
             </span>
             <select
               className="input-field !py-2 font-mono"
+              data-testid="trade-ticket-order-type"
               value={orderType}
               onChange={(event) =>
                 onOrderTypeChange(event.target.value as OrderType)

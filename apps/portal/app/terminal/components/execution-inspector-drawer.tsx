@@ -322,7 +322,10 @@ export const ExecutionInspectorDrawer = memo(function ExecutionInspectorDrawer(
   if (!open || !requestId) return null;
 
   return (
-    <div className="fixed inset-0 z-[70] flex justify-end bg-black/50 backdrop-blur-[2px]">
+    <div
+      className="fixed inset-0 z-[70] flex justify-end bg-black/50 backdrop-blur-[2px]"
+      data-testid="execution-inspector-drawer"
+    >
       <button
         className="absolute inset-0"
         aria-label="Close execution inspector"
