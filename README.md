@@ -81,6 +81,20 @@ Optional portal env:
 - `NEXT_PUBLIC_TERMINAL_RISK_LIQ_CRITICAL_BUFFER_PCT` (default `5`)
 - `NEXT_PUBLIC_TERMINAL_RISK_MIN_EQUITY_QUOTE` (default `25`)
 
+### Isolated per-worktree harness
+
+```bash
+bun run harness:up
+bun run harness:status
+bun run harness:down
+```
+
+- `harness:up` starts a portal and worker pair with worktree-local ports and
+  worker state under `.tmp/harness/<worktree-id>/`
+- `harness:status` prints the current local URLs, health, log directory, and
+  state file for the active worktree
+- `harness:down` tears down only the active worktree harness state
+
 ### Worker only
 
 ```bash

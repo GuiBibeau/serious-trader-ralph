@@ -12,6 +12,9 @@
   "scripts": {
     "dev": "turbo run dev --parallel",
     "dev:cli": "bun run src/bin/ralph.ts",
+    "harness:up": "bun run src/bin/harness.ts up",
+    "harness:down": "bun run src/bin/harness.ts down",
+    "harness:status": "bun run src/bin/harness.ts status",
     "build": "bun build src/bin/ralph.ts --outdir dist/bin --target node --format esm",
     "start": "bun dist/bin/ralph.js",
     "dev:local": "NEXT_PUBLIC_EDGE_API_BASE=http://127.0.0.1:8888 NEXT_PUBLIC_SITE_URL=http://localhost:3000 bun run dev",
