@@ -21,11 +21,16 @@ Terminal UX cutover sequencing and cohort-mode gates are documented in
 - Required access:
   - GitHub Actions deploy workflows
   - Cloudflare Worker variables/secrets for target env
-  - `ADMIN_TOKEN` for observability endpoint
+  - `ADMIN_TOKEN` for observability and ops-control endpoints
+
+GitHub workflow surfaces added for issue `#238`:
+
+- `.github/workflows/ops-dashboard.yml`
+- `.github/workflows/rollback-production.yml`
 
 ## Operational Toggles
 
-Lane kill switches (all default enabled):
+Static env defaults (all default enabled):
 
 - `EXEC_LANE_FAST_ENABLED`
 - `EXEC_LANE_PROTECTED_ENABLED`
@@ -47,6 +52,64 @@ Verification coverage:
 
 - `tests/unit/worker_execution_lane_resolver.test.ts`
 - `tests/unit/worker_x402_exec_submit_route.test.ts`
+
+## Runtime Ops Control Plane
+
+The worker now exposes runtime controls backed by `CONFIG_KV`, so operators can
+disable execution or the canary lane without redeploying code.
+
+Routes:
+
+- `GET /api/admin/ops/controls`
+- `POST /api/admin/ops/controls`
+- `POST /api/admin/ops/controls/reset`
+- `GET /api/admin/ops/dashboard`
+
+Disable all execution and the canary lane:
+
+```bash
+curl -fsS -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$API_BASE/api/admin/ops/controls" \
+  --data '{
+    "updatedBy": "incident-response",
+    "execution": {
+      "enabled": false,
+      "disabledReason": "incident-bridge"
+    },
+    "canary": {
+      "enabled": false,
+      "disabledReason": "incident-bridge"
+    }
+  }'
+```
+
+Disable a single execution lane without redeploy:
+
+```bash
+curl -fsS -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$API_BASE/api/admin/ops/controls" \
+  --data '{
+    "updatedBy": "incident-response",
+    "execution": {
+      "lanes": {
+        "protected": false
+      },
+      "disabledReason": "provider-outage"
+    }
+  }'
+```
+
+Reset runtime controls:
+
+```bash
+curl -fsS -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$API_BASE/api/admin/ops/controls/reset"
+```
 
 ## Incident Taxonomy Alignment
 
@@ -82,11 +145,21 @@ curl -sS \
   "$API_BASE/api/admin/execution/observability?windowMinutes=30&maxRequests=5000"
 ```
 
-2. Capture current thresholds and lane-level failures.
-3. Choose mitigation: disable lane, reroute adapter, or throttle ingress.
-4. Redeploy worker for target environment.
-5. Verify status with smoke submit + status/receipt polling.
-6. Record timeline and decision in incident log.
+2. Pull the aggregated ops dashboard when you need execution + canary + control
+   state in one payload:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$API_BASE/api/admin/ops/dashboard?windowMinutes=120&maxRequests=10000"
+```
+
+3. Capture current thresholds and lane-level failures.
+4. Choose mitigation: disable a lane, disable all execution, disable the canary
+   lane, reroute an adapter, or throttle ingress.
+5. Only redeploy if the issue cannot be mitigated by runtime controls alone.
+6. Verify status with smoke submit + status/receipt polling.
+7. Record timeline and decision in incident log.
 
 ## Runbook A: Provider Outage
 
@@ -99,12 +172,14 @@ Trigger indicators:
 Actions:
 
 1. Identify impacted lane (`fast`, `protected`, `safe`).
-2. Apply kill switch for impacted lane (`EXEC_LANE_<LANE>_ENABLED=0`) to stop new risk.
+2. Apply runtime kill switch for the impacted lane through
+   `/api/admin/ops/controls` to stop new risk.
 3. If failover path is validated, set adapter override (`EXEC_LANE_<LANE>_ADAPTER=<adapter>`).
-4. Redeploy and verify:
+4. Redeploy only if adapter overrides or static env defaults must change.
+5. Verify:
    - disabled lane rejects with `unsupported-lane`
    - unaffected lanes continue to accept submits
-5. Recover by restoring lane enable flag to `1` after health stabilizes.
+6. Recover by restoring runtime controls after health stabilizes.
 
 ## Runbook B: Lane Disable / Failover
 
@@ -113,6 +188,7 @@ Use when one lane degrades but overall service remains healthy.
 Actions:
 
 1. Disable only degraded lane with `EXEC_LANE_<LANE>_ENABLED=0`.
+   Prefer the runtime control plane before touching static env vars.
 2. Keep remaining lanes enabled for partial service continuity.
 3. Update client-facing status note (if needed) that lane is temporarily unavailable.
 4. Re-enable lane only after:
@@ -164,6 +240,22 @@ Actions:
 3. Confirm `/api/x402/exec/receipt/:requestId` returns canonical terminal state.
 
 ## Rollback and Verification Checklist
+
+Production rollback automation:
+
+```bash
+gh workflow run rollback-production.yml \
+  --raw-field reason="post-deploy smoke failure" \
+  --raw-field pr_number="<optional-pr-number>"
+```
+
+Optional dry-run:
+
+```bash
+gh workflow run rollback-production.yml \
+  --raw-field reason="dry run" \
+  --raw-field dry_run=true
+```
 
 - Lane flags restored to intended baseline.
 - Adapter overrides removed if temporary.

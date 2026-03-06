@@ -81,6 +81,48 @@ describe("execution lane resolver", () => {
     expect(disabledProtected.reason).toBe("lane-disabled-by-operator");
   });
 
+  test("supports runtime ops-control overrides without redeploy", () => {
+    const resolved = resolveExecutionLane({
+      env: {} as Env,
+      requestedLane: "safe",
+      mode: "privy_execute",
+      actorType: "privy_user",
+      runtimeControls: {
+        executionEnabled: true,
+        executionDisabledReason: null,
+        laneEnabledOverrides: {
+          fast: true,
+          protected: true,
+          safe: false,
+        },
+        mappedBy: "ops-control",
+      },
+    });
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) return;
+    expect(resolved.reason).toBe("lane-disabled-by-operator");
+
+    const globallyDisabled = resolveExecutionLane({
+      env: {} as Env,
+      requestedLane: "fast",
+      mode: "relay_signed",
+      actorType: "anonymous_x402",
+      runtimeControls: {
+        executionEnabled: false,
+        executionDisabledReason: "execution-disabled-by-operator",
+        laneEnabledOverrides: {
+          fast: true,
+          protected: true,
+          safe: true,
+        },
+        mappedBy: "ops-control",
+      },
+    });
+    expect(globallyDisabled.ok).toBe(false);
+    if (globallyDisabled.ok) return;
+    expect(globallyDisabled.reason).toBe("execution-disabled-by-operator");
+  });
+
   test("rejects safe lane for relay_signed mode", () => {
     const resolved = resolveExecutionLane({
       env: {} as Env,

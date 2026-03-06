@@ -1,0 +1,196 @@
+name: Rollback Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Why the rollback is being triggered
+        required: true
+        type: string
+      target_sha:
+        description: Optional commit SHA to redeploy instead of previous main
+        required: false
+        type: string
+      pr_number:
+        description: Optional PR number to comment with rollback results
+        required: false
+        type: string
+      dry_run:
+        description: Resolve and report the rollback target without deploying
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+
+      - name: Resolve rollback target
+        id: target
+        run: |
+          set -euo pipefail
+
+          git fetch origin main --depth=2
+          PREVIOUS_MAIN_SHA="$(git rev-parse origin/main^)"
+          TARGET_SHA="${{ inputs.target_sha }}"
+
+          if [ -z "${TARGET_SHA}" ]; then
+            TARGET_SHA="${PREVIOUS_MAIN_SHA}"
+          fi
+
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
+          echo "previous_main_sha=${PREVIOUS_MAIN_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Check production deploy credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          for secret_name in CLOUDFLARE_API_TOKEN VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::Missing required secret ${secret_name} for production rollback."
+              exit 1
+            fi
+          done
+
+      - name: Install deps
+        run: bun install
+
+      - name: Perform rollback deploy
+        id: rollback
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .tmp/rollback
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry-run only; skipping production deploy."
+            exit 0
+          fi
+
+          git checkout "${TARGET_SHA}"
+
+          cd apps/worker
+          npm install
+          npx wrangler deploy --env production
+          cd ../..
+
+          DEPLOY_OUTPUT="$(
+            npx --yes vercel deploy \
+              --scope guivercelpro \
+              --token "$VERCEL_TOKEN" \
+              --prod \
+              --yes \
+              --build-env "NEXT_PUBLIC_EDGE_API_BASE=https://api.trader-ralph.com" \
+              --build-env "NEXT_PUBLIC_SITE_URL=https://trader-ralph.com"
+          )"
+
+          DEPLOYMENT_URL="$(
+            printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+\.vercel\.app' | tail -n 1
+          )"
+
+          if [ -z "${DEPLOYMENT_URL}" ]; then
+            echo "Failed to parse Vercel deployment URL during rollback" >&2
+            printf '%s\n' "$DEPLOY_OUTPUT" >&2
+            exit 1
+          fi
+
+          for domain in trader-ralph.com www.trader-ralph.com api.trader-ralph.com; do
+            npx --yes vercel alias set "${DEPLOYMENT_URL}" "$domain" --scope guivercelpro --token "$VERCEL_TOKEN"
+          done
+
+          curl -fsS -o /dev/null "https://trader-ralph.com"
+          curl -fsS -o /dev/null "https://api.trader-ralph.com/api/health"
+          curl -fsS -o /dev/null "https://api.trader-ralph.com/openapi.json"
+
+      - name: Write rollback summary
+        if: always()
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
+          PREVIOUS_MAIN_SHA: ${{ steps.target.outputs.previous_main_sha }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .tmp/rollback
+          STATUS="failed"
+          if [ "${DRY_RUN}" = "true" ]; then
+            STATUS="dry-run"
+          elif [ "${ROLLBACK_OUTCOME}" = "success" ]; then
+            STATUS="success"
+          fi
+
+          bun run src/bin/rollback_summary.ts \
+            --output .tmp/rollback/summary.md \
+            --target-sha "${TARGET_SHA}" \
+            --previous-main-sha "${PREVIOUS_MAIN_SHA}" \
+            --portal-url "https://trader-ralph.com" \
+            --api-url "https://api.trader-ralph.com" \
+            --status "${STATUS}" \
+            --reason "${REASON}"
+
+          cat .tmp/rollback/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload rollback summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-rollback-${{ github.run_id }}
+          path: .tmp/rollback
+          if-no-files-found: error
+
+      - name: Post rollback result to PR
+        if: always() && inputs.pr_number != ''
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const fs = require("fs");
+            const body = fs.readFileSync(".tmp/rollback/summary.md", "utf8");
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body,
+            });
+
+      - name: Fail when rollback deploy fails
+        if: ${{ inputs.dry_run == false && steps.rollback.outcome != 'success' }}
+        run: |
+          set -euo pipefail
+          echo "::error::Production rollback failed."
+          exit 1

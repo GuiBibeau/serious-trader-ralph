@@ -115,6 +115,13 @@ import {
 } from "./macro_sources";
 import { computeMarketIndicators } from "./market_indicators";
 import {
+  executionLaneRuntimeControlsFromSnapshot,
+  type OpsControlPatch,
+  readOpsControlSnapshot,
+  resetOpsControlSnapshot,
+  writeOpsControlSnapshot,
+} from "./ops_controls";
+import {
   fetchPerpsFundingSurface,
   fetchPerpsOpenInterestSurface,
   fetchPerpsVenueScore,
@@ -333,6 +340,11 @@ function readNumberEnv(
   return Math.min(max, Math.max(min, parsed));
 }
 
+function readOptionalString(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  return normalized ? normalized : null;
+}
+
 function parsePositiveIntParam(
   raw: string | null,
   fallback: number,
@@ -346,6 +358,65 @@ function parsePositiveIntParam(
 
 function shouldSyncExecutePrivySubmit(env: Env): boolean {
   return readBooleanEnv(env.EXEC_PRIVY_SYNC_SUBMIT_ENABLED, false);
+}
+
+function parseOpsControlPatch(
+  value: unknown,
+): OpsControlPatch | { error: string } {
+  if (!isRecord(value)) {
+    return { error: "invalid-ops-control-payload" };
+  }
+
+  const patch: OpsControlPatch = {
+    updatedBy: readOptionalString(value.updatedBy) ?? "admin-route",
+  };
+
+  if (isRecord(value.execution)) {
+    patch.execution = {};
+    if (value.execution.enabled !== undefined) {
+      patch.execution.enabled = readBooleanEnv(value.execution.enabled, true);
+    }
+    if (value.execution.disabledReason !== undefined) {
+      patch.execution.disabledReason = readOptionalString(
+        value.execution.disabledReason,
+      );
+    }
+    if (isRecord(value.execution.lanes)) {
+      patch.execution.lanes = {};
+      if (value.execution.lanes.fast !== undefined) {
+        patch.execution.lanes.fast = readBooleanEnv(
+          value.execution.lanes.fast,
+          true,
+        );
+      }
+      if (value.execution.lanes.protected !== undefined) {
+        patch.execution.lanes.protected = readBooleanEnv(
+          value.execution.lanes.protected,
+          true,
+        );
+      }
+      if (value.execution.lanes.safe !== undefined) {
+        patch.execution.lanes.safe = readBooleanEnv(
+          value.execution.lanes.safe,
+          true,
+        );
+      }
+    }
+  }
+
+  if (isRecord(value.canary)) {
+    patch.canary = {};
+    if (value.canary.enabled !== undefined) {
+      patch.canary.enabled = readBooleanEnv(value.canary.enabled, true);
+    }
+    if (value.canary.disabledReason !== undefined) {
+      patch.canary.disabledReason = readOptionalString(
+        value.canary.disabledReason,
+      );
+    }
+  }
+
+  return patch;
 }
 
 function newExecutionAttemptId(): string {
@@ -801,7 +872,11 @@ const worker = {
         url.pathname === "/api/x402/exec/health"
       ) {
         const loopAHealth = await readLoopAHealthFromKv(env);
-        const routing = readExecutionLaneRoutingConfig(env);
+        const opsControls = await readOpsControlSnapshot(env);
+        const routing = readExecutionLaneRoutingConfig(
+          env,
+          executionLaneRuntimeControlsFromSnapshot(opsControls),
+        );
         const hasLaneOnline =
           routing.enabled.fast ||
           routing.enabled.protected ||
@@ -814,6 +889,9 @@ const worker = {
               ok: true,
             },
             loopA: loopAHealth ?? null,
+            controls: {
+              execution: opsControls.execution,
+            },
             lanes: {
               fast: {
                 enabled: routing.enabled.fast,
@@ -1046,6 +1124,9 @@ const worker = {
           requestedLane: parsed.value.lane,
           mode: parsed.value.mode,
           actorType,
+          runtimeControls: executionLaneRuntimeControlsFromSnapshot(
+            await readOpsControlSnapshot(env),
+          ),
         });
         if (!laneResolution.ok) {
           return withCors(
@@ -1901,6 +1982,147 @@ const worker = {
             : "manual";
         return withCors(
           json(await runExecutionCanary({ env, triggerSource })),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/controls"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(
+          json({
+            ok: true,
+            controls: await readOpsControlSnapshot(env),
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/controls"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const payload = (await request.json().catch(() => null)) as unknown;
+        const parsedPatch = parseOpsControlPatch(payload);
+        if ("error" in parsedPatch) {
+          return withCors(
+            json({ ok: false, error: parsedPatch.error }, { status: 400 }),
+            env,
+          );
+        }
+        try {
+          const controls = await writeOpsControlSnapshot(env, parsedPatch);
+          return withCors(json({ ok: true, controls }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "ops-control-write-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/controls/reset"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const controls = await resetOpsControlSnapshot(env, "admin-reset");
+          return withCors(json({ ok: true, controls }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "ops-control-reset-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/dashboard"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const defaultWindowMinutes = Math.floor(
+          readNumberEnv(env.EXEC_OBS_DEFAULT_WINDOW_MINUTES, 60, 5, 10_080),
+        );
+        const defaultMaxRequests = Math.floor(
+          readNumberEnv(env.EXEC_OBS_MAX_REQUESTS, 5_000, 100, 20_000),
+        );
+        const windowMinutes = parsePositiveIntParam(
+          url.searchParams.get("windowMinutes"),
+          defaultWindowMinutes,
+          5,
+          10_080,
+        );
+        const maxRequests = parsePositiveIntParam(
+          url.searchParams.get("maxRequests"),
+          defaultMaxRequests,
+          100,
+          20_000,
+        );
+        const [controls, execution, canary] = await Promise.all([
+          readOpsControlSnapshot(env),
+          readExecutionObservabilitySnapshot({
+            db: env.WAITLIST_DB,
+            windowMinutes,
+            maxRequests,
+            thresholds: readExecObservabilityThresholds(env),
+          }),
+          readExecutionCanarySnapshot(env),
+        ]);
+        return withCors(
+          json({
+            ok: true,
+            now: new Date().toISOString(),
+            controls,
+            execution,
+            canary,
+          }),
           env,
         );
       }
