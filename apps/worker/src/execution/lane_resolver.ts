@@ -1,3 +1,4 @@
+import type { ExecutionLaneRuntimeControls } from "../ops_controls";
 import type { Env } from "../types";
 import type {
   ExecutionActorType,
@@ -62,18 +63,41 @@ export type ExecutionLaneRoutingConfig = {
   adapters: Record<ExecutionLane, string>;
   enabled: Record<ExecutionLane, boolean>;
   allowAnonymousSafe: boolean;
+  mappedBy: "env" | "ops-control";
+  executionEnabled: boolean;
+  executionDisabledReason: string | null;
 };
 
 export function readExecutionLaneRoutingConfig(
   env: Env,
+  runtimeControls?: ExecutionLaneRuntimeControls,
 ): ExecutionLaneRoutingConfig {
+  const envEnabled = resolveLaneEnabledFlags(env);
+  const globalExecutionEnabled = runtimeControls?.executionEnabled ?? true;
+  const laneEnabledOverrides = runtimeControls?.laneEnabledOverrides ?? {};
   return {
     adapters: resolveLaneAdapters(env),
-    enabled: resolveLaneEnabledFlags(env),
+    enabled: {
+      fast:
+        globalExecutionEnabled &&
+        envEnabled.fast &&
+        (laneEnabledOverrides.fast ?? true),
+      protected:
+        globalExecutionEnabled &&
+        envEnabled.protected &&
+        (laneEnabledOverrides.protected ?? true),
+      safe:
+        globalExecutionEnabled &&
+        envEnabled.safe &&
+        (laneEnabledOverrides.safe ?? true),
+    },
     allowAnonymousSafe: readBooleanFlag(
       env.EXEC_LANE_SAFE_ALLOW_ANONYMOUS,
       false,
     ),
+    mappedBy: runtimeControls?.mappedBy ?? "env",
+    executionEnabled: globalExecutionEnabled,
+    executionDisabledReason: runtimeControls?.executionDisabledReason ?? null,
   };
 }
 
@@ -95,14 +119,24 @@ export function resolveExecutionLane(input: {
   requestedLane: ExecutionLane;
   mode: ExecutionMode;
   actorType: ExecutionActorType;
+  runtimeControls?: ExecutionLaneRuntimeControls;
 }): LaneResolveResult {
-  const routing = readExecutionLaneRoutingConfig(input.env);
+  const routing = readExecutionLaneRoutingConfig(
+    input.env,
+    input.runtimeControls,
+  );
 
   if (!routing.enabled[input.requestedLane]) {
+    const reason =
+      !routing.executionEnabled && routing.executionDisabledReason
+        ? routing.executionDisabledReason
+        : !routing.executionEnabled
+          ? "execution-disabled-by-operator"
+          : "lane-disabled-by-operator";
     return {
       ok: false,
       error: "unsupported-lane",
-      reason: "lane-disabled-by-operator",
+      reason,
     };
   }
 
@@ -132,7 +166,8 @@ export function resolveExecutionLane(input: {
       adapter: routing.adapters[input.requestedLane],
       requestedByMode: input.mode,
       requestedByActor: input.actorType,
-      mappedBy: "env",
+      mappedBy: routing.mappedBy,
+      executionEnabled: routing.executionEnabled,
     },
   };
 }

@@ -1,6 +1,10 @@
 import { SOL_MINT, USDC_MINT } from "../defaults";
 import type { JupiterQuoteResponse } from "../jupiter";
 import { JupiterClient } from "../jupiter";
+import {
+  executionLaneRuntimeControlsFromSnapshot,
+  readOpsControlSnapshot,
+} from "../ops_controls";
 import { enforcePolicy, normalizePolicy } from "../policy";
 import { createPrivySolanaWallet, getPrivyWalletAddressById } from "../privy";
 import { SolanaRpc } from "../solana_rpc";
@@ -604,6 +608,7 @@ export async function runExecutionCanary(input: {
   const { env, triggerSource } = input;
   const config = readExecutionCanaryConfig(env);
   const state = await getExecutionCanaryState(env.WAITLIST_DB);
+  const opsControls = await readOpsControlSnapshot(env);
 
   if (!config.enabled) {
     return {
@@ -613,6 +618,18 @@ export async function runExecutionCanary(input: {
       run: null,
       state,
       error: "execution-canary-disabled-by-config",
+    };
+  }
+  if (!opsControls.canary.enabled) {
+    return {
+      ok: false,
+      status: "disabled",
+      triggerSource,
+      run: null,
+      state,
+      error:
+        opsControls.canary.disabledReason ??
+        "execution-canary-disabled-by-operator",
     };
   }
   if (state?.disabled) {
@@ -669,6 +686,7 @@ export async function runExecutionCanary(input: {
     requestedLane: "safe",
     mode: "privy_execute",
     actorType: "api_key_actor",
+    runtimeControls: executionLaneRuntimeControlsFromSnapshot(opsControls),
   });
   if (!laneResolution.ok) {
     return await finalizeCanaryRun(env, {

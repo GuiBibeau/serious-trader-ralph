@@ -62,6 +62,9 @@ Current workflow files:
   - `.github/workflows/deploy-manual.yml`
 - Portal deploys:
   - `.github/workflows/deploy-portal.yml`
+- Ops:
+  - `.github/workflows/ops-dashboard.yml`
+  - `.github/workflows/rollback-production.yml`
 
 Current required secret names:
 
@@ -188,6 +191,30 @@ curl -fsS https://<lane-api-domain>/openapi.json
 For portal builds, also verify that the login bundle points at the intended API
 host for the lane and does not reference an unexpected `workers.dev` host.
 
+### 6a. Ops dashboard verification
+
+The scheduled GitHub workflow `.github/workflows/ops-dashboard.yml` is the
+repo-level dashboard surface for:
+
+- execution outcomes and latency
+- preview health
+- runner health
+- canary status
+- runtime kill-switch state
+
+Manual trigger:
+
+```bash
+gh workflow run ops-dashboard.yml
+```
+
+Expected result:
+
+- workflow summary renders all five sections above
+- uploaded artifact name matches `ops-dashboard-<run_id>`
+- preview health includes every open PR with a `<!-- pr-preview -->` comment
+- runner health reports either a valid heartbeat or `not-configured`
+
 ### 7. Canary verification
 
 Production execution canary behavior:
@@ -261,6 +288,20 @@ Use lane and rollout flags before attempting a broader revert:
 - `EXEC_LANE_SAFE_ENABLED`
 
 Reference: `docs/execution/rollout-plan-v1.md`
+
+### Production rollback automation
+
+When code rollback is required, prefer the automated workflow:
+
+```bash
+gh workflow run rollback-production.yml \
+  --raw-field reason="manual rollback" \
+  --raw-field pr_number="<optional-pr-number>"
+```
+
+This redeploys the previous `main` commit unless an explicit `target_sha` is
+provided. The workflow posts a summary to the run and can also comment on a PR
+when `pr_number` is supplied.
 
 ### Production triage and verification
 
