@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -493,6 +494,8 @@ function runLoggedCommand(input: {
       env: process.env,
       stdio: ["ignore", stdoutFd, stderrFd],
     });
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
     child.once("error", (error) => rejectPromise(error));
     child.once("exit", (code) => {
       if (code === 0) {
@@ -648,23 +651,57 @@ async function processIssue(
       JSON.stringify(summary, null, 2),
       "utf8",
     );
-    commentOnIssue(
-      context.root,
-      context.config.repository,
-      context.issue.number,
-      buildRunnerFailureComment({
-        issue: context.issue,
-        branch,
-        error: summary.error ?? "unknown runner error",
-      }),
-    );
-    editIssueLabels(
-      context.root,
-      context.config.repository,
-      context.issue.number,
-      {
-        remove: ["agent-running"],
-      },
+    let cleanupError: string | null = null;
+    try {
+      editIssueLabels(
+        context.root,
+        context.config.repository,
+        context.issue.number,
+        {
+          remove: ["agent-running"],
+        },
+      );
+    } catch (labelError) {
+      cleanupError =
+        labelError instanceof Error ? labelError.message : String(labelError);
+    }
+
+    try {
+      commentOnIssue(
+        context.root,
+        context.config.repository,
+        context.issue.number,
+        buildRunnerFailureComment({
+          issue: context.issue,
+          branch,
+          error: summary.error ?? "unknown runner error",
+        }),
+      );
+    } catch (commentError) {
+      const commentErrorMessage =
+        commentError instanceof Error
+          ? commentError.message
+          : String(commentError);
+      summary.error = [
+        summary.error,
+        `comment-post-failed: ${commentErrorMessage}`,
+      ]
+        .filter((value) => Boolean(value))
+        .join("\n");
+    }
+
+    if (cleanupError) {
+      summary.error = [
+        summary.error,
+        `agent-running-cleanup-failed: ${cleanupError}`,
+      ]
+        .filter((value) => Boolean(value))
+        .join("\n");
+    }
+    writeFileSync(
+      runPaths.summaryFile,
+      JSON.stringify(summary, null, 2),
+      "utf8",
     );
     return summary;
   }
