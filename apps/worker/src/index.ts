@@ -14,6 +14,13 @@ import {
   enforceExecSubmitAbuseGuard,
   readExecSubmitPayloadWithLimits,
 } from "./execution/abuse_guard";
+import {
+  bootstrapExecutionCanary,
+  isExecutionCanaryScheduledTick,
+  readExecutionCanarySnapshot,
+  resetExecutionCanary,
+  runExecutionCanary,
+} from "./execution/canary";
 import { ExecutionCoordinator } from "./execution/coordinator";
 import {
   buildExecutionErrorEnvelope,
@@ -1830,6 +1837,70 @@ const worker = {
             ok: true,
             ...snapshot,
           }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/execution/canary"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await readExecutionCanarySnapshot(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/execution/canary/bootstrap"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await bootstrapExecutionCanary(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/execution/canary/reset"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await resetExecutionCanary(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/execution/canary/run"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const payload = (await request.json().catch(() => null)) as unknown;
+        const triggerSource =
+          isRecord(payload) && payload.trigger === "post_deploy"
+            ? "post_deploy"
+            : "manual";
+        return withCors(
+          json(await runExecutionCanary({ env, triggerSource })),
           env,
         );
       }
@@ -3906,6 +3977,21 @@ const worker = {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+    if (isExecutionCanaryScheduledTick(_event)) {
+      try {
+        await runExecutionCanary({
+          env,
+          triggerSource: "schedule",
+        });
+      } catch (error) {
+        console.error("execution.canary.scheduled.error", {
+          message: error instanceof Error ? error.message : "unknown-error",
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
+      return;
+    }
+
     const startedAtMs = Date.now();
     const slotSourceEnabled =
       String(env.LOOP_A_SLOT_SOURCE_ENABLED ?? "0").trim() === "1";
