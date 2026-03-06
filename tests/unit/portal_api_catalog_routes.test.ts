@@ -155,4 +155,37 @@ describe("portal x402 api catalog routes", () => {
     expect(body.includes("API origin: https://portal.example")).toBe(true);
     expect(body.includes("https://portal.example/openapi.json")).toBe(true);
   });
+
+  test("GET /api/endpoints.json uses the preview worker host on Vercel previews", async () => {
+    const originalEdgeApiBase = process.env.NEXT_PUBLIC_EDGE_API_BASE;
+    process.env.NEXT_PUBLIC_EDGE_API_BASE =
+      "https://ralph-edge-pr-235.gui-bibeau.workers.dev";
+
+    try {
+      const response = getJsonCatalog(
+        new Request(
+          "https://serious-trader-ralph-git-codex-issue-235-preview-guivercelpro.vercel.app/api/endpoints.json",
+        ),
+      );
+      expect(response.status).toBe(200);
+
+      const payload = (await response.json()) as Record<string, unknown>;
+      const runtime = toRecord(payload.runtime);
+      expect(runtime).not.toBeNull();
+      expect(String(runtime?.apiOrigin)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev",
+      );
+
+      const discovery = toRecord(payload.discovery);
+      expect(discovery).not.toBeNull();
+      expect(String(discovery?.openapi)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev/openapi.json",
+      );
+      expect(String(discovery?.agentRegistryMetadata)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev/agent-registry/metadata.json",
+      );
+    } finally {
+      process.env.NEXT_PUBLIC_EDGE_API_BASE = originalEdgeApiBase;
+    }
+  });
 });

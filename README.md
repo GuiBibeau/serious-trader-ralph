@@ -165,6 +165,8 @@ bun run agent-registry:sync -- --lane production --step all
   - `dev` -> `dev.trader-ralph.com` and `dev.api.trader-ralph.com`
   - `staging` -> `staging.trader-ralph.com` and `staging.api.trader-ralph.com`
   - `main` -> `trader-ralph.com`, `www.trader-ralph.com`, `api.trader-ralph.com`
+- Internal pull requests also provision a Vercel portal preview and an
+  ephemeral Cloudflare worker named `ralph-edge-pr-<pr-number>`.
 - Cloudflare Worker and Vercel deploys are branch-driven in CI.
 
 ## Tests

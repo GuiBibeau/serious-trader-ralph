@@ -1,0 +1,233 @@
+name: Deploy PR Preview
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+    types: [opened, synchronize, reopened, closed]
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  deploy-preview:
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve preview config
+        id: preview
+        run: |
+          set -euo pipefail
+
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          WORKER_NAME="ralph-edge-pr-${PR_NUMBER}"
+          WORKER_HOST="${WORKER_NAME}.gui-bibeau.workers.dev"
+          WORKER_URL="https://${WORKER_HOST}"
+
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "worker_name=${WORKER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "worker_host=${WORKER_HOST}" >> "$GITHUB_OUTPUT"
+          echo "worker_url=${WORKER_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Check deployment credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          for secret_name in CLOUDFLARE_API_TOKEN VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::Missing required secret ${secret_name} for PR preview deploys."
+              exit 1
+            fi
+          done
+
+      - name: Deploy portal preview
+        id: portal
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          DEPLOY_OUTPUT="$(
+            npx --yes vercel deploy \
+              --scope guivercelpro \
+              --token "$VERCEL_TOKEN" \
+              --yes \
+              --build-env "NEXT_PUBLIC_EDGE_API_BASE=${{ steps.preview.outputs.worker_url }}" \
+              --build-env "NEXT_PUBLIC_SITE_URL=https://trader-ralph.com"
+          )"
+          DEPLOYMENT_URL="$(
+            printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+\.vercel\.app' | tail -n 1
+          )"
+
+          if [ -z "${DEPLOYMENT_URL}" ]; then
+            echo "Failed to parse Vercel preview URL" >&2
+            printf '%s\n' "$DEPLOY_OUTPUT" >&2
+            exit 1
+          fi
+
+          echo "portal_url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
+          echo "Preview URL: ${DEPLOYMENT_URL}"
+
+      - name: Deploy preview worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/deploy_preview_worker.mjs \
+            --pr-number "${{ steps.preview.outputs.pr_number }}" \
+            --portal-site-url "${{ steps.portal.outputs.portal_url }}"
+
+      - name: Smoke preview stack
+        env:
+          PORTAL_URL: ${{ steps.portal.outputs.portal_url }}
+          WORKER_URL: ${{ steps.preview.outputs.worker_url }}
+          WORKER_HOST: ${{ steps.preview.outputs.worker_host }}
+        run: |
+          set -euo pipefail
+
+          retry() {
+            local attempts="$1"
+            shift
+            local delay="$1"
+            shift
+            local count=1
+            until "$@"; do
+              if [ "$count" -ge "$attempts" ]; then
+                return 1
+              fi
+              count=$((count + 1))
+              sleep "$delay"
+            done
+          }
+
+          retry 12 5 curl -fsS -o /dev/null "$PORTAL_URL"
+          retry 12 5 curl -fsS -o /dev/null "${WORKER_URL}/api/health"
+
+          for path in /api /endpoints.json /endpoints.txt /llms.txt /openapi.json /agent-registry/metadata.json; do
+            retry 12 5 curl -fsS -o /dev/null "${PORTAL_URL}${path}"
+            retry 12 5 curl -fsS -o /dev/null "${WORKER_URL}${path}"
+          done
+
+          curl -fsS "${PORTAL_URL}/endpoints.json" | grep -q "${WORKER_HOST}"
+          curl -fsS "${PORTAL_URL}/agent-registry/metadata.json" | grep -q "${WORKER_HOST}"
+          curl -fsS "${WORKER_URL}/agent-registry/metadata.json" | grep -q "${WORKER_HOST}"
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+
+          curl -fsSL "${PORTAL_URL}/login" > "${tmp}/login.html"
+          grep -oE '/_next/static/[^" ]+\.js' "${tmp}/login.html" | sort -u > "${tmp}/scripts.txt"
+
+          if [ ! -s "${tmp}/scripts.txt" ]; then
+            echo "No Next.js JS bundle references found on ${PORTAL_URL}/login" >&2
+            exit 1
+          fi
+
+          while read -r script_path; do
+            curl -fsSL "${PORTAL_URL}${script_path}" >> "${tmp}/bundle.js"
+          done < "${tmp}/scripts.txt"
+
+          if ! grep -q "${WORKER_HOST}" "${tmp}/bundle.js"; then
+            echo "Expected preview worker host ${WORKER_HOST} not found in login bundle" >&2
+            exit 1
+          fi
+
+      - name: Write preview metadata
+        run: |
+          cat <<'JSON' > preview-metadata.json
+          {
+            "prNumber": ${{ steps.preview.outputs.pr_number }},
+            "portalUrl": "${{ steps.portal.outputs.portal_url }}",
+            "workerName": "${{ steps.preview.outputs.worker_name }}",
+            "workerUrl": "${{ steps.preview.outputs.worker_url }}"
+          }
+          JSON
+
+      - name: Upload preview metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-preview-${{ steps.preview.outputs.pr_number }}
+          path: preview-metadata.json
+
+      - name: Post preview links
+        uses: actions/github-script@v7
+        env:
+          PORTAL_URL: ${{ steps.portal.outputs.portal_url }}
+          WORKER_NAME: ${{ steps.preview.outputs.worker_name }}
+          WORKER_URL: ${{ steps.preview.outputs.worker_url }}
+        with:
+          script: |
+            const marker = "<!-- pr-preview -->";
+            const body = `${marker}
+            ## PR Preview
+            - Portal: ${process.env.PORTAL_URL}
+            - Worker: ${process.env.WORKER_URL}
+            - Worker name: \`${process.env.WORKER_NAME}\`
+            - Preview metadata artifact: \`pr-preview-${context.payload.pull_request.number}\``;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });
+
+  cleanup-preview:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Delete preview worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          WORKER_NAME="ralph-edge-pr-${{ github.event.pull_request.number }}"
+          cd apps/worker
+          if ! npx wrangler delete "${WORKER_NAME}" --force; then
+            echo "::warning::Failed to delete ${WORKER_NAME}; it may have already been removed."
+          fi

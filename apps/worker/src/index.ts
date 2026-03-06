@@ -582,7 +582,7 @@ function readExecObservabilityThresholds(env: Env) {
   };
 }
 
-function resolvePortalOriginForApiHost(hostname: string): string {
+function resolvePortalOriginForApiHost(hostname: string, env: Env): string {
   const normalized = hostname.trim().toLowerCase().split(":")[0] ?? "";
   if (normalized === "dev.api.trader-ralph.com") {
     return "https://dev.trader-ralph.com";
@@ -590,15 +590,22 @@ function resolvePortalOriginForApiHost(hostname: string): string {
   if (normalized === "staging.api.trader-ralph.com") {
     return "https://staging.trader-ralph.com";
   }
+  const configured = String(env.PORTAL_SITE_URL ?? "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (configured) {
+    return configured;
+  }
   return "https://www.trader-ralph.com";
 }
 
 async function proxyPortalDiscovery(
   request: Request,
   pathname: string,
+  env: Env,
 ): Promise<Response> {
   const requestUrl = new URL(request.url);
-  const portalOrigin = resolvePortalOriginForApiHost(requestUrl.host);
+  const portalOrigin = resolvePortalOriginForApiHost(requestUrl.host, env);
   const targetPath = pathname;
   const upstream = await fetch(`${portalOrigin}${targetPath}`, {
     method: "GET",
@@ -760,7 +767,7 @@ const worker = {
     const url = new URL(request.url);
     if (request.method === "GET" && DISCOVERY_DOC_PATHS.has(url.pathname)) {
       await recordEndpointCallSafe(env, request.method, url.pathname);
-      const proxied = await proxyPortalDiscovery(request, url.pathname);
+      const proxied = await proxyPortalDiscovery(request, url.pathname, env);
       return withCors(proxied, env);
     }
     if (url.pathname !== "/api" && !url.pathname.startsWith("/api/")) {
