@@ -14,6 +14,13 @@ It provides one execution fabric for:
 - `tests/`: unit + integration tests
 - `docs/`: execution contracts, registry runbooks, and metadata
 
+## Repository Contract
+
+- `WORKFLOW.md`: repo-owned execution contract for future issue runners and
+  manual issue branches
+- `docs/repository-verification-index.md`: architecture map, invariants,
+  environment inventory, rollback steps, and verification playbooks
+
 ## What Is Live
 
 - Terminal UI at `/terminal`
