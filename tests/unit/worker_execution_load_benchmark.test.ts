@@ -212,6 +212,10 @@ describe("execution fabric e2e load and reliability", () => {
         successCount: successes.length,
         successRate,
         p95Ms,
+        targets: {
+          successRateFloor: 0.99,
+          p95MsCeiling: 1_500,
+        },
       });
     } finally {
       sqlite.close();

@@ -160,7 +160,9 @@ test("proof route exercises market render, trade validation, and receipt drilldo
   await captureCheckpoint(page, "trade-complete.png");
 
   await page.getByTestId("proof-open-inspector").click();
-  await expect(page.getByTestId("execution-inspector-drawer")).toBeVisible();
-  await expect(page.getByText(RECEIPT_ID)).toBeVisible();
+  const inspector = page.getByTestId("execution-inspector-drawer");
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByText(`receipt ${RECEIPT_ID}`)).toBeVisible();
+  await expect(inspector.getByText(`signature: ${SIGNATURE}`)).toBeVisible();
   await captureCheckpoint(page, "receipt-drawer.png");
 });

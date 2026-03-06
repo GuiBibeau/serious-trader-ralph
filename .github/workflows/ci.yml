@@ -52,7 +52,32 @@ jobs:
         with:
           name: execution-benchmarks-${{ github.run_id }}
           path: .tmp/execution-benchmarks/*.json
-          if-no-files-found: ignore
+          if-no-files-found: error
+
+  browser-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+      - name: Install deps
+        run: bun install
+      - name: Run browser proof
+        run: bun run harness:proof --output-dir .tmp/browser-proof
+      - name: Upload browser proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-proof-${{ github.run_id }}
+          path: .tmp/browser-proof
+          if-no-files-found: error
+      - name: Append browser proof summary
+        if: always()
+        run: |
+          if [ -f .tmp/browser-proof/summary.md ]; then
+            cat .tmp/browser-proof/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -63,9 +88,21 @@ jobs:
           bun-version: '1.3.0'
       - name: Install deps
         run: bun install
-      - name: Run integration tests (skips if secrets missing)
+      - name: Check integration test credentials
         env:
-          RUN_INTEGRATION_TESTS: ${{ secrets.RPC_ENDPOINT != '' && secrets.JUPITER_API_KEY != '' && '1' || '0' }}
+          RPC_ENDPOINT: ${{ secrets.RPC_ENDPOINT }}
+          JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
+        run: |
+          set -euo pipefail
+          for secret_name in RPC_ENDPOINT JUPITER_API_KEY; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::Missing required secret ${secret_name} for integration-tests."
+              exit 1
+            fi
+          done
+      - name: Run integration tests
+        env:
+          RUN_INTEGRATION_TESTS: '1'
           RPC_ENDPOINT: ${{ secrets.RPC_ENDPOINT }}
           JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
           WALLET_PRIVATE_KEY: ${{ secrets.WALLET_PRIVATE_KEY }}
@@ -84,3 +121,133 @@ jobs:
         run: bun install
       - name: Run terminal execution E2E suite
         run: bun run test:e2e
+
+  artifact-publication:
+    if: always()
+    needs:
+      - unit-tests
+      - browser-proof
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Ensure required artifact jobs succeeded
+        run: |
+          set -euo pipefail
+          if [ "${{ needs['unit-tests'].result }}" != "success" ]; then
+            echo "::error::unit-tests must succeed before publishing artifacts."
+            exit 1
+          fi
+          if [ "${{ needs['browser-proof'].result }}" != "success" ]; then
+            echo "::error::browser-proof must succeed before publishing artifacts."
+            exit 1
+          fi
+
+      - name: Download execution benchmark artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: execution-benchmarks-${{ github.run_id }}
+          path: .tmp/artifacts/execution-benchmarks
+
+      - name: Download browser proof artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: browser-proof-${{ github.run_id }}
+          path: .tmp/artifacts/browser-proof
+
+      - name: Build artifact summary
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .tmp/artifacts/ci-summary
+          benchmark_file="$(find .tmp/artifacts/execution-benchmarks -maxdepth 1 -type f -name '*.json' | head -n 1)"
+          proof_summary=".tmp/artifacts/browser-proof/summary.json"
+
+          if [ -z "${benchmark_file}" ] || [ ! -f "${benchmark_file}" ]; then
+            echo "::error::Missing execution benchmark artifact."
+            exit 1
+          fi
+          if [ ! -f "${proof_summary}" ]; then
+            echo "::error::Missing browser proof summary artifact."
+            exit 1
+          fi
+
+          success_rate="$(jq -r '.successRate' "${benchmark_file}")"
+          success_floor="$(jq -r '.targets.successRateFloor // 0.99' "${benchmark_file}")"
+          p95_ms="$(jq -r '.p95Ms' "${benchmark_file}")"
+          p95_ceiling="$(jq -r '.targets.p95MsCeiling // 1500' "${benchmark_file}")"
+          success_delta="$(awk "BEGIN { printf \"%+.4f\", ${success_rate} - ${success_floor} }")"
+          p95_delta="$(awk "BEGIN { printf \"%+.0f\", ${p95_ceiling} - ${p95_ms} }")"
+
+          proof_status="$(jq -r '.status' "${proof_summary}")"
+          proof_expected="$(jq -r '.stats.expected' "${proof_summary}")"
+          proof_unexpected="$(jq -r '.stats.unexpected' "${proof_summary}")"
+          proof_screenshots="$(jq -r '.screenshots | length' "${proof_summary}")"
+
+          cat > .tmp/artifacts/ci-summary/summary.md <<EOF
+          # CI Artifact Summary
+
+          - Workflow run: ${RUN_URL}
+          - Browser proof artifact: \`browser-proof-${{ github.run_id }}\`
+          - Browser proof status: ${proof_status} (${proof_expected} expected, ${proof_unexpected} unexpected, ${proof_screenshots} screenshots)
+          - Benchmark artifact: \`execution-benchmarks-${{ github.run_id }}\`
+          - Benchmark delta vs target:
+            successRate ${success_rate} (${success_delta} vs floor ${success_floor})
+            p95Ms ${p95_ms} (${p95_delta} ms vs ceiling ${p95_ceiling})
+          EOF
+
+          cat > .tmp/artifacts/ci-summary/pr-comment.md <<EOF
+          <!-- ci-artifacts -->
+          ## CI Artifacts
+          - Workflow run: ${RUN_URL}
+          - Browser proof bundle: \`browser-proof-${{ github.run_id }}\`
+          - Benchmark bundle: \`execution-benchmarks-${{ github.run_id }}\`
+          - Browser proof: ${proof_status} with ${proof_expected} expected / ${proof_unexpected} unexpected and ${proof_screenshots} screenshots
+          - Benchmark delta: successRate ${success_rate} (${success_delta} vs ${success_floor} floor); p95Ms ${p95_ms} (${p95_delta} ms vs ${p95_ceiling} ceiling)
+          EOF
+
+          cat .tmp/artifacts/ci-summary/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CI summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-summary-${{ github.run_id }}
+          path: .tmp/artifacts/ci-summary
+          if-no-files-found: error
+
+      - name: Post PR artifact summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- ci-artifacts -->";
+            const body = fs.readFileSync(".tmp/artifacts/ci-summary/pr-comment.md", "utf8");
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
