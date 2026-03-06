@@ -85,14 +85,6 @@ function collectSections(lines, header) {
   return sections;
 }
 
-function renameSectionHeader(section, fromHeader, toHeader) {
-  const [firstLine, ...rest] = section.split("\n");
-  if (firstLine.trim() !== fromHeader) {
-    throw new Error(`expected section ${fromHeader}`);
-  }
-  return [toHeader, ...rest].join("\n");
-}
-
 function upsertStringVar(section, key, value) {
   const lines = section.split("\n");
   const pattern = new RegExp(`^${key}\\s*=`);
@@ -137,47 +129,21 @@ function buildPreviewConfig(source, previewName, portalSiteUrl, workerRoot) {
   });
 
   const vars = upsertStringVar(
-    renameSectionHeader(
-      collectSection(lines, "[env.production.vars]"),
-      "[env.production.vars]",
-      "[vars]",
-    ),
+    collectSection(lines, "[vars]"),
     "PORTAL_SITE_URL",
     portalSiteUrl,
   );
   const durableObjects = collectSections(lines, "[[durable_objects.bindings]]");
-  const kvNamespaces = collectSections(
-    lines,
-    "[[env.production.kv_namespaces]]",
-  ).map((section) =>
-    renameSectionHeader(
-      section,
-      "[[env.production.kv_namespaces]]",
-      "[[kv_namespaces]]",
-    ),
-  );
-  const d1Databases = collectSections(
-    lines,
-    "[[env.production.d1_databases]]",
-  ).map((section) =>
-    rewriteSectionPath(
-      renameSectionHeader(
-        section,
-        "[[env.production.d1_databases]]",
-        "[[d1_databases]]",
-      ),
-      "migrations_dir",
-      join(workerRoot, "migrations"),
-    ),
-  );
-  const r2Buckets = collectSections(lines, "[[env.production.r2_buckets]]").map(
+  const kvNamespaces = collectSections(lines, "[[kv_namespaces]]");
+  const d1Databases = collectSections(lines, "[[d1_databases]]").map(
     (section) =>
-      renameSectionHeader(
+      rewriteSectionPath(
         section,
-        "[[env.production.r2_buckets]]",
-        "[[r2_buckets]]",
+        "migrations_dir",
+        join(workerRoot, "migrations"),
       ),
   );
+  const r2Buckets = collectSections(lines, "[[r2_buckets]]");
   const migrations = collectSections(lines, "[[migrations]]");
 
   return [
