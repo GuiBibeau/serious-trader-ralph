@@ -54,6 +54,7 @@ export type Env = {
   LOOP_C_RECOMMENDER_DO?: DurableObjectNamespace;
   EXECUTION_COORDINATOR_DO?: DurableObjectNamespace;
   ALLOWED_ORIGINS?: string;
+  PORTAL_SITE_URL?: string;
   ADMIN_TOKEN?: string;
   PRIVY_APP_ID?: string;
   PRIVY_APP_SECRET?: string;

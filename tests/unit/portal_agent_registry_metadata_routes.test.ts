@@ -50,4 +50,32 @@ describe("portal agent registry metadata routes", () => {
     >;
     expect(aliasPayload.lane).toBe("production");
   });
+
+  test("serves preview metadata against the configured preview worker host", async () => {
+    const originalEdgeApiBase = process.env.NEXT_PUBLIC_EDGE_API_BASE;
+    process.env.NEXT_PUBLIC_EDGE_API_BASE =
+      "https://ralph-edge-pr-235.gui-bibeau.workers.dev";
+
+    try {
+      const response = getMetadata(
+        new Request(
+          "https://serious-trader-ralph-git-codex-issue-235-preview-guivercelpro.vercel.app/agent-registry/metadata.json",
+        ),
+      );
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as Record<string, unknown>;
+      expect(payload.lane).toBe("production");
+      expect(String(payload.queryEndpoint)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev/api/agent/query",
+      );
+      expect(String(payload.openApiUrl)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev/openapi.json",
+      );
+      expect(String(payload.metadataUrl)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev/agent-registry/metadata.json",
+      );
+    } finally {
+      process.env.NEXT_PUBLIC_EDGE_API_BASE = originalEdgeApiBase;
+    }
+  });
 });

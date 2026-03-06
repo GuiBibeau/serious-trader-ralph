@@ -7,6 +7,7 @@ workers_dev = true
 
 [vars]
 ALLOWED_ORIGINS = "*"
+PORTAL_SITE_URL = "https://dev.trader-ralph.com"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.devnet.solana.com"
 HELIUS_SENDER_URL = ""
@@ -123,6 +124,7 @@ name = "ralph-edge-staging"
 
 [env.staging.vars]
 ALLOWED_ORIGINS = "*"
+PORTAL_SITE_URL = "https://staging.trader-ralph.com"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com"
 HELIUS_SENDER_URL = ""
@@ -220,6 +222,7 @@ name = "ralph-edge"
 
 [env.production.vars]
 ALLOWED_ORIGINS = "*"
+PORTAL_SITE_URL = "https://www.trader-ralph.com"
 BILLING_MERCHANT_WALLET = "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
 BILLING_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com"
 HELIUS_SENDER_URL = ""

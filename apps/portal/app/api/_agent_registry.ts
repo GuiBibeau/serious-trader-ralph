@@ -1,6 +1,7 @@
 import devMetadata from "../../../../docs/agent-registry/metadata.dev.json";
 import productionMetadata from "../../../../docs/agent-registry/metadata.production.json";
 import stagingMetadata from "../../../../docs/agent-registry/metadata.staging.json";
+import { buildDiscoveryUrls, toAbsoluteApiUrl } from "./_discovery";
 
 export type AgentRegistryLane = "dev" | "staging" | "production";
 
@@ -55,9 +56,20 @@ export function resolveAgentRegistryMetadata(
   generatedAt: string;
 } {
   const lane = laneFromApiOrigin(apiOrigin);
+  const discovery = buildDiscoveryUrls(apiOrigin);
   const metadata = metadataForLane(lane);
   return {
     ...metadata,
+    queryEndpoint: toAbsoluteApiUrl(apiOrigin, "/api/agent/query"),
+    openApiUrl: discovery.openapi,
+    discoveryUrls: {
+      html: discovery.html,
+      json: discovery.json,
+      text: discovery.text,
+      llms: discovery.llms,
+      skills: discovery.skills,
+      metadata: discovery.agentRegistryMetadata,
+    },
     lane,
     generatedAt: new Date().toISOString(),
   };

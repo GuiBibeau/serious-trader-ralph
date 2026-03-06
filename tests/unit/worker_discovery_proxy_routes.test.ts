@@ -75,4 +75,39 @@ describe("worker discovery proxy routes", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("proxies preview-worker discovery docs to the configured preview portal", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      expect(url).toBe(
+        "https://serious-trader-ralph-git-codex-issue-235-preview-guivercelpro.vercel.app/openapi.json",
+      );
+      return new Response('{"preview":true}', {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+        },
+      });
+    }) as typeof fetch;
+
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "https://ralph-edge-pr-235.gui-bibeau.workers.dev/openapi.json",
+        ),
+        {
+          ...env,
+          PORTAL_SITE_URL:
+            "https://serious-trader-ralph-git-codex-issue-235-preview-guivercelpro.vercel.app",
+        },
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body.preview).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
