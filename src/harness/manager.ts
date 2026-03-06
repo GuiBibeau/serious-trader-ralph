@@ -184,6 +184,29 @@ function ensureHarnessDirs(paths: HarnessPaths): void {
   mkdirSync(paths.workerStateDir, { recursive: true });
 }
 
+function hasWorkspaceDependencies(root: string): boolean {
+  return (
+    existsSync(join(root, "node_modules")) &&
+    existsSync(join(root, "apps", "portal", "node_modules")) &&
+    existsSync(join(root, "apps", "worker", "node_modules"))
+  );
+}
+
+function ensureWorkspaceDependencies(root: string): void {
+  if (hasWorkspaceDependencies(root)) {
+    return;
+  }
+
+  const result = spawnSync("bun", ["install", "--frozen-lockfile"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+
+  if (result.status !== 0) {
+    throw new Error("failed to install workspace dependencies for harness");
+  }
+}
+
 function runWorkerMigration(workerDir: string, workerStateDir: string): void {
   const result = spawnSync(
     "bunx",
@@ -325,6 +348,7 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
   const workerDir = join(root, "apps", "worker");
   const portalDir = join(root, "apps", "portal");
 
+  ensureWorkspaceDependencies(root);
   runWorkerMigration(workerDir, paths.workerStateDir);
 
   const workerPid = startProcess({

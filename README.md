@@ -91,6 +91,8 @@ bun run harness:down
 
 - `harness:up` starts a portal and worker pair with worktree-local ports and
   worker state under `.tmp/harness/<worktree-id>/`
+- fresh worktrees bootstrap workspace dependencies automatically before the
+  local stack starts
 - `harness:status` prints the current local URLs, health, log directory, and
   state file for the active worktree
 - `harness:down` tears down only the active worktree harness state
