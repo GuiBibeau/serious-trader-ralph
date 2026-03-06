@@ -51,3 +51,22 @@ jobs:
             echo "Unsupported branch: ${{ github.ref_name }}"
             exit 1
           fi
+
+      - name: Trigger production execution canary
+        if: github.ref_name == 'main'
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::Missing required secret ADMIN_TOKEN for production canary trigger."
+            exit 1
+          fi
+
+          curl -fsS \
+            -X POST \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" \
+            -H "content-type: application/json" \
+            https://api.trader-ralph.com/api/admin/execution/canary/run \
+            --data '{"trigger":"post_deploy"}'

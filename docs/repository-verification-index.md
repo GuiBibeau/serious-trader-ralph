@@ -67,6 +67,7 @@ Current required secret names:
 
 - Cloudflare: `CLOUDFLARE_API_TOKEN`
 - Vercel: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`
+- Admin routes: `ADMIN_TOKEN`
 - Integration and live test inputs vary by suite and may include
   `RPC_ENDPOINT`, `BALANCE_RPC_ENDPOINT`, `JUPITER_API_KEY`,
   `WALLET_PRIVATE_KEY`, and provider-specific read keys.
@@ -189,17 +190,56 @@ host for the lane and does not reference an unexpected `workers.dev` host.
 
 ### 7. Canary verification
 
-Current state: the dedicated production canary lane is not implemented yet.
-Until issue `#237` lands, use the following temporary substitute after
-production deploys:
+Production execution canary behavior:
 
-1. Run the production execution smoke path described in the execution runbooks.
-2. Check the execution observability endpoint for failures, expiry, and latency
-   regressions.
-3. Confirm status and receipt consistency for the latest execution samples.
+- Pair is fixed to `SOL/USDC`.
+- Default target notional is `$5`.
+- Daily spend cap is `$25`.
+- Max slippage budget is `50 bps`.
+- Schedule is every 6 hours via cron `0 */6 * * *`.
+- A post-deploy canary trigger also runs after `main` worker deploys.
+- The lane auto-disables itself on reconciliation failure or slippage breach.
 
-When the canary lands, extend this section with the canary wallet, schedule,
-notional limits, and reconciliation checks.
+Bootstrap and inspect:
+
+```bash
+export API_BASE="https://api.trader-ralph.com"
+export ADMIN_TOKEN="<redacted>"
+
+curl -fsS \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$API_BASE/api/admin/execution/canary"
+
+curl -fsS -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$API_BASE/api/admin/execution/canary/bootstrap"
+```
+
+Run and review:
+
+```bash
+curl -fsS -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$API_BASE/api/admin/execution/canary/run" \
+  --data '{"trigger":"manual"}'
+```
+
+Verify all of the following after bootstrap or any production deploy:
+
+1. The canary snapshot reports a dedicated wallet id and address.
+2. The canary wallet has enough SOL for fees and enough USDC for the next buy
+   leg before enabling or relying on the schedule.
+3. The latest run records quote, request, receipt, and reconciliation payloads.
+4. `reconciliationStatus` is `passed` and the lane is not marked disabled.
+5. If the lane disables itself, reset it only after funding or routing issues
+   are resolved:
+
+```bash
+curl -fsS -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$API_BASE/api/admin/execution/canary/reset"
+```
 
 ## Rollback Steps
 

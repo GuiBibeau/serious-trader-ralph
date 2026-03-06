@@ -7,14 +7,20 @@ function withExecutionSchema(run: (db: Database) => void): void {
   const db = new Database(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON;");
-    const migrationPath = resolve(
-      import.meta.dir,
-      "..",
-      "..",
-      "apps/worker/migrations/0025_execution_fabric.sql",
-    );
-    const migrationSql = readFileSync(migrationPath, "utf8");
-    db.exec(migrationSql);
+    for (const migrationName of [
+      "0025_execution_fabric.sql",
+      "0026_execution_canary.sql",
+    ]) {
+      const migrationPath = resolve(
+        import.meta.dir,
+        "..",
+        "..",
+        "apps/worker/migrations",
+        migrationName,
+      );
+      const migrationSql = readFileSync(migrationPath, "utf8");
+      db.exec(migrationSql);
+    }
     run(db);
   } finally {
     db.close();
@@ -90,7 +96,9 @@ describe("worker execution schema migration", () => {
               'execution_requests',
               'execution_attempts',
               'execution_status_events',
-              'execution_receipts'
+              'execution_receipts',
+              'execution_canary_state',
+              'execution_canary_runs'
             )
           ORDER BY name
           `,
@@ -99,6 +107,8 @@ describe("worker execution schema migration", () => {
 
       expect(tableNames.map((row) => row.name)).toEqual([
         "execution_attempts",
+        "execution_canary_runs",
+        "execution_canary_state",
         "execution_receipts",
         "execution_requests",
         "execution_status_events",
