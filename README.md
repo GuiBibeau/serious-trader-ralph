@@ -87,6 +87,7 @@ Optional portal env:
 bun run harness:up
 bun run harness:status
 bun run harness:down
+bun run harness:proof
 ```
 
 - `harness:up` starts a portal and worker pair with worktree-local ports and
@@ -96,6 +97,8 @@ bun run harness:down
 - `harness:status` prints the current local URLs, health, log directory, and
   state file for the active worktree
 - `harness:down` tears down only the active worktree harness state
+- `harness:proof` runs the Playwright browser proof suite against the active
+  local harness, or a supplied preview URL via `--base-url`
 
 ### Worker only
 

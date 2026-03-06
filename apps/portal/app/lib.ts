@@ -8,6 +8,10 @@ const SOL_DECIMALS = 9;
 const USDC_DECIMALS = 6;
 const DISPLAY_DECIMALS = 2;
 
+type RuntimeWindow = Window & {
+  __TRADER_RALPH_EDGE_API_BASE__?: string;
+};
+
 export type BalanceResponse = {
   sol: { lamports: string; display?: string };
   usdc: { atomic: string; display?: string };
@@ -76,6 +80,14 @@ export function formatBalanceSummary(
 }
 
 export function apiBase(): string {
+  if (typeof window !== "undefined") {
+    const runtimeOverride = String(
+      (window as RuntimeWindow).__TRADER_RALPH_EDGE_API_BASE__ ?? "",
+    )
+      .trim()
+      .replace(/\/+$/, "");
+    if (runtimeOverride) return runtimeOverride;
+  }
   const configured = (process.env.NEXT_PUBLIC_EDGE_API_BASE ?? "")
     .trim()
     .replace(/\/+$/, "");
