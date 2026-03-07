@@ -56,6 +56,10 @@ export type Env = {
   ALLOWED_ORIGINS?: string;
   PORTAL_SITE_URL?: string;
   ADMIN_TOKEN?: string;
+  RUNTIME_INTERNAL_SERVICE_TOKEN?: string;
+  RUNTIME_INTERNAL_SERVICE_NAME?: string;
+  RUNTIME_INTERNAL_BASE_URL?: string;
+  RUNTIME_INTERNAL_STUB_MODE?: string;
   PRIVY_APP_ID?: string;
   PRIVY_APP_SECRET?: string;
   PRIVY_WALLET_ID?: string;

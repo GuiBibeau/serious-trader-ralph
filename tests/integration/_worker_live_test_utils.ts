@@ -172,6 +172,15 @@ export function createWorkerLiveEnv(options?: {
     BACKTEST_QUEUE: createMockDoNamespace() as never,
     LOGS_BUCKET: createMockR2() as never,
     ALLOWED_ORIGINS: "*",
+    RUNTIME_INTERNAL_SERVICE_TOKEN: readLiveEnv(
+      "RUNTIME_INTERNAL_SERVICE_TOKEN",
+      "runtime-service-secret",
+    ),
+    RUNTIME_INTERNAL_SERVICE_NAME: readLiveEnv(
+      "RUNTIME_INTERNAL_SERVICE_NAME",
+      "runtime-rs",
+    ),
+    RUNTIME_INTERNAL_STUB_MODE: readLiveEnv("RUNTIME_INTERNAL_STUB_MODE", "1"),
     LOOP_ENABLED_DEFAULT: "false",
     X402_NETWORK: readLiveEnv("X402_NETWORK", "solana-devnet"),
     X402_PAY_TO: readLiveEnv("X402_PAY_TO", DEFAULT_MERCHANT_WALLET),

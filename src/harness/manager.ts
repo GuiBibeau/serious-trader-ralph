@@ -16,6 +16,8 @@ const WORKER_PORT_BASE = 8800;
 const PORT_SCAN_WINDOW = 400;
 const STARTUP_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 1_000;
+const DEFAULT_RUNTIME_INTERNAL_SERVICE_TOKEN = "runtime-service-secret";
+const DEFAULT_RUNTIME_INTERNAL_SERVICE_NAME = "runtime-rs";
 
 export type HarnessState = {
   version: 1;
@@ -347,6 +349,13 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
 
   const workerDir = join(root, "apps", "worker");
   const portalDir = join(root, "apps", "portal");
+  const runtimeInternalServiceToken =
+    process.env.RUNTIME_INTERNAL_SERVICE_TOKEN ??
+    DEFAULT_RUNTIME_INTERNAL_SERVICE_TOKEN;
+  const runtimeInternalServiceName =
+    process.env.RUNTIME_INTERNAL_SERVICE_NAME ??
+    DEFAULT_RUNTIME_INTERNAL_SERVICE_NAME;
+  const runtimeInternalStubMode = process.env.RUNTIME_INTERNAL_STUB_MODE ?? "1";
 
   ensureWorkspaceDependencies(root);
   runWorkerMigration(workerDir, paths.workerStateDir);
@@ -363,6 +372,12 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
       "--test-scheduled",
       "--port",
       String(workerPort),
+      "--var",
+      `RUNTIME_INTERNAL_SERVICE_TOKEN:${runtimeInternalServiceToken}`,
+      "--var",
+      `RUNTIME_INTERNAL_SERVICE_NAME:${runtimeInternalServiceName}`,
+      "--var",
+      `RUNTIME_INTERNAL_STUB_MODE:${runtimeInternalStubMode}`,
     ],
     logFile: paths.workerLog,
   });
