@@ -104,8 +104,10 @@ test("runner comments include the key handoff details", () => {
     error: "codex exec failed",
   });
 
-  expect(success).toContain("Harness Runner Status");
-  expect(success).toContain("pull/250/checks");
+  expect(success).toContain("Harness Proof Bundle");
+  expect(success).toContain("<!-- harness-proof-bundle -->");
+  expect(success).toContain("<!-- pr-preview -->");
+  expect(success).toContain("- browser-proof: pending");
   expect(success).not.toContain("/tmp/runner");
   expect(failure).toContain("Harness Runner Failure");
   expect(failure).toContain("codex exec failed");

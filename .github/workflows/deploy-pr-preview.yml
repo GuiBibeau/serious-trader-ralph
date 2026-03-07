@@ -18,6 +18,9 @@ jobs:
     if: github.event.action != 'closed' && github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     environment: dev
+    concurrency:
+      group: proof-bundle-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -179,13 +182,139 @@ jobs:
           WORKER_URL: ${{ steps.preview.outputs.worker_url }}
         with:
           script: |
-            const marker = "<!-- pr-preview -->";
-            const body = `${marker}
-            ## PR Preview
-            - Portal: ${process.env.PORTAL_URL}
-            - Worker: ${process.env.WORKER_URL}
-            - Worker name: \`${process.env.WORKER_NAME}\`
-            - Preview metadata artifact: \`pr-preview-${context.payload.pull_request.number}\``;
+            const marker = "<!-- harness-proof-bundle -->";
+            const sectionMarkers = {
+              summary: ["<!-- proof:summary:start -->", "<!-- proof:summary:end -->"],
+              preview: ["<!-- proof:preview:start -->", "<!-- proof:preview:end -->"],
+              checks: ["<!-- proof:checks:start -->", "<!-- proof:checks:end -->"],
+              artifacts: ["<!-- proof:artifacts:start -->", "<!-- proof:artifacts:end -->"],
+              canary: ["<!-- proof:canary:start -->", "<!-- proof:canary:end -->"],
+              risk: ["<!-- proof:risk:start -->", "<!-- proof:risk:end -->"],
+            };
+            const requiredChecks = [
+              "lint",
+              "typecheck",
+              "unit-tests",
+              "integration-tests",
+              "terminal-e2e-tests",
+              "browser-proof",
+              "preview-smoke",
+              "artifact-publication",
+            ];
+
+            function escapeRegExp(value) {
+              return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            }
+
+            function buildSection(title, name, lines) {
+              const [start, end] = sectionMarkers[name];
+              return [
+                `### ${title}`,
+                start,
+                ...lines,
+                end,
+                "",
+              ];
+            }
+
+            function buildDefaultBody() {
+              return [
+                marker,
+                "## Harness Proof Bundle",
+                "",
+                ...buildSection("Summary", "summary", [
+                  `- PR: #${context.payload.pull_request.number}`,
+                  `- Branch: \`${context.payload.pull_request.head.ref}\``,
+                  "- Change summary: pending runner-authored detail or reviewer notes.",
+                ]),
+                ...buildSection("Preview", "preview", [
+                  "<!-- pr-preview -->",
+                  "- Portal: pending",
+                  "- Worker: pending",
+                  "- Worker name: pending",
+                  "- Preview metadata artifact: pending",
+                ]),
+                ...buildSection(
+                  "Required Checks",
+                  "checks",
+                  requiredChecks.map((check) => `- ${check}: pending`),
+                ),
+                ...buildSection("Artifacts", "artifacts", [
+                  "- Workflow run: pending",
+                  "- Browser proof bundle: pending",
+                  "- Benchmark bundle: pending",
+                  "- Browser proof: pending",
+                  "- Benchmark delta: pending",
+                ]),
+                ...buildSection("Canary Status", "canary", [
+                  "- Status: production canary unchanged until this change reaches `main`.",
+                ]),
+                ...buildSection("Risk Notes", "risk", [
+                  "- Human review is still required; this handoff stops at `human-review`.",
+                  "- Issue-specific risk notes are pending and should be updated before merge if the change introduces rollout or contract risk.",
+                ]),
+                "",
+                "This comment is the single repo-owned handoff summary for runner-created PRs.",
+              ].join("\n");
+            }
+
+            function replaceSection(body, name, lines) {
+              const [start, end] = sectionMarkers[name];
+              const replacement = [start, ...lines, end].join("\n");
+              return body.replace(
+                new RegExp(`${escapeRegExp(start)}[\\s\\S]*?${escapeRegExp(end)}`),
+                replacement,
+              );
+            }
+
+            function normalizeCheckStatus(rollup, checkName) {
+              const match = rollup.find((item) => item.name === checkName);
+              if (!match) return "pending";
+              if (match.__typename === "StatusContext") {
+                return String(match.state ?? "pending").toLowerCase();
+              }
+              if (String(match.status ?? "pending").toLowerCase() !== "completed") {
+                return "pending";
+              }
+              return String(match.conclusion ?? "pending").toLowerCase();
+            }
+
+            const [checkRunsResponse, combinedStatusResponse] = await Promise.all([
+              github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+                per_page: 100,
+              }),
+              github.rest.repos.getCombinedStatusForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+              }),
+            ]);
+            const rollup = [
+              ...checkRunsResponse.data.check_runs.map((checkRun) => ({
+                __typename: "CheckRun",
+                name: checkRun.name,
+                status: checkRun.status,
+                conclusion: checkRun.conclusion,
+              })),
+              ...combinedStatusResponse.data.statuses.map((statusContext) => ({
+                __typename: "StatusContext",
+                name: statusContext.context,
+                state: statusContext.state,
+              })),
+            ];
+            const checksLines = requiredChecks.map(
+              (check) => `- ${check}: ${normalizeCheckStatus(rollup, check)}`,
+            );
+            const previewLines = [
+              "<!-- pr-preview -->",
+              `- Portal: ${process.env.PORTAL_URL}`,
+              `- Worker: ${process.env.WORKER_URL}`,
+              `- Worker name: \`${process.env.WORKER_NAME}\``,
+              `- Preview metadata artifact: \`pr-preview-${context.payload.pull_request.number}\``,
+            ];
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
@@ -194,6 +323,15 @@ jobs:
             });
             const existing = comments.find((comment) =>
               comment.user?.type === "Bot" && comment.body?.includes(marker),
+            );
+            const body = replaceSection(
+              replaceSection(
+                existing?.body ?? buildDefaultBody(),
+                "preview",
+                previewLines,
+              ),
+              "checks",
+              checksLines,
             );
 
             if (existing) {
