@@ -47,6 +47,8 @@ export function buildRunnerSuccessComment(input: {
     "- Portal: pending",
     "- Worker: pending",
     "- Worker name: pending",
+    "- Runtime: pending-or-not-enabled",
+    "- Runtime health: pending-or-not-enabled",
     "- Preview metadata artifact: pending",
   ];
   const checkLines = REQUIRED_CHECKS.map((check) => `- ${check}: pending`);

@@ -22,6 +22,7 @@ test("resolveHarnessPaths scopes state to the current worktree", () => {
   expect(paths.workerStateDir).toContain(paths.harnessDir);
   expect(paths.stateFile).toContain(paths.harnessDir);
   expect(paths.logsDir).toContain(paths.harnessDir);
+  expect(paths.runtimeLog).toContain(paths.logsDir);
   expect(paths.workerStateDir.endsWith("/worker-state")).toBeTrue();
 });
 
@@ -31,6 +32,8 @@ test("resolvePreferredPorts is deterministic and lane-separated", () => {
 
   expect(first.portalPort).toBeGreaterThanOrEqual(3000);
   expect(first.portalPort).toBeLessThan(3400);
+  expect(first.runtimePort).toBeGreaterThanOrEqual(8080);
+  expect(first.runtimePort).toBeLessThan(8480);
   expect(first.workerPort).toBeGreaterThanOrEqual(8800);
   expect(first.workerPort).toBeLessThan(9200);
   expect(first).not.toEqual(second);

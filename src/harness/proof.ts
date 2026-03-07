@@ -9,6 +9,7 @@ import {
 import { join, resolve } from "node:path";
 import {
   getHarnessStatus,
+  type HarnessStatus,
   resolveWorktreeId,
   startHarness,
   stopHarness,
@@ -32,6 +33,16 @@ type HarnessProofSummary = {
   status: "passed" | "failed";
   baseUrl: string;
   startedLocalHarness: boolean;
+  harnessStatus: Pick<
+    HarnessStatus,
+    | "portalUrl"
+    | "portalHealth"
+    | "runtimeEnabled"
+    | "runtimeUrl"
+    | "runtimeHealth"
+    | "workerUrl"
+    | "workerHealth"
+  > | null;
   artifactsDir: string;
   screenshotDir: string;
   screenshots: string[];
@@ -105,6 +116,7 @@ export async function runHarnessProof(
 
   try {
     let baseUrl = options.baseUrl ? normalizeUrl(options.baseUrl) : "";
+    let harnessStatus: HarnessProofSummary["harnessStatus"] = null;
     if (!baseUrl) {
       const initialStatus = await getHarnessStatus(normalizedRoot);
       if (initialStatus.portalHealth !== "healthy") {
@@ -119,6 +131,15 @@ export async function runHarnessProof(
         throw new Error("local harness portal is not healthy");
       }
       baseUrl = normalizeUrl(status.portalUrl);
+      harnessStatus = {
+        portalUrl: status.portalUrl,
+        portalHealth: status.portalHealth,
+        runtimeEnabled: status.runtimeEnabled,
+        runtimeUrl: status.runtimeUrl,
+        runtimeHealth: status.runtimeHealth,
+        workerUrl: status.workerUrl,
+        workerHealth: status.workerHealth,
+      };
     }
 
     const artifactsDir =
@@ -171,6 +192,7 @@ export async function runHarnessProof(
       status: result.status === 0 ? "passed" : "failed",
       baseUrl,
       startedLocalHarness,
+      harnessStatus,
       artifactsDir,
       screenshotDir,
       screenshots,
@@ -188,6 +210,13 @@ export async function runHarnessProof(
         `- Status: ${summary.status}`,
         `- Base URL: ${summary.baseUrl}`,
         `- Started local harness: ${summary.startedLocalHarness ? "yes" : "no"}`,
+        ...(summary.harnessStatus
+          ? [
+              `- Local portal: ${summary.harnessStatus.portalUrl} (${summary.harnessStatus.portalHealth})`,
+              `- Local worker: ${summary.harnessStatus.workerUrl} (${summary.harnessStatus.workerHealth})`,
+              `- Local runtime: ${summary.harnessStatus.runtimeUrl} (${summary.harnessStatus.runtimeHealth})`,
+            ]
+          : []),
         `- Expected tests: ${summary.stats.expected}`,
         `- Unexpected tests: ${summary.stats.unexpected}`,
         `- Skipped tests: ${summary.stats.skipped}`,

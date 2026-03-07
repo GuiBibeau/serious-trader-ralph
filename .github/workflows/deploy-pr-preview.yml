@@ -37,11 +37,19 @@ jobs:
           WORKER_NAME="ralph-edge-pr-${PR_NUMBER}"
           WORKER_HOST="${WORKER_NAME}.gui-bibeau.workers.dev"
           WORKER_URL="https://${WORKER_HOST}"
+          RUNTIME_URL="${RUNTIME_PREVIEW_URL:-}"
+          RUNTIME_HEALTH_URL="${RUNTIME_PREVIEW_HEALTH_URL:-}"
+
+          if [ -n "${RUNTIME_URL}" ] && [ -z "${RUNTIME_HEALTH_URL}" ]; then
+            RUNTIME_HEALTH_URL="${RUNTIME_URL%/}/health"
+          fi
 
           echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "worker_name=${WORKER_NAME}" >> "$GITHUB_OUTPUT"
           echo "worker_host=${WORKER_HOST}" >> "$GITHUB_OUTPUT"
           echo "worker_url=${WORKER_URL}" >> "$GITHUB_OUTPUT"
+          echo "runtime_url=${RUNTIME_URL}" >> "$GITHUB_OUTPUT"
+          echo "runtime_health_url=${RUNTIME_HEALTH_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Check deployment credentials
         env:
@@ -158,15 +166,35 @@ jobs:
           fi
 
       - name: Write preview metadata
+        env:
+          PORTAL_URL: ${{ steps.portal.outputs.portal_url }}
+          PR_NUMBER: ${{ steps.preview.outputs.pr_number }}
+          RUNTIME_HEALTH_URL: ${{ steps.preview.outputs.runtime_health_url }}
+          RUNTIME_URL: ${{ steps.preview.outputs.runtime_url }}
+          WORKER_NAME: ${{ steps.preview.outputs.worker_name }}
+          WORKER_URL: ${{ steps.preview.outputs.worker_url }}
         run: |
-          cat <<'JSON' > preview-metadata.json
-          {
-            "prNumber": ${{ steps.preview.outputs.pr_number }},
-            "portalUrl": "${{ steps.portal.outputs.portal_url }}",
-            "workerName": "${{ steps.preview.outputs.worker_name }}",
-            "workerUrl": "${{ steps.preview.outputs.worker_url }}"
-          }
-          JSON
+          node <<'NODE'
+          const fs = require("node:fs");
+
+          const metadata = {
+            prNumber: Number(process.env.PR_NUMBER),
+            portalUrl: process.env.PORTAL_URL,
+            workerName: process.env.WORKER_NAME,
+            workerUrl: process.env.WORKER_URL,
+            runtimeEnabled: Boolean(
+              process.env.RUNTIME_URL || process.env.RUNTIME_HEALTH_URL,
+            ),
+            runtimeUrl: process.env.RUNTIME_URL || null,
+            runtimeHealthUrl: process.env.RUNTIME_HEALTH_URL || null,
+          };
+
+          fs.writeFileSync(
+            "preview-metadata.json",
+            JSON.stringify(metadata, null, 2),
+            "utf8",
+          );
+          NODE
 
       - name: Upload preview metadata
         uses: actions/upload-artifact@v4
@@ -178,6 +206,8 @@ jobs:
         uses: actions/github-script@v7
         env:
           PORTAL_URL: ${{ steps.portal.outputs.portal_url }}
+          RUNTIME_HEALTH_URL: ${{ steps.preview.outputs.runtime_health_url }}
+          RUNTIME_URL: ${{ steps.preview.outputs.runtime_url }}
           WORKER_NAME: ${{ steps.preview.outputs.worker_name }}
           WORKER_URL: ${{ steps.preview.outputs.worker_url }}
         with:
@@ -232,6 +262,8 @@ jobs:
                   "- Portal: pending",
                   "- Worker: pending",
                   "- Worker name: pending",
+                  "- Runtime: pending-or-not-enabled",
+                  "- Runtime health: pending-or-not-enabled",
                   "- Preview metadata artifact: pending",
                 ]),
                 ...buildSection(
@@ -313,6 +345,8 @@ jobs:
               `- Portal: ${process.env.PORTAL_URL}`,
               `- Worker: ${process.env.WORKER_URL}`,
               `- Worker name: \`${process.env.WORKER_NAME}\``,
+              `- Runtime: ${process.env.RUNTIME_URL || "not-enabled"}`,
+              `- Runtime health: ${process.env.RUNTIME_HEALTH_URL || "not-enabled"}`,
               `- Preview metadata artifact: \`pr-preview-${context.payload.pull_request.number}\``,
             ];
 

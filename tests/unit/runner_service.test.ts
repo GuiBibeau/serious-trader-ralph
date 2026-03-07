@@ -107,6 +107,8 @@ test("runner comments include the key handoff details", () => {
   expect(success).toContain("Harness Proof Bundle");
   expect(success).toContain("<!-- harness-proof-bundle -->");
   expect(success).toContain("<!-- pr-preview -->");
+  expect(success).toContain("- Runtime: pending-or-not-enabled");
+  expect(success).toContain("- Runtime health: pending-or-not-enabled");
   expect(success).toContain("- browser-proof: pending");
   expect(success).not.toContain("/tmp/runner");
   expect(failure).toContain("Harness Runner Failure");
