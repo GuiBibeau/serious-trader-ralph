@@ -330,7 +330,9 @@ jobs:
               if (match.__typename === "StatusContext") {
                 return String(match.state ?? "pending").toLowerCase();
               }
-              if (match.status !== "COMPLETED") return "pending";
+              if (String(match.status ?? "pending").toLowerCase() !== "completed") {
+                return "pending";
+              }
               return String(match.conclusion ?? "pending").toLowerCase();
             }
 
