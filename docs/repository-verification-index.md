@@ -162,6 +162,30 @@ Verify:
   topology, and wallet sleeve model are explicit,
 - no docs introduce secrets or private operational tokens.
 
+### 3b. Runtime-rs skeleton verification
+
+Rust workspace checks:
+
+```bash
+cargo fmt --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Run the local skeleton service:
+
+```bash
+cargo run -p runtime-rs
+curl -fsS http://127.0.0.1:8081/health
+```
+
+Expected behavior:
+
+- the workspace builds without changing public Worker behavior,
+- `runtime-rs` returns a JSON health payload describing service, environment,
+  protocol version, and bind address,
+- config loads from environment variables instead of tracked files.
+
 ### 4. x402 and discovery verification
 
 Portal-side discovery:

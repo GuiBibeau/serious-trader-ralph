@@ -1,0 +1,22 @@
+[package]
+name = "runtime-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+exec-client = { path = "../../crates/exec-client" }
+market-adapters = { path = "../../crates/market-adapters" }
+protocol = { path = "../../crates/protocol" }
+runtime-ops = { path = "../../crates/runtime-ops" }
+serde.workspace = true
+serde_json.workspace = true
+strategy-core = { path = "../../crates/strategy-core" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+tower.workspace = true

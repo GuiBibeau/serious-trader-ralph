@@ -112,6 +112,21 @@ bun run runner:once
   `.tmp/runner/worktrees/`, and writes runner heartbeat state to
   `.harness/runner-heartbeat.json`
 
+### Autonomous runtime skeleton
+
+```bash
+cargo fmt --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo run -p runtime-rs
+```
+
+- Default health endpoint: `http://127.0.0.1:8081/health`
+- Default env vars:
+  - `RUNTIME_RS_BIND_ADDR=127.0.0.1:8081`
+  - `RUNTIME_RS_ENV=local|preview|production`
+  - `RUNTIME_RS_LOG=info`
+
 ### Worker only
 
 ```bash

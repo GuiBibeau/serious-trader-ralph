@@ -35,6 +35,21 @@ jobs:
       - name: Run typecheck
         run: bun run typecheck
 
+  rust-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal --component rustfmt clippy
+          rustup default 1.92.0
+      - name: Run cargo fmt
+        run: cargo fmt --check
+      - name: Run cargo test
+        run: cargo test --workspace
+      - name: Run cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:
@@ -125,6 +140,7 @@ jobs:
   artifact-publication:
     if: always()
     needs:
+      - rust-checks
       - unit-tests
       - browser-proof
     runs-on: ubuntu-latest
@@ -140,6 +156,10 @@ jobs:
           set -euo pipefail
           if [ "${{ needs['unit-tests'].result }}" != "success" ]; then
             echo "::error::unit-tests must succeed before publishing artifacts."
+            exit 1
+          fi
+          if [ "${{ needs['rust-checks'].result }}" != "success" ]; then
+            echo "::error::rust-checks must succeed before publishing artifacts."
             exit 1
           fi
           if [ "${{ needs['browser-proof'].result }}" != "success" ]; then
@@ -249,6 +269,7 @@ jobs:
             const requiredChecks = [
               "lint",
               "typecheck",
+              "rust-checks",
               "unit-tests",
               "integration-tests",
               "terminal-e2e-tests",
