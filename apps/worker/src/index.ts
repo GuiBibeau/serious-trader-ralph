@@ -132,6 +132,7 @@ import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
+import { handleRuntimeInternalRoute } from "./runtime_internal";
 import { SolanaRpc } from "./solana_rpc";
 import type { Env, ExecutionConfig } from "./types";
 import type { UserRow } from "./users_db";
@@ -867,6 +868,15 @@ const worker = {
           }),
           env,
         );
+      }
+
+      const runtimeInternalResponse = await handleRuntimeInternalRoute(
+        request,
+        url,
+        env,
+      );
+      if (runtimeInternalResponse) {
+        return withCors(runtimeInternalResponse, env);
       }
 
       if (

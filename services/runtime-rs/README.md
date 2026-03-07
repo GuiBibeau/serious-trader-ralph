@@ -22,6 +22,10 @@ cargo run -p runtime-rs
   Default: `local`
 - `RUNTIME_RS_LOG`
   Default: `info`
+- `RUNTIME_WORKER_API_BASE`
+  Default: `http://127.0.0.1:8888`
+- `RUNTIME_INTERNAL_SERVICE_TOKEN`
+  Shared bearer token used for private runtime-to-Worker requests.
 
 ## Health check
 

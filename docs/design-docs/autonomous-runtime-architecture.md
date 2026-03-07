@@ -145,9 +145,11 @@ The first private route family is intentionally small:
 - `GET /api/internal/runtime/positions`
 - `GET /api/internal/runtime/pnl`
 - `GET /api/internal/runtime/health`
+- `POST /api/internal/runtime/execution-plans`
 
 Transport starts as HTTP+JSON with service auth. Shared schemas and fixtures
-arrive in `#257`.
+arrive in `#257`. In `#259`, control and inspection routes are fixture-backed
+stubs until later issues replace them with real runtime integration.
 
 ## Harness compatibility requirements
 

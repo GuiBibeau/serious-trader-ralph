@@ -1,5 +1,5 @@
 use axum::{extract::State, routing::get, Json, Router};
-use exec_client::{ExecClient, ExecClientConfig};
+use exec_client::ExecClient;
 use market_adapters::MarketAdapterHealth;
 use runtime_ops::{health_snapshot, RuntimeConfig};
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ impl RuntimeAppState {
     pub fn new(config: RuntimeConfig) -> Self {
         Self {
             config,
-            exec_client: ExecClient::new(ExecClientConfig::default()),
+            exec_client: ExecClient::from_lookup(|key| std::env::var(key).ok()),
             market_adapter_health: MarketAdapterHealth::bootstrap(
                 "bootstrap",
                 "wss://placeholder.invalid/runtime",
@@ -36,6 +36,7 @@ pub struct RuntimeHealthResponse {
     pub protocol_version: String,
     pub bind_address: String,
     pub exec_health_url: String,
+    pub worker_service_auth_configured: bool,
     pub market_adapter_status: String,
     pub supported_strategies: Vec<String>,
 }
@@ -55,6 +56,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         protocol_version: snapshot.protocol_version,
         bind_address: snapshot.bind_address,
         exec_health_url: state.exec_client.health_url(),
+        worker_service_auth_configured: state.exec_client.has_service_auth(),
         market_adapter_status: state.market_adapter_health.status_label().to_string(),
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
