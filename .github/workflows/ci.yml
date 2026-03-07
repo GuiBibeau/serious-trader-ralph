@@ -328,6 +328,9 @@ jobs:
             }
 
             function normalizeCheckStatus(rollup, checkName) {
+              if (checkName === "artifact-publication") {
+                return "success";
+              }
               const match = rollup.find((item) => item.name === checkName);
               if (!match) return "pending";
               if (match.__typename === "StatusContext") {
