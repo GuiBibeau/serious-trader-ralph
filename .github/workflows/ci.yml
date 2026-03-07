@@ -209,6 +209,16 @@ jobs:
           - Benchmark delta: successRate ${success_rate} (${success_delta} vs ${success_floor} floor); p95Ms ${p95_ms} (${p95_delta} ms vs ${p95_ceiling} ceiling)
           EOF
 
+          cat > .tmp/artifacts/ci-summary/handoff.json <<EOF
+          {
+            "workflowRunUrl": "${RUN_URL}",
+            "browserProofBundle": "browser-proof-${{ github.run_id }}",
+            "benchmarkBundle": "execution-benchmarks-${{ github.run_id }}",
+            "browserProofLine": "passed with ${proof_expected} expected / ${proof_unexpected} unexpected and ${proof_screenshots} screenshots",
+            "benchmarkDeltaLine": "successRate ${success_rate} (${success_delta} vs ${success_floor} floor); p95Ms ${p95_ms} (${p95_delta} ms vs ${p95_ceiling} ceiling)"
+          }
+          EOF
+
           cat .tmp/artifacts/ci-summary/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload CI summary artifact
@@ -224,8 +234,154 @@ jobs:
         with:
           script: |
             const fs = require("fs");
-            const marker = "<!-- ci-artifacts -->";
-            const body = fs.readFileSync(".tmp/artifacts/ci-summary/pr-comment.md", "utf8");
+            const marker = "<!-- harness-proof-bundle -->";
+            const sectionMarkers = {
+              summary: ["<!-- proof:summary:start -->", "<!-- proof:summary:end -->"],
+              preview: ["<!-- proof:preview:start -->", "<!-- proof:preview:end -->"],
+              checks: ["<!-- proof:checks:start -->", "<!-- proof:checks:end -->"],
+              artifacts: ["<!-- proof:artifacts:start -->", "<!-- proof:artifacts:end -->"],
+              canary: ["<!-- proof:canary:start -->", "<!-- proof:canary:end -->"],
+              risk: ["<!-- proof:risk:start -->", "<!-- proof:risk:end -->"],
+            };
+            const requiredChecks = [
+              "lint",
+              "typecheck",
+              "unit-tests",
+              "integration-tests",
+              "terminal-e2e-tests",
+              "browser-proof",
+              "preview-smoke",
+              "artifact-publication",
+            ];
+            const handoff = JSON.parse(
+              fs.readFileSync(".tmp/artifacts/ci-summary/handoff.json", "utf8"),
+            );
+
+            function escapeRegExp(value) {
+              return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            }
+
+            function buildSection(title, name, lines) {
+              const [start, end] = sectionMarkers[name];
+              return [
+                `### ${title}`,
+                start,
+                ...lines,
+                end,
+                "",
+              ];
+            }
+
+            function buildDefaultBody(existingBody) {
+              const fallbackPr = `#${context.issue.number}`;
+              const fallbackBranch = `\`${context.payload.pull_request.head.ref}\``;
+              return [
+                marker,
+                "## Harness Proof Bundle",
+                "",
+                ...buildSection("Summary", "summary", [
+                  `- PR: ${fallbackPr}`,
+                  `- Branch: ${fallbackBranch}`,
+                  "- Change summary: pending runner-authored detail or reviewer notes.",
+                ]),
+                ...buildSection("Preview", "preview", [
+                  "<!-- pr-preview -->",
+                  "- Portal: pending",
+                  "- Worker: pending",
+                  "- Worker name: pending",
+                  "- Preview metadata artifact: pending",
+                ]),
+                ...buildSection(
+                  "Required Checks",
+                  "checks",
+                  requiredChecks.map((check) => `- ${check}: pending`),
+                ),
+                ...buildSection("Artifacts", "artifacts", [
+                  "- Workflow run: pending",
+                  "- Browser proof bundle: pending",
+                  "- Benchmark bundle: pending",
+                  "- Browser proof: pending",
+                  "- Benchmark delta: pending",
+                ]),
+                ...buildSection("Canary Status", "canary", [
+                  "- Status: production canary unchanged until this change reaches `main`.",
+                ]),
+                ...buildSection("Risk Notes", "risk", [
+                  "- Human review is still required; this handoff stops at `human-review`.",
+                  "- Issue-specific risk notes are pending and should be updated before merge if the change introduces rollout or contract risk.",
+                ]),
+                "",
+                "This comment is the single repo-owned handoff summary for runner-created PRs.",
+              ].join("\n");
+            }
+
+            function replaceSection(body, name, lines) {
+              const [start, end] = sectionMarkers[name];
+              const replacement = [start, ...lines, end].join("\n");
+              return body.replace(
+                new RegExp(`${escapeRegExp(start)}[\\s\\S]*?${escapeRegExp(end)}`),
+                replacement,
+              );
+            }
+
+            function normalizeCheckStatus(rollup, checkName) {
+              const match = rollup.find((item) => item.name === checkName);
+              if (!match) return "pending";
+              if (match.__typename === "StatusContext") {
+                return String(match.state ?? "pending").toLowerCase();
+              }
+              if (match.status !== "COMPLETED") return "pending";
+              return String(match.conclusion ?? "pending").toLowerCase();
+            }
+
+            const prDetails = await github.graphql(
+              `query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    statusCheckRollup(first: 30) {
+                      nodes {
+                        __typename
+                        ... on CheckRun {
+                          name
+                          status
+                          conclusion
+                        }
+                        ... on StatusContext {
+                          context
+                          state
+                        }
+                      }
+                    }
+                  }
+                }
+              }`,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                number: context.issue.number,
+              },
+            );
+            const rollup =
+              prDetails.repository.pullRequest.statusCheckRollup.nodes.map((node) =>
+                node.__typename === "StatusContext"
+                  ? {
+                      __typename: "StatusContext",
+                      name: node.context,
+                      state: node.state,
+                    }
+                  : node,
+              );
+
+            const checksLines = requiredChecks.map(
+              (check) => `- ${check}: ${normalizeCheckStatus(rollup, check)}`,
+            );
+            const artifactLines = [
+              `- Workflow run: ${handoff.workflowRunUrl}`,
+              `- Browser proof bundle: \`${handoff.browserProofBundle}\``,
+              `- Benchmark bundle: \`${handoff.benchmarkBundle}\``,
+              `- Browser proof: ${handoff.browserProofLine}`,
+              `- Benchmark delta: ${handoff.benchmarkDeltaLine}`,
+            ];
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -233,6 +389,15 @@ jobs:
             });
             const existing = comments.find((comment) =>
               comment.user?.type === "Bot" && comment.body?.includes(marker),
+            );
+            const body = replaceSection(
+              replaceSection(
+                existing?.body ?? buildDefaultBody(existing?.body ?? null),
+                "checks",
+                checksLines,
+              ),
+              "artifacts",
+              artifactLines,
             );
 
             if (existing) {

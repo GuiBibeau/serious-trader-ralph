@@ -212,7 +212,8 @@ Expected result:
 
 - workflow summary renders all five sections above
 - uploaded artifact name matches `ops-dashboard-<run_id>`
-- preview health includes every open PR with a `<!-- pr-preview -->` comment
+- preview health includes every open PR whose repo-owned proof bundle comment
+  contains the `<!-- pr-preview -->` preview section marker
 - runner health reports either a valid heartbeat or `not-configured`
 
 ### 6b. Runner verification
@@ -230,7 +231,8 @@ Expected result:
 - worktrees are created under `.tmp/runner/worktrees/issue-<number>-<slug>`
 - `.harness/runner-heartbeat.json` updates with current status, concurrency, and
   active run count
-- successful runs open or update a PR and switch the issue to `human-review`
+- successful runs open or update a PR, seed a single `<!-- harness-proof-bundle -->`
+  handoff comment, and switch the issue to `human-review`
 
 ### 7. Canary verification
 

@@ -8,11 +8,23 @@ import {
 
 describe("ops dashboard helpers", () => {
   test("parses PR preview comment body", () => {
-    const parsed = parsePreviewCommentBody(`<!-- pr-preview -->
-## PR Preview
+    const parsed = parsePreviewCommentBody(`<!-- harness-proof-bundle -->
+## Harness Proof Bundle
+
+### Summary
+<!-- proof:summary:start -->
+- PR: #999
+- Branch: \`codex/issue-999-example\`
+<!-- proof:summary:end -->
+
+### Preview
+<!-- proof:preview:start -->
+<!-- pr-preview -->
 - Portal: https://preview.example.com
 - Worker: https://worker.example.workers.dev
 - Worker name: \`ralph-edge-pr-999\`
+- Preview metadata artifact: \`pr-preview-999\`
+<!-- proof:preview:end -->
 `);
 
     expect(parsed).toEqual({
