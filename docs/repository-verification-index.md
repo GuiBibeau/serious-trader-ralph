@@ -10,7 +10,8 @@ how to verify or roll back the main operating paths.
 | --- | --- | --- |
 | Portal | Next.js marketing, login, and terminal UI | `apps/portal` |
 | Worker | Cloudflare Worker API boundary for x402, execution, discovery, and auth-adjacent routes | `apps/worker` |
-| Runtime | Bun CLI, agent runtime, tools, policies, and journals | `src` |
+| Runtime control plane | Bun CLI, agent runtime, tools, policies, and journals | `src` |
+| Autonomous runtime (planned) | Rust hot path for always-on automation, reconciliation, and portfolio state | `docs/product-specs/autonomous-runtime-prd.md`, `docs/design-docs/autonomous-runtime-architecture.md` |
 | Tests | Unit, integration, and terminal execution suites | `tests` |
 | Public contracts | Execution docs, schemas, fixtures, and runbooks | `docs/execution` |
 | Agent registry | Lane metadata and operator runbook | `docs/agent-registry` |
@@ -32,6 +33,8 @@ These are the invariants that changes should preserve unless the issue
 explicitly calls for a contract break:
 
 - The Cloudflare Worker remains the public API boundary.
+- Autonomous runtime work must preserve the existing harness flow and keep
+  runtime-rs optional until the relevant issue explicitly enables it.
 - Existing x402 read routes stay under `POST /api/x402/read/*`.
 - Existing execution routes stay:
   - `POST /api/x402/exec/submit`
@@ -51,6 +54,18 @@ Current branch and domain mapping:
 | --- | --- | --- | --- | --- |
 | Dev | `dev` | `https://dev.trader-ralph.com` | `https://dev.api.trader-ralph.com` | `ralph-edge-dev` |
 | Production | `main` | `https://trader-ralph.com` and `https://www.trader-ralph.com` | `https://api.trader-ralph.com` | `ralph-edge` |
+
+Autonomous runtime planning surfaces:
+
+- Product spec: `docs/product-specs/autonomous-runtime-prd.md`
+- Architecture: `docs/design-docs/autonomous-runtime-architecture.md`
+- ADRs: `docs/design-docs/adrs/`
+- Ops runbook: `docs/reliability/autonomous-runtime-ops-runbook.md`
+- Rollout plan: `docs/exec-plans/active/autonomous-runtime-rollout.md`
+
+The runtime service is not deployed yet. Until `#258` to `#261` land, runtime
+verification is documentation-only and the live stack remains portal plus
+Worker.
 
 Current workflow files:
 
@@ -130,6 +145,22 @@ bun run test:integration:worker:live
 
 Use the narrowest relevant subset for focused changes, but record the exact
 commands used in the PR proof bundle.
+
+### 3a. Autonomous runtime planning verification
+
+For docs-only runtime planning work:
+
+```bash
+bun run lint
+```
+
+Verify:
+
+- the PRD, architecture doc, ADRs, runbook, and rollout plan all agree on the
+  Worker boundary and harness compatibility,
+- the chosen v1 answers for internal transport, storage ownership, region
+  topology, and wallet sleeve model are explicit,
+- no docs introduce secrets or private operational tokens.
 
 ### 4. x402 and discovery verification
 
@@ -326,6 +357,8 @@ when `pr_number` is supplied.
   receipt triage.
 - Use `docs/execution/terminal-cutover-plan-v1.md` for execution-specific
   rollback context.
+- Use `docs/exec-plans/active/autonomous-runtime-rollout.md` for runtime phase
+  gates and rollback posture when runtime-rs work lands.
 - Re-run the lane verification checks after any revert.
 
 ## Source Docs by Topic
@@ -336,4 +369,8 @@ when `pr_number` is supplied.
 - Execution rollout and rollback: `docs/execution/rollout-plan-v1.md`
 - Terminal cutover: `docs/execution/terminal-cutover-plan-v1.md`
 - Agent registry: `docs/agent-registry/runbook.md`
+- Autonomous runtime PRD: `docs/product-specs/autonomous-runtime-prd.md`
+- Autonomous runtime architecture: `docs/design-docs/autonomous-runtime-architecture.md`
+- Autonomous runtime runbook: `docs/reliability/autonomous-runtime-ops-runbook.md`
+- Autonomous runtime rollout plan: `docs/exec-plans/active/autonomous-runtime-rollout.md`
 - Long-form pipeline architecture: `loop-a-loop-b-architecture.md`

@@ -13,6 +13,9 @@ It provides one execution fabric for:
 - `apps/worker`: Cloudflare Worker API (execution, x402, discovery)
 - `tests/`: unit + integration tests
 - `docs/`: execution contracts, registry runbooks, and metadata
+- `docs/product-specs`, `docs/design-docs`, `docs/reliability`,
+  `docs/exec-plans`: repo-owned product, architecture, runbook, and rollout
+  docs for the autonomous runtime program
 
 ## Repository Contract
 
@@ -20,6 +23,10 @@ It provides one execution fabric for:
   manual issue branches
 - `docs/repository-verification-index.md`: architecture map, invariants,
   environment inventory, rollback steps, and verification playbooks
+- `docs/product-specs/autonomous-runtime-prd.md`: repo-owned product spec for
+  the Rust hot path rollout
+- `docs/design-docs/autonomous-runtime-architecture.md`: system boundary,
+  topology, and state ownership decisions for runtime-rs
 
 ## What Is Live
 
