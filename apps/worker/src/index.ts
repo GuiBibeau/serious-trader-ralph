@@ -851,6 +851,11 @@ const worker = {
     await recordEndpointCallSafe(env, request.method, url.pathname);
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
+        const loopASlotSourceEnabled =
+          String(env.LOOP_A_SLOT_SOURCE_ENABLED ?? "0").trim() === "1";
+        if (!loopASlotSourceEnabled) {
+          return withCors(json({ ok: true }), env);
+        }
         const loopAHealth = await readLoopAHealthFromKv(env);
         if (!loopAHealth) {
           return withCors(json({ ok: true }), env);
@@ -868,7 +873,11 @@ const worker = {
         request.method === "GET" &&
         url.pathname === "/api/x402/exec/health"
       ) {
-        const loopAHealth = await readLoopAHealthFromKv(env);
+        const loopASlotSourceEnabled =
+          String(env.LOOP_A_SLOT_SOURCE_ENABLED ?? "0").trim() === "1";
+        const loopAHealth = loopASlotSourceEnabled
+          ? await readLoopAHealthFromKv(env)
+          : null;
         const opsControls = await readOpsControlSnapshot(env);
         const routing = readExecutionLaneRoutingConfig(
           env,
