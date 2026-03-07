@@ -50,4 +50,14 @@ describe("execution canary helpers", () => {
     expect(config.maxSlippageBps).toBe(75);
     expect(config.minSolReserveLamports).toBe("60000000");
   });
+
+  test("uses landed before finalized for successful request lifecycle", () => {
+    expect(
+      executionCanaryTestExports.successfulCanaryRequestStatusPlan(),
+    ).toEqual({
+      requestTerminalStatus: "landed",
+      requestFinalStatus: "finalized",
+      receiptStatus: "finalized",
+    });
+  });
 });
