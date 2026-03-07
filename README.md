@@ -88,6 +88,7 @@ bun run harness:up
 bun run harness:status
 bun run harness:down
 bun run harness:proof
+bun run runner:once
 ```
 
 - `harness:up` starts a portal and worker pair with worktree-local ports and
@@ -99,6 +100,10 @@ bun run harness:proof
 - `harness:down` tears down only the active worktree harness state
 - `harness:proof` runs the Playwright browser proof suite against the active
   local harness, or a supplied preview URL via `--base-url`
+- `runner:once` polls GitHub for `harness` + `agent-ready` issues, claims up to
+  two at a time by default, executes Codex in isolated worktrees under
+  `.tmp/runner/worktrees/`, and writes runner heartbeat state to
+  `.harness/runner-heartbeat.json`
 
 ### Worker only
 
