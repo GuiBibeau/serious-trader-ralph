@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "v1",
+  "reconciliationId": "recon_180530",
+  "deploymentId": "dep_runtime_sol_usdc_shadow",
+  "runId": "run_shadow_20260307T180500Z",
+  "receiptId": "receipt_123",
+  "completedAt": "2026-03-07T18:05:30Z",
+  "status": "passed",
+  "walletDeltas": [
+    {
+      "mint": "So11111111111111111111111111111111111111112",
+      "expectedAtomic": "25000",
+      "actualAtomic": "25000",
+      "deltaAtomic": "0"
+    },
+    {
+      "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "expectedAtomic": "-5000000",
+      "actualAtomic": "-5000000",
+      "deltaAtomic": "0"
+    }
+  ],
+  "positionDeltaUsd": "0",
+  "notes": ["receipt and wallet state reconciled without correction"],
+  "correctionApplied": false
+}

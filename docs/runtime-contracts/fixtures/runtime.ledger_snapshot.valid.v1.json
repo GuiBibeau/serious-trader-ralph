@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "v1",
+  "snapshotId": "ledger_20260307T180600Z",
+  "deploymentId": "dep_runtime_sol_usdc_shadow",
+  "sleeveId": "sleeve_sol_usdc_core",
+  "asOf": "2026-03-07T18:06:00Z",
+  "balances": [
+    {
+      "mint": "So11111111111111111111111111111111111111112",
+      "symbol": "SOL",
+      "decimals": 9,
+      "freeAtomic": "100000000",
+      "reservedAtomic": "5000000",
+      "priceUsd": "190.50"
+    },
+    {
+      "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "symbol": "USDC",
+      "decimals": 6,
+      "freeAtomic": "95000000",
+      "reservedAtomic": "5000000",
+      "priceUsd": "1"
+    }
+  ],
+  "positions": [
+    {
+      "instrumentId": "spot:SOL/USDC",
+      "side": "long",
+      "quantityAtomic": "5000000",
+      "entryPriceUsd": "188.10",
+      "markPriceUsd": "190.50",
+      "unrealizedPnlUsd": "12.75"
+    }
+  ],
+  "totals": {
+    "equityUsd": "114.05",
+    "reservedUsd": "5",
+    "availableUsd": "109.05",
+    "realizedPnlUsd": "1.30",
+    "unrealizedPnlUsd": "12.75"
+  }
+}

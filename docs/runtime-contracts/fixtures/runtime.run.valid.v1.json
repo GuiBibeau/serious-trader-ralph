@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "v1",
+  "runId": "run_shadow_20260307T180500Z",
+  "deploymentId": "dep_runtime_sol_usdc_shadow",
+  "runKey": "dep_runtime_sol_usdc_shadow:2026-03-07T18:05:00Z:signal",
+  "trigger": {
+    "kind": "signal",
+    "source": "feature-cache",
+    "observedAt": "2026-03-07T18:05:00Z",
+    "featureSnapshotId": "feature_snapshot_180500",
+    "reason": "price_below_dca_band"
+  },
+  "state": "planned",
+  "plannedAt": "2026-03-07T18:05:01Z",
+  "updatedAt": "2026-03-07T18:05:02Z",
+  "riskVerdictId": "risk_180501",
+  "executionPlanId": "plan_180502"
+}

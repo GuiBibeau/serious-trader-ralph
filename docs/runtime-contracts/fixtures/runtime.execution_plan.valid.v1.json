@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "v1",
+  "planId": "plan_180502",
+  "deploymentId": "dep_runtime_sol_usdc_shadow",
+  "runId": "run_shadow_20260307T180500Z",
+  "createdAt": "2026-03-07T18:05:02Z",
+  "mode": "shadow",
+  "lane": "safe",
+  "idempotencyKey": "dep_runtime_sol_usdc_shadow:run_shadow_20260307T180500Z",
+  "simulateOnly": true,
+  "dryRun": true,
+  "slices": [
+    {
+      "sliceId": "slice_1",
+      "action": "buy",
+      "inputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "outputMint": "So11111111111111111111111111111111111111112",
+      "inputAmountAtomic": "5000000",
+      "minOutputAmountAtomic": "25000",
+      "notionalUsd": "5",
+      "slippageBps": 50
+    }
+  ]
+}
