@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "v1",
+  "deploymentId": "dep_runtime_sol_usdc_shadow",
+  "strategyKey": "dca",
+  "sleeveId": "sleeve_sol_usdc_core",
+  "ownerUserId": "user_ralph_operator",
+  "pair": {
+    "symbol": "SOL/USDC",
+    "baseMint": "So11111111111111111111111111111111111111112",
+    "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+  },
+  "mode": "shadow",
+  "state": "shadow",
+  "lane": "safe",
+  "createdAt": "2026-03-07T18:00:00Z",
+  "updatedAt": "2026-03-07T18:05:00Z",
+  "policy": {
+    "maxNotionalUsd": "25",
+    "dailyLossLimitUsd": "10",
+    "maxSlippageBps": 50,
+    "maxConcurrentRuns": 1,
+    "rebalanceToleranceBps": 125
+  },
+  "capital": {
+    "allocatedUsd": "100",
+    "reservedUsd": "5",
+    "availableUsd": "95"
+  },
+  "tags": ["phase-0", "shadow-only"]
+}

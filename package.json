@@ -41,6 +41,7 @@
     "agent-registry:sync": "bun run scripts/agent_registry/sync.ts",
     "agent-registry:submit": "bun run scripts/agent_registry/sync.ts --step submit",
     "contracts:loop-a:schemas": "bun run scripts/generate_loop_a_schemas.ts",
+    "contracts:runtime:schemas": "bun run scripts/generate_runtime_contract_schemas.ts",
     "typecheck": "bunx tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check . --write",

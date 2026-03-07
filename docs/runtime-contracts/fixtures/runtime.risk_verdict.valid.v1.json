@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "v1",
+  "verdictId": "risk_180501",
+  "deploymentId": "dep_runtime_sol_usdc_shadow",
+  "runId": "run_shadow_20260307T180500Z",
+  "decidedAt": "2026-03-07T18:05:01Z",
+  "verdict": "allow",
+  "reasons": [
+    {
+      "code": "within_limits",
+      "message": "Requested notional and concentration are within v1 limits.",
+      "severity": "info"
+    }
+  ],
+  "observed": {
+    "requestedNotionalUsd": "5",
+    "reservedUsd": "5",
+    "concentrationBps": 1200,
+    "featureAgeMs": 850
+  },
+  "limits": {
+    "maxNotionalUsd": "25",
+    "maxReservedUsd": "50",
+    "maxConcentrationBps": 3500,
+    "staleAfterMs": 5000
+  }
+}

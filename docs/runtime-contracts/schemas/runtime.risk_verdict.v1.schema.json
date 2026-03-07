@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/risk_verdict",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "verdictId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deploymentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "decidedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["allow", "reject", "pause"]
+    },
+    "reasons": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "warn", "error"]
+          }
+        },
+        "required": ["code", "message", "severity"],
+        "additionalProperties": false
+      }
+    },
+    "observed": {
+      "type": "object",
+      "properties": {
+        "requestedNotionalUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "reservedUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "concentrationBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "featureAgeMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "requestedNotionalUsd",
+        "reservedUsd",
+        "concentrationBps",
+        "featureAgeMs"
+      ],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "maxNotionalUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "maxReservedUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "maxConcentrationBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "staleAfterMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "maxNotionalUsd",
+        "maxReservedUsd",
+        "maxConcentrationBps",
+        "staleAfterMs"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "verdictId",
+    "deploymentId",
+    "runId",
+    "decidedAt",
+    "verdict",
+    "reasons",
+    "observed",
+    "limits"
+  ],
+  "additionalProperties": false
+}

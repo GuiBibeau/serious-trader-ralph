@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/ledger_snapshot",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "snapshotId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deploymentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sleeveId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "asOf": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "balances": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "mint": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 64
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decimals": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "freeAtomic": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          },
+          "reservedAtomic": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          },
+          "priceUsd": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          }
+        },
+        "required": [
+          "mint",
+          "symbol",
+          "decimals",
+          "freeAtomic",
+          "reservedAtomic"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "positions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "instrumentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "side": {
+            "type": "string",
+            "enum": ["long", "short", "flat"]
+          },
+          "quantityAtomic": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          },
+          "entryPriceUsd": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "markPriceUsd": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "unrealizedPnlUsd": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          }
+        },
+        "required": ["instrumentId", "side", "quantityAtomic"],
+        "additionalProperties": false
+      }
+    },
+    "totals": {
+      "type": "object",
+      "properties": {
+        "equityUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "reservedUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "availableUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "realizedPnlUsd": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
+        "unrealizedPnlUsd": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        }
+      },
+      "required": [
+        "equityUsd",
+        "reservedUsd",
+        "availableUsd",
+        "realizedPnlUsd",
+        "unrealizedPnlUsd"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "snapshotId",
+    "deploymentId",
+    "sleeveId",
+    "asOf",
+    "balances",
+    "positions",
+    "totals"
+  ],
+  "additionalProperties": false
+}

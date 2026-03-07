@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/reconciliation_result",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "reconciliationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deploymentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "receiptId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "completedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["passed", "needs_manual_review", "failed"]
+    },
+    "walletDeltas": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "mint": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 64
+          },
+          "expectedAtomic": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          },
+          "actualAtomic": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          },
+          "deltaAtomic": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          }
+        },
+        "required": ["mint", "expectedAtomic", "actualAtomic", "deltaAtomic"],
+        "additionalProperties": false
+      }
+    },
+    "positionDeltaUsd": {
+      "type": "string",
+      "pattern": "^-?\\d+(?:\\.\\d+)?$"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "correctionApplied": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "reconciliationId",
+    "deploymentId",
+    "runId",
+    "receiptId",
+    "completedAt",
+    "status",
+    "walletDeltas",
+    "positionDeltaUsd",
+    "notes",
+    "correctionApplied"
+  ],
+  "additionalProperties": false
+}

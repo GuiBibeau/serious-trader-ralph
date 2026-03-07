@@ -1,0 +1,40 @@
+{
+  "schemaFamily": "runtime",
+  "schemaVersion": "v1",
+  "schemas": [
+    {
+      "name": "deployment",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/deployment",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.deployment.v1.schema.json"
+    },
+    {
+      "name": "run",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/run",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.run.v1.schema.json"
+    },
+    {
+      "name": "ledgerSnapshot",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/ledger_snapshot",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.ledger_snapshot.v1.schema.json"
+    },
+    {
+      "name": "riskVerdict",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/risk_verdict",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.risk_verdict.v1.schema.json"
+    },
+    {
+      "name": "executionPlan",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/execution_plan",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.execution_plan.v1.schema.json"
+    },
+    {
+      "name": "reconciliationResult",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/reconciliation_result",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.reconciliation_result.v1.schema.json"
+    }
+  ],
+  "rustCodegenHook": {
+    "intendedConsumer": "future crates/protocol/build.rs or serde codegen step",
+    "sourceOfTruth": "docs/runtime-contracts/schemas/*.json"
+  }
+}
