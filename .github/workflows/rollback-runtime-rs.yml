@@ -81,6 +81,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP_NAME: ralph-runtime-rs
+          FLY_DEPLOY_LOCAL_ONLY: 0
           FLY_ORG_SLUG: personal
           FLY_PRIMARY_REGION: ord
           FLY_STANDBY_REGION: iad
