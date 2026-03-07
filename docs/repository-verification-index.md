@@ -50,7 +50,6 @@ Current branch and domain mapping:
 | Lane | Branch | Site URL | API URL | Worker name |
 | --- | --- | --- | --- | --- |
 | Dev | `dev` | `https://dev.trader-ralph.com` | `https://dev.api.trader-ralph.com` | `ralph-edge-dev` |
-| Staging | `staging` | `https://staging.trader-ralph.com` | `https://staging.api.trader-ralph.com` | `ralph-edge-staging` |
 | Production | `main` | `https://trader-ralph.com` and `https://www.trader-ralph.com` | `https://api.trader-ralph.com` | `ralph-edge` |
 
 Current workflow files:
@@ -58,7 +57,7 @@ Current workflow files:
 - CI: `.github/workflows/ci.yml`
 - Worker deploys:
   - `.github/workflows/deploy-dev.yml`
-  - `.github/workflows/deploy-staging-production.yml`
+  - `.github/workflows/deploy-production.yml`
   - `.github/workflows/deploy-manual.yml`
 - Portal deploys:
   - `.github/workflows/deploy-portal.yml`
@@ -165,7 +164,6 @@ Validate metadata:
 
 ```bash
 bun run agent-registry:validate -- --lane dev
-bun run agent-registry:validate -- --lane staging
 bun run agent-registry:validate -- --lane production
 ```
 

@@ -104,7 +104,7 @@ Policy decisions are machine-readable and stored under request metadata (`metada
 Policy env defaults support global or lane/environment scoped variants:
 
 - Global:
-  - `EXEC_POLICY_ENV` (`dev`, `staging`, `production`)
+  - `EXEC_POLICY_ENV` (`dev`, `production`)
   - `EXEC_POLICY_PRIVY_WALLET_ALLOWLIST`
   - `EXEC_POLICY_PRIVY_WALLET_DENYLIST`
   - `EXEC_POLICY_PRIVY_MAX_NOTIONAL_ATOMIC`
@@ -116,7 +116,7 @@ Policy env defaults support global or lane/environment scoped variants:
   - `EXEC_POLICY_PRIVY_REQUIRE_SIMULATION_PROTECTED`
   - `EXEC_POLICY_PRIVY_REQUIRE_SIMULATION_SAFE`
   - `EXEC_POLICY_PRIVY_ENFORCE_BALANCE_CHECKS`
-- Environment-prefixed (same suffixes): `EXEC_POLICY_DEV_*`, `EXEC_POLICY_STAGING_*`, `EXEC_POLICY_PRODUCTION_*`
+- Environment-prefixed (same suffixes): `EXEC_POLICY_DEV_*`, `EXEC_POLICY_PRODUCTION_*`
 
 ## Submit Abuse Guardrails (Phase 2)
 

@@ -13,7 +13,7 @@ tracker:
 branching:
   branch_prefix: codex/
   branch_format: codex/issue-<number>-<slug>
-  default_pr_base: dev
+  default_pr_base: main
 validation:
   default:
     - bun run lint
@@ -65,11 +65,10 @@ When a run starts, add `agent-running`. When the PR is ready for review, remove
 - Branch names must follow `codex/issue-<number>-<slug>`.
 - Include `Fixes #<issue-number>` in the PR body when the work should close the
   issue on merge.
-- Until issue `#241` lands, open PRs against `dev` because the current deploy
-  lane model is still `feature/codex -> dev -> staging -> main`.
-- After issue `#241` lands, switch the default PR base to `main` and treat
-  `dev` as an optional soak lane only.
-- Do not push directly to `dev`, `staging`, or `main`.
+- Open PRs against `main` by default.
+- `dev` remains available as an optional soak lane, but it is not a promotion
+  gate.
+- Do not push directly to `dev` or `main`.
 
 ## Validation Requirements
 

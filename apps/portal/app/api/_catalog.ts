@@ -92,7 +92,7 @@ export const X402_OVERVIEW: CatalogDoc["overview"] = {
     "Catalog and discovery endpoints are public. x402 read endpoints and /x402/exec/submit require payment authorization.",
     "/x402/exec/status/{requestId} and /x402/exec/receipt/{requestId} are public polling endpoints and do not require payment.",
     "payment-signature must be a valid on-chain Solana transaction signature that settles the required amount to payTo.",
-    "Environment policy: dev expects devnet USDC; staging and production expect mainnet USDC.",
+    "Environment policy: dev expects devnet USDC; production expects mainnet USDC.",
     "Supported terminal trading universe (tokens and pair presets) is included under supportedTrading.",
     "Pricing is dynamic per route config. Read the payment-required header (HTTP 402) as source of truth.",
     "Authenticated account and trading routes are intentionally excluded from this catalog.",

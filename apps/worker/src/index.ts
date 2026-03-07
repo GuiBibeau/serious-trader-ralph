@@ -665,9 +665,6 @@ function resolvePortalOriginForApiHost(hostname: string, env: Env): string {
   if (normalized === "dev.api.trader-ralph.com") {
     return "https://dev.trader-ralph.com";
   }
-  if (normalized === "staging.api.trader-ralph.com") {
-    return "https://staging.trader-ralph.com";
-  }
   const configured = String(env.PORTAL_SITE_URL ?? "")
     .trim()
     .replace(/\/+$/, "");

@@ -8,7 +8,6 @@ on:
         required: true
         type: choice
         options:
-          - staging
           - production
 
 concurrency:
@@ -36,9 +35,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
-          if [ "${{ inputs.environment }}" = "staging" ]; then
-            npx wrangler d1 migrations apply ralph_waitlist_staging --remote --env staging
-          elif [ "${{ inputs.environment }}" = "production" ]; then
+          if [ "${{ inputs.environment }}" = "production" ]; then
             npx wrangler d1 migrations apply ralph_waitlist --remote --env production
           else
             echo "Unknown environment: ${{ inputs.environment }}"
@@ -50,4 +47,3 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx wrangler deploy --env ${{ inputs.environment }}
-

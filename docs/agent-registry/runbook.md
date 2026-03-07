@@ -14,7 +14,6 @@ This runbook covers Trader Ralph registration and submission across lanes.
 
 ```bash
 bun run agent-registry:validate -- --lane dev
-bun run agent-registry:validate -- --lane staging
 bun run agent-registry:validate -- --lane production
 ```
 
@@ -22,7 +21,6 @@ bun run agent-registry:validate -- --lane production
 
 ```bash
 bun run agent-registry:sync -- --lane dev --step all --dry-run
-bun run agent-registry:sync -- --lane staging --step all --dry-run
 bun run agent-registry:sync -- --lane production --step all --dry-run
 ```
 
@@ -30,7 +28,6 @@ bun run agent-registry:sync -- --lane production --step all --dry-run
 
 ```bash
 bun run agent-registry:sync -- --lane dev --step all
-bun run agent-registry:sync -- --lane staging --step all
 bun run agent-registry:sync -- --lane production --step all
 ```
 
@@ -43,7 +40,6 @@ bun run agent-registry:submit -- --lane production --step submit
 ## Lane chain mapping
 
 - `dev` -> Solana `devnet`
-- `staging` -> Solana `devnet`
 - `production` -> Solana `mainnet-beta`
 
 ## Output state
@@ -51,7 +47,6 @@ bun run agent-registry:submit -- --lane production --step submit
 State files are written to:
 
 - `.tmp/agent-registry/dev.state.json`
-- `.tmp/agent-registry/staging.state.json`
 - `.tmp/agent-registry/production.state.json`
 
 ## Manual verification checklist

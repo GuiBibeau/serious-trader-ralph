@@ -12,7 +12,7 @@ import type {
 } from "./repository";
 import type { ExecSubmitRequestV1 } from "./submit_contract";
 
-type PolicyEnvironment = "dev" | "staging" | "production";
+type PolicyEnvironment = "dev" | "production";
 type PolicyCheckStatus = "pass" | "fail" | "skip";
 
 type PolicyCheck = {
@@ -169,13 +169,11 @@ function resolvePolicyEnvironment(env: Env): PolicyEnvironment {
     .trim()
     .toLowerCase();
   if (explicit === "dev") return "dev";
-  if (explicit === "staging") return "staging";
   if (explicit === "production") return "production";
   const network = String(env.X402_NETWORK ?? "")
     .trim()
     .toLowerCase();
   if (network.includes("devnet")) return "dev";
-  if (network.includes("staging")) return "staging";
   return "production";
 }
 

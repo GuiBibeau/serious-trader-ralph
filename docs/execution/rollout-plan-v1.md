@@ -33,7 +33,6 @@ Lane kill switches:
 Current baseline in `apps/worker/wrangler.toml`:
 
 - `dev`: internal `1`, trusted `1`, external `1`
-- `staging`: internal `1`, trusted `1`, external `1`
 - `production`: internal `1`, trusted `1`, external `1`
 
 Verification checks per environment:

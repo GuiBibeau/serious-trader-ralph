@@ -80,7 +80,7 @@ All `POST` under `/api/x402/read/*`:
 ### x402 Network Policy by Environment
 
 - `dev`: `X402_NETWORK=solana-devnet`, `X402_ASSET_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`
-- `staging`/`production`: `X402_NETWORK=solana-mainnet`, `X402_ASSET_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+- `production`: `X402_NETWORK=solana-mainnet`, `X402_ASSET_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
 
 ### Supported Trading Pairs (Terminal + Trade APIs)
 
@@ -114,8 +114,8 @@ The following now return `410`:
 
 ```bash
 cd apps/worker
-bun run wallet:migrate:users -- --env <dev|staging|production> --dry-run
-bun run wallet:migrate:users -- --env <dev|staging|production> --apply
+bun run wallet:migrate:users -- --env <dev|production> --dry-run
+bun run wallet:migrate:users -- --env <dev|production> --apply
 ```
 
 2. Review generated audit report:
@@ -137,5 +137,5 @@ This validates x402 endpoint payment requirements and paid-read responses.
 
 ```bash
 cd apps/worker
-bun run access:grant -- --env staging --privy-user-id did:privy:abc
+bun run access:grant -- --env production --privy-user-id did:privy:abc
 ```

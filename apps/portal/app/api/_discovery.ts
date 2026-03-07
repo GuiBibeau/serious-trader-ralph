@@ -58,9 +58,6 @@ function mapToApiHostname(hostname: string): string {
   if (hostname === "dev.trader-ralph.com") {
     return "dev.api.trader-ralph.com";
   }
-  if (hostname === "staging.trader-ralph.com") {
-    return "staging.api.trader-ralph.com";
-  }
   return hostname;
 }
 

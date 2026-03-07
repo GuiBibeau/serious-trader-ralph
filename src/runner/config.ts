@@ -30,7 +30,7 @@ const DEFAULT_CONFIG: RunnerWorkflowConfig = {
   excludeLabels: ["blocked", "agent-running", "human-review"],
   branchPrefix: "codex/",
   branchFormat: "codex/issue-<number>-<slug>",
-  defaultPrBase: "dev",
+  defaultPrBase: "main",
 };
 
 function coerceStringList(value: unknown): string[] {

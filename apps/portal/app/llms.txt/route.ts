@@ -41,7 +41,7 @@ export function GET(request: Request): Response {
     "Execution endpoints: /x402/exec/submit, /x402/exec/status/{requestId}, /x402/exec/receipt/{requestId}.",
     "x402 verification policy: payment-signature must be an on-chain Solana transaction signature.",
     "Payment policy: /x402/exec/submit and /x402/read/* are paid; status/receipt polling is public.",
-    "Environment policy: dev expects devnet USDC; staging and production expect mainnet USDC.",
+    "Environment policy: dev expects devnet USDC; production expects mainnet USDC.",
     "Supported trading tokens/pairs are published in the catalog under supportedTrading.",
     "Authenticated account/trading routes are not listed here.",
     "",
