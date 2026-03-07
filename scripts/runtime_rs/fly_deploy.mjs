@@ -94,6 +94,35 @@ function destroyMismatchedStandbys(config, machines, primaryMachineId) {
   }
 }
 
+async function replaceStandbyRegionMachines(config, primaryMachineId) {
+  const deadline = Date.now() + 120_000;
+
+  while (Date.now() < deadline) {
+    const standbyRegionMachines = listMachines(config.appName).filter(
+      (machine) =>
+        machine?.region === config.standbyRegion &&
+        machine?.state !== "destroyed",
+    );
+
+    if (standbyRegionMachines.length === 0) {
+      return ensureStandby(config, primaryMachineId);
+    }
+
+    for (const machine of standbyRegionMachines) {
+      runFly(
+        ["machine", "destroy", machine.id, "--app", config.appName, "--force"],
+        { stdio: "inherit" },
+      );
+    }
+
+    await sleep(2_000);
+  }
+
+  throw new Error(
+    `standby region ${config.standbyRegion} did not converge for ${config.appName}`,
+  );
+}
+
 function ensureApp(config) {
   const status = runFly(["status", "--app", config.appName], {
     allowFailure: true,
@@ -185,8 +214,7 @@ async function main() {
   pruneExtraPrimaryMachines(config, machines, primary.id);
   machines = listMachines(config.appName);
   destroyMismatchedStandbys(config, machines, primary.id);
-  machines = listMachines(config.appName);
-  const standby = await ensureStandby(config, primary.id);
+  const standby = await replaceStandbyRegionMachines(config, primary.id);
 
   console.log(
     JSON.stringify(
