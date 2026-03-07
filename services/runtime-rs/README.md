@@ -11,6 +11,8 @@ cargo fmt --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p runtime-rs
+bun run runtime:fly:deploy
+bun run runtime:fly:smoke
 ```
 
 ## Environment variables
@@ -26,6 +28,8 @@ cargo run -p runtime-rs
   Default: `http://127.0.0.1:8888`
 - `RUNTIME_INTERNAL_SERVICE_TOKEN`
   Shared bearer token used for private runtime-to-Worker requests.
+- `RUNTIME_DATABASE_URL`
+  Optional runtime-owned relational store bootstrap secret for later phases.
 
 ## Health check
 
@@ -36,3 +40,15 @@ curl -fsS http://127.0.0.1:8081/health
 Expected output is a JSON document describing the service name, environment,
 protocol version, bind address, strategy support, and internal dependency
 stubs.
+
+## Fly foundation
+
+- Config: `fly.runtime-rs.toml`
+- Docker image: `services/runtime-rs/Dockerfile`
+- Default app: `ralph-runtime-rs`
+- Default regions:
+  - active: `ord`
+  - warm standby: `iad`
+- GitHub workflows:
+  - `.github/workflows/deploy-runtime-rs.yml`
+  - `.github/workflows/rollback-runtime-rs.yml`

@@ -16,6 +16,8 @@
     "harness:down": "bun run src/bin/harness.ts down",
     "harness:status": "bun run src/bin/harness.ts status",
     "harness:proof": "bun run src/bin/harness.ts proof",
+    "runtime:fly:deploy": "node scripts/runtime_rs/fly_deploy.mjs",
+    "runtime:fly:smoke": "node scripts/runtime_rs/fly_smoke.mjs",
     "runner:once": "bun run src/bin/runner.ts once",
     "runner:start": "bun run src/bin/runner.ts start",
     "build": "bun build src/bin/ralph.ts --outdir dist/bin --target node --format esm",

@@ -186,6 +186,23 @@ Expected behavior:
   protocol version, and bind address,
 - config loads from environment variables instead of tracked files.
 
+### 3c. Runtime-rs Fly foundation verification
+
+Fly deploy and smoke:
+
+```bash
+bun run runtime:fly:deploy
+bun run runtime:fly:smoke
+```
+
+Expected behavior:
+
+- Fly app `ralph-runtime-rs` exists in the personal Fly org,
+- one primary machine runs in `ord`,
+- one warm standby machine exists in `iad`,
+- `https://ralph-runtime-rs.fly.dev/health` returns `serviceName=runtime-rs`
+  and `environment=production`.
+
 ### 4. x402 and discovery verification
 
 Portal-side discovery:
@@ -374,6 +391,20 @@ gh workflow run rollback-production.yml \
 This redeploys the previous `main` commit unless an explicit `target_sha` is
 provided. The workflow posts a summary to the run and can also comment on a PR
 when `pr_number` is supplied.
+
+### Runtime-rs rollback automation
+
+Runtime-rs uses its own Fly rollback workflow:
+
+```bash
+gh workflow run rollback-runtime-rs.yml \
+  --raw-field reason="manual runtime-rs rollback" \
+  --raw-field pr_number="<optional-pr-number>"
+```
+
+This redeploys the previous `main` commit for `ralph-runtime-rs` unless an
+explicit `target_sha` is supplied. The workflow uploads the Fly smoke summary
+and can comment on a PR when `pr_number` is supplied.
 
 ### Production triage and verification
 

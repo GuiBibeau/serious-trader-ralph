@@ -38,6 +38,21 @@ Verify:
 - reconciliation backlog,
 - runtime canary status.
 
+Fly foundation commands:
+
+```bash
+bun run runtime:fly:deploy
+bun run runtime:fly:smoke
+gh workflow run rollback-runtime-rs.yml --raw-field reason="manual rollback"
+```
+
+Expected topology for v1:
+
+- active app: `ralph-runtime-rs`
+- active region: `ord`
+- warm standby region: `iad`
+- public health endpoint: `https://ralph-runtime-rs.fly.dev/health`
+
 ### Pause a deployment
 
 Use pause when:
@@ -117,6 +132,7 @@ Response:
 - Prefer pause or kill controls before code rollback.
 - If code rollback is required, revert the offending PR and redeploy through the
   same harness flow.
+- Runtime-rs code rollback uses `.github/workflows/rollback-runtime-rs.yml`.
 - Do not shift public traffic directly to runtime-rs in any rollout covered by
   this runbook; the Worker stays the contract boundary.
 
