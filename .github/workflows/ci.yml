@@ -334,43 +334,32 @@ jobs:
               return String(match.conclusion ?? "pending").toLowerCase();
             }
 
-            const prDetails = await github.graphql(
-              `query($owner: String!, $repo: String!, $number: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $number) {
-                    statusCheckRollup(first: 30) {
-                      nodes {
-                        __typename
-                        ... on CheckRun {
-                          name
-                          status
-                          conclusion
-                        }
-                        ... on StatusContext {
-                          context
-                          state
-                        }
-                      }
-                    }
-                  }
-                }
-              }`,
-              {
+            const [checkRunsResponse, combinedStatusResponse] = await Promise.all([
+              github.rest.checks.listForRef({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                number: context.issue.number,
-              },
-            );
-            const rollup =
-              prDetails.repository.pullRequest.statusCheckRollup.nodes.map((node) =>
-                node.__typename === "StatusContext"
-                  ? {
-                      __typename: "StatusContext",
-                      name: node.context,
-                      state: node.state,
-                    }
-                  : node,
-              );
+                ref: context.payload.pull_request.head.sha,
+                per_page: 100,
+              }),
+              github.rest.repos.getCombinedStatusForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+              }),
+            ]);
+            const rollup = [
+              ...checkRunsResponse.data.check_runs.map((checkRun) => ({
+                __typename: "CheckRun",
+                name: checkRun.name,
+                status: checkRun.status,
+                conclusion: checkRun.conclusion,
+              })),
+              ...combinedStatusResponse.data.statuses.map((statusContext) => ({
+                __typename: "StatusContext",
+                name: statusContext.context,
+                state: statusContext.state,
+              })),
+            ];
 
             const checksLines = requiredChecks.map(
               (check) => `- ${check}: ${normalizeCheckStatus(rollup, check)}`,
