@@ -92,6 +92,12 @@ type CanaryBalanceSnapshot = {
   usdcAtomic: bigint;
 };
 
+type SuccessfulCanaryRequestStatusPlan = {
+  requestTerminalStatus: "landed";
+  requestFinalStatus: "finalized";
+  receiptStatus: "finalized";
+};
+
 function readBooleanEnv(value: unknown, fallback = false): boolean {
   const normalized = String(value ?? "")
     .trim()
@@ -115,6 +121,53 @@ function readNumberEnv(
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
+}
+
+function successfulCanaryRequestStatusPlan(): SuccessfulCanaryRequestStatusPlan {
+  return {
+    requestTerminalStatus: "landed",
+    requestFinalStatus: "finalized",
+    receiptStatus: "finalized",
+  };
+}
+
+async function finalizeSuccessfulCanaryRequest(input: {
+  db: D1Database;
+  requestId: string;
+  settledAt: string;
+  details: JsonObject;
+}): Promise<void> {
+  const plan = successfulCanaryRequestStatusPlan();
+  const landed = await terminalizeExecutionRequest(input.db, {
+    requestId: input.requestId,
+    status: plan.requestTerminalStatus,
+    statusReason: null,
+    details: input.details,
+    nowIso: input.settledAt,
+  });
+  if (
+    !landed.applied &&
+    landed.request?.status !== plan.requestTerminalStatus &&
+    landed.request?.status !== plan.requestFinalStatus
+  ) {
+    throw new Error("execution-canary-landed-terminalization-failed");
+  }
+  const finalized = await updateExecutionRequestStatus(input.db, {
+    requestId: input.requestId,
+    status: plan.requestFinalStatus,
+    statusReason: null,
+    nowIso: input.settledAt,
+  });
+  if (!finalized) {
+    throw new Error("execution-canary-request-finalization-failed");
+  }
+  await appendExecutionStatusEvent(input.db, {
+    requestId: input.requestId,
+    status: plan.requestFinalStatus,
+    reason: null,
+    details: input.details,
+    createdAt: input.settledAt,
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -899,7 +952,13 @@ export async function runExecutionCanary(input: {
     });
     const settledAt = new Date().toISOString();
     const failure = executionFailureFromResult(result.status, result.err);
-    const terminalStatus = failure ? failure.terminalStatus : "finalized";
+    const successPlan = successfulCanaryRequestStatusPlan();
+    const requestTerminalStatus = failure
+      ? failure.terminalStatus
+      : successPlan.requestTerminalStatus;
+    const receiptFinalizedStatus = failure
+      ? failure.terminalStatus
+      : successPlan.receiptStatus;
     const errorMessage = executionErrorMessage(result.err);
     const providerResponse: JsonObject = {
       ...providerResponseBase,
@@ -920,7 +979,7 @@ export async function runExecutionCanary(input: {
     const receiptRow = await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
       requestId,
       receiptId: newExecutionReceiptId(),
-      finalizedStatus: terminalStatus,
+      finalizedStatus: receiptFinalizedStatus,
       lane: laneResolution.lane,
       provider: laneResolution.adapter,
       signature: result.signature,
@@ -931,7 +990,7 @@ export async function runExecutionCanary(input: {
         canary: true,
         mode: "privy_execute",
         route: laneResolution.adapter,
-        outcome: terminalStatus,
+        outcome: receiptFinalizedStatus,
         resultStatus: result.status,
         quote: {
           inputMint: quoteSummary.inputMint,
@@ -943,17 +1002,27 @@ export async function runExecutionCanary(input: {
       },
       readyAt: settledAt,
     });
-    await terminalizeExecutionRequest(env.WAITLIST_DB, {
-      requestId,
-      status: terminalStatus,
-      statusReason: failure ? failure.statusReason : null,
-      details: {
-        provider: laneResolution.adapter,
-        attempt: 1,
-        ...(result.signature ? { signature: result.signature } : {}),
-      },
-      nowIso: settledAt,
-    });
+    const requestDetails = {
+      provider: laneResolution.adapter,
+      attempt: 1,
+      ...(result.signature ? { signature: result.signature } : {}),
+    } satisfies JsonObject;
+    if (failure) {
+      await terminalizeExecutionRequest(env.WAITLIST_DB, {
+        requestId,
+        status: requestTerminalStatus,
+        statusReason: failure.statusReason,
+        details: requestDetails,
+        nowIso: settledAt,
+      });
+    } else {
+      await finalizeSuccessfulCanaryRequest({
+        db: env.WAITLIST_DB,
+        requestId,
+        settledAt,
+        details: requestDetails,
+      });
+    }
 
     const latest = await getExecutionLatestStatus(env.WAITLIST_DB, requestId);
     const attempts = await listExecutionAttempts(env.WAITLIST_DB, requestId);
@@ -1126,4 +1195,5 @@ export const executionCanaryTestExports = {
   nextExecutionCanaryDirection,
   parseUsdAtomic,
   readExecutionCanaryConfig,
+  successfulCanaryRequestStatusPlan,
 };
