@@ -227,6 +227,7 @@ describe("worker loop A health + latency telemetry", () => {
 
   test("api health returns loop-a artifact when available", async () => {
     const { env } = createEnv({ withR2: false });
+    env.LOOP_A_SLOT_SOURCE_ENABLED = "1";
     const cursorState = createCursorState({ head: 640, state: 640 });
     await recordLoopAHealthTick(env, {
       ok: true,
@@ -252,5 +253,29 @@ describe("worker loop A health + latency telemetry", () => {
         lastSuccessfulSlot: 640,
       },
     });
+  });
+
+  test("api health ignores stale loop-a errors when slot source is disabled", async () => {
+    const { env } = createEnv({ withR2: false });
+    await recordLoopAHealthTick(env, {
+      ok: false,
+      trigger: "scheduled",
+      startedAtMs: 1000,
+      nowMs: 1300,
+      observedAt: "2026-02-21T12:30:00.000Z",
+      cursorStateFallback: createCursorState({ head: 900, state: 640 }),
+      error: new Error("loop-a-slot-source-disabled"),
+    });
+
+    env.LOOP_A_SLOT_SOURCE_ENABLED = "0";
+
+    const response = await worker.fetch(
+      new Request("http://localhost/api/health", { method: "GET" }),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
   });
 });
