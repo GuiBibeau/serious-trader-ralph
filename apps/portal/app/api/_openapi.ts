@@ -60,6 +60,14 @@ function fieldSchema(field: FieldSpec): Record<string, unknown> {
     };
   }
 
+  if (type === "object") {
+    return {
+      type: "object",
+      additionalProperties: true,
+      description: field.description,
+    };
+  }
+
   if (type.endsWith("[]") || type.startsWith("Array<")) {
     return {
       type: "array",
@@ -89,6 +97,7 @@ function requestSchema(endpoint: X402EndpointSpec): Record<string, unknown> {
 }
 
 function hasRequestBody(endpoint: X402EndpointSpec): boolean {
+  if (endpoint.method !== "POST") return false;
   return (
     endpoint.requiredFields.length > 0 ||
     endpoint.optionalFields.length > 0 ||
@@ -96,13 +105,36 @@ function hasRequestBody(endpoint: X402EndpointSpec): boolean {
   );
 }
 
+function isPaidX402Endpoint(endpoint: X402EndpointSpec): boolean {
+  return endpoint.access === "public-x402-paid";
+}
+
+function parseOpenApiPathParameters(path: string): string[] {
+  return Array.from(path.matchAll(/\{([A-Za-z0-9_]+)\}/g)).map(
+    (match) => match[1] ?? "",
+  );
+}
+
+function toOpenApiPath(path: string): string {
+  return path.replace(/:([A-Za-z0-9_]+)/g, "{$1}");
+}
+
 function x402Operation(endpoint: X402EndpointSpec): Record<string, unknown> {
+  const pathParams = parseOpenApiPathParameters(endpoint.path).map((name) => ({
+    name,
+    in: "path",
+    required: true,
+    schema: { type: "string" },
+    description: `Path parameter: ${name}.`,
+  }));
+  const paid = isPaidX402Endpoint(endpoint);
   return {
     tags: ["x402"],
     operationId: `x402_${endpoint.id}`,
     summary: endpoint.summary,
     description: `${endpoint.summary} ${X402_OVERVIEW.scope}`,
-    security: [{ paymentSignature: [] }],
+    ...(pathParams.length > 0 ? { parameters: pathParams } : {}),
+    ...(paid ? { security: [{ paymentSignature: [] }] } : {}),
     ...(hasRequestBody(endpoint)
       ? {
           requestBody: {
@@ -118,14 +150,20 @@ function x402Operation(endpoint: X402EndpointSpec): Record<string, unknown> {
       : {}),
     responses: {
       "200": {
-        description: "Paid request accepted and completed.",
-        headers: {
-          [PAYMENT_RESPONSE_HEADER]: {
-            description:
-              "x402 settlement metadata for the successful paid request.",
-            schema: { type: "string" },
-          },
-        },
+        description: paid
+          ? "Paid request accepted and completed."
+          : "Request completed.",
+        ...(paid
+          ? {
+              headers: {
+                [PAYMENT_RESPONSE_HEADER]: {
+                  description:
+                    "x402 settlement metadata for the successful paid request.",
+                  schema: { type: "string" },
+                },
+              },
+            }
+          : {}),
         content: {
           "application/json": {
             schema: {
@@ -139,24 +177,29 @@ function x402Operation(endpoint: X402EndpointSpec): Record<string, unknown> {
       "400": {
         description: "Invalid request payload.",
       },
-      "402": {
-        description: "Payment is required before this route can be accessed.",
-        headers: {
-          [PAYMENT_REQUIRED_HEADER]: {
-            description: "x402 payment requirements for this route.",
-            schema: { type: "string" },
-          },
-        },
-        content: {
-          "application/json": {
-            schema: {
-              type: "object",
-              additionalProperties: true,
+      ...(paid
+        ? {
+            "402": {
+              description:
+                "Payment is required before this route can be accessed.",
+              headers: {
+                [PAYMENT_REQUIRED_HEADER]: {
+                  description: "x402 payment requirements for this route.",
+                  schema: { type: "string" },
+                },
+              },
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: true,
+                  },
+                  example: X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
+                },
+              },
             },
-            example: X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE,
-          },
-        },
-      },
+          }
+        : {}),
       "503": {
         description: "Route configuration or upstream dependency unavailable.",
       },
@@ -167,8 +210,9 @@ function x402Operation(endpoint: X402EndpointSpec): Record<string, unknown> {
 function x402Paths(): Record<string, unknown> {
   return Object.fromEntries(
     X402_ENDPOINTS.map((endpoint) => {
-      const runtimePath = toApiRuntimePath(endpoint.path);
-      return [runtimePath, { post: x402Operation(endpoint) }];
+      const runtimePath = toApiRuntimePath(toOpenApiPath(endpoint.path));
+      const methodKey = endpoint.method.toLowerCase();
+      return [runtimePath, { [methodKey]: x402Operation(endpoint) }];
     }),
   );
 }
@@ -210,7 +254,7 @@ export function buildOpenApiDocument(
       {
         name: "x402",
         description:
-          "Paid x402 read endpoints requiring the payment-signature header.",
+          "x402 routes including paid submit/read endpoints and public execution polling routes.",
       },
     ],
     components: {

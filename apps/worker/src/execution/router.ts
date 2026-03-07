@@ -1,3 +1,4 @@
+import { executeHeliusSenderSwap } from "./helius_sender_executor";
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
 import { executeJupiterSwap } from "./jupiter_executor";
 import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
@@ -9,6 +10,7 @@ export type ExecutionAdapterFn = (
 
 const ADAPTERS = new Map<string, ExecutionAdapterFn>([
   ["jupiter", executeJupiterSwap],
+  ["helius_sender", executeHeliusSenderSwap],
   ["jito_bundle", executeJitoBundleSwap],
   ["magicblock_ephemeral_rollup", executeMagicBlockEphemeralRollupSwap],
 ]);

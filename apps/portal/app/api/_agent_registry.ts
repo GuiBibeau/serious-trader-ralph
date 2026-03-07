@@ -1,8 +1,8 @@
 import devMetadata from "../../../../docs/agent-registry/metadata.dev.json";
 import productionMetadata from "../../../../docs/agent-registry/metadata.production.json";
-import stagingMetadata from "../../../../docs/agent-registry/metadata.staging.json";
+import { buildDiscoveryUrls, toAbsoluteApiUrl } from "./_discovery";
 
-export type AgentRegistryLane = "dev" | "staging" | "production";
+export type AgentRegistryLane = "dev" | "production";
 
 type AgentRegistryMetadata = {
   name: string;
@@ -36,7 +36,6 @@ function parseHostname(apiOrigin: string): string {
 export function laneFromApiOrigin(apiOrigin: string): AgentRegistryLane {
   const hostname = parseHostname(apiOrigin);
   if (hostname === "dev.api.trader-ralph.com") return "dev";
-  if (hostname === "staging.api.trader-ralph.com") return "staging";
   return "production";
 }
 
@@ -44,7 +43,6 @@ export function metadataForLane(
   lane: AgentRegistryLane,
 ): AgentRegistryMetadata {
   if (lane === "dev") return structuredClone(devMetadata);
-  if (lane === "staging") return structuredClone(stagingMetadata);
   return structuredClone(productionMetadata);
 }
 
@@ -55,9 +53,20 @@ export function resolveAgentRegistryMetadata(
   generatedAt: string;
 } {
   const lane = laneFromApiOrigin(apiOrigin);
+  const discovery = buildDiscoveryUrls(apiOrigin);
   const metadata = metadataForLane(lane);
   return {
     ...metadata,
+    queryEndpoint: toAbsoluteApiUrl(apiOrigin, "/api/agent/query"),
+    openApiUrl: discovery.openapi,
+    discoveryUrls: {
+      html: discovery.html,
+      json: discovery.json,
+      text: discovery.text,
+      llms: discovery.llms,
+      skills: discovery.skills,
+      metadata: discovery.agentRegistryMetadata,
+    },
     lane,
     generatedAt: new Date().toISOString(),
   };

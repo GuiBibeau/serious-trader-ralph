@@ -18,6 +18,7 @@ export function MacroStablecoinWidget({
 }: MacroStablecoinWidgetProps) {
   const feed = useMacroStablecoinHealth();
   const data = feed.data;
+  const tradeEnabled = typeof onTradeAction === "function";
   const rows = (data?.stablecoins ?? []).slice(0, 4);
 
   return (
@@ -47,7 +48,9 @@ export function MacroStablecoinWidget({
               </p>
               <div className="mt-2 flex gap-2">
                 <button
-                  className={`${BTN_SECONDARY} !h-7 !px-2.5 !py-0 text-[10px]`}
+                  className={`${BTN_SECONDARY} !h-7 !px-2.5 !py-0 text-[10px] ${
+                    !tradeEnabled ? "opacity-60 pointer-events-none" : ""
+                  }`}
                   onClick={() =>
                     onTradeAction?.(
                       createSolUsdcIntent("buy", "STABLECOIN_HEALTH", {
@@ -56,11 +59,14 @@ export function MacroStablecoinWidget({
                     )
                   }
                   type="button"
+                  disabled={!tradeEnabled}
                 >
                   Deploy USDC -&gt; SOL
                 </button>
                 <button
-                  className={`${BTN_SECONDARY} !h-7 !px-2.5 !py-0 text-[10px]`}
+                  className={`${BTN_SECONDARY} !h-7 !px-2.5 !py-0 text-[10px] ${
+                    !tradeEnabled ? "opacity-60 pointer-events-none" : ""
+                  }`}
                   onClick={() =>
                     onTradeAction?.(
                       createSolUsdcIntent("sell", "STABLECOIN_HEALTH", {
@@ -69,6 +75,7 @@ export function MacroStablecoinWidget({
                     )
                   }
                   type="button"
+                  disabled={!tradeEnabled}
                 >
                   Reduce SOL -&gt; USDC
                 </button>

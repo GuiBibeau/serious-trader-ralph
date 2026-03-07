@@ -14,6 +14,29 @@ import {
 } from "../_discovery";
 
 const CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=600";
+const EXEC_SUBMIT_PRIVY_EXAMPLE = {
+  schemaVersion: "v1",
+  mode: "privy_execute",
+  lane: "safe",
+  metadata: {
+    source: "terminal-ui",
+    reason: "rebalance",
+    clientRequestId: "ui-001",
+  },
+  privyExecute: {
+    intentType: "swap",
+    wallet: "4Nd1mYjtY9p7jW3nX5z9r4s1v6u8t2q3m5n7p9r1s2t3",
+    swap: {
+      inputMint: "So11111111111111111111111111111111111111112",
+      outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      amountAtomic: "100000000",
+      slippageBps: 50,
+    },
+    options: {
+      commitment: "confirmed",
+    },
+  },
+} satisfies Record<string, unknown>;
 
 function formatFields(
   label: string,
@@ -40,7 +63,7 @@ export function GET(request: Request): Response {
     `version: ${X402_CATALOG_VERSION}`,
     "",
     `offering: ${X402_OVERVIEW.offering}`,
-    "scope: x402 public read endpoints only",
+    "scope: public x402 endpoints (/x402/read/* and /x402/exec/*)",
     "",
     "x402 flow:",
     "1) POST endpoint",
@@ -50,16 +73,17 @@ export function GET(request: Request): Response {
     "",
     "verification:",
     "payment-signature must reference an on-chain Solana transfer that matches network, mint, payTo, and amount.",
-    "dev environment uses devnet USDC; staging and production use mainnet USDC.",
+    "dev environment uses devnet USDC; production uses mainnet USDC.",
     "",
     "headers:",
     "request: payment-signature",
     "response: payment-required, payment-response",
+    "note: /x402/exec/status/{requestId} and /x402/exec/receipt/{requestId} are public and do not require payment.",
     "",
     "runtime urls:",
     `api origin: ${apiOrigin}`,
-    `x402 base path: ${toApiRuntimePath("/x402/read")}`,
-    `x402 base url: ${toAbsoluteApiUrl(apiOrigin, toApiRuntimePath("/x402/read"))}`,
+    `x402 base path: ${toApiRuntimePath("/x402")}`,
+    `x402 base url: ${toAbsoluteApiUrl(apiOrigin, toApiRuntimePath("/x402"))}`,
     "",
     `example 402 response: ${JSON.stringify(X402_PAYMENT_REQUIRED_RESPONSE_EXAMPLE)}`,
     "",
@@ -90,6 +114,12 @@ export function GET(request: Request): Response {
     lines.push(
       `  example response: ${JSON.stringify(endpoint.responseExample)}`,
     );
+    if (endpoint.id === "exec_submit") {
+      lines.push(
+        `  example request (privy_execute): ${JSON.stringify(EXEC_SUBMIT_PRIVY_EXAMPLE)}`,
+      );
+      lines.push("  required header: Idempotency-Key");
+    }
   }
 
   const body = `${lines.join("\n")}\n`;

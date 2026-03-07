@@ -215,6 +215,23 @@ export class SolanaRpc {
     );
   }
 
+  async isBlockhashValid(
+    blockhash: string,
+    opts?: {
+      commitment?: "processed" | "confirmed" | "finalized";
+    },
+  ): Promise<boolean> {
+    const result = await this.request<{
+      value?: boolean;
+    }>("isBlockhashValid", [
+      blockhash,
+      {
+        commitment: opts?.commitment ?? "confirmed",
+      },
+    ]);
+    return Boolean(result?.value);
+  }
+
   async confirmSignature(
     signature: string,
     opts?: {

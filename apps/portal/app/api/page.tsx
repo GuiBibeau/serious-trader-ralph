@@ -17,7 +17,7 @@ import {
 export const metadata: Metadata = {
   title: "API Catalog | Trader Ralph",
   description:
-    "Public x402 endpoint catalog for Trader Ralph market, macro, and perps reads.",
+    "Public x402 endpoint catalog for Trader Ralph reads and execution submit/status/receipt.",
 };
 
 function renderFieldList(
@@ -55,7 +55,7 @@ export default async function ApiCatalogPage() {
   const requestHeaders = await headers();
   const apiOrigin = resolveApiOriginFromHeaders(requestHeaders);
   const discovery = buildDiscoveryUrls(apiOrigin);
-  const x402BasePath = toApiRuntimePath("/x402/read");
+  const x402BasePath = toApiRuntimePath("/x402");
   const x402BaseUrl = toAbsoluteApiUrl(apiOrigin, x402BasePath);
 
   return (
@@ -64,7 +64,7 @@ export default async function ApiCatalogPage() {
         <div className="w-[min(1120px,92vw)] mx-auto space-y-6">
           <div className="card p-6">
             <p className="label">Public API Catalog</p>
-            <h1 className="mt-2.5">x402 Read Endpoints</h1>
+            <h1 className="mt-2.5">x402 Endpoints</h1>
             <p className="text-muted mt-3 max-w-3xl">{X402_OVERVIEW.scope}</p>
             <p className="text-xs text-muted mt-3">
               Catalog version: <code>{X402_CATALOG_VERSION}</code>
@@ -142,6 +142,10 @@ export default async function ApiCatalogPage() {
             <p className="text-xs text-muted mt-4">
               Route pricing should always be read from the{" "}
               <code>payment-required</code> header payload.
+            </p>
+            <p className="text-xs text-muted mt-2">
+              Payment required for <code>/x402/read/*</code> and{" "}
+              <code>/x402/exec/submit</code>. Status/receipt polling is public.
             </p>
             <div className="mt-4">
               <p className="text-xs text-muted mb-1.5">

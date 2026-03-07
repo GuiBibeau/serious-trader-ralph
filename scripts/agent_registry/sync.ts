@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { IPFSClient, SolanaSDK } from "8004-solana";
 
-type Lane = "dev" | "staging" | "production";
+type Lane = "dev" | "production";
 type Step = "validate" | "publish" | "register" | "submit" | "all";
 
 type AgentMetadata = {
@@ -44,19 +44,16 @@ type RunState = {
 
 const LANE_TO_BASE_URL: Record<Lane, string> = {
   dev: "https://dev.api.trader-ralph.com",
-  staging: "https://staging.api.trader-ralph.com",
   production: "https://api.trader-ralph.com",
 };
 
 const LANE_TO_CLUSTER: Record<Lane, "devnet" | "mainnet-beta"> = {
   dev: "devnet",
-  staging: "devnet",
   production: "mainnet-beta",
 };
 
 const LANE_TO_METADATA_PATH: Record<Lane, string> = {
   dev: resolve("docs/agent-registry/metadata.dev.json"),
-  staging: resolve("docs/agent-registry/metadata.staging.json"),
   production: resolve("docs/agent-registry/metadata.production.json"),
 };
 
@@ -73,7 +70,7 @@ function parseArgs(argv: string[]): {
     const arg = argv[i];
     if (arg === "--lane") {
       const value = argv[i + 1] as Lane | undefined;
-      if (!value || !["dev", "staging", "production"].includes(value)) {
+      if (!value || !["dev", "production"].includes(value)) {
         throw new Error("invalid-or-missing-lane");
       }
       lane = value;

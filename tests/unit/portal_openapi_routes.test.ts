@@ -9,6 +9,10 @@ function toRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function toOpenApiPath(path: string): string {
+  return path.replace(/:([A-Za-z0-9_]+)/g, "{$1}");
+}
+
 describe("portal openapi routes", () => {
   test("GET /openapi.json returns OpenAPI 3.1 with public routes", async () => {
     const response = getOpenApi(
@@ -29,15 +33,24 @@ describe("portal openapi routes", () => {
     expect(paths?.["/openapi.json"]).toBeDefined();
     expect(paths?.["/api/llms.txt"]).toBeDefined();
     expect(paths?.["/agent-registry/metadata.json"]).toBeDefined();
+    expect(paths?.["/api/x402/exec/submit"]).toBeDefined();
+    expect(paths?.["/api/x402/exec/status/{requestId}"]).toBeDefined();
+    expect(paths?.["/api/x402/exec/receipt/{requestId}"]).toBeDefined();
 
     for (const endpoint of X402_ENDPOINTS) {
-      const path = toApiRuntimePath(endpoint.path);
+      const path = toApiRuntimePath(toOpenApiPath(endpoint.path));
       const pathItem = toRecord(paths?.[path]);
       expect(pathItem).not.toBeNull();
-      const post = toRecord(pathItem?.post);
-      expect(post).not.toBeNull();
-      const security = Array.isArray(post?.security) ? post.security : [];
-      expect(security.length).toBeGreaterThan(0);
+      const operation = toRecord(pathItem?.[endpoint.method.toLowerCase()]);
+      expect(operation).not.toBeNull();
+      const security = Array.isArray(operation?.security)
+        ? operation.security
+        : [];
+      if (endpoint.access === "public-x402-paid") {
+        expect(security.length).toBeGreaterThan(0);
+      } else {
+        expect(security.length).toBe(0);
+      }
     }
 
     const components = toRecord(doc?.components);

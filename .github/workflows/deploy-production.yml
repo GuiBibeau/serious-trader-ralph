@@ -1,0 +1,57 @@
+name: Deploy (production)
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install worker deps
+        working-directory: apps/worker
+        run: npm install
+
+      - name: Apply D1 migrations
+        working-directory: apps/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations apply ralph_waitlist --remote --env production
+
+      - name: Deploy worker
+        working-directory: apps/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          npx wrangler deploy --env production
+
+      - name: Trigger production execution canary
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::Missing required secret ADMIN_TOKEN for production canary trigger."
+            exit 1
+          fi
+
+          curl -fsS \
+            -X POST \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" \
+            -H "content-type: application/json" \
+            https://api.trader-ralph.com/api/admin/execution/canary/run \
+            --data '{"trigger":"post_deploy"}'

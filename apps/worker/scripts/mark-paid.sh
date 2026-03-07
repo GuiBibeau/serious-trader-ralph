@@ -14,7 +14,7 @@ usage() {
 Grant manual access in a chosen Cloudflare environment.
 
 Usage:
-  ./scripts/mark-paid.sh --env <dev|staging|production> [user selector] [options]
+  ./scripts/mark-paid.sh --env <dev|production> [user selector] [options]
 
 User selector (provide one):
   --user-id <id>               Internal users.id
@@ -27,7 +27,7 @@ Options:
   --source <text>              Default: manual_onboarding
 
 Examples:
-  ./scripts/mark-paid.sh --env staging --privy-user-id did:privy:abc
+  ./scripts/mark-paid.sh --env dev --privy-user-id did:privy:abc
   ./scripts/mark-paid.sh --env production --user-id 123e4567 --years 2
 USAGE
 }
@@ -92,8 +92,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$ENVIRONMENT" != "dev" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "production" ]]; then
-  echo "Invalid --env '$ENVIRONMENT'. Use dev|staging|production." >&2
+if [[ "$ENVIRONMENT" != "dev" && "$ENVIRONMENT" != "production" ]]; then
+  echo "Invalid --env '$ENVIRONMENT'. Use dev|production." >&2
   exit 1
 fi
 

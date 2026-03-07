@@ -1,5 +1,4 @@
-import { signTransactionWithPrivyById } from "../privy";
-import { swapWithRetry } from "../swap";
+import { buildAndSignPrivySwapTransaction } from "./privy_swap_builder";
 import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
 
 type JitoRpcResponse = {
@@ -10,6 +9,11 @@ type JitoRpcResponse = {
     data?: unknown;
   };
 };
+
+const DEFAULT_PROTECTED_MAX_RETRIES = 2;
+const DEFAULT_PROTECTED_RETRY_BASE_MS = 250;
+const MAX_PROTECTED_RETRIES = 5;
+const MAX_PROTECTED_RETRY_BASE_MS = 5_000;
 
 let cachedTipAccounts: {
   endpoint: string;
@@ -26,6 +30,64 @@ function normalizeBlockEngineEndpoint(raw: string): string {
   if (!input) return "";
   if (input.endsWith("/api/v1/bundles")) return input;
   return `${input.replace(/\/+$/, "")}/api/v1/bundles`;
+}
+
+function parseBoundedInt(
+  raw: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  const bounded = Math.floor(parsed);
+  if (bounded < min) return min;
+  if (bounded > max) return max;
+  return bounded;
+}
+
+function mapProtectedErrorCode(input: {
+  message?: string | null;
+  bundleStatus?: string | null;
+}): string {
+  const message = String(input.message ?? "")
+    .trim()
+    .toLowerCase();
+  const bundleStatus = String(input.bundleStatus ?? "")
+    .trim()
+    .toLowerCase();
+  const joined = `${message} ${bundleStatus}`;
+  if (joined.includes("timeout")) return "venue-timeout";
+  if (
+    joined.includes("blockhash") &&
+    (joined.includes("not found") ||
+      joined.includes("expired") ||
+      joined.includes("stale"))
+  ) {
+    return "expired-blockhash";
+  }
+  return "submission-failed";
+}
+
+function classifyStatus(
+  status: Extract<
+    ExecuteSwapResult["status"],
+    "processed" | "confirmed" | "finalized" | "error"
+  >,
+): "landed" | "confirmed" | "finalized" | "error" {
+  if (status === "processed") return "landed";
+  if (status === "confirmed") return "confirmed";
+  if (status === "finalized") return "finalized";
+  return "error";
+}
+
+async function sleepMs(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function resetJitoTipAccountCacheForTest(): void {
+  cachedTipAccounts = null;
 }
 
 async function jitoRpc(
@@ -161,25 +223,40 @@ export async function executeJitoBundleSwap(
   if (!endpoint) {
     throw new Error("jito-block-engine-url-missing");
   }
+  const maxRetries = parseBoundedInt(
+    env.EXEC_PROTECTED_MAX_RETRIES,
+    DEFAULT_PROTECTED_MAX_RETRIES,
+    0,
+    MAX_PROTECTED_RETRIES,
+  );
+  const retryBaseMs = parseBoundedInt(
+    env.EXEC_PROTECTED_RETRY_BASE_MS,
+    DEFAULT_PROTECTED_RETRY_BASE_MS,
+    0,
+    MAX_PROTECTED_RETRY_BASE_MS,
+  );
+  const maxAttempts = maxRetries + 1;
 
   if (guardEnabled) await guardEnabled();
 
   const {
-    swap,
-    quoteResponse: usedQuote,
+    signedBase64,
+    usedQuote,
     refreshed,
-  } = await swapWithRetry(jupiter, quoteResponse, userPublicKey, policy);
-  const txBuiltAt = nowIso();
-
-  if (!privyWalletId) {
-    throw new Error("missing-privy-wallet-id");
-  }
-
-  const signedBase64 = await signTransactionWithPrivyById(
+    lastValidBlockHeight,
+    txBuiltAt,
+  } = await buildAndSignPrivySwapTransaction({
     env,
+    policy,
+    rpc,
+    jupiter,
+    quoteResponse,
+    userPublicKey,
     privyWalletId,
-    swap.swapTransaction,
-  );
+    log,
+    execution: input.execution,
+    guardEnabled,
+  });
 
   if (policy.simulateOnly) {
     const sim = await rpc.simulateTransactionBase64(signedBase64, {
@@ -193,7 +270,7 @@ export async function executeJitoBundleSwap(
       signature: null,
       usedQuote,
       refreshed,
-      lastValidBlockHeight: swap.lastValidBlockHeight,
+      lastValidBlockHeight,
       err: sim.err ?? null,
       executionMeta: {
         route,
@@ -210,74 +287,172 @@ export async function executeJitoBundleSwap(
   if (guardEnabled) await guardEnabled();
 
   const tipAccount = await resolveTipAccount(endpoint);
-  const sendBundleParams = [
-    [signedBase64],
-    {
-      encoding: "base64",
-      ...(tipAccount ? { tipAccount } : {}),
-    },
-  ];
+  let lastBundleId: string | null = null;
+  let lastBundleStatus: string | null = null;
+  let lastErrorMessage = "jito-bundle-failed";
+  let lastErrorCode = "submission-failed";
 
-  log("info", "jito.bundle.submit", {
-    endpoint,
-    tipAccount: tipAccount ?? undefined,
-  });
-  const bundleResult = await jitoRpc(endpoint, "sendBundle", sendBundleParams);
-  const bundleId =
-    typeof bundleResult === "string" && bundleResult.trim()
-      ? bundleResult.trim()
-      : null;
-  const sentAt = nowIso();
+  for (let attemptNo = 1; attemptNo <= maxAttempts; attemptNo += 1) {
+    if (guardEnabled) await guardEnabled();
+    const sendBundleParams = [
+      [signedBase64],
+      {
+        encoding: "base64",
+        ...(tipAccount ? { tipAccount } : {}),
+      },
+    ];
 
-  let bundleStatus: string | null = null;
-  if (bundleId) {
-    const statuses = await jitoRpc(endpoint, "getBundleStatuses", [[bundleId]]);
-    if (Array.isArray(statuses) && statuses.length > 0) {
-      bundleStatus = extractBundleStatus(statuses[0]);
-    } else {
-      bundleStatus = extractBundleStatus(statuses);
+    try {
+      log("info", "jito.bundle.submit", {
+        endpoint,
+        tipAccount: tipAccount ?? undefined,
+        attemptNo,
+        maxAttempts,
+      });
+      const bundleResult = await jitoRpc(
+        endpoint,
+        "sendBundle",
+        sendBundleParams,
+      );
+      const bundleId =
+        typeof bundleResult === "string" && bundleResult.trim()
+          ? bundleResult.trim()
+          : null;
+      const sentAt = nowIso();
+      lastBundleId = bundleId;
+
+      let bundleStatus: string | null = null;
+      if (bundleId) {
+        const statuses = await jitoRpc(endpoint, "getBundleStatuses", [
+          [bundleId],
+        ]);
+        if (Array.isArray(statuses) && statuses.length > 0) {
+          bundleStatus = extractBundleStatus(statuses[0]);
+        } else {
+          bundleStatus = extractBundleStatus(statuses);
+        }
+      }
+      lastBundleStatus = bundleStatus;
+
+      const landedAt = nowIso();
+      const status = mapBundleStatusToResult(bundleStatus);
+      const classification = classifyStatus(status);
+
+      if (status === "error") {
+        lastErrorMessage = "jito-bundle-failed";
+        lastErrorCode = mapProtectedErrorCode({
+          message: lastErrorMessage,
+          bundleStatus,
+        });
+        log("warn", "jito.bundle.status.error", {
+          attemptNo,
+          maxAttempts,
+          bundleId,
+          bundleStatus,
+          errorCode: lastErrorCode,
+        });
+        if (attemptNo < maxAttempts) {
+          await sleepMs(attemptNo * retryBaseMs);
+          continue;
+        }
+      } else {
+        return {
+          status,
+          signature: null,
+          usedQuote,
+          refreshed,
+          lastValidBlockHeight,
+          err: null,
+          executionMeta: {
+            route,
+            classification,
+            bundleId,
+            tipAccount,
+            trace: {
+              txBuiltAt,
+              sentAt,
+              landedAt,
+              ...(status === "confirmed" || status === "finalized"
+                ? { confirmedAt: landedAt }
+                : {}),
+              ...(status === "finalized" ? { finalizedAt: landedAt } : {}),
+            },
+          },
+        };
+      }
+
+      return {
+        status: "error",
+        signature: null,
+        usedQuote,
+        refreshed,
+        lastValidBlockHeight,
+        err: {
+          code: lastErrorCode,
+          message: lastErrorMessage,
+          bundleStatus,
+          bundleId,
+          attempts: attemptNo,
+        },
+        executionMeta: {
+          route,
+          classification,
+          bundleId,
+          tipAccount,
+          trace: {
+            txBuiltAt,
+            sentAt,
+            landedAt,
+            failedAt: landedAt,
+          },
+        },
+      };
+    } catch (error) {
+      lastErrorMessage =
+        error instanceof Error
+          ? error.message
+          : String(error ?? "unknown-error");
+      lastErrorCode = mapProtectedErrorCode({
+        message: lastErrorMessage,
+        bundleStatus: lastBundleStatus,
+      });
+      log("warn", "jito.bundle.submit.failed", {
+        attemptNo,
+        maxAttempts,
+        endpoint,
+        bundleId: lastBundleId,
+        bundleStatus: lastBundleStatus,
+        errorCode: lastErrorCode,
+        errorMessage: lastErrorMessage,
+      });
+      if (attemptNo < maxAttempts) {
+        await sleepMs(attemptNo * retryBaseMs);
+      }
     }
   }
 
-  const landedAt = nowIso();
-  const status = mapBundleStatusToResult(bundleStatus);
-  const classification =
-    status === "processed"
-      ? "landed"
-      : status === "confirmed"
-        ? "confirmed"
-        : status === "finalized"
-          ? "finalized"
-          : "error";
-
+  const failedAt = nowIso();
   return {
-    status,
+    status: "error",
     signature: null,
     usedQuote,
     refreshed,
-    lastValidBlockHeight: swap.lastValidBlockHeight,
-    err:
-      status === "error"
-        ? {
-            reason: "jito-bundle-failed",
-            bundleStatus,
-            bundleId,
-          }
-        : null,
+    lastValidBlockHeight,
+    err: {
+      code: lastErrorCode,
+      message: lastErrorMessage,
+      bundleStatus: lastBundleStatus,
+      bundleId: lastBundleId,
+      attempts: maxAttempts,
+    },
     executionMeta: {
       route,
-      classification,
-      bundleId,
+      classification: "error",
+      bundleId: lastBundleId,
       tipAccount,
       trace: {
         txBuiltAt,
-        sentAt,
-        landedAt,
-        ...(status === "confirmed" || status === "finalized"
-          ? { confirmedAt: landedAt }
-          : {}),
-        ...(status === "finalized" ? { finalizedAt: landedAt } : {}),
-        ...(status === "error" ? { failedAt: landedAt } : {}),
+        failedAt,
       },
     },
   };

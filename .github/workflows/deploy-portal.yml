@@ -2,7 +2,7 @@ name: Deploy Portal (Vercel)
 
 on:
   push:
-    branches: [dev, staging, main]
+    branches: [dev, main]
 
 concurrency:
   group: deploy-portal-${{ github.ref_name }}
@@ -30,12 +30,6 @@ jobs:
               echo "site_url=https://dev.trader-ralph.com" >> "$GITHUB_OUTPUT"
               echo "alias_domains=dev.trader-ralph.com,dev.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
               echo "expected_edge_host=dev.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
-              ;;
-            staging)
-              echo "edge_api_base=https://staging.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
-              echo "site_url=https://staging.trader-ralph.com" >> "$GITHUB_OUTPUT"
-              echo "alias_domains=staging.trader-ralph.com,staging.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
-              echo "expected_edge_host=staging.api.trader-ralph.com" >> "$GITHUB_OUTPUT"
               ;;
             main)
               echo "edge_api_base=https://api.trader-ralph.com" >> "$GITHUB_OUTPUT"
@@ -66,7 +60,7 @@ jobs:
           echo "::warning::Skipping managed Vercel deploy because one or more Vercel secrets are missing for environment ${GITHUB_REF_NAME}."
           echo "enabled=false" >> "$GITHUB_OUTPUT"
 
-      - name: Enforce Vercel credentials on staging and main
+      - name: Enforce Vercel credentials on main
         if: steps.vercel_auth.outputs.enabled != 'true' && github.ref_name != 'dev'
         run: |
           set -euo pipefail
@@ -176,7 +170,7 @@ jobs:
             exit 1
           fi
 
-          if grep -qE 'ralph-edge-(dev|staging)\.gui-bibeau\.workers\.dev' "${tmp}/bundle.js"; then
+          if grep -qE 'ralph-edge-dev\.gui-bibeau\.workers\.dev' "${tmp}/bundle.js"; then
             echo "Legacy workers.dev host leaked into login bundle" >&2
             exit 1
           fi

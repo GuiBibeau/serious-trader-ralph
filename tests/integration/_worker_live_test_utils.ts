@@ -178,6 +178,10 @@ export function createWorkerLiveEnv(options?: {
     X402_ASSET_MINT: readLiveEnv("X402_ASSET_MINT", DEVNET_USDC_MINT),
     X402_ENFORCE_ONCHAIN: readLiveEnv("X402_ENFORCE_ONCHAIN", "0"),
     X402_MAX_TIMEOUT_SECONDS: readLiveEnv("X402_MAX_TIMEOUT_SECONDS", "60"),
+    X402_EXEC_SUBMIT_PRICE_USD: readLiveEnv(
+      "X402_EXEC_SUBMIT_PRICE_USD",
+      "0.01",
+    ),
     X402_MARKET_SNAPSHOT_PRICE_USD: readLiveEnv(
       "X402_MARKET_SNAPSHOT_PRICE_USD",
       "0.01",

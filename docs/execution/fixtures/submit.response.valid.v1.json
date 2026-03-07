@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "requestId": "execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+  "status": {
+    "state": "received",
+    "terminal": false,
+    "updatedAt": "2026-03-03T01:15:40.100Z"
+  },
+  "poll": {
+    "statusUrl": "/api/x402/exec/status/execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A",
+    "receiptUrl": "/api/x402/exec/receipt/execreq_01HZWXQ6V4KR2Y2XP9VJ6Y3Q7A"
+  }
+}

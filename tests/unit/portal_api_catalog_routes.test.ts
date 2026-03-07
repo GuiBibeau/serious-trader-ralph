@@ -23,6 +23,9 @@ const EXPECTED_X402_PATHS = [
   "/x402/read/perps_funding_surface",
   "/x402/read/perps_open_interest_surface",
   "/x402/read/perps_venue_score",
+  "/x402/exec/submit",
+  "/x402/exec/status/{requestId}",
+  "/x402/exec/receipt/{requestId}",
 ] as const;
 
 function toRecord(value: unknown): Record<string, unknown> | null {
@@ -51,7 +54,7 @@ describe("portal x402 api catalog routes", () => {
     const endpointsRaw = Array.isArray(payloadRecord?.endpoints)
       ? payloadRecord.endpoints
       : [];
-    expect(endpointsRaw.length).toBe(18);
+    expect(endpointsRaw.length).toBe(EXPECTED_X402_PATHS.length);
 
     const endpointRecords = endpointsRaw
       .map((item) => toRecord(item))
@@ -66,9 +69,7 @@ describe("portal x402 api catalog routes", () => {
 
     expect(endpointPaths.includes("/api/me")).toBe(false);
     expect(endpointPaths.includes("/api/trade/swap")).toBe(false);
-    expect(endpointPaths.every((path) => path.startsWith("/x402/read/"))).toBe(
-      true,
-    );
+    expect(endpointPaths.every((path) => path.startsWith("/x402/"))).toBe(true);
 
     expect(
       endpointRecords.every((endpoint) => toRecord(endpoint.requestExample)),
@@ -102,6 +103,13 @@ describe("portal x402 api catalog routes", () => {
       : null;
     expect(oilExample).not.toBeNull();
     expect(String(oilExample?.configured ?? "")).toBe("true");
+
+    const execStatusEndpoint =
+      endpointRecords.find(
+        (endpoint) => endpoint.path === "/x402/exec/status/{requestId}",
+      ) ?? null;
+    expect(execStatusEndpoint).not.toBeNull();
+    expect(execStatusEndpoint?.method).toBe("GET");
   });
 
   test("GET /api/endpoints.txt returns plain text with x402 endpoints", async () => {
@@ -146,5 +154,38 @@ describe("portal x402 api catalog routes", () => {
     const body = await response.text();
     expect(body.includes("API origin: https://portal.example")).toBe(true);
     expect(body.includes("https://portal.example/openapi.json")).toBe(true);
+  });
+
+  test("GET /api/endpoints.json uses the preview worker host on Vercel previews", async () => {
+    const originalEdgeApiBase = process.env.NEXT_PUBLIC_EDGE_API_BASE;
+    process.env.NEXT_PUBLIC_EDGE_API_BASE =
+      "https://ralph-edge-pr-235.gui-bibeau.workers.dev";
+
+    try {
+      const response = getJsonCatalog(
+        new Request(
+          "https://serious-trader-ralph-git-codex-issue-235-preview-guivercelpro.vercel.app/api/endpoints.json",
+        ),
+      );
+      expect(response.status).toBe(200);
+
+      const payload = (await response.json()) as Record<string, unknown>;
+      const runtime = toRecord(payload.runtime);
+      expect(runtime).not.toBeNull();
+      expect(String(runtime?.apiOrigin)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev",
+      );
+
+      const discovery = toRecord(payload.discovery);
+      expect(discovery).not.toBeNull();
+      expect(String(discovery?.openapi)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev/openapi.json",
+      );
+      expect(String(discovery?.agentRegistryMetadata)).toBe(
+        "https://ralph-edge-pr-235.gui-bibeau.workers.dev/agent-registry/metadata.json",
+      );
+    } finally {
+      process.env.NEXT_PUBLIC_EDGE_API_BASE = originalEdgeApiBase;
+    }
   });
 });

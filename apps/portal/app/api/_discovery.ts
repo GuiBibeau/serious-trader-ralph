@@ -43,6 +43,10 @@ function isLocalHostname(hostname: string): boolean {
   );
 }
 
+function isVercelPreviewHostname(hostname: string): boolean {
+  return hostname.endsWith(".vercel.app");
+}
+
 function mapToApiHostname(hostname: string): string {
   if (!hostname) return hostname;
   if (hostname.startsWith("api.") || hostname.includes(".api.")) {
@@ -53,9 +57,6 @@ function mapToApiHostname(hostname: string): string {
   }
   if (hostname === "dev.trader-ralph.com") {
     return "dev.api.trader-ralph.com";
-  }
-  if (hostname === "staging.trader-ralph.com") {
-    return "staging.api.trader-ralph.com";
   }
   return hostname;
 }
@@ -70,9 +71,14 @@ function resolveApiOrigin(protocolRaw: string, hostRaw: string): string {
   const protocol = normalizeProtocol(protocolRaw);
   const { hostname, port } = parseHost(hostRaw);
   if (!hostname) return "";
+  const configured = configuredApiBase();
 
   if (isLocalHostname(hostname)) {
-    return configuredApiBase() || DEFAULT_LOCAL_API_ORIGIN;
+    return configured || DEFAULT_LOCAL_API_ORIGIN;
+  }
+
+  if (configured && isVercelPreviewHostname(hostname)) {
+    return configured;
   }
 
   const apiHostname = mapToApiHostname(hostname);

@@ -11,19 +11,64 @@ import {
   USDC_MINT,
 } from "./defaults";
 import {
-  applyExecutionResultToTrace,
-  buildExecutionOutcomeFromError,
-  buildExecutionOutcomeFromResult,
-  createExecutionDecision,
-  createExecutionIntent,
-  newExecutionLatencyTrace,
-  recordExecutionReceipt,
-} from "./execution/contracts";
+  enforceExecSubmitAbuseGuard,
+  readExecSubmitPayloadWithLimits,
+} from "./execution/abuse_guard";
 import {
-  ExecutionCoordinator,
-  requestExecutionCoordinatorDecision,
-} from "./execution/coordinator";
+  bootstrapExecutionCanary,
+  isExecutionCanaryScheduledTick,
+  readExecutionCanarySnapshot,
+  resetExecutionCanary,
+  runExecutionCanary,
+} from "./execution/canary";
+import { ExecutionCoordinator } from "./execution/coordinator";
+import {
+  buildExecutionErrorEnvelope,
+  type CanonicalExecutionErrorCode,
+  executionErrorStatus,
+  normalizeExecutionErrorCode,
+} from "./execution/error_taxonomy";
+import {
+  hashExecutionSubmitPayload,
+  readIdempotencyKey,
+  reserveExecutionSubmitRequest,
+} from "./execution/idempotency";
+import {
+  readExecutionLaneRoutingConfig,
+  resolveExecutionLane,
+} from "./execution/lane_resolver";
+import {
+  DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS,
+  readExecutionObservabilitySnapshot,
+} from "./execution/observability";
+import {
+  evaluateExecutionSubmitPolicy,
+  evaluatePrivyRuntimeBalancePolicy,
+  type SubmitPolicyRuntime,
+} from "./execution/policy_engine";
+import {
+  assembleCanonicalExecutionReceiptV1,
+  canonicalExecutionReceiptStorageKey,
+} from "./execution/receipt_assembler";
+import {
+  createRelayImmutabilitySnapshot,
+  readRelayImmutabilitySnapshot,
+  verifyRelayImmutabilitySnapshot,
+} from "./execution/relay_immutability";
+import {
+  appendExecutionStatusEvent,
+  createExecutionAttemptIdempotent,
+  finalizeExecutionAttempt,
+  getExecutionLatestStatus,
+  listExecutionAttempts,
+  listExecutionStatusEvents,
+  terminalizeExecutionRequest,
+  updateExecutionRequestStatus,
+  upsertExecutionReceiptIdempotent,
+} from "./execution/repository";
+import { evaluateExecutionRolloutGate } from "./execution/rollout_gate";
 import { executeSwapViaRouter } from "./execution/router";
+import { parseExecSubmitPayload } from "./execution/submit_contract";
 import {
   type ExperienceLevel,
   evaluateOnboarding,
@@ -70,6 +115,13 @@ import {
 } from "./macro_sources";
 import { computeMarketIndicators } from "./market_indicators";
 import {
+  executionLaneRuntimeControlsFromSnapshot,
+  type OpsControlPatch,
+  readOpsControlSnapshot,
+  resetOpsControlSnapshot,
+  writeOpsControlSnapshot,
+} from "./ops_controls";
+import {
   fetchPerpsFundingSurface,
   fetchPerpsOpenInterestSurface,
   fetchPerpsVenueScore,
@@ -112,7 +164,8 @@ type ExperienceEventName =
   | "level_assigned_auto"
   | "level_overridden_manual"
   | "degen_acknowledged"
-  | "terminal_opened_from_consumer";
+  | "terminal_opened_from_consumer"
+  | "terminal_mode_changed";
 
 const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
   "onboarding_started",
@@ -122,6 +175,7 @@ const EXPERIENCE_EVENT_NAMES = new Set<ExperienceEventName>([
   "level_overridden_manual",
   "degen_acknowledged",
   "terminal_opened_from_consumer",
+  "terminal_mode_changed",
 ]);
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -141,12 +195,346 @@ const DISCOVERY_DOC_PATHS = new Set([
   "/api/agent-registry/metadata.json",
 ]);
 const BEARER_RE = /^bearer\s+/i;
+type ExecutionActorMode = "relay_signed" | "privy_execute";
+type ExecApiKeyActor = {
+  actorId: string;
+  key: string;
+  modes: Set<ExecutionActorMode>;
+};
+type ResolvedExecApiKeyActor = {
+  actorId: string;
+  modes: Set<ExecutionActorMode>;
+  authSource: "x-exec-api-key" | "authorization";
+};
 
 function parseBearerToken(value: string | null): string | null {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
   if (!BEARER_RE.test(raw)) return null;
   return raw.replace(BEARER_RE, "").trim() || null;
+}
+
+function parseExecApiKeyModes(raw: string): Set<ExecutionActorMode> {
+  const modes = new Set<ExecutionActorMode>();
+  const normalized = raw
+    .split(/[|+]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  for (const mode of normalized) {
+    if (mode === "relay_signed" || mode === "relay") {
+      modes.add("relay_signed");
+      continue;
+    }
+    if (mode === "privy_execute" || mode === "privy") {
+      modes.add("privy_execute");
+      continue;
+    }
+    if (mode === "all") {
+      modes.add("relay_signed");
+      modes.add("privy_execute");
+    }
+  }
+  if (modes.size < 1) {
+    modes.add("relay_signed");
+  }
+  return modes;
+}
+
+function parseExecApiKeyActors(raw: unknown): ExecApiKeyActor[] {
+  const entries = String(raw ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const parsed: ExecApiKeyActor[] = [];
+  for (const entry of entries) {
+    let actorId = "";
+    let key = "";
+    let modesRaw = "";
+
+    if (entry.includes("=")) {
+      const [left, right] = entry.split("=", 2);
+      actorId = left?.trim() ?? "";
+      const rightParts = String(right ?? "")
+        .split(":")
+        .map((item) => item.trim());
+      key = rightParts[0] ?? "";
+      modesRaw = rightParts.slice(1).join("|");
+    } else {
+      const parts = entry.split(":").map((item) => item.trim());
+      actorId = parts[0] ?? "";
+      key = parts[1] ?? "";
+      modesRaw = parts.slice(2).join("|");
+    }
+
+    if (!actorId || !key) continue;
+    parsed.push({
+      actorId,
+      key,
+      modes: parseExecApiKeyModes(modesRaw),
+    });
+  }
+  return parsed;
+}
+
+function resolveExecApiKeyActor(
+  request: Request,
+  env: Env,
+): ResolvedExecApiKeyActor | null {
+  const candidates: Array<{
+    token: string;
+    source: "x-exec-api-key" | "authorization";
+  }> = [];
+  const headerToken = String(
+    request.headers.get("x-exec-api-key") ?? "",
+  ).trim();
+  if (headerToken) {
+    candidates.push({
+      token: headerToken,
+      source: "x-exec-api-key",
+    });
+  }
+  const bearerToken = parseBearerToken(request.headers.get("authorization"));
+  if (bearerToken) {
+    candidates.push({
+      token: bearerToken,
+      source: "authorization",
+    });
+  }
+  if (candidates.length < 1) return null;
+
+  const actors = parseExecApiKeyActors(env.EXEC_API_KEYS);
+  for (const candidate of candidates) {
+    const match = actors.find((item) => item.key === candidate.token);
+    if (!match) continue;
+    return {
+      actorId: match.actorId,
+      modes: new Set(match.modes),
+      authSource: candidate.source,
+    };
+  }
+  return null;
+}
+
+function readBooleanEnv(value: unknown, fallback = false): boolean {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "1" || normalized === "true" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "off") {
+    return false;
+  }
+  return fallback;
+}
+
+function readNumberEnv(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function readOptionalString(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  return normalized ? normalized : null;
+}
+
+function parsePositiveIntParam(
+  raw: string | null,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number.parseInt(String(raw ?? "").trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function shouldSyncExecutePrivySubmit(env: Env): boolean {
+  return readBooleanEnv(env.EXEC_PRIVY_SYNC_SUBMIT_ENABLED, false);
+}
+
+function parseOpsControlPatch(
+  value: unknown,
+): OpsControlPatch | { error: string } {
+  if (!isRecord(value)) {
+    return { error: "invalid-ops-control-payload" };
+  }
+
+  const patch: OpsControlPatch = {
+    updatedBy: readOptionalString(value.updatedBy) ?? "admin-route",
+  };
+
+  if (isRecord(value.execution)) {
+    patch.execution = {};
+    if (value.execution.enabled !== undefined) {
+      patch.execution.enabled = readBooleanEnv(value.execution.enabled, true);
+    }
+    if (value.execution.disabledReason !== undefined) {
+      patch.execution.disabledReason = readOptionalString(
+        value.execution.disabledReason,
+      );
+    }
+    if (isRecord(value.execution.lanes)) {
+      patch.execution.lanes = {};
+      if (value.execution.lanes.fast !== undefined) {
+        patch.execution.lanes.fast = readBooleanEnv(
+          value.execution.lanes.fast,
+          true,
+        );
+      }
+      if (value.execution.lanes.protected !== undefined) {
+        patch.execution.lanes.protected = readBooleanEnv(
+          value.execution.lanes.protected,
+          true,
+        );
+      }
+      if (value.execution.lanes.safe !== undefined) {
+        patch.execution.lanes.safe = readBooleanEnv(
+          value.execution.lanes.safe,
+          true,
+        );
+      }
+    }
+  }
+
+  if (isRecord(value.canary)) {
+    patch.canary = {};
+    if (value.canary.enabled !== undefined) {
+      patch.canary.enabled = readBooleanEnv(value.canary.enabled, true);
+    }
+    if (value.canary.disabledReason !== undefined) {
+      patch.canary.disabledReason = readOptionalString(
+        value.canary.disabledReason,
+      );
+    }
+  }
+
+  return patch;
+}
+
+function newExecutionAttemptId(): string {
+  return `execatt_${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+function newExecutionReceiptId(): string {
+  return `exec_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+function executionErrorMessage(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Error) return value.message.slice(0, 2_000);
+  const text = String(value).trim();
+  return text ? text.slice(0, 2_000) : null;
+}
+
+function normalizePolicyReason(value: unknown, fallback: string): string {
+  const raw = executionErrorMessage(value) ?? "";
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-:]+|[-:]+$/g, "");
+  return normalized || fallback;
+}
+
+function asPolicyDeniedError(reason: string): Error {
+  return new Error(`policy-denied:${reason}`);
+}
+
+function execErrorResponse(input: {
+  code: CanonicalExecutionErrorCode;
+  status?: number;
+  message?: string;
+  details?: Record<string, unknown> | null;
+  requestId?: string | null;
+  headers?: HeadersInit;
+}): Response {
+  const details =
+    input.details && Object.keys(input.details).length > 0
+      ? (input.details as unknown as Record<string, unknown>)
+      : null;
+  return json(
+    buildExecutionErrorEnvelope({
+      code: input.code,
+      ...(input.message ? { message: input.message } : {}),
+      ...(details ? { details: details as never } : {}),
+      ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+    }),
+    {
+      status: input.status ?? executionErrorStatus(input.code),
+      ...(input.headers ? { headers: input.headers } : {}),
+    },
+  );
+}
+
+function policyDeniedReason(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Error) {
+    const text = value.message.trim();
+    if (text.startsWith("policy-denied:")) {
+      return text.slice("policy-denied:".length) || "policy-denied";
+    }
+    return null;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text.startsWith("policy-denied:")) {
+      return text.slice("policy-denied:".length) || "policy-denied";
+    }
+    return null;
+  }
+  if (typeof value === "object" && value && !Array.isArray(value)) {
+    const code = String((value as { code?: unknown }).code ?? "")
+      .trim()
+      .toLowerCase();
+    if (code !== "policy-denied") return null;
+    const reason = String((value as { reason?: unknown }).reason ?? "").trim();
+    return reason || "policy-denied";
+  }
+  return null;
+}
+
+function resolveTerminalFailureFromExecuteResult(
+  status: string,
+  err: unknown,
+): {
+  terminalStatus: "failed" | "rejected";
+  errorCode: string;
+  statusReason: string;
+} | null {
+  if (
+    status === "processed" ||
+    status === "confirmed" ||
+    status === "finalized"
+  ) {
+    return null;
+  }
+  const deniedReason = policyDeniedReason(err);
+  if (deniedReason) {
+    return {
+      terminalStatus: "rejected",
+      errorCode: "policy-denied",
+      statusReason: `policy-denied:${deniedReason}`,
+    };
+  }
+  const canonicalErrorCode = normalizeExecutionErrorCode({
+    statusHint: status,
+    error: err,
+    fallback: "submission-failed",
+  });
+  return {
+    terminalStatus: "failed",
+    errorCode: canonicalErrorCode,
+    statusReason: canonicalErrorCode,
+  };
 }
 
 function authorizeWaitlistWrite(
@@ -174,13 +562,114 @@ function authorizeWaitlistWrite(
   return { ok: true };
 }
 
-function resolvePortalOriginForApiHost(hostname: string): string {
+function authorizeAdminRoute(
+  request: Request,
+  env: Env,
+): { ok: true } | { ok: false; status: number; error: string } {
+  const configuredToken = String(env.ADMIN_TOKEN ?? "").trim();
+  if (!configuredToken) {
+    return {
+      ok: false,
+      status: 503,
+      error: "admin-auth-not-configured",
+    };
+  }
+
+  const token = parseBearerToken(request.headers.get("authorization"));
+  if (!token || token !== configuredToken) {
+    return {
+      ok: false,
+      status: 401,
+      error: "auth-required",
+    };
+  }
+
+  return { ok: true };
+}
+
+function readExecObservabilityThresholds(env: Env) {
+  return {
+    minSampleSize: Math.floor(
+      readNumberEnv(
+        env.EXEC_OBS_ALERT_MIN_SAMPLE_SIZE,
+        DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.minSampleSize,
+        1,
+        50_000,
+      ),
+    ),
+    failRateWarning: readNumberEnv(
+      env.EXEC_OBS_ALERT_FAIL_RATE_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.failRateWarning,
+      0,
+      1,
+    ),
+    failRateCritical: readNumberEnv(
+      env.EXEC_OBS_ALERT_FAIL_RATE_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.failRateCritical,
+      0,
+      1,
+    ),
+    expiryRateWarning: readNumberEnv(
+      env.EXEC_OBS_ALERT_EXPIRY_RATE_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.expiryRateWarning,
+      0,
+      1,
+    ),
+    expiryRateCritical: readNumberEnv(
+      env.EXEC_OBS_ALERT_EXPIRY_RATE_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.expiryRateCritical,
+      0,
+      1,
+    ),
+    dispatchP95WarningMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_DISPATCH_MS_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.dispatchP95WarningMs,
+      1,
+      3_600_000,
+    ),
+    dispatchP95CriticalMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_DISPATCH_MS_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.dispatchP95CriticalMs,
+      1,
+      3_600_000,
+    ),
+    landingP95WarningMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_LANDING_MS_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.landingP95WarningMs,
+      1,
+      7_200_000,
+    ),
+    landingP95CriticalMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_LANDING_MS_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.landingP95CriticalMs,
+      1,
+      7_200_000,
+    ),
+    finalizationP95WarningMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_FINALIZATION_MS_WARN,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.finalizationP95WarningMs,
+      1,
+      7_200_000,
+    ),
+    finalizationP95CriticalMs: readNumberEnv(
+      env.EXEC_OBS_ALERT_P95_FINALIZATION_MS_CRITICAL,
+      DEFAULT_EXECUTION_OBSERVABILITY_THRESHOLDS.finalizationP95CriticalMs,
+      1,
+      7_200_000,
+    ),
+  };
+}
+
+function resolvePortalOriginForApiHost(hostname: string, env: Env): string {
   const normalized = hostname.trim().toLowerCase().split(":")[0] ?? "";
   if (normalized === "dev.api.trader-ralph.com") {
     return "https://dev.trader-ralph.com";
   }
-  if (normalized === "staging.api.trader-ralph.com") {
-    return "https://staging.trader-ralph.com";
+  const configured = String(env.PORTAL_SITE_URL ?? "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (configured) {
+    return configured;
   }
   return "https://www.trader-ralph.com";
 }
@@ -188,9 +677,10 @@ function resolvePortalOriginForApiHost(hostname: string): string {
 async function proxyPortalDiscovery(
   request: Request,
   pathname: string,
+  env: Env,
 ): Promise<Response> {
   const requestUrl = new URL(request.url);
-  const portalOrigin = resolvePortalOriginForApiHost(requestUrl.host);
+  const portalOrigin = resolvePortalOriginForApiHost(requestUrl.host, env);
   const targetPath = pathname;
   const upstream = await fetch(`${portalOrigin}${targetPath}`, {
     method: "GET",
@@ -273,6 +763,48 @@ async function recordEndpointCallSafe(
   }
 }
 
+async function sha256Hex(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  const bytes = new Uint8Array(digest);
+  return Array.from(bytes)
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function buildExecSubmitBillingAuditMetadata(
+  request: Request,
+  resourcePath: string,
+): Promise<Record<string, unknown>> {
+  const paymentSignature = String(
+    request.headers.get("payment-signature") ?? "",
+  ).trim();
+  const paymentSignatureHash =
+    paymentSignature.length > 0
+      ? `sha256:${await sha256Hex(paymentSignature)}`
+      : null;
+  return {
+    schemaVersion: "v1",
+    model: "x402",
+    routeKey: "exec_submit",
+    resource: {
+      uri: resourcePath,
+      method: request.method.toUpperCase(),
+    },
+    payment: {
+      required: true,
+      signatureProvided: paymentSignature.length > 0,
+      ...(paymentSignatureHash ? { signatureHash: paymentSignatureHash } : {}),
+    },
+    settlementHeader: "payment-response",
+    polling: {
+      statusPath: "/api/x402/exec/status/:requestId",
+      receiptPath: "/api/x402/exec/receipt/:requestId",
+      requiresPayment: false,
+    },
+  };
+}
+
 export {
   ExecutionCoordinator,
   LoopACoordinator,
@@ -301,7 +833,7 @@ function resolveX402ReadRpcEndpoint(env: Env): string {
   return X402_READ_RPC_ENDPOINT_FALLBACK;
 }
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext) {
     if (request.method === "OPTIONS") {
       return okCors(env);
@@ -310,7 +842,7 @@ export default {
     const url = new URL(request.url);
     if (request.method === "GET" && DISCOVERY_DOC_PATHS.has(url.pathname)) {
       await recordEndpointCallSafe(env, request.method, url.pathname);
-      const proxied = await proxyPortalDiscovery(request, url.pathname);
+      const proxied = await proxyPortalDiscovery(request, url.pathname, env);
       return withCors(proxied, env);
     }
     if (url.pathname !== "/api" && !url.pathname.startsWith("/api/")) {
@@ -333,6 +865,51 @@ export default {
       }
 
       if (
+        request.method === "GET" &&
+        url.pathname === "/api/x402/exec/health"
+      ) {
+        const loopAHealth = await readLoopAHealthFromKv(env);
+        const opsControls = await readOpsControlSnapshot(env);
+        const routing = readExecutionLaneRoutingConfig(
+          env,
+          executionLaneRuntimeControlsFromSnapshot(opsControls),
+        );
+        const hasLaneOnline =
+          routing.enabled.fast ||
+          routing.enabled.protected ||
+          routing.enabled.safe;
+        return withCors(
+          json({
+            ok: hasLaneOnline,
+            now: new Date().toISOString(),
+            api: {
+              ok: true,
+            },
+            loopA: loopAHealth ?? null,
+            controls: {
+              execution: opsControls.execution,
+            },
+            lanes: {
+              fast: {
+                enabled: routing.enabled.fast,
+                adapter: routing.adapters.fast,
+              },
+              protected: {
+                enabled: routing.enabled.protected,
+                adapter: routing.adapters.protected,
+              },
+              safe: {
+                enabled: routing.enabled.safe,
+                adapter: routing.adapters.safe,
+                allowAnonymous: routing.allowAnonymousSafe,
+              },
+            },
+          }),
+          env,
+        );
+      }
+
+      if (
         (request.method === "GET" || request.method === "POST") &&
         url.pathname === "/api/agent/query"
       ) {
@@ -343,6 +920,1208 @@ export default {
             ? url.searchParams.get("q")
             : (payload.query ?? payload.q);
         return withCors(json(buildAgentQueryResponse(query, url)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/x402/exec/submit"
+      ) {
+        const payloadRead = await readExecSubmitPayloadWithLimits(request, env);
+        if (!payloadRead.ok) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              status: payloadRead.status,
+              details: {
+                reason: payloadRead.reason,
+                abuse: {
+                  payload: payloadRead.metadata,
+                },
+              },
+            }),
+            env,
+          );
+        }
+        const parsed = parseExecSubmitPayload(payloadRead.payload);
+        if (!parsed.ok) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: parsed.error,
+              },
+            }),
+            env,
+          );
+        }
+
+        const idempotencyKey = readIdempotencyKey(request);
+        if (!idempotencyKey) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "missing-idempotency-key",
+              },
+            }),
+            env,
+          );
+        }
+
+        let actorType: "anonymous_x402" | "privy_user" | "api_key_actor" =
+          "anonymous_x402";
+        let actorId: string | null = null;
+        let actorAuthSource: string | null = null;
+        const isRelaySigned = parsed.value.mode === "relay_signed";
+        let submitMetadata = parsed.metadataForStorage;
+        let relayImmutability: ReturnType<
+          typeof readRelayImmutabilitySnapshot
+        > = null;
+        let relayValidationParsed: {
+          transactionVersion: "legacy" | "v0";
+          signatureCount: number;
+          txSizeBytes: number;
+          feePayer: string;
+          recentBlockhash: string;
+          programIds: string[];
+        } | null = null;
+        let submitPolicyRuntime: SubmitPolicyRuntime | null = null;
+        let privyActorContext: {
+          userId: string;
+          walletAddress: string;
+          privyWalletId: string;
+        } | null = null;
+        const payloadAbuseMetadata = payloadRead.metadata;
+        const apiKeyActor = resolveExecApiKeyActor(request, env);
+        if (apiKeyActor) {
+          if (!apiKeyActor.modes.has(parsed.value.mode)) {
+            return withCors(
+              execErrorResponse({
+                code: "policy-denied",
+                details: {
+                  reason: `api-key-mode-not-enabled:${parsed.value.mode}`,
+                },
+              }),
+              env,
+            );
+          }
+          actorType = "api_key_actor";
+          actorId = apiKeyActor.actorId;
+          actorAuthSource = `api-key:${apiKeyActor.authSource}`;
+        }
+
+        if (!isRelaySigned) {
+          if (actorType !== "api_key_actor") {
+            let user = await requireOnboardedUser(request, env);
+            user = await ensureUserWallet(env, user);
+            if (!user.walletAddress || !user.privyWalletId) {
+              return withCors(
+                execErrorResponse({
+                  code: "submission-failed",
+                  status: 503,
+                  details: {
+                    reason: "user-wallet-missing",
+                  },
+                }),
+                env,
+              );
+            }
+            if (parsed.value.privyExecute.wallet !== user.walletAddress) {
+              return withCors(
+                execErrorResponse({
+                  code: "invalid-request",
+                }),
+                env,
+              );
+            }
+            actorType = "privy_user";
+            actorId = user.id;
+            actorAuthSource = "authorization";
+            privyActorContext = {
+              userId: user.id,
+              walletAddress: user.walletAddress,
+              privyWalletId: user.privyWalletId,
+            };
+          }
+        } else if (actorType !== "api_key_actor") {
+          const relayPrivyActor = await maybeResolvePrivyActorContext(
+            request,
+            env,
+          );
+          if (relayPrivyActor) {
+            actorType = "privy_user";
+            actorId = relayPrivyActor.userId;
+            actorAuthSource = "authorization";
+            privyActorContext = relayPrivyActor;
+          }
+        }
+
+        const rolloutGate = evaluateExecutionRolloutGate({
+          env,
+          actorType,
+          mode: parsed.value.mode,
+        });
+        submitMetadata = {
+          ...(submitMetadata ?? {}),
+          rollout: rolloutGate.metadata,
+        };
+        if (!rolloutGate.ok) {
+          return withCors(
+            execErrorResponse({
+              code: rolloutGate.error,
+              status: 403,
+              details: {
+                reason: rolloutGate.reason,
+                rollout: rolloutGate.metadata,
+              },
+            }),
+            env,
+          );
+        }
+
+        const abuseCheck = await enforceExecSubmitAbuseGuard({
+          env,
+          request,
+          actorType,
+          actorId,
+          idempotencyKey,
+        });
+        if (!abuseCheck.ok) {
+          console.warn("exec.submit.abuse.denied", {
+            actorType,
+            actorId,
+            reason: abuseCheck.reason,
+            status: abuseCheck.status,
+            ...(abuseCheck.metadata ?? {}),
+          });
+          const denied = json(
+            buildExecutionErrorEnvelope({
+              code: abuseCheck.error,
+              details: {
+                reason: abuseCheck.reason,
+                abuse: abuseCheck.metadata,
+              } as never,
+            }),
+            {
+              status: abuseCheck.status,
+              ...(abuseCheck.retryAfterSeconds
+                ? {
+                    headers: {
+                      "retry-after": String(abuseCheck.retryAfterSeconds),
+                    },
+                  }
+                : {}),
+            },
+          );
+          return withCors(denied, env);
+        }
+
+        const laneResolution = resolveExecutionLane({
+          env,
+          requestedLane: parsed.value.lane,
+          mode: parsed.value.mode,
+          actorType,
+          runtimeControls: executionLaneRuntimeControlsFromSnapshot(
+            await readOpsControlSnapshot(env),
+          ),
+        });
+        if (!laneResolution.ok) {
+          return withCors(
+            execErrorResponse({
+              code: laneResolution.error,
+              details: {
+                reason: laneResolution.reason,
+              },
+            }),
+            env,
+          );
+        }
+        submitMetadata = {
+          ...(submitMetadata ?? {}),
+          abuse: {
+            payload: payloadAbuseMetadata,
+            request: abuseCheck.metadata,
+          },
+          laneResolution: laneResolution.metadata,
+          actor: {
+            type: actorType,
+            id: actorId,
+            mode: parsed.value.mode,
+            ...(actorAuthSource ? { authSource: actorAuthSource } : {}),
+          },
+        };
+
+        if (isRelaySigned) {
+          let paymentRequired: Response | null = null;
+          try {
+            paymentRequired = await requireX402Payment(
+              request,
+              env,
+              "exec_submit",
+              url.pathname,
+            );
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : "x402-route-config-missing";
+            return withCors(
+              execErrorResponse({
+                code: "submission-failed",
+                status: 503,
+                details: {
+                  reason: message,
+                },
+              }),
+              env,
+            );
+          }
+          if (paymentRequired) {
+            if (paymentRequired.status === 402) {
+              const upstreamBody = (await paymentRequired
+                .clone()
+                .json()
+                .catch(() => null)) as {
+                reason?: string;
+                paymentRequired?: unknown;
+              } | null;
+              const normalized = json(
+                buildExecutionErrorEnvelope({
+                  code: "payment-required",
+                  details: {
+                    ...(upstreamBody?.reason
+                      ? { reason: upstreamBody.reason }
+                      : {}),
+                    ...(upstreamBody?.paymentRequired
+                      ? { paymentRequired: upstreamBody.paymentRequired }
+                      : {}),
+                  } as never,
+                }),
+                {
+                  status: 402,
+                  headers: paymentRequired.headers,
+                },
+              );
+              return withCors(normalized, env);
+            }
+            return withCors(paymentRequired, env);
+          }
+          const billingMetadata = await buildExecSubmitBillingAuditMetadata(
+            request,
+            url.pathname,
+          );
+          submitMetadata = {
+            ...(submitMetadata ?? {}),
+            x402Billing: billingMetadata,
+          };
+        }
+
+        const submitPolicy = await evaluateExecutionSubmitPolicy({
+          env,
+          request: parsed.value,
+          lane: laneResolution.lane,
+          actorType,
+        });
+        if (!submitPolicy.ok) {
+          return withCors(
+            execErrorResponse({
+              code: submitPolicy.error,
+              status: submitPolicy.status,
+              details: {
+                reason: submitPolicy.reason,
+                policy: submitPolicy.metadata,
+              },
+            }),
+            env,
+          );
+        }
+        submitPolicyRuntime = submitPolicy.runtime ?? null;
+        relayValidationParsed = submitPolicy.relayParsed
+          ? {
+              transactionVersion: submitPolicy.relayParsed.transactionVersion,
+              signatureCount: submitPolicy.relayParsed.signatureCount,
+              txSizeBytes: submitPolicy.relayParsed.txSizeBytes,
+              feePayer: submitPolicy.relayParsed.feePayer,
+              recentBlockhash: submitPolicy.relayParsed.recentBlockhash,
+              programIds: submitPolicy.relayParsed.programIds,
+            }
+          : null;
+        submitMetadata = {
+          ...(submitMetadata ?? {}),
+          policy: submitPolicy.metadata,
+        };
+
+        if (isRelaySigned) {
+          if (!relayValidationParsed) {
+            return withCors(
+              execErrorResponse({
+                code: "invalid-transaction",
+                details: {
+                  reason: "relay-validation-missing",
+                },
+              }),
+              env,
+            );
+          }
+          relayImmutability = await createRelayImmutabilitySnapshot({
+            signedTransactionBase64: parsed.value.relaySigned.signedTransaction,
+          });
+          if (!relayImmutability) {
+            return withCors(
+              execErrorResponse({
+                code: "invalid-transaction",
+                details: {
+                  reason: "relay-immutability-hash-failed",
+                },
+              }),
+              env,
+            );
+          }
+          submitMetadata = {
+            ...(submitMetadata ?? {}),
+            relayValidation: {
+              transactionVersion: relayValidationParsed.transactionVersion,
+              signatureCount: relayValidationParsed.signatureCount,
+              txSizeBytes: relayValidationParsed.txSizeBytes,
+              feePayer: relayValidationParsed.feePayer,
+              recentBlockhash: relayValidationParsed.recentBlockhash,
+              programIds: relayValidationParsed.programIds,
+            },
+            relayImmutability,
+          };
+        }
+
+        const payloadHash = await hashExecutionSubmitPayload(parsed.value);
+        const reservation = await reserveExecutionSubmitRequest({
+          db: env.WAITLIST_DB,
+          requestId: newExecRequestId(),
+          idempotencyKey,
+          actorType,
+          actorId,
+          mode: parsed.value.mode,
+          lane: laneResolution.lane,
+          payloadHash,
+          metadata: submitMetadata,
+        });
+
+        if (reservation.result === "conflict") {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              status: 409,
+              requestId: reservation.request.requestId,
+              details: {
+                reason: reservation.error,
+              },
+            }),
+            env,
+          );
+        }
+
+        if (isRelaySigned && reservation.result !== "created") {
+          const storedImmutability = readRelayImmutabilitySnapshot(
+            reservation.request.metadata,
+          );
+          if (storedImmutability) {
+            const immutabilityVerification =
+              await verifyRelayImmutabilitySnapshot({
+                expectedReceivedTxHash: storedImmutability.receivedTxHash,
+                signedTransactionBase64:
+                  parsed.value.mode === "relay_signed"
+                    ? parsed.value.relaySigned.signedTransaction
+                    : "",
+              });
+            if (!immutabilityVerification.ok) {
+              return withCors(
+                execErrorResponse({
+                  code: immutabilityVerification.error,
+                  status:
+                    immutabilityVerification.error === "policy-denied"
+                      ? 403
+                      : 400,
+                  details: {
+                    reason: immutabilityVerification.reason,
+                  },
+                }),
+                env,
+              );
+            }
+          }
+        }
+
+        if (reservation.result === "created") {
+          await appendExecutionStatusEvent(env.WAITLIST_DB, {
+            requestId: reservation.request.requestId,
+            status: "received",
+            reason: null,
+            details: null,
+          });
+          await updateExecutionRequestStatus(env.WAITLIST_DB, {
+            requestId: reservation.request.requestId,
+            status: "validated",
+            statusReason: null,
+          });
+          await appendExecutionStatusEvent(env.WAITLIST_DB, {
+            requestId: reservation.request.requestId,
+            status: "validated",
+            reason: null,
+            details: null,
+          });
+        }
+
+        if (
+          reservation.result === "created" &&
+          !isRelaySigned &&
+          shouldSyncExecutePrivySubmit(env) &&
+          privyActorContext
+        ) {
+          const swap = parsed.value.privyExecute.swap;
+          const options = parsed.value.privyExecute.options ?? {};
+          const requestedRequireSimulation =
+            typeof options.requireSimulation === "boolean"
+              ? options.requireSimulation
+              : null;
+          const effectiveRequireSimulation =
+            submitPolicyRuntime?.requireSimulation === true ||
+            requestedRequireSimulation === true;
+          const executionParams: Record<string, unknown> = {
+            lane: laneResolution.lane,
+          };
+          if (requestedRequireSimulation === false) {
+            executionParams.requireSimulation = false;
+          }
+          if (effectiveRequireSimulation) {
+            executionParams.requireSimulation = true;
+          }
+          if (typeof options.priorityMicroLamports === "number") {
+            executionParams.priorityMicroLamports =
+              options.priorityMicroLamports;
+          }
+          const execution = {
+            adapter: laneResolution.adapter,
+            params: executionParams,
+          };
+          const policy = normalizePolicy({
+            allowedMints: SUPPORTED_TRADING_MINTS,
+            slippageBps: swap.slippageBps,
+            maxPriceImpactPct: 0.05,
+            minSolReserveLamports: "50000000",
+            simulateOnly: Boolean(options.simulateOnly),
+            dryRun: Boolean(options.dryRun),
+            commitment: options.commitment ?? "confirmed",
+          });
+
+          const attemptId = newExecutionAttemptId();
+          const attemptStartedAt = new Date().toISOString();
+          const qualityMetadata = {
+            lane: laneResolution.lane,
+            slippageBps: swap.slippageBps,
+            requestedRequireSimulation,
+            effectiveRequireSimulation,
+            priorityMicroLamports:
+              typeof options.priorityMicroLamports === "number"
+                ? options.priorityMicroLamports
+                : null,
+          };
+          let providerResponse: Record<string, unknown> | null = {
+            route: laneResolution.adapter,
+            lane: laneResolution.lane,
+            mode: parsed.value.mode,
+            quality: qualityMetadata,
+          };
+
+          try {
+            const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
+            if (!rpcEndpoint) {
+              throw new Error("rpc-endpoint-missing");
+            }
+            const rpc = new SolanaRpc(rpcEndpoint);
+            const jupiter = new JupiterClient(
+              String(env.JUPITER_BASE_URL ?? "").trim() ||
+                X402_READ_JUPITER_BASE_URL,
+              env.JUPITER_API_KEY,
+            );
+
+            const runtimeBalancePolicy =
+              await evaluatePrivyRuntimeBalancePolicy({
+                env,
+                lane: laneResolution.lane,
+                walletAddress: privyActorContext.walletAddress,
+                inputMint: swap.inputMint,
+                amountAtomic: swap.amountAtomic,
+                minSolReserveLamports: policy.minSolReserveLamports,
+                rpc,
+                runtimeDefaults: submitPolicyRuntime,
+              });
+            providerResponse = {
+              ...(providerResponse ?? {}),
+              runtimePolicy: runtimeBalancePolicy.metadata,
+            };
+            if (!runtimeBalancePolicy.ok) {
+              throw asPolicyDeniedError(runtimeBalancePolicy.reason);
+            }
+
+            const quoteResponse = await jupiter.quote({
+              inputMint: swap.inputMint,
+              outputMint: swap.outputMint,
+              amount: swap.amountAtomic,
+              slippageBps: policy.slippageBps,
+              swapMode: "ExactIn",
+            });
+            try {
+              enforcePolicy(policy, quoteResponse);
+            } catch (error) {
+              throw asPolicyDeniedError(
+                `privy-quote-${normalizePolicyReason(error, "policy-violation")}`,
+              );
+            }
+
+            await updateExecutionRequestStatus(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              status: "dispatched",
+              statusReason: null,
+            });
+            await appendExecutionStatusEvent(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              status: "dispatched",
+              reason: null,
+              details: {
+                provider: laneResolution.adapter,
+                attempt: 1,
+              },
+              createdAt: attemptStartedAt,
+            });
+            await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
+              attemptId,
+              requestId: reservation.request.requestId,
+              attemptNo: 1,
+              lane: laneResolution.lane,
+              provider: laneResolution.adapter,
+              status: "dispatched",
+              providerResponse,
+              startedAt: attemptStartedAt,
+            });
+
+            const result = await executeSwapViaRouter({
+              env,
+              execution,
+              policy,
+              rpc,
+              jupiter,
+              quoteResponse,
+              userPublicKey: privyActorContext.walletAddress,
+              privyWalletId: privyActorContext.privyWalletId,
+              log(level, message, meta) {
+                console[level]("exec.submit", {
+                  requestId: reservation.request.requestId,
+                  userId: privyActorContext.userId,
+                  message,
+                  ...(meta ?? {}),
+                });
+              },
+            });
+            const settledAt = new Date().toISOString();
+            const failure = resolveTerminalFailureFromExecuteResult(
+              result.status,
+              result.err,
+            );
+            const terminalStatus = failure ? failure.terminalStatus : "landed";
+            const errorMessage = executionErrorMessage(result.err);
+            providerResponse = {
+              ...(providerResponse ?? {}),
+              executionStatus: result.status,
+              refreshed: result.refreshed,
+              lastValidBlockHeight: result.lastValidBlockHeight,
+              executionMeta:
+                result.executionMeta &&
+                typeof result.executionMeta === "object" &&
+                !Array.isArray(result.executionMeta)
+                  ? result.executionMeta
+                  : null,
+            };
+
+            await finalizeExecutionAttempt(env.WAITLIST_DB, {
+              attemptId,
+              status: result.status,
+              providerResponse,
+              errorCode: failure ? failure.errorCode : null,
+              errorMessage,
+              completedAt: settledAt,
+            });
+            await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              receiptId: newExecutionReceiptId(),
+              finalizedStatus: terminalStatus,
+              lane: laneResolution.lane,
+              provider: laneResolution.adapter,
+              signature: result.signature,
+              slot: null,
+              errorCode: failure ? failure.errorCode : null,
+              errorMessage,
+              receipt: {
+                mode: parsed.value.mode,
+                route: laneResolution.adapter,
+                resultStatus: result.status,
+                outcome: terminalStatus,
+                quality: qualityMetadata,
+                quote: {
+                  inputMint: swap.inputMint,
+                  outputMint: swap.outputMint,
+                  inAmount: swap.amountAtomic,
+                  outAmount: String(result.usedQuote?.outAmount ?? ""),
+                },
+              },
+              readyAt: settledAt,
+            });
+            await terminalizeExecutionRequest(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              status: terminalStatus,
+              statusReason: failure ? failure.statusReason : null,
+              details: {
+                provider: laneResolution.adapter,
+                attempt: 1,
+                ...(result.signature ? { signature: result.signature } : {}),
+              },
+              nowIso: settledAt,
+            });
+          } catch (error) {
+            const failedAt = new Date().toISOString();
+            const deniedReason = policyDeniedReason(error);
+            const terminalStatus = deniedReason ? "rejected" : "failed";
+            const errorCode = deniedReason
+              ? "policy-denied"
+              : normalizeExecutionErrorCode({
+                  error,
+                  fallback: "submission-failed",
+                });
+            const statusReason = deniedReason
+              ? `policy-denied:${deniedReason}`
+              : errorCode;
+            const errorMessage =
+              executionErrorMessage(error) ?? "execution-submit-failed";
+            await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
+              attemptId,
+              requestId: reservation.request.requestId,
+              attemptNo: 1,
+              lane: laneResolution.lane,
+              provider: laneResolution.adapter,
+              status: terminalStatus,
+              providerResponse,
+              errorCode,
+              errorMessage,
+              startedAt: attemptStartedAt,
+            });
+            await finalizeExecutionAttempt(env.WAITLIST_DB, {
+              attemptId,
+              status: terminalStatus,
+              providerResponse,
+              errorCode,
+              errorMessage,
+              completedAt: failedAt,
+            });
+            await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              receiptId: newExecutionReceiptId(),
+              finalizedStatus: terminalStatus,
+              lane: laneResolution.lane,
+              provider: laneResolution.adapter,
+              signature: null,
+              slot: null,
+              errorCode,
+              errorMessage,
+              receipt: {
+                mode: parsed.value.mode,
+                route: laneResolution.adapter,
+                outcome: terminalStatus,
+                quality: qualityMetadata,
+              },
+              readyAt: failedAt,
+            });
+            await terminalizeExecutionRequest(env.WAITLIST_DB, {
+              requestId: reservation.request.requestId,
+              status: terminalStatus,
+              statusReason,
+              details: {
+                provider: laneResolution.adapter,
+                attempt: 1,
+                errorMessage,
+              },
+              nowIso: failedAt,
+            });
+          }
+        }
+
+        const latest = await getExecutionLatestStatus(
+          env.WAITLIST_DB,
+          reservation.request.requestId,
+        );
+        const updatedAt =
+          latest?.request.updatedAt ?? reservation.request.updatedAt;
+        const state = toExecSubmitState(latest?.request.status ?? "validated");
+        const base = json({
+          ok: true,
+          requestId: reservation.request.requestId,
+          status: {
+            state,
+            terminal: isExecSubmitTerminalState(state),
+            updatedAt,
+          },
+          poll: {
+            statusUrl: `/api/x402/exec/status/${reservation.request.requestId}`,
+            receiptUrl: `/api/x402/exec/receipt/${reservation.request.requestId}`,
+          },
+        });
+        if (!isRelaySigned) return withCors(base, env);
+        const settled = withX402SettlementHeader(
+          base,
+          request,
+          env,
+          "exec_submit",
+          url.pathname,
+        );
+        return withCors(settled, env);
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname.startsWith("/api/x402/exec/status/")
+      ) {
+        const requestId = url.pathname.slice("/api/x402/exec/status/".length);
+        if (!isValidExecRequestId(requestId)) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "invalid-request-id",
+              },
+            }),
+            env,
+          );
+        }
+
+        const latest = await getExecutionLatestStatus(
+          env.WAITLIST_DB,
+          requestId,
+        );
+        if (!latest) {
+          return withCors(
+            execErrorResponse({
+              code: "not-found",
+              requestId,
+            }),
+            env,
+          );
+        }
+
+        const [events, attempts] = await Promise.all([
+          listExecutionStatusEvents(env.WAITLIST_DB, requestId, 500),
+          listExecutionAttempts(env.WAITLIST_DB, requestId),
+        ]);
+        const timelineEvents =
+          events.length > 0
+            ? events
+            : [
+                {
+                  eventId: "synthetic",
+                  requestId,
+                  seq: 1,
+                  status: latest.request.status,
+                  reason: latest.request.statusReason,
+                  details: null,
+                  createdAt: latest.request.updatedAt,
+                },
+              ];
+        const attemptsByState = new Map<string, (typeof attempts)[number]>();
+        for (const attempt of attempts) {
+          if (!attemptsByState.has(attempt.status)) {
+            attemptsByState.set(attempt.status, attempt);
+          }
+        }
+
+        const state = toExecSubmitState(latest.request.status);
+        const queueDepthRaw = Number(latest.request.metadata?.queueDepth);
+        const queuePositionRaw = Number(latest.request.metadata?.queuePosition);
+        const relayImmutability = readRelayImmutabilitySnapshot(
+          latest.request.metadata,
+        );
+        return withCors(
+          json({
+            ok: true,
+            requestId,
+            status: {
+              state,
+              terminal: isExecSubmitTerminalState(state),
+              mode: latest.request.mode,
+              lane: latest.request.lane,
+              actorType: latest.request.actorType,
+              receivedAt: latest.request.receivedAt,
+              updatedAt: latest.request.updatedAt,
+              terminalAt: latest.request.terminalAt,
+              ...(Number.isFinite(queueDepthRaw) && queueDepthRaw >= 0
+                ? { queueDepth: Math.floor(queueDepthRaw) }
+                : {}),
+              ...(Number.isFinite(queuePositionRaw) && queuePositionRaw >= 0
+                ? { queuePosition: Math.floor(queuePositionRaw) }
+                : {}),
+              ...(relayImmutability ? { immutability: relayImmutability } : {}),
+            },
+            events: timelineEvents.map((event) => {
+              const mappedState = toExecSubmitState(event.status);
+              const attempt = attemptsByState.get(event.status);
+              return {
+                state: mappedState,
+                at: event.createdAt,
+                ...(attempt ? { provider: attempt.provider } : {}),
+                ...(attempt ? { attempt: attempt.attemptNo } : {}),
+                ...(event.reason ? { note: event.reason } : {}),
+              };
+            }),
+            attempts: attempts.map((attempt) => ({
+              attempt: attempt.attemptNo,
+              provider: attempt.provider,
+              state: attempt.status,
+              at: attempt.completedAt ?? attempt.startedAt,
+            })),
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname.startsWith("/api/x402/exec/receipt/")
+      ) {
+        const requestId = url.pathname.slice("/api/x402/exec/receipt/".length);
+        if (!isValidExecRequestId(requestId)) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "invalid-request-id",
+              },
+            }),
+            env,
+          );
+        }
+
+        const latest = await getExecutionLatestStatus(
+          env.WAITLIST_DB,
+          requestId,
+        );
+        if (!latest) {
+          return withCors(
+            execErrorResponse({
+              code: "not-found",
+              requestId,
+            }),
+            env,
+          );
+        }
+
+        const state = toExecSubmitState(latest.request.status);
+        const terminal = isExecSubmitTerminalState(state);
+        const relayImmutability = readRelayImmutabilitySnapshot(
+          latest.request.metadata,
+        );
+        if (!latest.receipt) {
+          return withCors(
+            json({
+              ok: true,
+              requestId,
+              ready: false,
+              status: {
+                state,
+                terminal,
+                updatedAt: latest.request.updatedAt,
+                ...(relayImmutability
+                  ? { immutability: relayImmutability }
+                  : {}),
+              },
+            }),
+            env,
+          );
+        }
+
+        const attempts = await listExecutionAttempts(
+          env.WAITLIST_DB,
+          requestId,
+        );
+        const canonicalReceipt = assembleCanonicalExecutionReceiptV1({
+          request: latest.request,
+          receipt: latest.receipt,
+          attempts,
+          immutability: relayImmutability,
+        });
+        if (env.LOGS_BUCKET) {
+          const key = canonicalExecutionReceiptStorageKey(requestId);
+          try {
+            await env.LOGS_BUCKET.put(key, JSON.stringify(canonicalReceipt));
+          } catch (error) {
+            console.warn("exec.receipt.persist.error", {
+              requestId,
+              key,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        return withCors(
+          json({
+            ok: true,
+            requestId,
+            ready: true,
+            receipt: canonicalReceipt,
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/execution/observability"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const defaultWindowMinutes = Math.floor(
+          readNumberEnv(env.EXEC_OBS_DEFAULT_WINDOW_MINUTES, 60, 5, 10_080),
+        );
+        const defaultMaxRequests = Math.floor(
+          readNumberEnv(env.EXEC_OBS_MAX_REQUESTS, 5_000, 100, 20_000),
+        );
+        const windowMinutes = parsePositiveIntParam(
+          url.searchParams.get("windowMinutes"),
+          defaultWindowMinutes,
+          5,
+          10_080,
+        );
+        const maxRequests = parsePositiveIntParam(
+          url.searchParams.get("maxRequests"),
+          defaultMaxRequests,
+          100,
+          20_000,
+        );
+        const snapshot = await readExecutionObservabilitySnapshot({
+          db: env.WAITLIST_DB,
+          windowMinutes,
+          maxRequests,
+          thresholds: readExecObservabilityThresholds(env),
+        });
+        return withCors(
+          json({
+            ok: true,
+            ...snapshot,
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/execution/canary"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await readExecutionCanarySnapshot(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/execution/canary/bootstrap"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await bootstrapExecutionCanary(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/execution/canary/reset"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await resetExecutionCanary(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/execution/canary/run"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const payload = (await request.json().catch(() => null)) as unknown;
+        const triggerSource =
+          isRecord(payload) && payload.trigger === "post_deploy"
+            ? "post_deploy"
+            : "manual";
+        return withCors(
+          json(await runExecutionCanary({ env, triggerSource })),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/controls"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(
+          json({
+            ok: true,
+            controls: await readOpsControlSnapshot(env),
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/controls"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const payload = (await request.json().catch(() => null)) as unknown;
+        const parsedPatch = parseOpsControlPatch(payload);
+        if ("error" in parsedPatch) {
+          return withCors(
+            json({ ok: false, error: parsedPatch.error }, { status: 400 }),
+            env,
+          );
+        }
+        try {
+          const controls = await writeOpsControlSnapshot(env, parsedPatch);
+          return withCors(json({ ok: true, controls }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "ops-control-write-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/controls/reset"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const controls = await resetOpsControlSnapshot(env, "admin-reset");
+          return withCors(json({ ok: true, controls }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "ops-control-reset-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/dashboard"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const defaultWindowMinutes = Math.floor(
+          readNumberEnv(env.EXEC_OBS_DEFAULT_WINDOW_MINUTES, 60, 5, 10_080),
+        );
+        const defaultMaxRequests = Math.floor(
+          readNumberEnv(env.EXEC_OBS_MAX_REQUESTS, 5_000, 100, 20_000),
+        );
+        const windowMinutes = parsePositiveIntParam(
+          url.searchParams.get("windowMinutes"),
+          defaultWindowMinutes,
+          5,
+          10_080,
+        );
+        const maxRequests = parsePositiveIntParam(
+          url.searchParams.get("maxRequests"),
+          defaultMaxRequests,
+          100,
+          20_000,
+        );
+        const [controls, execution, canary] = await Promise.all([
+          readOpsControlSnapshot(env),
+          readExecutionObservabilitySnapshot({
+            db: env.WAITLIST_DB,
+            windowMinutes,
+            maxRequests,
+            thresholds: readExecObservabilityThresholds(env),
+          }),
+          readExecutionCanarySnapshot(env),
+        ]);
+        return withCors(
+          json({
+            ok: true,
+            now: new Date().toISOString(),
+            controls,
+            execution,
+            canary,
+          }),
+          env,
+        );
       }
 
       if (request.method === "POST" && url.pathname === "/api/waitlist") {
@@ -1667,7 +3446,6 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/trade/swap") {
-        const requestReceivedAt = new Date().toISOString();
         let user = await requireOnboardedUser(request, env);
         user = await ensureUserWallet(env, user);
         if (!user.walletAddress || !user.privyWalletId) {
@@ -1717,28 +3495,6 @@ export default {
           );
         }
 
-        const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
-        if (!rpcEndpoint) {
-          return withCors(
-            json({ ok: false, error: "rpc-endpoint-missing" }, { status: 500 }),
-            env,
-          );
-        }
-
-        const jupiter = new JupiterClient(
-          String(env.JUPITER_BASE_URL ?? "").trim() ||
-            X402_READ_JUPITER_BASE_URL,
-          env.JUPITER_API_KEY,
-        );
-        const rpc = new SolanaRpc(rpcEndpoint);
-        const policy = normalizePolicy({
-          allowedMints: SUPPORTED_TRADING_MINTS,
-          slippageBps,
-          maxPriceImpactPct: 0.05,
-          minSolReserveLamports: "50000000",
-          commitment: "confirmed",
-        });
-
         const walletAddress = user.walletAddress;
         const inputAmount = BigInt(amount);
         if (inputAmount <= 0n) {
@@ -1750,243 +3506,99 @@ export default {
             env,
           );
         }
-        if (inputMint === X402_SOL_MINT) {
-          const balanceLamports = await rpc.getBalanceLamports(walletAddress);
-          const minSolReserveLamports = BigInt(policy.minSolReserveLamports);
-          if (inputAmount + minSolReserveLamports > balanceLamports) {
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "insufficient-sol-reserve",
-                  reserveLamports: minSolReserveLamports.toString(),
-                  balanceLamports: balanceLamports.toString(),
+        const lane = resolveTradeSwapExecutionLane(execution);
+        const idempotencyKey =
+          readIdempotencyKey(request) ??
+          newTradeSwapCompatibilityIdempotencyKey();
+        const submitPayload: Record<string, unknown> = {
+          schemaVersion: "v1",
+          mode: "privy_execute",
+          ...(lane ? { lane } : {}),
+          ...(source || reason
+            ? {
+                metadata: {
+                  ...(source ? { source } : {}),
+                  ...(reason ? { reason } : {}),
                 },
-                { status: 400 },
-              ),
-              env,
-            );
-          }
-        } else {
-          const tokenBalance = await rpc.getTokenBalanceAtomic(
-            walletAddress,
-            inputMint,
-          );
-          if (inputAmount > tokenBalance) {
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "insufficient-token-balance",
-                  balanceAtomic: tokenBalance.toString(),
-                },
-                { status: 400 },
-              ),
-              env,
-            );
-          }
-        }
-
-        const quoteResponse = await jupiter.quote({
-          inputMint,
-          outputMint,
-          amount,
-          slippageBps: policy.slippageBps,
-          swapMode: "ExactIn",
-        });
-        enforcePolicy(policy, quoteResponse);
-
-        const trace = newExecutionLatencyTrace(requestReceivedAt);
-        trace.validatedAt = new Date().toISOString();
-        trace.decisionAt = new Date().toISOString();
-
-        const intent = createExecutionIntent({
-          receivedAt: requestReceivedAt,
-          userId: user.id,
-          wallet: walletAddress,
-          inputMint,
-          outputMint,
-          amountAtomic: amount,
-          slippageBps: policy.slippageBps,
-          source: source || "TERMINAL",
-          reason: reason || undefined,
-          execution,
-          simulateOnly: policy.simulateOnly,
-          dryRun: policy.dryRun,
-          commitment: policy.commitment,
-        });
-        let executionRoute =
-          String(execution?.adapter ?? "jupiter").trim() || "jupiter";
-        let decision = createExecutionDecision({
-          intentId: intent.intentId,
-          decidedAt: trace.decisionAt,
-          route: executionRoute,
-          simulateOnly: policy.simulateOnly,
-          dryRun: policy.dryRun,
-          commitment: policy.commitment,
-        });
-        try {
-          const coordinator = await requestExecutionCoordinatorDecision(env, {
-            intent,
-          });
-          if (coordinator && !coordinator.accepted) {
-            const rejectedAt = new Date().toISOString();
-            trace.failedAt = rejectedAt;
-            try {
-              await recordExecutionReceipt(env, {
-                generatedAt: rejectedAt,
-                intent,
-                decision,
-                trace,
-                outcome: {
-                  status: "rejected",
-                  signature: null,
-                  refreshed: false,
-                  lastValidBlockHeight: null,
-                  error: coordinator.reason ?? "execution-rejected",
-                },
-                quote: quoteResponse,
-              });
-            } catch (receiptError) {
-              console.error("trade.swap.receipt.error", {
-                userId: user.id,
-                route: executionRoute,
-                message:
-                  receiptError instanceof Error
-                    ? receiptError.message
-                    : String(receiptError),
-              });
-            }
-            return withCors(
-              json(
-                {
-                  ok: false,
-                  error: "execution-rejected",
-                  reason: coordinator.reason,
-                  queueDepth: coordinator.queueDepth,
-                  queuePosition: coordinator.queuePosition,
-                },
-                { status: 409 },
-              ),
-              env,
-            );
-          }
-          if (coordinator?.accepted && coordinator.decision) {
-            decision = coordinator.decision;
-            executionRoute = coordinator.decision.route;
-          }
-        } catch (coordinatorError) {
-          console.warn("trade.swap.coordinator.fallback", {
-            userId: user.id,
-            message:
-              coordinatorError instanceof Error
-                ? coordinatorError.message
-                : String(coordinatorError),
-          });
-        }
-        const routedExecution: ExecutionConfig | undefined = {
-          ...(execution ?? {}),
-          adapter: executionRoute,
-        };
-
-        let result: Awaited<ReturnType<typeof executeSwapViaRouter>>;
-        try {
-          result = await executeSwapViaRouter({
-            env,
-            execution: routedExecution,
-            policy,
-            rpc,
-            jupiter,
-            quoteResponse,
-            userPublicKey: walletAddress,
-            privyWalletId: user.privyWalletId,
-            log(level, message, meta) {
-              console[level]("trade.swap", {
-                userId: user.id,
-                inputMint,
-                outputMint,
-                amount,
-                slippageBps: policy.slippageBps,
-                source: source || "TERMINAL",
-                reason: reason || undefined,
-                executionRoute,
-                message,
-                ...(meta ?? {}),
-              });
+              }
+            : {}),
+          privyExecute: {
+            intentType: "swap",
+            wallet: walletAddress,
+            swap: {
+              inputMint,
+              outputMint,
+              amountAtomic: amount,
+              slippageBps,
             },
-          });
-        } catch (error) {
-          trace.failedAt = new Date().toISOString();
-          try {
-            await recordExecutionReceipt(env, {
-              generatedAt: trace.failedAt,
-              intent,
-              decision,
-              trace,
-              outcome: buildExecutionOutcomeFromError(error),
-              quote: quoteResponse,
-            });
-          } catch (receiptError) {
-            console.error("trade.swap.receipt.error", {
-              userId: user.id,
-              route: executionRoute,
-              message:
-                receiptError instanceof Error
-                  ? receiptError.message
-                  : String(receiptError),
-            });
-          }
-          throw error;
-        }
-
-        const settledAt = new Date().toISOString();
-        const traceSettled = applyExecutionResultToTrace({
-          trace,
-          result,
-          settledAt,
+          },
+        };
+        const submitHeaders = new Headers({
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
         });
-        let executionReceipt: Awaited<
-          ReturnType<typeof recordExecutionReceipt>
-        > | null = null;
+        const authorization = request.headers.get("authorization");
+        if (authorization) submitHeaders.set("authorization", authorization);
+        const submitRequest = new Request(
+          new URL("/api/x402/exec/submit", url.origin).toString(),
+          {
+            method: "POST",
+            headers: submitHeaders,
+            body: JSON.stringify(submitPayload),
+          },
+        );
+        const submitResponse = await worker.fetch(submitRequest, env, _ctx);
+        let submitPayloadRaw: unknown = null;
         try {
-          executionReceipt = await recordExecutionReceipt(env, {
-            generatedAt: settledAt,
-            intent,
-            decision,
-            trace: traceSettled,
-            outcome: buildExecutionOutcomeFromResult(result),
-            quote: result.usedQuote,
-          });
-        } catch (receiptError) {
-          console.error("trade.swap.receipt.error", {
-            userId: user.id,
-            route: executionRoute,
-            message:
-              receiptError instanceof Error
-                ? receiptError.message
-                : String(receiptError),
-          });
+          submitPayloadRaw = await submitResponse.json();
+        } catch {
+          submitPayloadRaw = null;
         }
-
+        if (!isRecord(submitPayloadRaw)) {
+          return withCors(
+            json({ ok: false, error: "trade-submit-failed" }, { status: 502 }),
+            env,
+          );
+        }
+        if (submitResponse.status >= 400 || submitPayloadRaw.ok !== true) {
+          const error =
+            typeof submitPayloadRaw.error === "string"
+              ? submitPayloadRaw.error
+              : "trade-submit-failed";
+          return withCors(
+            json({ ok: false, error }, { status: submitResponse.status }),
+            env,
+          );
+        }
+        const requestId = String(submitPayloadRaw.requestId ?? "").trim();
+        if (!requestId) {
+          return withCors(
+            json({ ok: false, error: "trade-submit-failed" }, { status: 502 }),
+            env,
+          );
+        }
+        const status = isRecord(submitPayloadRaw.status)
+          ? String(submitPayloadRaw.status.state ?? "").trim()
+          : "";
         return withCors(
           json({
             ok: true,
-            status: result.status,
-            signature: result.signature,
-            refreshed: result.refreshed,
-            lastValidBlockHeight: result.lastValidBlockHeight,
-            quote: summarizeJupiterQuote(
-              result.usedQuote as unknown as Record<string, unknown>,
-            ),
+            requestId,
+            status: status || "validated",
+            signature: null,
+            refreshed: false,
+            lastValidBlockHeight: null,
             source: source || "TERMINAL",
-            err: result.err ?? null,
-            executionReceipt:
-              executionReceipt === null
-                ? null
-                : {
-                    receiptId: executionReceipt.receiptId,
-                    key: executionReceipt.storage.key,
-                  },
+            err: null,
+            executionReceipt: null,
+            ...(isRecord(submitPayloadRaw.poll)
+              ? { poll: submitPayloadRaw.poll }
+              : {}),
+            compatibility: {
+              route: "/api/trade/swap",
+              deprecated: true,
+              replacement: "/api/x402/exec/submit",
+            },
           }),
           env,
         );
@@ -2525,6 +4137,35 @@ export default {
             /no such column/i.test(rawMessage)
           ? "d1-migrations-not-applied"
           : rawMessage;
+      if (url.pathname.startsWith("/api/x402/exec/")) {
+        const code = normalizeExecutionErrorCode({
+          error: message,
+          fallback: "submission-failed",
+        });
+        const forcedStatus =
+          message === "d1-migrations-not-applied" ||
+          message.startsWith("x402-route-config-")
+            ? 503
+            : undefined;
+        if ((forcedStatus ?? executionErrorStatus(code)) >= 500) {
+          console.error("api.error", {
+            method: request.method,
+            path: url.pathname,
+            message: rawMessage,
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+        }
+        return withCors(
+          execErrorResponse({
+            code,
+            ...(forcedStatus ? { status: forcedStatus } : {}),
+            details: {
+              reason: message,
+            },
+          }),
+          env,
+        );
+      }
       const status =
         message === "unauthorized"
           ? 401
@@ -2555,6 +4196,21 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+    if (isExecutionCanaryScheduledTick(_event)) {
+      try {
+        await runExecutionCanary({
+          env,
+          triggerSource: "schedule",
+        });
+      } catch (error) {
+        console.error("execution.canary.scheduled.error", {
+          message: error instanceof Error ? error.message : "unknown-error",
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
+      return;
+    }
+
     const startedAtMs = Date.now();
     const slotSourceEnabled =
       String(env.LOOP_A_SLOT_SOURCE_ENABLED ?? "0").trim() === "1";
@@ -2633,6 +4289,8 @@ export default {
   },
 };
 
+export default worker;
+
 async function requireOnboardedUser(
   request: Request,
   env: Env,
@@ -2650,6 +4308,32 @@ async function requireOnboardedUser(
   const existing = await findUserByPrivyUserId(env, auth.privyUserId);
   if (existing) return existing;
   return await upsertUser(env, auth.privyUserId);
+}
+
+async function maybeResolvePrivyActorContext(
+  request: Request,
+  env: Env,
+): Promise<{
+  userId: string;
+  walletAddress: string;
+  privyWalletId: string;
+} | null> {
+  const hasAuthorization = Boolean(
+    String(request.headers.get("authorization") ?? "").trim(),
+  );
+  if (!hasAuthorization) return null;
+  try {
+    let user = await requireOnboardedUser(request, env);
+    user = await ensureUserWallet(env, user);
+    if (!user.walletAddress || !user.privyWalletId) return null;
+    return {
+      userId: user.id,
+      walletAddress: user.walletAddress,
+      privyWalletId: user.privyWalletId,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function ensureUserWallet(env: Env, user: UserRow): Promise<UserRow> {
@@ -2787,6 +4471,46 @@ function toUniqueStrings(value: unknown, maxItems: number): string[] {
     if (out.length >= maxItems) break;
   }
   return out;
+}
+
+type ExecSubmitState =
+  | "received"
+  | "validated"
+  | "queued"
+  | "dispatched"
+  | "landed"
+  | "finalized"
+  | "failed"
+  | "expired";
+
+function newExecRequestId(): string {
+  const token = crypto.randomUUID().replace(/-/g, "");
+  return `execreq_${token}`;
+}
+
+function isValidExecRequestId(value: string): boolean {
+  return /^execreq_[A-Za-z0-9_-]{8,}$/.test(value);
+}
+
+function toExecSubmitState(status: string): ExecSubmitState {
+  if (status === "received") return "received";
+  if (status === "validated") return "validated";
+  if (status === "queued") return "queued";
+  if (status === "dispatched") return "dispatched";
+  if (status === "landed") return "landed";
+  if (status === "finalized") return "finalized";
+  if (status === "expired") return "expired";
+  if (status === "failed" || status === "rejected") return "failed";
+  return "received";
+}
+
+function isExecSubmitTerminalState(state: ExecSubmitState): boolean {
+  return (
+    state === "landed" ||
+    state === "finalized" ||
+    state === "failed" ||
+    state === "expired"
+  );
 }
 
 function parsePerpsSymbol(value: string): string {
@@ -2938,6 +4662,41 @@ function parseExecutionConfig(value: unknown): ExecutionConfig | undefined {
     ...(adapter ? { adapter } : {}),
     ...(params ? { params } : {}),
   };
+}
+
+function resolveTradeSwapExecutionLane(
+  execution: ExecutionConfig | undefined,
+): "fast" | "protected" | "safe" | undefined {
+  const adapter = String(execution?.adapter ?? "")
+    .trim()
+    .toLowerCase();
+  if (!adapter || adapter === "jupiter") return "safe";
+  if (
+    adapter === "fast" ||
+    adapter === "helius" ||
+    adapter === "helius_sender"
+  ) {
+    return "fast";
+  }
+  if (
+    adapter === "jito" ||
+    adapter === "jito_bundle" ||
+    adapter === "protected"
+  ) {
+    return "protected";
+  }
+  if (
+    adapter === "magicblock" ||
+    adapter === "magicblock_ephemeral_rollup" ||
+    adapter === "safe"
+  ) {
+    return "safe";
+  }
+  return undefined;
+}
+
+function newTradeSwapCompatibilityIdempotencyKey(): string {
+  return `trade_swap_${crypto.randomUUID().replace(/-/g, "")}`;
 }
 
 function parseRiskMode(

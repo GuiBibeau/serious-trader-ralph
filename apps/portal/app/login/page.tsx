@@ -11,7 +11,8 @@ function isSignInHostAllowed(hostname: string): boolean {
     normalized === "localhost" ||
     normalized === "127.0.0.1" ||
     normalized === "dev.trader-ralph.com" ||
-    normalized === "staging.trader-ralph.com"
+    normalized === "trader-ralph.com" ||
+    normalized === "www.trader-ralph.com"
   );
 }
 
@@ -118,7 +119,8 @@ export default function LoginPage() {
               <p className="label">Access</p>
               <h1 className="mt-2.5">Sign in unavailable</h1>
               <p className="text-muted mt-3 max-w-[540px]">
-                Sign in is currently available on dev and staging only.
+                Sign in is currently available on dev and the production
+                domains.
               </p>
               <div className="flex flex-wrap items-center gap-3 mt-6">
                 <a className={BTN_SECONDARY} href="/">

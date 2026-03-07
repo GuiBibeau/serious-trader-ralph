@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/error.envelope.v1.schema.json",
+  "title": "ErrorEnvelopeV1",
+  "type": "object",
+  "required": ["ok", "error"],
+  "additionalProperties": false,
+  "properties": {
+    "ok": { "const": false },
+    "requestId": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "payment-required",
+            "auth-required",
+            "invalid-request",
+            "invalid-transaction",
+            "policy-denied",
+            "unsupported-lane",
+            "insufficient-balance",
+            "venue-timeout",
+            "submission-failed",
+            "expired-blockhash",
+            "not-found",
+            "not-ready"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1 },
+        "details": { "type": "object", "additionalProperties": true }
+      }
+    }
+  }
+}

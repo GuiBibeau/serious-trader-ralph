@@ -6,6 +6,7 @@ import type { Env } from "./types";
 import { findUserByPrivyUserId } from "./users_db";
 
 type X402RouteKey =
+  | "exec_submit"
   | "market_snapshot"
   | "market_snapshot_v2"
   | "market_token_balance"
@@ -35,12 +36,47 @@ type X402RouteConfig = {
   maxTimeoutSeconds: number;
 };
 
+type X402Provider = "local" | "corbits";
+
+type FacilitatorPaymentRequirement = {
+  scheme: "exact";
+  network: string;
+  maxAmountRequired: string;
+  resource: string;
+  description: string;
+  mimeType: string;
+  payTo: string;
+  asset: string;
+  maxTimeoutSeconds: number;
+  outputSchema: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+};
+
+type FacilitatorPaymentPayload = {
+  x402Version: number;
+  scheme: string;
+  network: string;
+  payload: Record<string, unknown>;
+};
+
+type FacilitatorVerifyResponse = {
+  isValid?: boolean;
+  invalidReason?: string;
+};
+
+type FacilitatorSettleResponse = {
+  success?: boolean;
+  errorReason?: string;
+};
+
 const PAYMENT_REQUIRED_HEADER = "payment-required";
 const PAYMENT_SIGNATURE_HEADER = "payment-signature";
 const PAYMENT_RESPONSE_HEADER = "payment-response";
 const X_PAYMENT_HEADER = "x-payment";
 const MAINNET_RPC_ENDPOINT = "https://api.mainnet-beta.solana.com";
 const DEVNET_RPC_ENDPOINT = "https://api.devnet.solana.com";
+const CORBITS_FACILITATOR_URL = "https://facilitator.corbits.dev";
+const CORBITS_TIMEOUT_MS = 10_000;
 const X402_REPLAY_KEY_PREFIX = "x402:payment-signature:";
 const X402_REPLAY_TTL_SECONDS = 60 * 60 * 24 * 30;
 const BASE58_SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{32,128}$/;
@@ -154,6 +190,104 @@ function toBase64Json(input: unknown): string {
     binary += String.fromCharCode(ch);
   }
   return btoa(binary);
+}
+
+function fromBase64Json(value: string): unknown {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded =
+    normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function resolveX402Provider(env: Env): X402Provider {
+  const raw = String(env.X402_PROVIDER ?? "")
+    .trim()
+    .toLowerCase();
+  if (raw === "corbits") return "corbits";
+  return "local";
+}
+
+function resolveCorbitsFacilitatorUrl(env: Env): string {
+  const configured = String(env.X402_FACILITATOR_URL ?? "").trim();
+  return configured || CORBITS_FACILITATOR_URL;
+}
+
+function resolveCorbitsTimeoutMs(env: Env): number {
+  return normalizePositiveInt(
+    env.X402_FACILITATOR_TIMEOUT_MS,
+    CORBITS_TIMEOUT_MS,
+  );
+}
+
+function normalizeCorbitsNetwork(network: string): string {
+  const normalized = network.trim().toLowerCase();
+  if (normalized === "solana-mainnet") return "solana-mainnet-beta";
+  return network;
+}
+
+function parseFacilitatorPaymentPayload(
+  value: string,
+): FacilitatorPaymentPayload | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  let decoded: unknown = null;
+  if (trimmed.startsWith("{")) {
+    try {
+      decoded = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  } else {
+    try {
+      decoded = fromBase64Json(trimmed);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!isRecord(decoded)) return null;
+  if (!Number.isFinite(Number(decoded.x402Version))) return null;
+  if (typeof decoded.scheme !== "string" || !decoded.scheme.trim()) return null;
+  if (typeof decoded.network !== "string" || !decoded.network.trim())
+    return null;
+  if (!isRecord(decoded.payload)) return null;
+
+  return {
+    x402Version: Number(decoded.x402Version),
+    scheme: decoded.scheme.trim(),
+    network: decoded.network.trim(),
+    payload: decoded.payload,
+  };
+}
+
+function buildFacilitatorPaymentRequirement(
+  config: X402RouteConfig,
+  request: Request,
+  resourcePath: string,
+): FacilitatorPaymentRequirement {
+  const resource = new URL(resourcePath, request.url).toString();
+  return {
+    scheme: "exact",
+    network: normalizeCorbitsNetwork(config.network),
+    maxAmountRequired: config.amountAtomic,
+    resource,
+    description: `Trader Ralph x402 route ${config.routeKey}`,
+    mimeType: "application/json",
+    payTo: config.payTo,
+    asset: config.asset,
+    maxTimeoutSeconds: config.maxTimeoutSeconds,
+    outputSchema: {},
+    extra: {
+      route: config.routeKey,
+      priceUsd: config.priceUsd,
+    },
+  };
 }
 
 function parseUsdPriceToAtomic(value: string): string {
@@ -368,75 +502,162 @@ async function consumePaymentSignature(
   );
 }
 
+async function postCorbitsFacilitator<T>(
+  env: Env,
+  path: "/verify" | "/settle",
+  payload: Record<string, unknown>,
+): Promise<{ status: number; body: T | null }> {
+  const baseUrl = resolveCorbitsFacilitatorUrl(env);
+  const timeoutMs = resolveCorbitsTimeoutMs(env);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(new URL(path, baseUrl).toString(), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const body = (await response.json().catch(() => null)) as T | null;
+    return { status: response.status, body };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function consumePaymentWithCorbits(
+  signature: string,
+  config: X402RouteConfig,
+  env: Env,
+  request: Request,
+  resourcePath: string,
+): Promise<"consumed" | "skipped"> {
+  const paymentPayload = parseFacilitatorPaymentPayload(signature);
+  if (!paymentPayload) return "skipped";
+
+  const paymentRequirements = buildFacilitatorPaymentRequirement(
+    config,
+    request,
+    resourcePath,
+  );
+  const reqBody = {
+    paymentRequirements,
+    paymentPayload,
+  };
+
+  const verified = await postCorbitsFacilitator<FacilitatorVerifyResponse>(
+    env,
+    "/verify",
+    reqBody,
+  );
+  const verifyReason =
+    (isRecord(verified.body) &&
+      String(verified.body.invalidReason ?? "").trim()) ||
+    "";
+  if (verified.status >= 400) {
+    throw new Error(
+      verifyReason || `x402-facilitator-verify-http-${verified.status}`,
+    );
+  }
+  if (!isRecord(verified.body) || verified.body.isValid !== true) {
+    throw new Error(verifyReason || "x402-facilitator-payment-invalid");
+  }
+
+  const settled = await postCorbitsFacilitator<FacilitatorSettleResponse>(
+    env,
+    "/settle",
+    reqBody,
+  );
+  const settleReason =
+    (isRecord(settled.body) && String(settled.body.errorReason ?? "").trim()) ||
+    "";
+  if (settled.status >= 400) {
+    throw new Error(
+      settleReason || `x402-facilitator-settle-http-${settled.status}`,
+    );
+  }
+  if (!isRecord(settled.body) || settled.body.success !== true) {
+    throw new Error(settleReason || "x402-facilitator-settle-failed");
+  }
+
+  return "consumed";
+}
+
 function loadRouteConfig(env: Env, routeKey: X402RouteKey): X402RouteConfig {
   const network = String(env.X402_NETWORK ?? "").trim();
   const payTo = String(env.X402_PAY_TO ?? "").trim();
   const asset = String(env.X402_ASSET_MINT ?? BILLING_USDC_MINT).trim();
   const priceUsdRaw =
-    routeKey === "market_snapshot"
-      ? String(env.X402_MARKET_SNAPSHOT_PRICE_USD ?? "").trim()
-      : routeKey === "market_snapshot_v2"
-        ? String(env.X402_MARKET_SNAPSHOT_V2_PRICE_USD ?? "").trim()
-        : routeKey === "market_token_balance"
-          ? String(env.X402_MARKET_TOKEN_BALANCE_PRICE_USD ?? "").trim()
-          : routeKey === "market_jupiter_quote"
-            ? String(env.X402_MARKET_JUPITER_QUOTE_PRICE_USD ?? "").trim()
-            : routeKey === "market_jupiter_quote_batch"
-              ? String(
-                  env.X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD ?? "",
-                ).trim()
-              : routeKey === "market_ohlcv"
-                ? String(env.X402_MARKET_OHLCV_PRICE_USD ?? "").trim()
-                : routeKey === "market_indicators"
-                  ? String(env.X402_MARKET_INDICATORS_PRICE_USD ?? "").trim()
-                  : routeKey === "solana_marks_latest"
-                    ? String(
-                        env.X402_SOLANA_MARKS_LATEST_PRICE_USD ?? "",
-                      ).trim()
-                    : routeKey === "solana_scores_latest"
+    routeKey === "exec_submit"
+      ? String(env.X402_EXEC_SUBMIT_PRICE_USD ?? "").trim()
+      : routeKey === "market_snapshot"
+        ? String(env.X402_MARKET_SNAPSHOT_PRICE_USD ?? "").trim()
+        : routeKey === "market_snapshot_v2"
+          ? String(env.X402_MARKET_SNAPSHOT_V2_PRICE_USD ?? "").trim()
+          : routeKey === "market_token_balance"
+            ? String(env.X402_MARKET_TOKEN_BALANCE_PRICE_USD ?? "").trim()
+            : routeKey === "market_jupiter_quote"
+              ? String(env.X402_MARKET_JUPITER_QUOTE_PRICE_USD ?? "").trim()
+              : routeKey === "market_jupiter_quote_batch"
+                ? String(
+                    env.X402_MARKET_JUPITER_QUOTE_BATCH_PRICE_USD ?? "",
+                  ).trim()
+                : routeKey === "market_ohlcv"
+                  ? String(env.X402_MARKET_OHLCV_PRICE_USD ?? "").trim()
+                  : routeKey === "market_indicators"
+                    ? String(env.X402_MARKET_INDICATORS_PRICE_USD ?? "").trim()
+                    : routeKey === "solana_marks_latest"
                       ? String(
-                          env.X402_SOLANA_SCORES_LATEST_PRICE_USD ?? "",
+                          env.X402_SOLANA_MARKS_LATEST_PRICE_USD ?? "",
                         ).trim()
-                      : routeKey === "solana_views_top"
+                      : routeKey === "solana_scores_latest"
                         ? String(
-                            env.X402_SOLANA_VIEWS_TOP_PRICE_USD ?? "",
+                            env.X402_SOLANA_SCORES_LATEST_PRICE_USD ?? "",
                           ).trim()
-                        : routeKey === "macro_signals"
+                        : routeKey === "solana_views_top"
                           ? String(
-                              env.X402_MACRO_SIGNALS_PRICE_USD ?? "",
+                              env.X402_SOLANA_VIEWS_TOP_PRICE_USD ?? "",
                             ).trim()
-                          : routeKey === "macro_fred_indicators"
+                          : routeKey === "macro_signals"
                             ? String(
-                                env.X402_MACRO_FRED_INDICATORS_PRICE_USD ?? "",
+                                env.X402_MACRO_SIGNALS_PRICE_USD ?? "",
                               ).trim()
-                            : routeKey === "macro_etf_flows"
+                            : routeKey === "macro_fred_indicators"
                               ? String(
-                                  env.X402_MACRO_ETF_FLOWS_PRICE_USD ?? "",
+                                  env.X402_MACRO_FRED_INDICATORS_PRICE_USD ??
+                                    "",
                                 ).trim()
-                              : routeKey === "macro_stablecoin_health"
+                              : routeKey === "macro_etf_flows"
                                 ? String(
-                                    env.X402_MACRO_STABLECOIN_HEALTH_PRICE_USD ??
-                                      "",
+                                    env.X402_MACRO_ETF_FLOWS_PRICE_USD ?? "",
                                   ).trim()
-                                : routeKey === "macro_oil_analytics"
+                                : routeKey === "macro_stablecoin_health"
                                   ? String(
-                                      env.X402_MACRO_OIL_ANALYTICS_PRICE_USD ??
+                                      env.X402_MACRO_STABLECOIN_HEALTH_PRICE_USD ??
                                         "",
                                     ).trim()
-                                  : routeKey === "perps_funding_surface"
+                                  : routeKey === "macro_oil_analytics"
                                     ? String(
-                                        env.X402_PERPS_FUNDING_SURFACE_PRICE_USD ??
+                                        env.X402_MACRO_OIL_ANALYTICS_PRICE_USD ??
                                           "",
                                       ).trim()
-                                    : routeKey === "perps_open_interest_surface"
+                                    : routeKey === "perps_funding_surface"
                                       ? String(
-                                          env.X402_PERPS_OPEN_INTEREST_SURFACE_PRICE_USD ??
+                                          env.X402_PERPS_FUNDING_SURFACE_PRICE_USD ??
                                             "",
                                         ).trim()
-                                      : String(
-                                          env.X402_PERPS_VENUE_SCORE_PRICE_USD ??
-                                            "",
-                                        ).trim();
+                                      : routeKey ===
+                                          "perps_open_interest_surface"
+                                        ? String(
+                                            env.X402_PERPS_OPEN_INTEREST_SURFACE_PRICE_USD ??
+                                              "",
+                                          ).trim()
+                                        : String(
+                                            env.X402_PERPS_VENUE_SCORE_PRICE_USD ??
+                                              "",
+                                          ).trim();
   if (!network || !payTo || !asset || !priceUsdRaw) {
     throw new Error("x402-route-config-missing");
   }
@@ -455,17 +676,31 @@ function buildPaymentRequirements(
   config: X402RouteConfig,
   request: Request,
   resourcePath: string,
+  env: Env,
 ) {
+  const provider = resolveX402Provider(env);
+  const facilitatorRequirements = buildFacilitatorPaymentRequirement(
+    config,
+    request,
+    resourcePath,
+  );
+  const network =
+    provider === "corbits" ? facilitatorRequirements.network : config.network;
   return {
-    x402Version: 2,
+    x402Version: provider === "corbits" ? 1 : 2,
     accepts: [
       {
         scheme: "exact",
-        network: config.network,
-        asset: config.asset,
+        network,
+        asset: facilitatorRequirements.asset,
         amount: config.amountAtomic,
-        payTo: config.payTo,
-        maxTimeoutSeconds: config.maxTimeoutSeconds,
+        maxAmountRequired: facilitatorRequirements.maxAmountRequired,
+        payTo: facilitatorRequirements.payTo,
+        resource: facilitatorRequirements.resource,
+        description: facilitatorRequirements.description,
+        mimeType: facilitatorRequirements.mimeType,
+        outputSchema: facilitatorRequirements.outputSchema,
+        maxTimeoutSeconds: facilitatorRequirements.maxTimeoutSeconds,
         extra: {
           route: config.routeKey,
           priceUsd: config.priceUsd,
@@ -482,6 +717,7 @@ function buildPaymentRequirements(
 function buildPaymentRequiredResponse(
   config: X402RouteConfig,
   request: Request,
+  env: Env,
   resourcePath: string,
   reason?: string,
 ): Response {
@@ -489,6 +725,7 @@ function buildPaymentRequiredResponse(
     config,
     request,
     resourcePath,
+    env,
   );
   const response = json(
     {
@@ -520,21 +757,41 @@ export async function requireX402Payment(
   }
   const signature = getPaymentSignature(request);
   if (!signature) {
-    return buildPaymentRequiredResponse(config, request, resourcePath);
+    return buildPaymentRequiredResponse(config, request, env, resourcePath);
   }
   if (!onchainVerificationEnabled(env)) {
     return null;
   }
 
+  const provider = resolveX402Provider(env);
   try {
-    await consumePaymentSignature(signature, config, env);
+    if (provider === "corbits") {
+      const corbitsOutcome = await consumePaymentWithCorbits(
+        signature,
+        config,
+        env,
+        request,
+        resourcePath,
+      );
+      if (corbitsOutcome === "skipped") {
+        await consumePaymentSignature(signature, config, env);
+      }
+    } else {
+      await consumePaymentSignature(signature, config, env);
+    }
     return null;
   } catch (error) {
     const reason =
       error instanceof Error
         ? error.message
         : "x402-payment-verification-failed";
-    return buildPaymentRequiredResponse(config, request, resourcePath, reason);
+    return buildPaymentRequiredResponse(
+      config,
+      request,
+      env,
+      resourcePath,
+      reason,
+    );
   }
 }
 
@@ -546,13 +803,15 @@ export function withX402SettlementHeader(
   resourcePath: string,
 ): Response {
   const config = loadRouteConfig(env, routeKey);
+  const provider = resolveX402Provider(env);
   const payload = {
-    x402Version: 2,
+    x402Version: provider === "corbits" ? 1 : 2,
     accepted: {
       scheme: "exact",
-      network: config.network,
+      network: normalizeCorbitsNetwork(config.network),
       asset: config.asset,
       amount: config.amountAtomic,
+      maxAmountRequired: config.amountAtomic,
       payTo: config.payTo,
     },
     resource: {

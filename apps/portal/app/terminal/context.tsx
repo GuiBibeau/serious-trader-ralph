@@ -8,6 +8,11 @@ import {
   useMemo,
   useState,
 } from "react";
+import {
+  resolveDefaultTerminalMode,
+  TERMINAL_MODE_OPTIONS,
+  type TerminalMode,
+} from "./terminal-modes";
 
 type HeaderState = {
   title?: string;
@@ -19,6 +24,9 @@ type HeaderState = {
   showFundButton: boolean;
   showBalance: boolean;
   isRefreshing: boolean;
+  terminalMode: TerminalMode;
+  terminalAllowedModes: readonly TerminalMode[];
+  terminalModeSaving: boolean;
 };
 
 type HeaderActions = {
@@ -29,11 +37,19 @@ type HeaderActions = {
   setIsRefreshing: (refreshing: boolean) => void;
   setShowFundButton: (show: boolean) => void;
   setShowBalance: (show: boolean) => void;
+  setTerminalMode: (mode: TerminalMode) => void;
+  setTerminalAllowedModes: (modes: readonly TerminalMode[]) => void;
+  setTerminalModeSaving: (saving: boolean) => void;
+  setModeAction: (fn: ((mode: TerminalMode) => void) | null) => void;
 };
 
 const DashboardContext = createContext<
   | (HeaderState &
-      HeaderActions & { onFund?: () => void; onRefresh?: () => void })
+      HeaderActions & {
+        onFund?: () => void;
+        onRefresh?: () => void;
+        onModeChange?: (mode: TerminalMode) => void;
+      })
   | null
 >(null);
 
@@ -46,11 +62,21 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [showFundButton, setShowFundButton] = useState(false);
   const [showBalance, setShowBalance] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [terminalMode, setTerminalMode] = useState<TerminalMode>(() =>
+    resolveDefaultTerminalMode(process.env.NEXT_PUBLIC_TERMINAL_DEFAULT_MODE),
+  );
+  const [terminalAllowedModes, setTerminalAllowedModes] = useState<
+    readonly TerminalMode[]
+  >(TERMINAL_MODE_OPTIONS);
+  const [terminalModeSaving, setTerminalModeSaving] = useState(false);
 
   const [onFund, setOnFund] = useState<(() => void) | undefined>(undefined);
   const [onRefresh, setOnRefresh] = useState<(() => void) | undefined>(
     undefined,
   );
+  const [onModeChange, setOnModeChange] = useState<
+    ((mode: TerminalMode) => void) | undefined
+  >(undefined);
 
   const setFundAction = useCallback((fn: (() => void) | null) => {
     setOnFund(() => fn || undefined);
@@ -59,6 +85,13 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const setRefreshAction = useCallback((fn: (() => void) | null) => {
     setOnRefresh(() => fn || undefined);
   }, []);
+
+  const setModeAction = useCallback(
+    (fn: ((mode: TerminalMode) => void) | null) => {
+      setOnModeChange(() => fn || undefined);
+    },
+    [],
+  );
 
   const value = useMemo(
     () => ({
@@ -72,10 +105,18 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setShowBalance,
       isRefreshing,
       setIsRefreshing,
+      terminalMode,
+      setTerminalMode,
+      terminalAllowedModes,
+      setTerminalAllowedModes,
+      terminalModeSaving,
+      setTerminalModeSaving,
       onFund,
       setFundAction,
       onRefresh,
       setRefreshAction,
+      onModeChange,
+      setModeAction,
     }),
     [
       walletBalances,
@@ -83,10 +124,15 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       showFundButton,
       showBalance,
       isRefreshing,
+      terminalMode,
+      terminalAllowedModes,
+      terminalModeSaving,
       onFund,
       onRefresh,
+      onModeChange,
       setFundAction,
       setRefreshAction,
+      setModeAction,
     ],
   );
 

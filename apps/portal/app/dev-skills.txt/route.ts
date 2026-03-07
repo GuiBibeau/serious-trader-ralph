@@ -104,7 +104,7 @@ export function GET(request: Request): Response {
     "",
     "AI-first, environment-aware skills for API discovery and ingestion.",
     `API origin: ${apiOrigin}`,
-    `x402 runtime base: ${toAbsoluteApiUrl(apiOrigin, toApiRuntimePath("/x402/read"))}`,
+    `x402 runtime base: ${toAbsoluteApiUrl(apiOrigin, toApiRuntimePath("/x402"))}`,
     "",
     "Skill index:",
     ...skills.map(

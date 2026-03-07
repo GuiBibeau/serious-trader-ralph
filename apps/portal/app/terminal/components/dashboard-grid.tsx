@@ -1,5 +1,5 @@
 // import RGL from "react-grid-layout"; // Commented out to avoid ESM issues
-import { type ReactNode, useCallback, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 
@@ -26,9 +26,11 @@ interface DashboardGridProps {
   children: ReactNode[];
   className?: string;
   onLayoutChange?: (layout: Layout[]) => void;
+  allowLayoutEditing?: boolean;
+  storageKey?: string;
 }
 
-const DASHBOARD_LAYOUT_STORAGE_KEY = "dashboard-grid-layouts:v3";
+const DASHBOARD_LAYOUT_STORAGE_KEY = "dashboard-grid-layouts:v6";
 const LAYOUT_BREAKPOINTS = ["lg", "md", "sm"] as const;
 
 type LayoutBreakpoint = (typeof LAYOUT_BREAKPOINTS)[number];
@@ -44,33 +46,57 @@ type DashboardLayouts = Record<string, Layout[]>;
 
 const DEFAULT_DASHBOARD_LAYOUTS: Record<LayoutBreakpoint, Layout[]> = {
   lg: [
-    { i: "market", x: 0, y: 0, w: 12, h: 4 },
-    { i: "wallet", x: 0, y: 4, w: 4, h: 3 },
-    { i: "macro_radar", x: 4, y: 4, w: 4, h: 3 },
-    { i: "macro_fred", x: 8, y: 4, w: 4, h: 3 },
-    { i: "macro_etf", x: 0, y: 7, w: 4, h: 3 },
-    { i: "macro_stablecoin", x: 4, y: 7, w: 4, h: 3 },
-    { i: "macro_oil", x: 8, y: 7, w: 4, h: 3 },
+    { i: "chart", x: 0, y: 0, w: 7, h: 6 },
+    { i: "orderbook", x: 7, y: 0, w: 3, h: 4 },
+    { i: "order_entry", x: 10, y: 0, w: 2, h: 3 },
+    { i: "trades_tape", x: 10, y: 3, w: 2, h: 3 },
+    { i: "positions", x: 7, y: 4, w: 3, h: 2 },
+    { i: "account_risk", x: 0, y: 6, w: 4, h: 3 },
+    { i: "macro_radar", x: 4, y: 6, w: 4, h: 3 },
+    { i: "macro_fred", x: 8, y: 6, w: 4, h: 3 },
+    { i: "macro_etf", x: 0, y: 9, w: 4, h: 3 },
+    { i: "macro_stablecoin", x: 4, y: 9, w: 4, h: 3 },
+    { i: "macro_oil", x: 8, y: 9, w: 4, h: 3 },
+    { i: "degen_watchlist", x: 0, y: 12, w: 6, h: 3 },
+    { i: "degen_event_hooks", x: 6, y: 12, w: 6, h: 3 },
   ],
   md: [
-    { i: "market", x: 0, y: 0, w: 10, h: 4 },
-    { i: "wallet", x: 0, y: 4, w: 10, h: 3 },
-    { i: "macro_radar", x: 0, y: 7, w: 5, h: 3 },
-    { i: "macro_fred", x: 5, y: 7, w: 5, h: 3 },
-    { i: "macro_etf", x: 0, y: 10, w: 5, h: 3 },
-    { i: "macro_stablecoin", x: 5, y: 10, w: 5, h: 3 },
-    { i: "macro_oil", x: 0, y: 13, w: 10, h: 3 },
+    { i: "chart", x: 0, y: 0, w: 6, h: 6 },
+    { i: "orderbook", x: 6, y: 0, w: 2, h: 3 },
+    { i: "order_entry", x: 8, y: 0, w: 2, h: 3 },
+    { i: "trades_tape", x: 8, y: 3, w: 2, h: 3 },
+    { i: "positions", x: 6, y: 3, w: 2, h: 3 },
+    { i: "account_risk", x: 0, y: 6, w: 5, h: 3 },
+    { i: "macro_radar", x: 5, y: 6, w: 5, h: 3 },
+    { i: "macro_fred", x: 0, y: 9, w: 5, h: 3 },
+    { i: "macro_etf", x: 5, y: 9, w: 5, h: 3 },
+    { i: "macro_stablecoin", x: 0, y: 12, w: 5, h: 3 },
+    { i: "macro_oil", x: 5, y: 12, w: 5, h: 3 },
+    { i: "degen_watchlist", x: 0, y: 15, w: 5, h: 3 },
+    { i: "degen_event_hooks", x: 5, y: 15, w: 5, h: 3 },
   ],
   sm: [
-    { i: "market", x: 0, y: 0, w: 6, h: 4 },
-    { i: "wallet", x: 0, y: 4, w: 6, h: 2 },
-    { i: "macro_radar", x: 0, y: 6, w: 6, h: 3 },
-    { i: "macro_fred", x: 0, y: 9, w: 6, h: 3 },
-    { i: "macro_etf", x: 0, y: 12, w: 6, h: 3 },
-    { i: "macro_stablecoin", x: 0, y: 15, w: 6, h: 3 },
-    { i: "macro_oil", x: 0, y: 18, w: 6, h: 3 },
+    { i: "chart", x: 0, y: 0, w: 6, h: 5 },
+    { i: "orderbook", x: 0, y: 5, w: 3, h: 3 },
+    { i: "order_entry", x: 3, y: 5, w: 3, h: 3 },
+    { i: "trades_tape", x: 0, y: 8, w: 6, h: 3 },
+    { i: "positions", x: 0, y: 11, w: 6, h: 3 },
+    { i: "account_risk", x: 0, y: 14, w: 6, h: 3 },
+    { i: "macro_radar", x: 0, y: 17, w: 6, h: 3 },
+    { i: "macro_fred", x: 0, y: 20, w: 6, h: 3 },
+    { i: "macro_etf", x: 0, y: 23, w: 6, h: 3 },
+    { i: "macro_stablecoin", x: 0, y: 26, w: 6, h: 3 },
+    { i: "macro_oil", x: 0, y: 29, w: 6, h: 3 },
+    { i: "degen_watchlist", x: 0, y: 32, w: 6, h: 3 },
+    { i: "degen_event_hooks", x: 0, y: 35, w: 6, h: 3 },
   ],
 };
+
+const KNOWN_PANEL_IDS = new Set(
+  LAYOUT_BREAKPOINTS.flatMap((breakpoint) =>
+    DEFAULT_DASHBOARD_LAYOUTS[breakpoint].map((entry) => entry.i),
+  ),
+);
 
 const GRID_OVERLAY_STYLES = `
   .react-grid-item.react-grid-placeholder {
@@ -141,28 +167,97 @@ function isDashboardLayoutModified(layouts: unknown): boolean {
   );
 }
 
-function readStoredDashboardLayouts(): unknown | null {
+function resolveLayoutStorageKey(storageKey?: string): string {
+  const normalized = String(storageKey ?? "").trim();
+  return normalized || DASHBOARD_LAYOUT_STORAGE_KEY;
+}
+
+function cloneDefaultDashboardLayouts(): DashboardLayouts {
+  return {
+    lg: DEFAULT_DASHBOARD_LAYOUTS.lg.map((entry) => ({ ...entry })),
+    md: DEFAULT_DASHBOARD_LAYOUTS.md.map((entry) => ({ ...entry })),
+    sm: DEFAULT_DASHBOARD_LAYOUTS.sm.map((entry) => ({ ...entry })),
+  };
+}
+
+function sanitizeLayoutEntry(raw: unknown): Layout | null {
+  if (!raw || typeof raw !== "object") return null;
+  const entry = raw as Record<string, unknown>;
+  const i = String(entry.i ?? "").trim();
+  if (!i || !KNOWN_PANEL_IDS.has(i)) return null;
+  const x = Number(entry.x ?? 0);
+  const y = Number(entry.y ?? 0);
+  const w = Number(entry.w ?? 0);
+  const h = Number(entry.h ?? 0);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (!Number.isFinite(w) || !Number.isFinite(h)) return null;
+  if (w <= 0 || h <= 0) return null;
+
+  return {
+    i,
+    x: Math.max(0, Math.floor(x)),
+    y: Math.max(0, Math.floor(y)),
+    w: Math.max(1, Math.floor(w)),
+    h: Math.max(1, Math.floor(h)),
+  };
+}
+
+function sanitizeDashboardLayouts(layouts: unknown): DashboardLayouts | null {
+  if (!layouts || typeof layouts !== "object") return null;
+  const record = layouts as Record<string, unknown>;
+  const sanitized = cloneDefaultDashboardLayouts();
+
+  for (const breakpoint of LAYOUT_BREAKPOINTS) {
+    const rawEntries = Array.isArray(record[breakpoint])
+      ? record[breakpoint]
+      : [];
+    const entriesById = new Map<string, Layout>();
+
+    for (const rawEntry of rawEntries) {
+      const parsed = sanitizeLayoutEntry(rawEntry);
+      if (!parsed) continue;
+      if (entriesById.has(parsed.i)) continue;
+      entriesById.set(parsed.i, parsed);
+    }
+
+    if (entriesById.size < 1) continue;
+
+    const nextEntries = Array.from(entriesById.values());
+    const missingDefaults = DEFAULT_DASHBOARD_LAYOUTS[breakpoint]
+      .filter((entry) => !entriesById.has(entry.i))
+      .map((entry) => ({ ...entry }));
+    sanitized[breakpoint] = [...nextEntries, ...missingDefaults];
+  }
+
+  return sanitized;
+}
+
+function readStoredDashboardLayouts(
+  storageKey?: string,
+): DashboardLayouts | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(DASHBOARD_LAYOUT_STORAGE_KEY);
+    const raw = window.localStorage.getItem(
+      resolveLayoutStorageKey(storageKey),
+    );
     if (!raw) return null;
-    return JSON.parse(raw);
+    return sanitizeDashboardLayouts(JSON.parse(raw));
   } catch {
     return null;
   }
 }
 
-export function clearDashboardGridLayouts(): void {
+export function clearDashboardGridLayouts(storageKey?: string): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.removeItem(DASHBOARD_LAYOUT_STORAGE_KEY);
+    window.localStorage.removeItem(resolveLayoutStorageKey(storageKey));
   } catch {
     // Ignore storage errors.
   }
 }
 
-export function hasCustomDashboardGridLayouts(): boolean {
-  const stored = readStoredDashboardLayouts();
+export function hasCustomDashboardGridLayouts(storageKey?: string): boolean {
+  const stored = readStoredDashboardLayouts(storageKey);
   if (!stored) return false;
   return isDashboardLayoutModified(stored);
 }
@@ -171,41 +266,53 @@ export function DashboardGrid({
   children,
   className,
   onLayoutChange,
+  allowLayoutEditing = true,
+  storageKey,
 }: DashboardGridProps) {
   // Use the hook to get width
   const { width, containerRef, mounted } = useContainerWidth();
+  const resolvedStorageKey = resolveLayoutStorageKey(storageKey);
 
   const [layouts, setLayouts] = useState<DashboardLayouts>(() => {
-    const stored = readStoredDashboardLayouts();
+    const stored = readStoredDashboardLayouts(resolvedStorageKey);
     if (!stored || !isDashboardLayoutModified(stored)) {
-      clearDashboardGridLayouts();
-      return DEFAULT_DASHBOARD_LAYOUTS as DashboardLayouts;
+      clearDashboardGridLayouts(resolvedStorageKey);
+      return cloneDefaultDashboardLayouts();
     }
 
-    return {
-      ...DEFAULT_DASHBOARD_LAYOUTS,
-      ...(stored as Record<string, unknown>),
-    };
+    return stored;
   });
+
+  useEffect(() => {
+    const stored = readStoredDashboardLayouts(resolvedStorageKey);
+    if (!stored || !isDashboardLayoutModified(stored)) {
+      clearDashboardGridLayouts(resolvedStorageKey);
+      setLayouts(cloneDefaultDashboardLayouts());
+      return;
+    }
+    setLayouts(stored);
+  }, [resolvedStorageKey]);
 
   const handleLayoutChange = useCallback(
     (layout: Layout[], allLayouts: DashboardLayouts) => {
-      setLayouts(allLayouts);
-      if (isDashboardLayoutModified(allLayouts)) {
+      const sanitized =
+        sanitizeDashboardLayouts(allLayouts) ?? cloneDefaultDashboardLayouts();
+      setLayouts(sanitized);
+      if (isDashboardLayoutModified(sanitized)) {
         try {
           window.localStorage.setItem(
-            DASHBOARD_LAYOUT_STORAGE_KEY,
-            JSON.stringify(allLayouts),
+            resolvedStorageKey,
+            JSON.stringify(sanitized),
           );
         } catch {
           // Ignore storage errors and keep in-memory behavior.
         }
       } else {
-        clearDashboardGridLayouts();
+        clearDashboardGridLayouts(resolvedStorageKey);
       }
       if (onLayoutChange) onLayoutChange(layout);
     },
-    [onLayoutChange],
+    [onLayoutChange, resolvedStorageKey],
   );
 
   return (
@@ -222,8 +329,8 @@ export function DashboardGrid({
           margin={[1, 1]}
           containerPadding={[0, 0]}
           onLayoutChange={handleLayoutChange}
-          isDraggable
-          isResizable
+          isDraggable={allowLayoutEditing}
+          isResizable={allowLayoutEditing}
           draggableHandle=".dashboard-drag-handle"
           draggableCancel=".no-drag"
         >

@@ -1283,7 +1283,7 @@ Below are implementation tickets sized to be GitHub issues. IDs are suggestions.
 ### XS-02 — Extend `X402RouteKey` + pricing env vars for new endpoints
 **Deliverables**
 - Update `apps/worker/src/x402.ts` with new keys + env mapping
-- Update Wrangler env vars (dev/staging/prod)
+- Update Wrangler env vars (dev/prod)
 
 **Acceptance criteria**
 - Missing env config returns `503` route-config error like existing routes

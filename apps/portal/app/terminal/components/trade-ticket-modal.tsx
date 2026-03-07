@@ -12,12 +12,20 @@ import {
 } from "react";
 import { toast } from "sonner";
 import {
-  apiBase,
-  apiFetchJson,
-  BTN_PRIMARY,
-  BTN_SECONDARY,
-  isRecord,
-} from "../../lib";
+  createExecutionClient,
+  describeExecutionClientError,
+  newExecutionIdempotencyKey,
+} from "../../execution-client";
+import { apiBase, BTN_PRIMARY, BTN_SECONDARY, isRecord } from "../../lib";
+import {
+  type AccountRiskSnapshot,
+  evaluatePreSubmitRisk,
+} from "./account-risk";
+import {
+  formatHotkeyChord,
+  matchesHotkey,
+  toAriaKeyShortcuts,
+} from "./terminal-hotkeys";
 import type { TradeIntent } from "./trade-intent";
 
 type TradeTicketModalProps = {
@@ -25,20 +33,74 @@ type TradeTicketModalProps = {
   intent: TradeIntent | null;
   walletAddress: string | null;
   tokenBalancesByMint?: Record<string, string> | null;
+  riskSnapshot?: AccountRiskSnapshot | null;
+  riskAcknowledgement?: {
+    required: boolean;
+    title?: string;
+    message?: string;
+    confirmationLabel?: string;
+  };
+  hotkeyBindings?: TradeTicketHotkeyBindings;
   getAccessToken: () => Promise<string | null>;
   onClose: () => void;
   onTradeComplete?: (trade: TradeTicketCompletion) => void;
+  onOrderQueued?: (order: QueuedTerminalOrder) => void;
+};
+
+type TradeTicketHotkeyBindings = {
+  submit: string;
+  cancel: string;
+  preset1: string;
+  preset2: string;
+  preset3: string;
 };
 
 export type TradeTicketCompletion = {
+  pairId: TradeIntent["pairId"];
+  direction: TradeIntent["direction"];
+  source: string;
+  reason: string;
+  requestId: string;
+  receiptId: string | null;
+  provider: string | null;
   inputMint: string;
   outputMint: string;
   inputSymbol: string;
   outputSymbol: string;
   inAmountAtomic: string;
   outAmountAtomic: string;
+  baseFilledUi: number;
+  quoteFilledUi: number;
+  fillPrice: number | null;
+  feeUi: number | null;
+  feeSymbol: string | null;
   status: string;
   signature: string | null;
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  slippageBps: number;
+  priorityLevel: PriorityLevel;
+  priorityMicroLamports: number;
+};
+
+export type QueuedTerminalOrder = {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  pairId: TradeIntent["pairId"];
+  direction: TradeIntent["direction"];
+  source: string;
+  reason: string;
+  orderType: "limit" | "trigger";
+  timeInForce: TimeInForce;
+  amountUi: string;
+  remainingAmountUi: string;
+  slippageBps: number;
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  priorityLevel: PriorityLevel;
+  limitPriceUi: string | null;
+  triggerPriceUi: string | null;
 };
 
 type QuoteState = {
@@ -51,9 +113,39 @@ type QuoteState = {
   priceImpactPct: number | null;
 };
 
+type OrderType = "market" | "limit" | "trigger";
+type TimeInForce = "gtc" | "ioc" | "fok";
+type QuantityMode = "base" | "quote" | "notional";
+type ExecutionLane = "fast" | "protected" | "safe";
+type SimulationPreference = "auto" | "always" | "never";
+type PriorityLevel = "normal" | "high" | "urgent";
+
 const MIN_SLIPPAGE_BPS = "1";
 const MAX_SLIPPAGE_BPS = "5000";
 const BEARER_RE = /^bearer\s+/i;
+const EXEC_POLL_INTERVAL_MS = 1200;
+const EXEC_POLL_TIMEOUT_MS = 45000;
+const ORDER_PRICE_DECIMALS = 6;
+const MAX_PRIORITY_MICRO_LAMPORTS = 2_000_000;
+const DEFAULT_EXECUTION_LANE: ExecutionLane = "safe";
+const DEFAULT_SIMULATION_PREFERENCE: SimulationPreference = "auto";
+const DEFAULT_PRIORITY_LEVEL: PriorityLevel = "normal";
+const DEFAULT_TRADE_TICKET_HOTKEY_BINDINGS: TradeTicketHotkeyBindings = {
+  submit: "mod+enter",
+  cancel: "escape",
+  preset1: "alt+1",
+  preset2: "alt+2",
+  preset3: "alt+3",
+};
+const PRIORITY_MICRO_LAMPORTS_BY_LEVEL: Record<PriorityLevel, number> = {
+  normal: 5_000,
+  high: 50_000,
+  urgent: 200_000,
+};
+
+type CloseModalOptions = {
+  cancelExecution?: boolean;
+};
 
 function parseUiAmountToAtomic(value: string, decimals: number): string | null {
   const trimmed = value.trim();
@@ -95,6 +187,25 @@ function formatAtomicToUi(
   }
 }
 
+function atomicToUiNumber(
+  atomicRaw: string | null,
+  decimals: number,
+): number | null {
+  const ui = formatAtomicToUi(atomicRaw, decimals, 9);
+  if (!ui) return null;
+  const parsed = Number(ui);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+function lamportsToSolUi(lamports: string | null): number | null {
+  const formatted = formatAtomicToUi(lamports, 9, 9);
+  if (!formatted) return null;
+  const parsed = Number(formatted);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
 function toPositiveAtomic(raw: string | null | undefined): string | null {
   if (!raw || !/^\d+$/.test(raw)) return null;
   try {
@@ -124,6 +235,13 @@ function toBoundedSlippage(value: string, fallback: number): number {
   return Math.max(1, Math.min(5000, Math.floor(raw)));
 }
 
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
 function areQuoteStatesEqual(a: QuoteState, b: QuoteState): boolean {
   return (
     a.status === b.status &&
@@ -146,28 +264,202 @@ const EMPTY_QUOTE: QuoteState = {
   priceImpactPct: null,
 };
 
+export function validateOrderConfig(input: {
+  orderType: OrderType;
+  timeInForce: TimeInForce;
+  reduceOnly: boolean;
+  postOnly: boolean;
+  quantityMode: QuantityMode;
+  amountAtomic: string | null;
+  limitPriceAtomic: string | null;
+  triggerPriceAtomic: string | null;
+  takeProfitPriceAtomic: string | null;
+  stopLossPriceAtomic: string | null;
+  bracketEnabled: boolean;
+}): string[] {
+  const errors: string[] = [];
+  if (!input.amountAtomic) {
+    errors.push("Amount must be greater than zero.");
+  }
+  if (input.orderType === "limit" && !input.limitPriceAtomic) {
+    errors.push("Limit orders require a limit price.");
+  }
+  if (input.orderType === "trigger" && !input.triggerPriceAtomic) {
+    errors.push("Trigger orders require a trigger price.");
+  }
+  if (
+    input.postOnly &&
+    (input.timeInForce === "ioc" || input.timeInForce === "fok")
+  ) {
+    errors.push("Post-only cannot be combined with IOC or FOK.");
+  }
+  if (input.orderType === "market" && input.postOnly) {
+    errors.push("Post-only is only valid for limit or trigger orders.");
+  }
+  if (
+    input.bracketEnabled &&
+    !input.takeProfitPriceAtomic &&
+    !input.stopLossPriceAtomic
+  ) {
+    errors.push("Bracket mode requires TP and/or SL price.");
+  }
+  if (
+    input.bracketEnabled &&
+    input.takeProfitPriceAtomic &&
+    input.stopLossPriceAtomic
+  ) {
+    try {
+      if (
+        BigInt(input.takeProfitPriceAtomic) ===
+        BigInt(input.stopLossPriceAtomic)
+      ) {
+        errors.push("TP and SL cannot be equal.");
+      }
+    } catch {
+      errors.push("Invalid TP/SL values.");
+    }
+  }
+  if (
+    input.quantityMode !== "quote" &&
+    input.orderType === "market" &&
+    input.reduceOnly
+  ) {
+    errors.push(
+      "Reduce-only market orders currently require quote quantity mode.",
+    );
+  }
+  return errors;
+}
+
+function qualityHint(input: {
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  priorityLevel: PriorityLevel;
+}): string {
+  const laneHint =
+    input.lane === "safe"
+      ? "Safe lane routes with stronger validation."
+      : input.lane === "protected"
+        ? "Protected lane prioritizes private execution."
+        : "Fast lane targets lowest latency routing.";
+  const simulationHint =
+    input.simulationPreference === "always"
+      ? "Simulation is always required before dispatch."
+      : input.simulationPreference === "never"
+        ? "Simulation is skipped unless policy enforces it."
+        : "Simulation follows lane and policy defaults.";
+  const priorityHint =
+    input.priorityLevel === "urgent"
+      ? "Urgent priority increases fee pressure for speed."
+      : input.priorityLevel === "high"
+        ? "High priority balances speed and fee spend."
+        : "Normal priority uses conservative fee settings.";
+  return `${laneHint} ${simulationHint} ${priorityHint}`;
+}
+
+export function validateExecutionQualityConfig(input: {
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  slippageBps: number;
+  priorityMicroLamports: number;
+}): string[] {
+  const errors: string[] = [];
+  if (input.lane === "safe" && input.simulationPreference === "never") {
+    errors.push("Safe lane requires simulation (choose auto or always).");
+  }
+  if (!Number.isInteger(input.slippageBps) || input.slippageBps < 1) {
+    errors.push("Slippage must be at least 1 bps.");
+  }
+  if (input.slippageBps > 5_000) {
+    errors.push("Slippage cannot exceed 5000 bps.");
+  }
+  if (
+    !Number.isInteger(input.priorityMicroLamports) ||
+    input.priorityMicroLamports < 0 ||
+    input.priorityMicroLamports > MAX_PRIORITY_MICRO_LAMPORTS
+  ) {
+    errors.push("Priority fee is outside allowed bounds.");
+  }
+  return errors;
+}
+
 export function TradeTicketModal({
   open,
   intent,
   walletAddress,
   tokenBalancesByMint,
+  riskSnapshot,
+  riskAcknowledgement,
+  hotkeyBindings = DEFAULT_TRADE_TICKET_HOTKEY_BINDINGS,
   getAccessToken,
   onClose,
   onTradeComplete,
+  onOrderQueued,
 }: TradeTicketModalProps) {
   const [amountUi, setAmountUi] = useState("");
   const [slippageInput, setSlippageInput] = useState("50");
+  const [executionLane, setExecutionLane] = useState<ExecutionLane>(
+    DEFAULT_EXECUTION_LANE,
+  );
+  const [simulationPreference, setSimulationPreference] =
+    useState<SimulationPreference>(DEFAULT_SIMULATION_PREFERENCE);
+  const [priorityLevel, setPriorityLevel] = useState<PriorityLevel>(
+    DEFAULT_PRIORITY_LEVEL,
+  );
+  const [orderType, setOrderType] = useState<OrderType>("market");
+  const [timeInForce, setTimeInForce] = useState<TimeInForce>("gtc");
+  const [quantityMode, setQuantityMode] = useState<QuantityMode>("quote");
+  const [reduceOnly, setReduceOnly] = useState(false);
+  const [postOnly, setPostOnly] = useState(false);
+  const [limitPriceUi, setLimitPriceUi] = useState("");
+  const [triggerPriceUi, setTriggerPriceUi] = useState("");
+  const [takeProfitPriceUi, setTakeProfitPriceUi] = useState("");
+  const [stopLossPriceUi, setStopLossPriceUi] = useState("");
+  const [bracketEnabled, setBracketEnabled] = useState(false);
   const [quote, setQuote] = useState<QuoteState>(EMPTY_QUOTE);
   const [submitStatus, setSubmitStatus] = useState<
-    "idle" | "submitting" | "error"
+    "idle" | "submitting" | "tracking" | "error"
   >("idle");
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
+  const [riskConfirmed, setRiskConfirmed] = useState(false);
   const [isQuoteTransitionPending, startQuoteTransition] = useTransition();
 
-  const onCloseRef = useRef(onClose);
   const quoteAbortRef = useRef<AbortController | null>(null);
+  const executeAbortRef = useRef<AbortController | null>(null);
+  const executeToastIdRef = useRef<string | number | null>(null);
+  const continueExecutionOnUnmountRef = useRef(false);
   const quoteRequestIdRef = useRef(0);
-  onCloseRef.current = onClose;
+  const mountedRef = useRef(true);
+  const openRef = useRef(open);
+
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+
+  const dismissExecuteToast = useCallback(() => {
+    if (executeToastIdRef.current === null) return;
+    toast.dismiss(executeToastIdRef.current);
+    executeToastIdRef.current = null;
+  }, []);
+
+  const closeModal = useCallback(
+    (options?: CloseModalOptions) => {
+      const cancelExecution = Boolean(options?.cancelExecution);
+      if (cancelExecution) {
+        continueExecutionOnUnmountRef.current = false;
+        executeAbortRef.current?.abort();
+        dismissExecuteToast();
+      }
+      openRef.current = false;
+      onClose();
+    },
+    [dismissExecuteToast, onClose],
+  );
+
+  const cancelAndCloseModal = useCallback(() => {
+    quoteAbortRef.current?.abort();
+    closeModal({ cancelExecution: true });
+  }, [closeModal]);
 
   const setQuoteTransition = useCallback((next: QuoteState) => {
     startQuoteTransition(() => {
@@ -179,27 +471,37 @@ export function TradeTicketModal({
 
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       quoteAbortRef.current?.abort();
+      if (!continueExecutionOnUnmountRef.current) {
+        executeAbortRef.current?.abort();
+        dismissExecuteToast();
+      }
     };
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") onCloseRef.current();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [dismissExecuteToast]);
 
   useEffect(() => {
     if (!open || !intent) return;
     quoteAbortRef.current?.abort();
     setAmountUi(intent.amountUi);
     setSlippageInput(String(intent.slippageBps));
+    setExecutionLane(DEFAULT_EXECUTION_LANE);
+    setSimulationPreference(DEFAULT_SIMULATION_PREFERENCE);
+    setPriorityLevel(DEFAULT_PRIORITY_LEVEL);
+    setOrderType("market");
+    setTimeInForce("gtc");
+    setQuantityMode("quote");
+    setReduceOnly(false);
+    setPostOnly(false);
+    setLimitPriceUi("");
+    setTriggerPriceUi("");
+    setTakeProfitPriceUi("");
+    setStopLossPriceUi("");
+    setBracketEnabled(false);
     setQuote(EMPTY_QUOTE);
     setSubmitStatus("idle");
     setSubmitMessage(null);
+    setRiskConfirmed(false);
   }, [open, intent]);
 
   const deferredAmountUi = useDeferredValue(amountUi);
@@ -221,6 +523,93 @@ export function TradeTicketModal({
   const resolvedSlippageBps = useMemo(
     () => toBoundedSlippage(deferredSlippageInput, intent?.slippageBps ?? 50),
     [deferredSlippageInput, intent?.slippageBps],
+  );
+  const priorityMicroLamports = useMemo(
+    () => PRIORITY_MICRO_LAMPORTS_BY_LEVEL[priorityLevel],
+    [priorityLevel],
+  );
+  const executionQualityHint = useMemo(
+    () =>
+      qualityHint({
+        lane: executionLane,
+        simulationPreference,
+        priorityLevel,
+      }),
+    [executionLane, priorityLevel, simulationPreference],
+  );
+  const executionQualityErrors = useMemo(
+    () =>
+      validateExecutionQualityConfig({
+        lane: executionLane,
+        simulationPreference,
+        slippageBps: resolvedSlippageBps,
+        priorityMicroLamports,
+      }),
+    [
+      executionLane,
+      priorityMicroLamports,
+      resolvedSlippageBps,
+      simulationPreference,
+    ],
+  );
+
+  const amountAtomicForValidation = useMemo(
+    () => parseUiAmountToAtomic(deferredAmountUi, intent?.inputDecimals ?? 0),
+    [deferredAmountUi, intent?.inputDecimals],
+  );
+  const limitPriceAtomic = useMemo(
+    () => parseUiAmountToAtomic(limitPriceUi, ORDER_PRICE_DECIMALS),
+    [limitPriceUi],
+  );
+  const triggerPriceAtomic = useMemo(
+    () => parseUiAmountToAtomic(triggerPriceUi, ORDER_PRICE_DECIMALS),
+    [triggerPriceUi],
+  );
+  const takeProfitPriceAtomic = useMemo(
+    () => parseUiAmountToAtomic(takeProfitPriceUi, ORDER_PRICE_DECIMALS),
+    [takeProfitPriceUi],
+  );
+  const stopLossPriceAtomic = useMemo(
+    () => parseUiAmountToAtomic(stopLossPriceUi, ORDER_PRICE_DECIMALS),
+    [stopLossPriceUi],
+  );
+  const orderValidationErrors = useMemo(
+    () =>
+      validateOrderConfig({
+        orderType,
+        timeInForce,
+        reduceOnly,
+        postOnly,
+        quantityMode,
+        amountAtomic: amountAtomicForValidation,
+        limitPriceAtomic,
+        triggerPriceAtomic,
+        takeProfitPriceAtomic,
+        stopLossPriceAtomic,
+        bracketEnabled,
+      }),
+    [
+      amountAtomicForValidation,
+      bracketEnabled,
+      limitPriceAtomic,
+      orderType,
+      postOnly,
+      quantityMode,
+      reduceOnly,
+      stopLossPriceAtomic,
+      takeProfitPriceAtomic,
+      timeInForce,
+      triggerPriceAtomic,
+    ],
+  );
+  const preSubmitRisk = useMemo(
+    () =>
+      evaluatePreSubmitRisk({
+        snapshot: riskSnapshot,
+        direction: intent?.direction ?? "buy",
+        reduceOnly,
+      }),
+    [intent?.direction, reduceOnly, riskSnapshot],
   );
 
   const refreshQuote = useCallback(async (): Promise<void> => {
@@ -364,6 +753,28 @@ export function TradeTicketModal({
 
   const executeTrade = useCallback(async (): Promise<void> => {
     if (!intent) return;
+    if (orderValidationErrors.length > 0 || executionQualityErrors.length > 0) {
+      setSubmitStatus("error");
+      setSubmitMessage(
+        orderValidationErrors[0] ??
+          executionQualityErrors[0] ??
+          "invalid-order-config",
+      );
+      return;
+    }
+    if (preSubmitRisk.blocked) {
+      setSubmitStatus("error");
+      setSubmitMessage(preSubmitRisk.message ?? "risk-guard-blocked");
+      return;
+    }
+    if (riskAcknowledgement?.required && !riskConfirmed) {
+      setSubmitStatus("error");
+      setSubmitMessage(
+        riskAcknowledgement.message ??
+          "degen-risk-confirmation-required-before-submit",
+      );
+      return;
+    }
     if (!walletAddress) {
       setSubmitStatus("error");
       setSubmitMessage("wallet-unavailable");
@@ -380,63 +791,236 @@ export function TradeTicketModal({
       return;
     }
 
+    const boundedSlippageBps = toBoundedSlippage(
+      slippageInput,
+      resolvedSlippageBps,
+    );
+    const options = {
+      commitment: "confirmed" as const,
+      ...(simulationPreference === "always"
+        ? { requireSimulation: true }
+        : simulationPreference === "never"
+          ? { requireSimulation: false }
+          : {}),
+      priorityMicroLamports,
+      orderType,
+      timeInForce,
+      reduceOnly,
+      postOnly,
+      quantityMode,
+      ...(limitPriceAtomic ? { limitPriceAtomic } : {}),
+      ...(triggerPriceAtomic ? { triggerPriceAtomic } : {}),
+      ...(takeProfitPriceAtomic ? { takeProfitPriceAtomic } : {}),
+      ...(stopLossPriceAtomic ? { stopLossPriceAtomic } : {}),
+    };
+
+    if (orderType === "limit" || orderType === "trigger") {
+      if (!onOrderQueued) {
+        setSubmitStatus("error");
+        setSubmitMessage("open-orders-panel-unavailable");
+        return;
+      }
+      const amountForOrder = amountUi.trim();
+      if (!amountForOrder) {
+        setSubmitStatus("error");
+        setSubmitMessage("order-amount-required");
+        return;
+      }
+      const now = Date.now();
+      onOrderQueued({
+        id: crypto.randomUUID(),
+        createdAt: now,
+        updatedAt: now,
+        pairId: intent.pairId,
+        direction: intent.direction,
+        source: intent.source,
+        reason: intent.reason,
+        orderType,
+        timeInForce,
+        amountUi: amountForOrder,
+        remainingAmountUi: amountForOrder,
+        slippageBps: boundedSlippageBps,
+        lane: executionLane,
+        simulationPreference,
+        priorityLevel,
+        limitPriceUi:
+          orderType === "limit" ? limitPriceUi.trim() || null : null,
+        triggerPriceUi:
+          orderType === "trigger" ? triggerPriceUi.trim() || null : null,
+      });
+      closeModal();
+      toast.success(`${orderType.toUpperCase()} order queued`, {
+        description: `${intent.pairId} • ${amountForOrder} ${intent.inputSymbol}`,
+        position: "bottom-right",
+        duration: 3500,
+      });
+      return;
+    }
     setSubmitStatus("submitting");
     setSubmitMessage(null);
+    let execToastId: string | number | null = null;
 
     try {
+      executeAbortRef.current?.abort();
+      continueExecutionOnUnmountRef.current = false;
+      const controller = new AbortController();
+      executeAbortRef.current = controller;
+      dismissExecuteToast();
+
       const token = await getAccessToken();
       if (!token) throw new Error("missing-access-token");
 
-      const payload = await apiFetchJson("/api/trade/swap", token, {
-        method: "POST",
-        body: JSON.stringify({
-          inputMint: intent.inputMint,
-          outputMint: intent.outputMint,
-          amount: quote.inAmountAtomic,
-          slippageBps: resolvedSlippageBps,
-          source: intent.source,
-          reason: intent.reason,
-        }),
+      const executionClient = createExecutionClient({
+        authToken: token,
+        pollIntervalMs: EXEC_POLL_INTERVAL_MS,
+        pollTimeoutMs: EXEC_POLL_TIMEOUT_MS,
+      });
+      const idempotencyKey = newExecutionIdempotencyKey("trade");
+      const submitAck = await executionClient.submit(
+        {
+          schemaVersion: "v1",
+          mode: "privy_execute",
+          lane: executionLane,
+          metadata: {
+            source: intent.source,
+            reason: `${intent.reason} • ${orderType}/${timeInForce}/${quantityMode} • ${executionLane}/${simulationPreference}/${priorityLevel}`,
+            clientRequestId: idempotencyKey,
+          },
+          privyExecute: {
+            intentType: "swap",
+            wallet: walletAddress,
+            swap: {
+              inputMint: intent.inputMint,
+              outputMint: intent.outputMint,
+              amountAtomic: quote.inAmountAtomic,
+              slippageBps: boundedSlippageBps,
+            },
+            options,
+          },
+        },
+        {
+          idempotencyKey,
+          signal: controller.signal,
+        },
+      );
+
+      continueExecutionOnUnmountRef.current = true;
+      closeModal();
+      execToastId = toast.loading("TX submitting...", {
+        position: "bottom-right",
+        duration: Number.POSITIVE_INFINITY,
+      });
+      executeToastIdRef.current = execToastId;
+
+      const terminal = await executionClient.waitForTerminalReceipt({
+        requestId: submitAck.requestId,
+        signal: controller.signal,
       });
 
-      if (!isRecord(payload) || payload.ok !== true) {
-        throw new Error("swap-failed");
-      }
+      const inputUiAmount =
+        atomicToUiNumber(quote.inAmountAtomic, intent.inputDecimals) ?? 0;
+      const outputUiAmount =
+        atomicToUiNumber(quote.outAmountAtomic, intent.outputDecimals) ?? 0;
+      const baseFilledUi =
+        intent.direction === "buy" ? outputUiAmount : inputUiAmount;
+      const quoteFilledUi =
+        intent.direction === "buy" ? inputUiAmount : outputUiAmount;
+      const fillPrice = baseFilledUi > 0 ? quoteFilledUi / baseFilledUi : null;
 
-      const status = String(payload.status ?? "").trim() || "unknown";
-      const nextSignature =
-        typeof payload.signature === "string" && payload.signature.trim()
-          ? payload.signature.trim()
-          : null;
       onTradeComplete?.({
+        pairId: intent.pairId,
+        direction: intent.direction,
+        source: intent.source,
+        reason: intent.reason,
+        requestId: terminal.requestId,
+        receiptId: terminal.receiptId,
+        provider: terminal.provider,
         inputMint: intent.inputMint,
         outputMint: intent.outputMint,
         inputSymbol: intent.inputSymbol,
         outputSymbol: intent.outputSymbol,
         inAmountAtomic: quote.inAmountAtomic,
         outAmountAtomic: quote.outAmountAtomic,
-        status,
-        signature: nextSignature,
+        baseFilledUi,
+        quoteFilledUi,
+        fillPrice,
+        feeUi: lamportsToSolUi(terminal.networkFeeLamports),
+        feeSymbol: terminal.networkFeeLamports ? "SOL" : null,
+        status: terminal.status,
+        signature: terminal.signature,
+        lane: executionLane,
+        simulationPreference,
+        slippageBps: boundedSlippageBps,
+        priorityLevel,
+        priorityMicroLamports,
       });
-      toast.success("Swap executed", {
-        description: nextSignature
-          ? `Signature: ${nextSignature.slice(0, 8)}...${nextSignature.slice(-8)}`
-          : `Status: ${status}`,
+      toast.success("Trade executed", {
+        id: execToastId ?? undefined,
+        description: terminal.signature
+          ? `Signature: ${terminal.signature.slice(0, 8)}...${terminal.signature.slice(-8)}`
+          : `Status: ${terminal.status}`,
         position: "bottom-right",
+        duration: 6000,
       });
-      onClose();
+      continueExecutionOnUnmountRef.current = false;
+      executeToastIdRef.current = null;
     } catch (error) {
+      if (executeAbortRef.current?.signal.aborted) return;
+      const message = describeExecutionClientError(error, "execution-failed");
+      if (executeToastIdRef.current !== null || execToastId !== null) {
+        toast.error("Trade execution failed", {
+          id: executeToastIdRef.current ?? execToastId ?? undefined,
+          description: message,
+          position: "bottom-right",
+          duration: 7000,
+        });
+        executeToastIdRef.current = null;
+      } else {
+        toast.error("Trade execution failed", {
+          description: message,
+          position: "bottom-right",
+          duration: 7000,
+        });
+      }
+      continueExecutionOnUnmountRef.current = false;
+      if (!mountedRef.current) return;
+      if (!openRef.current) return;
       setSubmitStatus("error");
-      setSubmitMessage(error instanceof Error ? error.message : "swap-failed");
+      setSubmitMessage(message);
     }
   }, [
+    amountUi,
+    closeModal,
+    dismissExecuteToast,
     getAccessToken,
     intent,
-    onClose,
+    limitPriceAtomic,
+    limitPriceUi,
+    onOrderQueued,
     onTradeComplete,
+    orderType,
+    orderValidationErrors,
+    preSubmitRisk,
+    riskAcknowledgement?.message,
+    riskAcknowledgement?.required,
+    riskConfirmed,
+    executionLane,
+    executionQualityErrors,
+    postOnly,
+    priorityLevel,
+    priorityMicroLamports,
+    quantityMode,
     quote.inAmountAtomic,
     quote.outAmountAtomic,
+    reduceOnly,
     resolvedSlippageBps,
+    slippageInput,
+    stopLossPriceAtomic,
+    simulationPreference,
+    takeProfitPriceAtomic,
+    timeInForce,
+    triggerPriceAtomic,
+    triggerPriceUi,
     walletAddress,
   ]);
 
@@ -472,15 +1056,87 @@ export function TradeTicketModal({
     setSlippageInput(MAX_SLIPPAGE_BPS);
   }, []);
 
+  const canExecuteTrade =
+    submitStatus !== "submitting" &&
+    submitStatus !== "tracking" &&
+    quote.status === "ready" &&
+    Boolean(quote.inAmountAtomic) &&
+    (!riskAcknowledgement?.required || riskConfirmed) &&
+    orderValidationErrors.length < 1 &&
+    executionQualityErrors.length < 1 &&
+    !preSubmitRisk.blocked;
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent): void {
+      if (matchesHotkey(event, hotkeyBindings.cancel)) {
+        event.preventDefault();
+        cancelAndCloseModal();
+        return;
+      }
+
+      const typing = isTypingTarget(event.target);
+      if (typing && !event.altKey && !event.metaKey && !event.ctrlKey) {
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.submit)) {
+        if (!canExecuteTrade) return;
+        event.preventDefault();
+        void executeTrade();
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.preset1)) {
+        const preset = amountPresets[0] ?? null;
+        if (!preset) return;
+        event.preventDefault();
+        setAmountUi(preset);
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.preset2)) {
+        const preset = amountPresets[1] ?? null;
+        if (!preset) return;
+        event.preventDefault();
+        setAmountUi(preset);
+        return;
+      }
+
+      if (matchesHotkey(event, hotkeyBindings.preset3)) {
+        const preset = amountPresets[2] ?? null;
+        if (!preset) return;
+        event.preventDefault();
+        setAmountUi(preset);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    amountPresets,
+    cancelAndCloseModal,
+    canExecuteTrade,
+    executeTrade,
+    hotkeyBindings.cancel,
+    hotkeyBindings.preset1,
+    hotkeyBindings.preset2,
+    hotkeyBindings.preset3,
+    hotkeyBindings.submit,
+    open,
+  ]);
+
   if (!intent) return null;
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[6px]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[6px]"
+      data-testid="trade-ticket-modal"
+    >
       <button
         aria-label="Close trade ticket"
         className="absolute inset-0"
-        onClick={onClose}
+        onClick={cancelAndCloseModal}
         type="button"
       />
       <div className="relative w-[min(520px,92vw)] max-h-[90vh] overflow-y-auto card">
@@ -493,9 +1149,10 @@ export function TradeTicketModal({
           </div>
           <button
             className="flex items-center justify-center w-9 h-9 rounded-md border border-border bg-surface text-xl cursor-pointer hover:bg-paper transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
-            onClick={onClose}
+            onClick={cancelAndCloseModal}
             type="button"
             aria-label="Close"
+            aria-keyshortcuts={toAriaKeyShortcuts(hotkeyBindings.cancel)}
           >
             &times;
           </button>
@@ -503,10 +1160,24 @@ export function TradeTicketModal({
 
         <div className="p-6 space-y-4">
           <TradeIdentityCard intent={intent} walletAddress={walletAddress} />
+          <TradeRiskContextCard
+            snapshot={riskSnapshot ?? null}
+            preSubmitRisk={preSubmitRisk}
+          />
+          {riskAcknowledgement?.required ? (
+            <DegenRiskAcknowledgeCard
+              title={riskAcknowledgement.title}
+              message={riskAcknowledgement.message}
+              confirmationLabel={riskAcknowledgement.confirmationLabel}
+              confirmed={riskConfirmed}
+              onConfirmedChange={setRiskConfirmed}
+            />
+          ) : null}
           <TradeInputsSection
             amountUi={amountUi}
             amountPresets={amountPresets}
             inputSymbol={intent.inputSymbol}
+            quantityMode={quantityMode}
             amountMinValue={intent.inputMinAmountUi}
             amountMaxValue={maxAmountUi}
             slippageInput={slippageInput}
@@ -519,6 +1190,41 @@ export function TradeTicketModal({
             onSetSlippageMax={setSlippageMax}
             onRefreshQuote={refreshQuote}
           />
+          <ExecutionQualitySection
+            lane={executionLane}
+            simulationPreference={simulationPreference}
+            priorityLevel={priorityLevel}
+            priorityMicroLamports={priorityMicroLamports}
+            slippageBps={resolvedSlippageBps}
+            hint={executionQualityHint}
+            validationErrors={executionQualityErrors}
+            onLaneChange={setExecutionLane}
+            onSimulationPreferenceChange={setSimulationPreference}
+            onPriorityLevelChange={setPriorityLevel}
+          />
+          <AdvancedOrderConfigSection
+            orderType={orderType}
+            timeInForce={timeInForce}
+            quantityMode={quantityMode}
+            reduceOnly={reduceOnly}
+            postOnly={postOnly}
+            bracketEnabled={bracketEnabled}
+            limitPriceUi={limitPriceUi}
+            triggerPriceUi={triggerPriceUi}
+            takeProfitPriceUi={takeProfitPriceUi}
+            stopLossPriceUi={stopLossPriceUi}
+            validationErrors={orderValidationErrors}
+            onOrderTypeChange={setOrderType}
+            onTimeInForceChange={setTimeInForce}
+            onQuantityModeChange={setQuantityMode}
+            onReduceOnlyChange={setReduceOnly}
+            onPostOnlyChange={setPostOnly}
+            onBracketEnabledChange={setBracketEnabled}
+            onLimitPriceChange={setLimitPriceUi}
+            onTriggerPriceChange={setTriggerPriceUi}
+            onTakeProfitPriceChange={setTakeProfitPriceUi}
+            onStopLossPriceChange={setStopLossPriceUi}
+          />
           <QuoteSummaryCard
             outputSymbol={intent.outputSymbol}
             quote={quote}
@@ -526,32 +1232,48 @@ export function TradeTicketModal({
           />
 
           {submitMessage ? (
-            <p className="text-red-400 text-xs">{submitMessage}</p>
+            <p
+              className={
+                submitStatus === "error"
+                  ? "text-red-400 text-xs"
+                  : "text-muted text-xs"
+              }
+            >
+              {submitMessage}
+            </p>
           ) : null}
 
           <div className="flex justify-end gap-2 pt-1">
             <button
               className={`${BTN_SECONDARY} !py-2 !px-4 text-xs`}
-              onClick={onClose}
+              onClick={cancelAndCloseModal}
               type="button"
+              aria-keyshortcuts={toAriaKeyShortcuts(hotkeyBindings.cancel)}
             >
               Close
             </button>
             <button
               className={`${BTN_PRIMARY} !py-2 !px-4 text-xs min-w-[8.5rem]`}
+              data-testid="trade-ticket-submit"
               onClick={() => void executeTrade()}
               type="button"
-              disabled={
-                submitStatus === "submitting" ||
-                quote.status !== "ready" ||
-                !quote.inAmountAtomic
-              }
+              disabled={!canExecuteTrade}
+              aria-keyshortcuts={toAriaKeyShortcuts(hotkeyBindings.submit)}
             >
-              {submitStatus === "submitting"
-                ? "Submitting..."
+              {submitStatus === "submitting" || submitStatus === "tracking"
+                ? submitStatus === "tracking"
+                  ? "Tracking..."
+                  : "Submitting..."
                 : `Execute ${intent.direction === "buy" ? "Buy" : "Sell"}`}
             </button>
           </div>
+          <p className="text-[10px] text-muted text-right">
+            {formatHotkeyChord(hotkeyBindings.submit)} submit •{" "}
+            {formatHotkeyChord(hotkeyBindings.cancel)} cancel •{" "}
+            {formatHotkeyChord(hotkeyBindings.preset1)}/
+            {formatHotkeyChord(hotkeyBindings.preset2)}/
+            {formatHotkeyChord(hotkeyBindings.preset3)} presets
+          </p>
         </div>
       </div>
     </div>
@@ -585,10 +1307,111 @@ const TradeIdentityCard = memo(function TradeIdentityCard(props: {
   );
 });
 
+const TradeRiskContextCard = memo(function TradeRiskContextCard(props: {
+  snapshot: AccountRiskSnapshot | null;
+  preSubmitRisk: { blocked: boolean; message: string | null };
+}) {
+  const { snapshot, preSubmitRisk } = props;
+  if (!snapshot) {
+    return (
+      <div className="rounded border border-border bg-subtle px-3 py-2 text-xs text-muted">
+        Risk context unavailable.
+      </div>
+    );
+  }
+
+  const highlightClass =
+    snapshot.liquidationRiskLevel === "critical" ||
+    snapshot.concentrationLevel === "critical"
+      ? "border-red-500/40 bg-red-500/10 text-red-200"
+      : snapshot.liquidationRiskLevel === "warning" ||
+          snapshot.concentrationLevel === "warning"
+        ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
+        : "border-border bg-subtle text-ink";
+  const formatNumber = (value: number | null, digits = 2): string =>
+    value === null || !Number.isFinite(value) ? "--" : value.toFixed(digits);
+
+  return (
+    <div className={`rounded border px-3 py-2 text-xs ${highlightClass}`}>
+      <p className="label">RISK_CONTEXT</p>
+      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+        <p>
+          Equity:{" "}
+          <span className="font-mono">
+            {formatNumber(snapshot.equityQuote)}
+          </span>
+        </p>
+        <p className="text-right">
+          Used margin:{" "}
+          <span className="font-mono">
+            {formatNumber(snapshot.usedMarginQuote)}
+          </span>
+        </p>
+        <p>
+          Maint ratio:{" "}
+          <span className="font-mono">
+            {formatNumber(snapshot.maintenanceRatio, 2)}x
+          </span>
+        </p>
+        <p className="text-right">
+          Liq buffer:{" "}
+          <span className="font-mono">
+            {formatNumber(snapshot.liquidationBufferPct, 2)}%
+          </span>
+        </p>
+      </div>
+      {preSubmitRisk.message ? (
+        <p
+          className={
+            preSubmitRisk.blocked
+              ? "mt-1.5 text-[11px] text-red-300"
+              : "mt-1.5 text-[11px] text-amber-200"
+          }
+        >
+          {preSubmitRisk.message}
+        </p>
+      ) : null}
+    </div>
+  );
+});
+
+const DegenRiskAcknowledgeCard = memo(function DegenRiskAcknowledgeCard(props: {
+  title?: string;
+  message?: string;
+  confirmationLabel?: string;
+  confirmed: boolean;
+  onConfirmedChange: (next: boolean) => void;
+}) {
+  const { title, message, confirmationLabel, confirmed, onConfirmedChange } =
+    props;
+  return (
+    <div className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+      <p className="label">{title ?? "DEGEN_RISK_ACKNOWLEDGEMENT"}</p>
+      <p className="mt-1 text-[11px]">
+        {message ??
+          "This path is configured for high-volatility execution. Confirm risk posture before dispatch."}
+      </p>
+      <label className="mt-2 inline-flex items-center gap-1.5 text-[11px]">
+        <input
+          className="h-3.5 w-3.5 accent-red-500"
+          type="checkbox"
+          checked={confirmed}
+          onChange={(event) => onConfirmedChange(event.target.checked)}
+        />
+        <span>
+          {confirmationLabel ??
+            "I understand this is Degen mode and accept higher execution risk."}
+        </span>
+      </label>
+    </div>
+  );
+});
+
 const TradeInputsSection = memo(function TradeInputsSection(props: {
   amountUi: string;
   amountPresets: readonly string[];
   inputSymbol: string;
+  quantityMode: QuantityMode;
   amountMinValue: string;
   amountMaxValue: string | null;
   slippageInput: string;
@@ -605,6 +1428,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
     amountUi,
     amountPresets,
     inputSymbol,
+    quantityMode,
     amountMinValue,
     amountMaxValue,
     slippageInput,
@@ -624,7 +1448,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
       <div>
         <div className="mb-2 flex items-center justify-between gap-2">
           <label className="label block" htmlFor="trade-ticket-amount">
-            Amount ({inputSymbol})
+            Amount ({quantityMode === "quote" ? inputSymbol : quantityMode})
           </label>
           <div className="flex items-center gap-1.5">
             <button
@@ -654,6 +1478,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
           <input
             id="trade-ticket-amount"
             className="input-field !py-2.5 font-mono"
+            data-testid="trade-ticket-amount-input"
             inputMode="decimal"
             placeholder={amountPresets[1] ?? amountPresets[0] ?? "1"}
             value={amountUi}
@@ -708,6 +1533,7 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
         <input
           id="trade-ticket-slippage"
           className="input-field !py-2.5 font-mono"
+          data-testid="trade-ticket-slippage-input"
           inputMode="numeric"
           min={1}
           max={5000}
@@ -718,6 +1544,315 @@ const TradeInputsSection = memo(function TradeInputsSection(props: {
     </>
   );
 });
+
+const ExecutionQualitySection = memo(function ExecutionQualitySection(props: {
+  lane: ExecutionLane;
+  simulationPreference: SimulationPreference;
+  priorityLevel: PriorityLevel;
+  priorityMicroLamports: number;
+  slippageBps: number;
+  hint: string;
+  validationErrors: string[];
+  onLaneChange: (value: ExecutionLane) => void;
+  onSimulationPreferenceChange: (value: SimulationPreference) => void;
+  onPriorityLevelChange: (value: PriorityLevel) => void;
+}) {
+  const {
+    lane,
+    simulationPreference,
+    priorityLevel,
+    priorityMicroLamports,
+    slippageBps,
+    hint,
+    validationErrors,
+    onLaneChange,
+    onSimulationPreferenceChange,
+    onPriorityLevelChange,
+  } = props;
+  return (
+    <div className="rounded border border-border bg-subtle px-3 py-2 text-xs space-y-3">
+      <p className="label">EXECUTION_QUALITY</p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <label className="space-y-1">
+          <span className="text-muted text-[10px] uppercase tracking-wider">
+            Lane
+          </span>
+          <select
+            className="input-field !py-2 font-mono"
+            value={lane}
+            onChange={(event) =>
+              onLaneChange(event.target.value as ExecutionLane)
+            }
+          >
+            <option value="fast">fast</option>
+            <option value="protected">protected</option>
+            <option value="safe">safe</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-muted text-[10px] uppercase tracking-wider">
+            Simulation
+          </span>
+          <select
+            className="input-field !py-2 font-mono"
+            value={simulationPreference}
+            onChange={(event) =>
+              onSimulationPreferenceChange(
+                event.target.value as SimulationPreference,
+              )
+            }
+          >
+            <option value="auto">auto</option>
+            <option value="always">always</option>
+            <option value="never">never</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-muted text-[10px] uppercase tracking-wider">
+            Priority
+          </span>
+          <select
+            className="input-field !py-2 font-mono"
+            value={priorityLevel}
+            onChange={(event) =>
+              onPriorityLevelChange(event.target.value as PriorityLevel)
+            }
+          >
+            <option value="normal">normal</option>
+            <option value="high">high</option>
+            <option value="urgent">urgent</option>
+          </select>
+        </label>
+      </div>
+      <div className="rounded border border-border/60 bg-paper/70 px-2 py-1.5 text-[10px] text-muted space-y-0.5">
+        <p>Slippage: {slippageBps} bps</p>
+        <p>
+          Priority fee: {priorityMicroLamports.toLocaleString()} u-lamports/CU
+        </p>
+        <p>{hint}</p>
+      </div>
+      {validationErrors.length > 0 ? (
+        <ul className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-300 space-y-1">
+          {validationErrors.map((error) => (
+            <li key={error}>• {error}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+});
+
+const AdvancedOrderConfigSection = memo(
+  function AdvancedOrderConfigSection(props: {
+    orderType: OrderType;
+    timeInForce: TimeInForce;
+    quantityMode: QuantityMode;
+    reduceOnly: boolean;
+    postOnly: boolean;
+    bracketEnabled: boolean;
+    limitPriceUi: string;
+    triggerPriceUi: string;
+    takeProfitPriceUi: string;
+    stopLossPriceUi: string;
+    validationErrors: string[];
+    onOrderTypeChange: (value: OrderType) => void;
+    onTimeInForceChange: (value: TimeInForce) => void;
+    onQuantityModeChange: (value: QuantityMode) => void;
+    onReduceOnlyChange: (value: boolean) => void;
+    onPostOnlyChange: (value: boolean) => void;
+    onBracketEnabledChange: (value: boolean) => void;
+    onLimitPriceChange: (value: string) => void;
+    onTriggerPriceChange: (value: string) => void;
+    onTakeProfitPriceChange: (value: string) => void;
+    onStopLossPriceChange: (value: string) => void;
+  }) {
+    const {
+      orderType,
+      timeInForce,
+      quantityMode,
+      reduceOnly,
+      postOnly,
+      bracketEnabled,
+      limitPriceUi,
+      triggerPriceUi,
+      takeProfitPriceUi,
+      stopLossPriceUi,
+      validationErrors,
+      onOrderTypeChange,
+      onTimeInForceChange,
+      onQuantityModeChange,
+      onReduceOnlyChange,
+      onPostOnlyChange,
+      onBracketEnabledChange,
+      onLimitPriceChange,
+      onTriggerPriceChange,
+      onTakeProfitPriceChange,
+      onStopLossPriceChange,
+    } = props;
+
+    return (
+      <div className="rounded border border-border bg-subtle px-3 py-2 text-xs space-y-3">
+        <p className="label">ADVANCED_ORDER_CONFIG</p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <label className="space-y-1">
+            <span className="text-muted text-[10px] uppercase tracking-wider">
+              Order Type
+            </span>
+            <select
+              className="input-field !py-2 font-mono"
+              data-testid="trade-ticket-order-type"
+              value={orderType}
+              onChange={(event) =>
+                onOrderTypeChange(event.target.value as OrderType)
+              }
+            >
+              <option value="market">market</option>
+              <option value="limit">limit</option>
+              <option value="trigger">trigger</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted text-[10px] uppercase tracking-wider">
+              Time In Force
+            </span>
+            <select
+              className="input-field !py-2 font-mono"
+              value={timeInForce}
+              onChange={(event) =>
+                onTimeInForceChange(event.target.value as TimeInForce)
+              }
+            >
+              <option value="gtc">gtc</option>
+              <option value="ioc">ioc</option>
+              <option value="fok">fok</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted text-[10px] uppercase tracking-wider">
+              Quantity Mode
+            </span>
+            <select
+              className="input-field !py-2 font-mono"
+              value={quantityMode}
+              onChange={(event) =>
+                onQuantityModeChange(event.target.value as QuantityMode)
+              }
+            >
+              <option value="quote">quote</option>
+              <option value="base">base</option>
+              <option value="notional">notional</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+          <label className="flex items-center gap-2">
+            <input
+              checked={reduceOnly}
+              onChange={(event) => onReduceOnlyChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Reduce-only</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={postOnly}
+              onChange={(event) => onPostOnlyChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Post-only</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={bracketEnabled}
+              onChange={(event) => onBracketEnabledChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Bracket TP/SL</span>
+          </label>
+        </div>
+
+        {orderType !== "market" ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {orderType === "limit" ? (
+              <label className="space-y-1">
+                <span className="text-muted text-[10px] uppercase tracking-wider">
+                  Limit Price
+                </span>
+                <input
+                  className="input-field !py-2 font-mono"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={limitPriceUi}
+                  onChange={(event) => onLimitPriceChange(event.target.value)}
+                />
+              </label>
+            ) : null}
+            {orderType === "trigger" ? (
+              <label className="space-y-1">
+                <span className="text-muted text-[10px] uppercase tracking-wider">
+                  Trigger Price
+                </span>
+                <input
+                  className="input-field !py-2 font-mono"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={triggerPriceUi}
+                  onChange={(event) => onTriggerPriceChange(event.target.value)}
+                />
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+
+        {bracketEnabled ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label className="space-y-1">
+              <span className="text-muted text-[10px] uppercase tracking-wider">
+                Take Profit
+              </span>
+              <input
+                className="input-field !py-2 font-mono"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={takeProfitPriceUi}
+                onChange={(event) =>
+                  onTakeProfitPriceChange(event.target.value)
+                }
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted text-[10px] uppercase tracking-wider">
+                Stop Loss
+              </span>
+              <input
+                className="input-field !py-2 font-mono"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={stopLossPriceUi}
+                onChange={(event) => onStopLossPriceChange(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+
+        <p className="text-[10px] text-muted">
+          Quantity mode and order flags are mapped into the execution contract
+          options for policy-aware routing.
+        </p>
+
+        {validationErrors.length > 0 ? (
+          <ul className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-300 space-y-1">
+            {validationErrors.map((error) => (
+              <li key={error}>• {error}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    );
+  },
+);
 
 const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
   outputSymbol: string;

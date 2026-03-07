@@ -5,6 +5,11 @@ import { Wallet } from "lucide-react";
 import Link from "next/link";
 import { cn } from "../../cn";
 import { BTN_PRIMARY, BTN_SECONDARY, formatBalanceSummary } from "../../lib";
+import {
+  getTerminalModeCapabilities,
+  TERMINAL_MODE_OPTIONS,
+  type TerminalMode,
+} from "../terminal-modes";
 
 interface DashboardHeaderProps {
   walletBalances?: {
@@ -17,6 +22,10 @@ interface DashboardHeaderProps {
   isRefreshing?: boolean;
   showFundButton?: boolean;
   showBalance?: boolean;
+  terminalMode: TerminalMode;
+  allowedModes?: readonly TerminalMode[];
+  terminalModeSaving?: boolean;
+  onModeChange?: (mode: TerminalMode) => void;
 }
 
 export function DashboardHeader({
@@ -27,6 +36,10 @@ export function DashboardHeader({
   isRefreshing,
   showFundButton = false,
   showBalance = false,
+  terminalMode,
+  allowedModes = TERMINAL_MODE_OPTIONS,
+  terminalModeSaving = false,
+  onModeChange,
 }: DashboardHeaderProps) {
   const { logout } = usePrivy();
   const balanceText = walletBalanceError
@@ -49,6 +62,45 @@ export function DashboardHeader({
           <span className="ml-2 text-muted font-normal">Terminal</span>
         </Link>
         <div className="flex min-w-0 items-center justify-end gap-2 overflow-x-auto text-xs">
+          <div className="inline-flex h-8 shrink-0 items-center rounded-md border border-border bg-surface p-0.5">
+            {TERMINAL_MODE_OPTIONS.map((modeOption) => {
+              const active = modeOption === terminalMode;
+              const allowed = allowedModes.includes(modeOption);
+              const modeView = getTerminalModeCapabilities(modeOption);
+              return (
+                <button
+                  key={modeOption}
+                  className={cn(
+                    "h-6 rounded px-2.5 text-[10px] font-semibold tracking-wide uppercase transition-colors",
+                    active
+                      ? "bg-ink text-surface"
+                      : "text-muted hover:text-ink hover:bg-paper",
+                    !allowed && !active && "opacity-50 cursor-not-allowed",
+                    !onModeChange && "pointer-events-none opacity-60",
+                  )}
+                  onClick={() => {
+                    if (!allowed) return;
+                    onModeChange?.(modeOption);
+                  }}
+                  title={
+                    allowed
+                      ? modeView.description
+                      : `${modeView.description} (rollout gated)`
+                  }
+                  type="button"
+                  aria-pressed={active}
+                  aria-disabled={!allowed}
+                >
+                  {modeView.label}
+                </button>
+              );
+            })}
+          </div>
+          {terminalModeSaving ? (
+            <span className="text-[10px] text-muted tabular-nums shrink-0">
+              Saving mode...
+            </span>
+          ) : null}
           <span
             className={cn(
               "inline-flex h-8 w-[25ch] shrink-0 items-center justify-end rounded-md border border-border bg-surface px-2.5 font-mono tabular-nums text-muted whitespace-nowrap",

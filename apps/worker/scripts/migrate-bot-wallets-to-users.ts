@@ -12,7 +12,7 @@ const TEN_USD_ATOMIC = 10_000_000n;
 const ONE_SOL_LAMPORTS = 1_000_000_000n;
 
 type Cli = {
-  env: "dev" | "staging" | "production";
+  env: "dev" | "production";
   dryRun: boolean;
   apply: boolean;
 };
@@ -69,7 +69,7 @@ function parseArgs(argv: string[]): Cli {
     const arg = argv[i];
     if (arg === "--env") {
       const next = String(argv[i + 1] ?? "").trim();
-      if (next !== "dev" && next !== "staging" && next !== "production") {
+      if (next !== "dev" && next !== "production") {
         throw new Error("invalid --env value");
       }
       env = next;
@@ -100,7 +100,7 @@ function printHelp(): void {
   console.log(
     [
       "Usage:",
-      "  bun run scripts/migrate-bot-wallets-to-users.ts --env <dev|staging|production> [--dry-run|--apply]",
+      "  bun run scripts/migrate-bot-wallets-to-users.ts --env <dev|production> [--dry-run|--apply]",
       "",
       "Defaults:",
       "  --dry-run is default.",

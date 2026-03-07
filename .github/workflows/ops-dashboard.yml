@@ -1,0 +1,88 @@
+name: Ops Dashboard
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+
+      - name: Install deps
+        run: bun install
+
+      - name: Check admin credentials
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::Missing required secret ADMIN_TOKEN for ops dashboard."
+            exit 1
+          fi
+
+      - name: Fetch production ops data
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .tmp/ops-dashboard
+
+          curl -fsS \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" \
+            "https://api.trader-ralph.com/api/admin/execution/observability?windowMinutes=360&maxRequests=10000" \
+            > .tmp/ops-dashboard/execution.json
+
+          curl -fsS \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" \
+            "https://api.trader-ralph.com/api/admin/execution/canary" \
+            > .tmp/ops-dashboard/canary.json
+
+          curl -fsS \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" \
+            "https://api.trader-ralph.com/api/admin/ops/controls" \
+            > .tmp/ops-dashboard/controls-envelope.json
+
+          jq '.controls' .tmp/ops-dashboard/controls-envelope.json > .tmp/ops-dashboard/controls.json
+
+      - name: Build ops dashboard
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          args=(
+            --execution .tmp/ops-dashboard/execution.json
+            --canary .tmp/ops-dashboard/canary.json
+            --controls .tmp/ops-dashboard/controls.json
+            --output-json .tmp/ops-dashboard/dashboard.json
+            --output-markdown .tmp/ops-dashboard/dashboard.md
+          )
+
+          if [ -f .harness/runner-heartbeat.json ]; then
+            args+=(--runner-heartbeat .harness/runner-heartbeat.json)
+          fi
+
+          bun run src/bin/ops_dashboard.ts "${args[@]}"
+          cat .tmp/ops-dashboard/dashboard.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ops dashboard artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops-dashboard-${{ github.run_id }}
+          path: .tmp/ops-dashboard
+          if-no-files-found: error
