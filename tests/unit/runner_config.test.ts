@@ -13,7 +13,7 @@ tracker:
 branching:
   branch_prefix: codex/
   branch_format: codex/issue-<number>-<slug>
-  default_pr_base: dev
+  default_pr_base: main
 ---
 
 # Contract
@@ -23,7 +23,7 @@ branching:
   expect(config.readyLabels).toEqual(["harness", "agent-ready"]);
   expect(config.excludeLabels).toEqual(["blocked"]);
   expect(config.branchPrefix).toBe("codex/");
-  expect(config.defaultPrBase).toBe("dev");
+  expect(config.defaultPrBase).toBe("main");
 });
 
 test("parseWorkflowContract falls back to defaults when frontmatter is absent", () => {

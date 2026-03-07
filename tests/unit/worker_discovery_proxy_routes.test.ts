@@ -50,9 +50,9 @@ describe("worker discovery proxy routes", () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       expect(url).toBe(
-        "https://staging.trader-ralph.com/api/agent-registry/metadata.json",
+        "https://www.trader-ralph.com/api/agent-registry/metadata.json",
       );
-      return new Response('{"lane":"staging"}', {
+      return new Response('{"lane":"production"}', {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
@@ -63,14 +63,14 @@ describe("worker discovery proxy routes", () => {
     try {
       const response = await worker.fetch(
         new Request(
-          "https://staging.api.trader-ralph.com/api/agent-registry/metadata.json",
+          "https://api.trader-ralph.com/api/agent-registry/metadata.json",
         ),
         env,
         createExecutionContextStub(),
       );
       expect(response.status).toBe(200);
       const body = (await response.json()) as Record<string, unknown>;
-      expect(body.lane).toBe("staging");
+      expect(body.lane).toBe("production");
     } finally {
       globalThis.fetch = originalFetch;
     }

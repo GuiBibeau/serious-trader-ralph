@@ -44,11 +44,9 @@ Mode fallback rule:
 
 ## Promotion Sequence
 
-1. `codex/*` -> `dev`
-2. `dev` -> `staging`
-3. `staging` -> `main`
-
-Do not skip lanes during normal rollout.
+1. `codex/*` or `feature/*` -> PR preview
+2. PR preview -> `main`
+3. Optional soak can continue on `dev` after `main` is green
 
 ## Go/No-Go Gates
 
@@ -60,8 +58,12 @@ All gates must pass before lane promotion:
    - `unit-tests`
    - `integration-tests`
    - `terminal-e2e-tests`
+   - `browser-proof`
+   - `preview-smoke`
+   - `artifact-publication`
 2. Deploy gates green:
-   - `Deploy (dev|staging|production)`
+   - `Deploy (dev)`
+   - `Deploy (production)`
    - `Deploy Portal (Vercel)`
 3. Terminal execution checks:
    - submit -> status -> receipt loop healthy on lane API host
@@ -110,4 +112,3 @@ Run after each promotion and 24h after production cutover:
    - no abnormal expiry trend
 3. Spot-check canonical receipts and timeline rendering.
 4. Confirm no new CORS/auth regressions on terminal execution routes.
-

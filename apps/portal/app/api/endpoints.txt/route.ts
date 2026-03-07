@@ -73,7 +73,7 @@ export function GET(request: Request): Response {
     "",
     "verification:",
     "payment-signature must reference an on-chain Solana transfer that matches network, mint, payTo, and amount.",
-    "dev environment uses devnet USDC; staging and production use mainnet USDC.",
+    "dev environment uses devnet USDC; production uses mainnet USDC.",
     "",
     "headers:",
     "request: payment-signature",

@@ -17,7 +17,7 @@ const config = {
   excludeLabels: ["blocked", "agent-running", "human-review"],
   branchPrefix: "codex/",
   branchFormat: "codex/issue-<number>-<slug>",
-  defaultPrBase: "dev",
+  defaultPrBase: "main",
 };
 
 function buildIssue(
@@ -41,7 +41,7 @@ test("selectRunnableIssues requires all ready labels and excludes blocked states
       "agent-ready",
     ]),
     buildIssue(240, "[PR Handoff] Standardize proof", ["harness"]),
-    buildIssue(241, "[Env Simplification] Remove staging", [
+    buildIssue(241, "[Env Simplification] Remove deprecated lane", [
       "harness",
       "agent-ready",
       "human-review",

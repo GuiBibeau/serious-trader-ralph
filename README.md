@@ -151,7 +151,6 @@ Use discovery/openapi for machine-readable catalog:
 
 - Metadata source-of-truth:
   - `docs/agent-registry/metadata.dev.json`
-  - `docs/agent-registry/metadata.staging.json`
   - `docs/agent-registry/metadata.production.json`
 - Runbook: `docs/agent-registry/runbook.md`
 
@@ -165,10 +164,9 @@ bun run agent-registry:sync -- --lane production --step all
 
 ## Branch and Deploy Model
 
-- Promotion flow: `codex/*` or `feature/*` -> `dev` -> `staging` -> `main`
+- Promotion flow: `codex/*` or `feature/*` -> PR preview -> `main`
 - Branch environments:
   - `dev` -> `dev.trader-ralph.com` and `dev.api.trader-ralph.com`
-  - `staging` -> `staging.trader-ralph.com` and `staging.api.trader-ralph.com`
   - `main` -> `trader-ralph.com`, `www.trader-ralph.com`, `api.trader-ralph.com`
 - Internal pull requests also provision a Vercel portal preview and an
   ephemeral Cloudflare worker named `ralph-edge-pr-<pr-number>`.

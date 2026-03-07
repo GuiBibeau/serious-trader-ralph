@@ -16,7 +16,6 @@ Terminal UX cutover sequencing and cohort-mode gates are documented in
 
 - Environments:
   - `dev` (`ralph_waitlist_dev`, worker `ralph-edge-dev`)
-  - `staging` (`ralph_waitlist_staging`, worker `ralph-edge-staging`)
   - `production` (`ralph_waitlist`, worker `ralph-edge`)
 - Required access:
   - GitHub Actions deploy workflows
