@@ -121,6 +121,7 @@ cargo fmt --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p runtime-rs
+bun run runtime:fly:smoke
 ```
 
 - Default health endpoint: `http://127.0.0.1:8081/health`
@@ -128,6 +129,12 @@ cargo run -p runtime-rs
   - `RUNTIME_RS_BIND_ADDR=127.0.0.1:8081`
   - `RUNTIME_RS_ENV=local|preview|production`
   - `RUNTIME_RS_LOG=info`
+- Fly foundation scripts:
+  - `bun run runtime:fly:deploy`
+  - `bun run runtime:fly:smoke`
+  - default app: `ralph-runtime-rs`
+  - default active region: `ord`
+  - default warm standby region: `iad`
 
 ### Worker only
 

@@ -19,9 +19,33 @@ jobs:
         with:
           node-version: 20
 
+      - name: Check production deploy credentials
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          for secret_name in CLOUDFLARE_API_TOKEN ADMIN_TOKEN RUNTIME_INTERNAL_SERVICE_TOKEN; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::Missing required secret ${secret_name} for production deploy."
+              exit 1
+            fi
+          done
+
       - name: Install worker deps
         working-directory: apps/worker
         run: npm install
+
+      - name: Sync runtime service auth secret to worker
+        working-directory: apps/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${RUNTIME_INTERNAL_SERVICE_TOKEN}" | npx wrangler secret put RUNTIME_INTERNAL_SERVICE_TOKEN --env production
 
       - name: Apply D1 migrations
         working-directory: apps/worker
@@ -38,16 +62,36 @@ jobs:
         run: |
           npx wrangler deploy --env production
 
+      - name: Smoke runtime bridge
+        env:
+          RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          response="$(
+            curl -fsS \
+              -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}" \
+              https://api.trader-ralph.com/api/internal/runtime/health
+          )"
+          RESPONSE="${response}" node <<'NODE'
+          const payload = JSON.parse(process.env.RESPONSE ?? "{}");
+
+          if (!payload?.ok) {
+            throw new Error("runtime-bridge-smoke-not-ok");
+          }
+          if (payload?.integration?.runtimeBaseUrl !== "https://ralph-runtime-rs.fly.dev") {
+            throw new Error("runtime-bridge-base-url-mismatch");
+          }
+          if (payload?.authenticatedService !== "runtime-rs") {
+            throw new Error("runtime-bridge-service-mismatch");
+          }
+          NODE
+
       - name: Trigger production execution canary
         env:
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: |
           set -euo pipefail
-
-          if [ -z "${ADMIN_TOKEN:-}" ]; then
-            echo "::error::Missing required secret ADMIN_TOKEN for production canary trigger."
-            exit 1
-          fi
 
           curl -fsS \
             -X POST \

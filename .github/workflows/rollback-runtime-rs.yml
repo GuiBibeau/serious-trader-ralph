@@ -1,0 +1,181 @@
+name: Rollback runtime-rs (Fly)
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Why the runtime-rs rollback is being triggered
+        required: true
+        type: string
+      target_sha:
+        description: Optional commit SHA to deploy instead of previous main
+        required: false
+        type: string
+      pr_number:
+        description: Optional PR number to comment with rollback results
+        required: false
+        type: string
+      dry_run:
+        description: Resolve and report the rollback target without deploying
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  rollback-runtime:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        with:
+          version: 0.4.19
+
+      - name: Resolve rollback target
+        id: target
+        run: |
+          set -euo pipefail
+
+          git fetch origin main --depth=2
+          PREVIOUS_MAIN_SHA="$(git rev-parse origin/main^)"
+          TARGET_SHA="${{ inputs.target_sha }}"
+
+          if [ -z "${TARGET_SHA}" ]; then
+            TARGET_SHA="${PREVIOUS_MAIN_SHA}"
+          fi
+
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
+          echo "previous_main_sha=${PREVIOUS_MAIN_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Check runtime rollback credentials
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          for secret_name in FLY_API_TOKEN RUNTIME_INTERNAL_SERVICE_TOKEN; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::Missing required secret ${secret_name} for runtime-rs rollback."
+              exit 1
+            fi
+          done
+
+      - name: Perform runtime-rs rollback deploy
+        id: rollback
+        continue-on-error: true
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ralph-runtime-rs
+          FLY_ORG_SLUG: personal
+          FLY_PRIMARY_REGION: ord
+          FLY_STANDBY_REGION: iad
+          RUNTIME_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
+          RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
+          RUNTIME_WORKER_API_BASE: https://api.trader-ralph.com
+          RUNTIME_RS_ENV: production
+          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .tmp/runtime-rollback
+          ROLLBACK_DIR="$(pwd)/.tmp/runtime-rollback"
+          TARGET_DIR=".tmp/runtime-rollback/target"
+          rm -rf "${TARGET_DIR}"
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry-run only; skipping runtime-rs deploy."
+            exit 0
+          fi
+
+          git worktree add --detach "${TARGET_DIR}" "${TARGET_SHA}"
+          trap 'git worktree remove --force "${TARGET_DIR}"' EXIT
+
+          cd "${TARGET_DIR}"
+          node scripts/runtime_rs/fly_deploy.mjs
+          node scripts/runtime_rs/fly_smoke.mjs > "${ROLLBACK_DIR}/smoke.json"
+
+      - name: Write runtime-rs rollback summary
+        if: always()
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          PREVIOUS_MAIN_SHA: ${{ steps.target.outputs.previous_main_sha }}
+          REASON: ${{ inputs.reason }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .tmp/runtime-rollback
+          STATUS="failed"
+          if [ "${DRY_RUN}" = "true" ]; then
+            STATUS="dry-run"
+          elif [ "${ROLLBACK_OUTCOME}" = "success" ]; then
+            STATUS="success"
+          fi
+
+          cat <<EOF > .tmp/runtime-rollback/summary.md
+          # Runtime-rs Rollback
+          - status: ${STATUS}
+          - reason: ${REASON}
+          - target sha: \`${TARGET_SHA}\`
+          - previous main sha: \`${PREVIOUS_MAIN_SHA}\`
+          - app: \`ralph-runtime-rs\`
+          - health url: https://ralph-runtime-rs.fly.dev/health
+          EOF
+
+          if [ -f .tmp/runtime-rollback/smoke.json ]; then
+            {
+              echo
+              echo '## Smoke'
+              echo
+              cat .tmp/runtime-rollback/smoke.json
+            } >> .tmp/runtime-rollback/summary.md
+          fi
+
+          cat .tmp/runtime-rollback/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runtime-rs rollback summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-rs-rollback-${{ github.run_id }}
+          path: .tmp/runtime-rollback
+          if-no-files-found: error
+
+      - name: Post rollback result to PR
+        if: always() && inputs.pr_number != ''
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const fs = require("fs");
+            const body = fs.readFileSync(".tmp/runtime-rollback/summary.md", "utf8");
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body,
+            });
+
+      - name: Fail when runtime-rs rollback deploy fails
+        if: ${{ inputs.dry_run == false && steps.rollback.outcome != 'success' }}
+        run: |
+          set -euo pipefail
+          echo "::error::Runtime-rs rollback failed."
+          exit 1

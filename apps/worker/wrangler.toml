@@ -209,6 +209,8 @@ LOOP_C_EXCLUDED_ASSETS = ""
 LOOP_C_EXCLUDED_PROTOCOLS = ""
 EXECUTION_COORDINATOR_ENABLED = "0"
 EXECUTION_AUCTION_WINDOW_MS = "250"
+RUNTIME_INTERNAL_SERVICE_NAME = "runtime-rs"
+RUNTIME_INTERNAL_BASE_URL = "https://ralph-runtime-rs.fly.dev"
 
 [[migrations]]
 tag = "v2-loop-a-coordinator"

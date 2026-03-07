@@ -1,0 +1,35 @@
+primary_region = "ord"
+
+[build]
+dockerfile = "services/runtime-rs/Dockerfile"
+
+[env]
+RUNTIME_RS_BIND_ADDR = "0.0.0.0:8080"
+RUNTIME_RS_ENV = "production"
+RUNTIME_RS_LOG = "info"
+RUNTIME_WORKER_API_BASE = "https://api.trader-ralph.com"
+
+[http_service]
+internal_port = 8080
+force_https = true
+auto_start_machines = true
+auto_stop_machines = false
+min_machines_running = 0
+processes = ["app"]
+
+  [http_service.concurrency]
+  type = "requests"
+  soft_limit = 25
+  hard_limit = 50
+
+  [[http_service.checks]]
+  grace_period = "10s"
+  interval = "15s"
+  method = "GET"
+  path = "/health"
+  timeout = "5s"
+
+[vm]
+cpu_kind = "shared"
+cpus = 1
+memory_mb = 512

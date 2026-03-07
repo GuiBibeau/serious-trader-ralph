@@ -1,0 +1,71 @@
+name: Deploy runtime-rs (Fly)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-runtime-rs.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "fly.runtime-rs.toml"
+      - "crates/**"
+      - "scripts/runtime_rs/**"
+      - "services/runtime-rs/**"
+  workflow_dispatch:
+
+jobs:
+  deploy-runtime:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        with:
+          version: 0.4.19
+
+      - name: Check runtime deploy credentials
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          for secret_name in FLY_API_TOKEN RUNTIME_INTERNAL_SERVICE_TOKEN; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::Missing required secret ${secret_name} for runtime-rs deploy."
+              exit 1
+            fi
+          done
+
+      - name: Deploy runtime-rs to Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ralph-runtime-rs
+          FLY_ORG_SLUG: personal
+          FLY_PRIMARY_REGION: ord
+          FLY_STANDBY_REGION: iad
+          RUNTIME_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
+          RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
+          RUNTIME_WORKER_API_BASE: https://api.trader-ralph.com
+          RUNTIME_RS_ENV: production
+        run: |
+          set -euo pipefail
+          node scripts/runtime_rs/fly_deploy.mjs
+
+      - name: Smoke runtime-rs deployment
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ralph-runtime-rs
+          FLY_PRIMARY_REGION: ord
+          FLY_STANDBY_REGION: iad
+          RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
+          RUNTIME_WORKER_API_BASE: https://api.trader-ralph.com
+          RUNTIME_RS_ENV: production
+        run: |
+          set -euo pipefail
+          node scripts/runtime_rs/fly_smoke.mjs
