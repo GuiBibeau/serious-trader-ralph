@@ -128,6 +128,9 @@ jobs:
       - unit-tests
       - browser-proof
     runs-on: ubuntu-latest
+    concurrency:
+      group: proof-bundle-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: write

@@ -77,11 +77,21 @@ async function collectPreviewHealth(input: {
       `${input.apiBase}/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`,
       input.githubToken,
     )) as unknown[];
-    const previewComment = comments
-      .filter((comment) => typeof comment === "object" && comment)
-      .map((comment) => (comment as Record<string, unknown>).body)
-      .map((body) => String(body ?? ""))
-      .find((body) => body.includes("<!-- pr-preview -->"));
+    const previewComment =
+      comments
+        .filter((comment) => typeof comment === "object" && comment)
+        .map((comment) => (comment as Record<string, unknown>).body)
+        .map((body) => String(body ?? ""))
+        .find(
+          (body) =>
+            body.includes("<!-- harness-proof-bundle -->") &&
+            body.includes("<!-- pr-preview -->"),
+        ) ??
+      comments
+        .filter((comment) => typeof comment === "object" && comment)
+        .map((comment) => (comment as Record<string, unknown>).body)
+        .map((body) => String(body ?? ""))
+        .find((body) => body.includes("<!-- pr-preview -->"));
     if (!previewComment) continue;
     const preview = parsePreviewCommentBody(previewComment);
     if (!preview) continue;

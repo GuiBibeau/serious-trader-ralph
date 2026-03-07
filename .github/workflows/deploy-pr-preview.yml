@@ -18,6 +18,9 @@ jobs:
     if: github.event.action != 'closed' && github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     environment: dev
+    concurrency:
+      group: proof-bundle-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
