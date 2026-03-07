@@ -52,6 +52,7 @@ Expected topology for v1:
 - active region: `ord`
 - warm standby region: `iad`
 - public health endpoint: `https://ralph-runtime-rs.fly.dev/health`
+- feed metrics endpoint: `https://ralph-runtime-rs.fly.dev/metrics`
 
 ### Pause a deployment
 

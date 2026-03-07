@@ -16,6 +16,7 @@ strategy-core = { path = "../../crates/strategy-core" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+time = { version = "0.3.44", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 http-body-util.workspace = true

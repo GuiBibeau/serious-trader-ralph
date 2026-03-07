@@ -3,3 +3,9 @@ name = "market-adapters"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time = { version = "0.3.44", features = ["formatting", "parsing"] }

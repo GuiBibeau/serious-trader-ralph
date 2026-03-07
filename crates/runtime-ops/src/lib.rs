@@ -38,6 +38,13 @@ pub struct RuntimeConfig {
     pub environment: RuntimeEnvironment,
     pub log_level: String,
     pub protocol_version: String,
+    pub feed_provider: String,
+    pub feed_websocket_url: String,
+    pub feed_http_url: String,
+    pub feed_market_stale_after_ms: u64,
+    pub feed_slot_stale_after_ms: u64,
+    pub feed_max_slot_gap: u64,
+    pub feed_replay_fixture_path: Option<String>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -64,6 +71,23 @@ impl RuntimeConfig {
             environment: RuntimeEnvironment::parse(lookup("RUNTIME_RS_ENV"))?,
             log_level: lookup("RUNTIME_RS_LOG").unwrap_or_else(|| "info".to_string()),
             protocol_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            feed_provider: lookup("RUNTIME_FEED_PROVIDER").unwrap_or_else(|| "fixture".to_string()),
+            feed_websocket_url: lookup("RUNTIME_FEED_WS_URL")
+                .unwrap_or_else(|| "wss://price-feed.example/runtime".to_string()),
+            feed_http_url: lookup("RUNTIME_FEED_HTTP_URL")
+                .unwrap_or_else(|| "https://rpc.example/runtime".to_string()),
+            feed_market_stale_after_ms: parse_u64_env(
+                lookup("RUNTIME_FEED_MARKET_STALE_AFTER_MS"),
+                30_000,
+            ),
+            feed_slot_stale_after_ms: parse_u64_env(
+                lookup("RUNTIME_FEED_SLOT_STALE_AFTER_MS"),
+                15_000,
+            ),
+            feed_max_slot_gap: parse_u64_env(lookup("RUNTIME_FEED_MAX_SLOT_GAP"), 2),
+            feed_replay_fixture_path: lookup("RUNTIME_FEED_REPLAY_FIXTURE_PATH")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
         })
     }
 
@@ -72,6 +96,11 @@ impl RuntimeConfig {
             .parse()
             .map_err(|_| RuntimeConfigError::InvalidBindAddress(self.bind_address.clone()))
     }
+}
+
+fn parse_u64_env(raw: Option<String>, default_value: u64) -> u64 {
+    raw.and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default_value)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -107,6 +136,11 @@ mod tests {
         assert_eq!(config.bind_address, "127.0.0.1:8081");
         assert_eq!(config.environment, RuntimeEnvironment::Local);
         assert_eq!(config.protocol_version, "v1");
+        assert_eq!(config.feed_provider, "fixture");
+        assert_eq!(config.feed_market_stale_after_ms, 30_000);
+        assert_eq!(config.feed_slot_stale_after_ms, 15_000);
+        assert_eq!(config.feed_max_slot_gap, 2);
+        assert_eq!(config.feed_replay_fixture_path, None);
     }
 
     #[test]
@@ -115,6 +149,13 @@ mod tests {
             "RUNTIME_RS_BIND_ADDR" => Some("0.0.0.0:9090".to_string()),
             "RUNTIME_RS_ENV" => Some("preview".to_string()),
             "RUNTIME_RS_LOG" => Some("debug".to_string()),
+            "RUNTIME_FEED_PROVIDER" => Some("jupiter".to_string()),
+            "RUNTIME_FEED_WS_URL" => Some("wss://feeds.jupiter.example/runtime".to_string()),
+            "RUNTIME_FEED_HTTP_URL" => Some("https://rpc.jupiter.example/runtime".to_string()),
+            "RUNTIME_FEED_MARKET_STALE_AFTER_MS" => Some("45000".to_string()),
+            "RUNTIME_FEED_SLOT_STALE_AFTER_MS" => Some("22000".to_string()),
+            "RUNTIME_FEED_MAX_SLOT_GAP" => Some("4".to_string()),
+            "RUNTIME_FEED_REPLAY_FIXTURE_PATH" => Some("/tmp/runtime-feed.json".to_string()),
             _ => None,
         })
         .expect("custom config to load");
@@ -122,6 +163,19 @@ mod tests {
         assert_eq!(config.bind_address, "0.0.0.0:9090");
         assert_eq!(config.environment, RuntimeEnvironment::Preview);
         assert_eq!(config.log_level, "debug");
+        assert_eq!(config.feed_provider, "jupiter");
+        assert_eq!(
+            config.feed_websocket_url,
+            "wss://feeds.jupiter.example/runtime",
+        );
+        assert_eq!(config.feed_http_url, "https://rpc.jupiter.example/runtime");
+        assert_eq!(config.feed_market_stale_after_ms, 45_000);
+        assert_eq!(config.feed_slot_stale_after_ms, 22_000);
+        assert_eq!(config.feed_max_slot_gap, 4);
+        assert_eq!(
+            config.feed_replay_fixture_path.as_deref(),
+            Some("/tmp/runtime-feed.json"),
+        );
         assert_eq!(
             config.socket_addr().expect("socket addr to parse"),
             "0.0.0.0:9090".parse().expect("address"),
