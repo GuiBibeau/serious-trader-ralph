@@ -1,8 +1,8 @@
 # runtime-rs
 
 `runtime-rs` is the minimal Rust service skeleton for the autonomous runtime
-program. In this phase it is intentionally internal-only and exposes just a
-health endpoint plus config loading.
+program. In this phase it is intentionally internal-only and exposes health and
+feed-metric endpoints plus config loading.
 
 ## Local commands
 
@@ -28,6 +28,21 @@ bun run runtime:fly:smoke
   Default: `http://127.0.0.1:8888`
 - `RUNTIME_INTERNAL_SERVICE_TOKEN`
   Shared bearer token used for private runtime-to-Worker requests.
+- `RUNTIME_FEED_PROVIDER`
+  Default: `fixture`
+- `RUNTIME_FEED_WS_URL`
+  Default: `wss://price-feed.example/runtime`
+- `RUNTIME_FEED_HTTP_URL`
+  Default: `https://rpc.example/runtime`
+- `RUNTIME_FEED_MARKET_STALE_AFTER_MS`
+  Default: `30000`
+- `RUNTIME_FEED_SLOT_STALE_AFTER_MS`
+  Default: `15000`
+- `RUNTIME_FEED_MAX_SLOT_GAP`
+  Default: `2`
+- `RUNTIME_FEED_REPLAY_FIXTURE_PATH`
+  Optional local replay fixture. The checked-in deterministic fixture is
+  `services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json`.
 - `RUNTIME_DATABASE_URL`
   Optional runtime-owned relational store bootstrap secret for later phases.
 
@@ -35,11 +50,12 @@ bun run runtime:fly:smoke
 
 ```bash
 curl -fsS http://127.0.0.1:8081/health
+curl -fsS http://127.0.0.1:8081/metrics
 ```
 
 Expected output is a JSON document describing the service name, environment,
-protocol version, bind address, strategy support, and internal dependency
-stubs.
+protocol version, bind address, strategy support, feed freshness contracts,
+duplicate suppression counters, slot lag, and internal dependency stubs.
 
 ## Fly foundation
 
