@@ -60,6 +60,8 @@ bun run runtime:fly:smoke
 - `RUNTIME_DATABASE_URL`
   SQLite database path or `sqlite://` URL for the runtime-owned registry.
   Default: `.tmp/runtime-rs/strategy-registry.sqlite3`
+  If the configured path is not writable, runtime-rs falls back to
+  `/tmp/runtime-rs/strategy-registry.sqlite3`.
 
 ## Health check
 

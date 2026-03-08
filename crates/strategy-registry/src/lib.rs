@@ -118,19 +118,19 @@ pub enum StrategyRegistryError {
 
 impl StrategyRegistry {
     pub fn new(config: StrategyRegistryConfig) -> Result<Self, StrategyRegistryError> {
-        let database_path = normalize_database_path(&config.database_url);
-        if database_path != Path::new(":memory:") {
-            if let Some(parent) = database_path
-                .parent()
-                .filter(|path| !path.as_os_str().is_empty())
-            {
-                fs::create_dir_all(parent)?;
+        let requested_path = normalize_database_path(&config.database_url);
+        match Self::initialize_at_path(requested_path.clone()) {
+            Ok(registry) => Ok(registry),
+            Err(error) if should_fallback_to_tmp(&requested_path, &error) => {
+                Self::initialize_at_path(fallback_database_path())
             }
+            Err(error) => Err(error),
         }
-        let registry = Self { database_path };
-        let connection = registry.open_connection()?;
-        initialize_schema(&connection)?;
-        Ok(registry)
+    }
+
+    #[must_use]
+    pub fn database_path(&self) -> &Path {
+        &self.database_path
     }
 
     pub fn upsert_deployment(
@@ -344,6 +344,21 @@ impl StrategyRegistry {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         Ok(connection)
     }
+
+    fn initialize_at_path(database_path: PathBuf) -> Result<Self, StrategyRegistryError> {
+        if database_path != Path::new(":memory:") {
+            if let Some(parent) = database_path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+            {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let registry = Self { database_path };
+        let connection = registry.open_connection()?;
+        initialize_schema(&connection)?;
+        Ok(registry)
+    }
 }
 
 fn normalize_database_path(database_url: &str) -> PathBuf {
@@ -358,6 +373,38 @@ fn normalize_database_path(database_url: &str) -> PathBuf {
         return PathBuf::from(stripped);
     }
     PathBuf::from(trimmed)
+}
+
+fn fallback_database_path() -> PathBuf {
+    std::env::temp_dir()
+        .join("runtime-rs")
+        .join("strategy-registry.sqlite3")
+}
+
+fn should_fallback_to_tmp(database_path: &Path, error: &StrategyRegistryError) -> bool {
+    if database_path == Path::new(":memory:") || database_path == fallback_database_path() {
+        return false;
+    }
+
+    match error {
+        StrategyRegistryError::Io(inner) => inner.kind() == std::io::ErrorKind::PermissionDenied,
+        StrategyRegistryError::Storage(inner) => {
+            matches!(
+                inner,
+                rusqlite::Error::SqliteFailure(code, _)
+                    if code.code == rusqlite::ErrorCode::CannotOpen
+            )
+        }
+        StrategyRegistryError::Serialization(_)
+        | StrategyRegistryError::DeploymentNotFound { .. }
+        | StrategyRegistryError::UnsupportedStrategy(_)
+        | StrategyRegistryError::ImmutableFieldChanged { .. }
+        | StrategyRegistryError::InvalidStateTransition { .. }
+        | StrategyRegistryError::DeploymentNotShadow { .. }
+        | StrategyRegistryError::FeatureStreamMissing { .. }
+        | StrategyRegistryError::FeatureStreamStale { .. }
+        | StrategyRegistryError::InvalidObservedAt(_) => false,
+    }
 }
 
 fn initialize_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
@@ -662,6 +709,9 @@ mod tests {
     use super::*;
     use protocol::{RuntimeCapital, RuntimeLane, RuntimePair, RuntimePolicy};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     fn temp_database_url(test_name: &str) -> String {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -676,6 +726,37 @@ mod tests {
     fn registry(test_name: &str) -> StrategyRegistry {
         StrategyRegistry::new(StrategyRegistryConfig::new(temp_database_url(test_name)))
             .expect("registry to initialize")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn falls_back_to_tmp_when_requested_path_is_not_writable() {
+        let root = std::env::temp_dir().join(format!(
+            "strategy-registry-perms-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("root directory");
+        let blocked = root.join("blocked");
+        fs::create_dir_all(&blocked).expect("blocked directory");
+        let original_permissions = fs::metadata(&blocked).expect("metadata").permissions();
+        let mut readonly_permissions = original_permissions.clone();
+        readonly_permissions.set_mode(0o500);
+        fs::set_permissions(&blocked, readonly_permissions).expect("permissions to set");
+
+        let requested_path = blocked.join("registry.sqlite3");
+        let registry = StrategyRegistry::new(StrategyRegistryConfig::new(
+            requested_path.display().to_string(),
+        ))
+        .expect("registry to initialize");
+
+        assert_ne!(registry.database_path(), requested_path.as_path());
+        assert_eq!(registry.database_path(), fallback_database_path().as_path());
+
+        fs::set_permissions(&blocked, original_permissions).expect("permissions to restore");
+        fs::remove_dir_all(&root).expect("temporary directory cleanup");
     }
 
     fn deployment(
