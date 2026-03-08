@@ -243,11 +243,12 @@ impl FeatureCache {
 
     #[must_use]
     pub fn snapshot_at(&self, now: OffsetDateTime) -> FeatureCacheSnapshot {
+        let slot_head = self.slot_commitments.values().map(|state| state.slot).max();
         let processed_slot = self
             .slot_commitments
             .get(&SlotCommitment::Processed)
             .map(|state| state.slot)
-            .or_else(|| self.slot_commitments.values().map(|state| state.slot).max());
+            .or(slot_head);
 
         let max_slot_age_ms = self
             .slot_commitments
@@ -255,6 +256,13 @@ impl FeatureCache {
             .map(|state| age_ms(now, state.observed_at_ts))
             .max()
             .unwrap_or(0);
+        let slot_gap_observed = slot_head.map(|head| {
+            self.slot_commitments
+                .values()
+                .map(|state| head.saturating_sub(state.slot))
+                .max()
+                .unwrap_or(0)
+        });
 
         let mut stale_feature_keys = Vec::new();
         let mut max_feature_age_ms = 0_u64;
@@ -275,13 +283,12 @@ impl FeatureCache {
                 let ingest_lag_ms = age_ms(latest.received_at_ts, latest.observed_at_ts);
                 max_ingest_lag_ms = max_ingest_lag_ms.max(ingest_lag_ms);
 
-                let processed_slot_state = self.slot_commitments.get(&SlotCommitment::Processed);
-                let slot_age_ms =
-                    processed_slot_state.map(|state| age_ms(now, state.observed_at_ts));
-                let slot_gap = processed_slot
-                    .zip(processed_slot_state.map(|state| state.slot))
-                    .map(|(processed, current)| processed.saturating_sub(current))
-                    .or(Some(0));
+                let slot_age_ms = if self.slot_commitments.is_empty() {
+                    None
+                } else {
+                    Some(max_slot_age_ms)
+                };
+                let slot_gap = slot_gap_observed;
                 if let Some(gap) = slot_gap {
                     max_slot_gap_observed = max_slot_gap_observed.max(gap);
                 }
