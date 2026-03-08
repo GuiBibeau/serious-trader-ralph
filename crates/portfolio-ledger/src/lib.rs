@@ -92,8 +92,10 @@ impl PortfolioLedger {
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
 
-        let allocated_cents =
-            parse_usd_cents("capital.allocatedUsd", &deployment.capital.allocated_usd)?;
+        let allocated_cents = parse_non_negative_usd_cents(
+            "capital.allocatedUsd",
+            &deployment.capital.allocated_usd,
+        )?;
         let reserved_cents = effective_reserved_cents(deployment)?;
         let existing = load_deployment_state(&transaction, &deployment.deployment_id)?;
         let sleeve = load_sleeve_state(&transaction, &deployment.sleeve_id)?;
@@ -160,7 +162,8 @@ impl PortfolioLedger {
         sleeve_id: &str,
         corrected_equity_usd: &str,
     ) -> Result<(), PortfolioLedgerError> {
-        let corrected_equity_cents = parse_usd_cents("correctedEquityUsd", corrected_equity_usd)?;
+        let corrected_equity_cents =
+            parse_non_negative_usd_cents("correctedEquityUsd", corrected_equity_usd)?;
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
         let sleeve = load_sleeve_state(&transaction, sleeve_id)?.ok_or_else(|| {
@@ -408,7 +411,8 @@ fn should_fallback_to_tmp(database_path: &Path, error: &PortfolioLedgerError) ->
 fn effective_reserved_cents(
     deployment: &RuntimeDeploymentRecord,
 ) -> Result<i64, PortfolioLedgerError> {
-    let reserved_cents = parse_usd_cents("capital.reservedUsd", &deployment.capital.reserved_usd)?;
+    let reserved_cents =
+        parse_non_negative_usd_cents("capital.reservedUsd", &deployment.capital.reserved_usd)?;
     Ok(
         if matches!(
             deployment.state,
@@ -735,6 +739,20 @@ fn parse_usd_cents(field: &'static str, value: &str) -> Result<i64, PortfolioLed
     Ok(sign * cents)
 }
 
+fn parse_non_negative_usd_cents(
+    field: &'static str,
+    value: &str,
+) -> Result<i64, PortfolioLedgerError> {
+    let cents = parse_usd_cents(field, value)?;
+    if cents < 0 {
+        return Err(PortfolioLedgerError::InvalidUsdAmount {
+            field,
+            value: value.trim().to_string(),
+        });
+    }
+    Ok(cents)
+}
+
 fn format_usd_cents(value: i64) -> String {
     let sign = if value < 0 { "-" } else { "" };
     let absolute = value.abs();
@@ -992,5 +1010,27 @@ mod tests {
         assert_eq!(result.snapshot.totals.equity_usd, "100.01");
         assert_eq!(result.snapshot.totals.reserved_usd, "5.13");
         assert_eq!(result.snapshot.totals.available_usd, "94.88");
+    }
+
+    #[test]
+    fn rejects_negative_capital_amounts() {
+        let ledger = ledger("negative-capital");
+
+        let error = ledger
+            .sync_deployment(&deployment(
+                "deployment_1",
+                "sleeve_alpha",
+                "-100.00",
+                "5.00",
+            ))
+            .expect_err("negative capital should fail");
+
+        assert!(matches!(
+            error,
+            PortfolioLedgerError::InvalidUsdAmount {
+                field: "capital.allocatedUsd",
+                ..
+            }
+        ));
     }
 }
