@@ -45,6 +45,11 @@ pub struct RuntimeConfig {
     pub feed_slot_stale_after_ms: u64,
     pub feed_max_slot_gap: u64,
     pub feed_replay_fixture_path: Option<String>,
+    pub feature_stale_after_ms: u64,
+    pub feature_short_window_ms: u64,
+    pub feature_long_window_ms: u64,
+    pub feature_volatility_window_size: usize,
+    pub feature_max_samples_per_stream: usize,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -88,6 +93,20 @@ impl RuntimeConfig {
             feed_replay_fixture_path: lookup("RUNTIME_FEED_REPLAY_FIXTURE_PATH")
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            feature_stale_after_ms: parse_u64_env(lookup("RUNTIME_FEATURE_STALE_AFTER_MS"), 20_000),
+            feature_short_window_ms: parse_u64_env(
+                lookup("RUNTIME_FEATURE_SHORT_WINDOW_MS"),
+                10_000,
+            ),
+            feature_long_window_ms: parse_u64_env(lookup("RUNTIME_FEATURE_LONG_WINDOW_MS"), 25_000),
+            feature_volatility_window_size: parse_usize_env(
+                lookup("RUNTIME_FEATURE_VOLATILITY_WINDOW_SIZE"),
+                4,
+            ),
+            feature_max_samples_per_stream: parse_usize_env(
+                lookup("RUNTIME_FEATURE_MAX_SAMPLES_PER_STREAM"),
+                64,
+            ),
         })
     }
 
@@ -100,6 +119,11 @@ impl RuntimeConfig {
 
 fn parse_u64_env(raw: Option<String>, default_value: u64) -> u64 {
     raw.and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default_value)
+}
+
+fn parse_usize_env(raw: Option<String>, default_value: usize) -> usize {
+    raw.and_then(|value| value.trim().parse::<usize>().ok())
         .unwrap_or(default_value)
 }
 
@@ -141,6 +165,11 @@ mod tests {
         assert_eq!(config.feed_slot_stale_after_ms, 15_000);
         assert_eq!(config.feed_max_slot_gap, 2);
         assert_eq!(config.feed_replay_fixture_path, None);
+        assert_eq!(config.feature_stale_after_ms, 20_000);
+        assert_eq!(config.feature_short_window_ms, 10_000);
+        assert_eq!(config.feature_long_window_ms, 25_000);
+        assert_eq!(config.feature_volatility_window_size, 4);
+        assert_eq!(config.feature_max_samples_per_stream, 64);
     }
 
     #[test]
@@ -156,6 +185,11 @@ mod tests {
             "RUNTIME_FEED_SLOT_STALE_AFTER_MS" => Some("22000".to_string()),
             "RUNTIME_FEED_MAX_SLOT_GAP" => Some("4".to_string()),
             "RUNTIME_FEED_REPLAY_FIXTURE_PATH" => Some("/tmp/runtime-feed.json".to_string()),
+            "RUNTIME_FEATURE_STALE_AFTER_MS" => Some("30000".to_string()),
+            "RUNTIME_FEATURE_SHORT_WINDOW_MS" => Some("12000".to_string()),
+            "RUNTIME_FEATURE_LONG_WINDOW_MS" => Some("45000".to_string()),
+            "RUNTIME_FEATURE_VOLATILITY_WINDOW_SIZE" => Some("8".to_string()),
+            "RUNTIME_FEATURE_MAX_SAMPLES_PER_STREAM" => Some("128".to_string()),
             _ => None,
         })
         .expect("custom config to load");
@@ -176,6 +210,11 @@ mod tests {
             config.feed_replay_fixture_path.as_deref(),
             Some("/tmp/runtime-feed.json"),
         );
+        assert_eq!(config.feature_stale_after_ms, 30_000);
+        assert_eq!(config.feature_short_window_ms, 12_000);
+        assert_eq!(config.feature_long_window_ms, 45_000);
+        assert_eq!(config.feature_volatility_window_size, 8);
+        assert_eq!(config.feature_max_samples_per_stream, 128);
         assert_eq!(
             config.socket_addr().expect("socket addr to parse"),
             "0.0.0.0:9090".parse().expect("address"),

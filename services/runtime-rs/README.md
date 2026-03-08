@@ -43,6 +43,16 @@ bun run runtime:fly:smoke
 - `RUNTIME_FEED_REPLAY_FIXTURE_PATH`
   Optional local replay fixture. The checked-in deterministic fixture is
   `services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json`.
+- `RUNTIME_FEATURE_STALE_AFTER_MS`
+  Default: `20000`
+- `RUNTIME_FEATURE_SHORT_WINDOW_MS`
+  Default: `10000`
+- `RUNTIME_FEATURE_LONG_WINDOW_MS`
+  Default: `25000`
+- `RUNTIME_FEATURE_VOLATILITY_WINDOW_SIZE`
+  Default: `4`
+- `RUNTIME_FEATURE_MAX_SAMPLES_PER_STREAM`
+  Default: `64`
 - `RUNTIME_DATABASE_URL`
   Optional runtime-owned relational store bootstrap secret for later phases.
 
@@ -55,7 +65,8 @@ curl -fsS http://127.0.0.1:8081/metrics
 
 Expected output is a JSON document describing the service name, environment,
 protocol version, bind address, strategy support, feed freshness contracts,
-duplicate suppression counters, slot lag, and internal dependency stubs.
+duplicate suppression counters, slot lag, feature freshness windows, derived
+signal snapshots, and internal dependency stubs.
 
 ## Fly foundation
 

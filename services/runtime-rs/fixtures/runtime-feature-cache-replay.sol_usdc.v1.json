@@ -1,0 +1,100 @@
+{
+  "schemaVersion": "v1",
+  "marketEvents": [
+    {
+      "source": "fixture.jupiter",
+      "symbol": "SOL/USDC",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "priceUsd": "142.0000",
+      "bidPriceUsd": "141.9500",
+      "askPriceUsd": "142.0500",
+      "observedAt": "2026-03-07T00:00:00Z",
+      "receivedAt": "2026-03-07T00:00:01Z",
+      "sequence": 301
+    },
+    {
+      "source": "fixture.jupiter",
+      "symbol": "SOL/USDC",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "priceUsd": "142.1200",
+      "bidPriceUsd": "142.0700",
+      "askPriceUsd": "142.1700",
+      "observedAt": "2026-03-07T00:00:05Z",
+      "receivedAt": "2026-03-07T00:00:06Z",
+      "sequence": 302
+    },
+    {
+      "source": "fixture.jupiter",
+      "symbol": "SOL/USDC",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "priceUsd": "141.9800",
+      "bidPriceUsd": "141.9300",
+      "askPriceUsd": "142.0300",
+      "observedAt": "2026-03-07T00:00:10Z",
+      "receivedAt": "2026-03-07T00:00:11Z",
+      "sequence": 303
+    },
+    {
+      "source": "fixture.jupiter",
+      "symbol": "SOL/USDC",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "priceUsd": "142.3000",
+      "bidPriceUsd": "142.2500",
+      "askPriceUsd": "142.3500",
+      "observedAt": "2026-03-07T00:00:15Z",
+      "receivedAt": "2026-03-07T00:00:16Z",
+      "sequence": 304
+    },
+    {
+      "source": "fixture.jupiter",
+      "symbol": "SOL/USDC",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "priceUsd": "142.1800",
+      "bidPriceUsd": "142.1300",
+      "askPriceUsd": "142.2300",
+      "observedAt": "2026-03-07T00:00:20Z",
+      "receivedAt": "2026-03-07T00:00:21Z",
+      "sequence": 305
+    },
+    {
+      "source": "fixture.jupiter",
+      "symbol": "SOL/USDC",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "priceUsd": "142.4400",
+      "bidPriceUsd": "142.3900",
+      "askPriceUsd": "142.4900",
+      "observedAt": "2026-03-07T00:00:25Z",
+      "receivedAt": "2026-03-07T00:00:26Z",
+      "sequence": 306
+    }
+  ],
+  "slotEvents": [
+    {
+      "source": "fixture.helius",
+      "commitment": "processed",
+      "slot": 310000000,
+      "observedAt": "2026-03-07T00:00:25Z",
+      "sequence": 401
+    },
+    {
+      "source": "fixture.helius",
+      "commitment": "confirmed",
+      "slot": 309999999,
+      "observedAt": "2026-03-07T00:00:24Z",
+      "sequence": 402
+    },
+    {
+      "source": "fixture.helius",
+      "commitment": "finalized",
+      "slot": 309999998,
+      "observedAt": "2026-03-07T00:00:23Z",
+      "sequence": 403
+    }
+  ]
+}

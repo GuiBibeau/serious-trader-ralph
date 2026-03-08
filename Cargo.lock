@@ -98,6 +98,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "feature-cache"
+version = "0.1.0"
+dependencies = [
+ "market-adapters",
+ "serde",
+ "thiserror",
+ "time",
+]
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -409,6 +419,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "exec-client",
+ "feature-cache",
  "http-body-util",
  "market-adapters",
  "protocol",

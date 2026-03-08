@@ -7,6 +7,8 @@
       "baseMint": "So11111111111111111111111111111111111111112",
       "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       "priceUsd": "142.15",
+      "bidPriceUsd": "142.10",
+      "askPriceUsd": "142.20",
       "observedAt": "2026-03-07T00:00:00Z",
       "receivedAt": "2026-03-07T00:00:00Z",
       "sequence": 101
@@ -17,6 +19,8 @@
       "baseMint": "So11111111111111111111111111111111111111112",
       "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       "priceUsd": "142.42",
+      "bidPriceUsd": "142.37",
+      "askPriceUsd": "142.47",
       "observedAt": "2026-03-07T00:00:05Z",
       "receivedAt": "2026-03-07T00:00:05Z",
       "sequence": 102

@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/exec-client",
+  "crates/feature-cache",
   "crates/market-adapters",
   "crates/portfolio-ledger",
   "crates/protocol",
