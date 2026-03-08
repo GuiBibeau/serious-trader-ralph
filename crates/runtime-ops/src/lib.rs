@@ -38,6 +38,8 @@ pub struct RuntimeConfig {
     pub environment: RuntimeEnvironment,
     pub log_level: String,
     pub protocol_version: String,
+    pub internal_service_token: Option<String>,
+    pub database_url: String,
     pub feed_provider: String,
     pub feed_websocket_url: String,
     pub feed_http_url: String,
@@ -76,6 +78,13 @@ impl RuntimeConfig {
             environment: RuntimeEnvironment::parse(lookup("RUNTIME_RS_ENV"))?,
             log_level: lookup("RUNTIME_RS_LOG").unwrap_or_else(|| "info".to_string()),
             protocol_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            internal_service_token: lookup("RUNTIME_INTERNAL_SERVICE_TOKEN")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            database_url: lookup("RUNTIME_DATABASE_URL")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| ".tmp/runtime-rs/strategy-registry.sqlite3".to_string()),
             feed_provider: lookup("RUNTIME_FEED_PROVIDER").unwrap_or_else(|| "fixture".to_string()),
             feed_websocket_url: lookup("RUNTIME_FEED_WS_URL")
                 .unwrap_or_else(|| "wss://price-feed.example/runtime".to_string()),
@@ -160,6 +169,11 @@ mod tests {
         assert_eq!(config.bind_address, "127.0.0.1:8081");
         assert_eq!(config.environment, RuntimeEnvironment::Local);
         assert_eq!(config.protocol_version, "v1");
+        assert_eq!(config.internal_service_token, None);
+        assert_eq!(
+            config.database_url,
+            ".tmp/runtime-rs/strategy-registry.sqlite3"
+        );
         assert_eq!(config.feed_provider, "fixture");
         assert_eq!(config.feed_market_stale_after_ms, 30_000);
         assert_eq!(config.feed_slot_stale_after_ms, 15_000);
@@ -178,6 +192,8 @@ mod tests {
             "RUNTIME_RS_BIND_ADDR" => Some("0.0.0.0:9090".to_string()),
             "RUNTIME_RS_ENV" => Some("preview".to_string()),
             "RUNTIME_RS_LOG" => Some("debug".to_string()),
+            "RUNTIME_INTERNAL_SERVICE_TOKEN" => Some("runtime-token".to_string()),
+            "RUNTIME_DATABASE_URL" => Some("/tmp/runtime-state.sqlite3".to_string()),
             "RUNTIME_FEED_PROVIDER" => Some("jupiter".to_string()),
             "RUNTIME_FEED_WS_URL" => Some("wss://feeds.jupiter.example/runtime".to_string()),
             "RUNTIME_FEED_HTTP_URL" => Some("https://rpc.jupiter.example/runtime".to_string()),
@@ -197,6 +213,11 @@ mod tests {
         assert_eq!(config.bind_address, "0.0.0.0:9090");
         assert_eq!(config.environment, RuntimeEnvironment::Preview);
         assert_eq!(config.log_level, "debug");
+        assert_eq!(
+            config.internal_service_token.as_deref(),
+            Some("runtime-token")
+        );
+        assert_eq!(config.database_url, "/tmp/runtime-state.sqlite3");
         assert_eq!(config.feed_provider, "jupiter");
         assert_eq!(
             config.feed_websocket_url,

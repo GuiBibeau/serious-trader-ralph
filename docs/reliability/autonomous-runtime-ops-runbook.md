@@ -36,6 +36,7 @@ Verify:
 - provider connectivity,
 - feed freshness,
 - feature freshness and ingest lag,
+- strategy registry health and deployment/run counts,
 - reconciliation backlog,
 - runtime canary status.
 
@@ -55,6 +56,16 @@ Expected topology for v1:
 - public health endpoint: `https://ralph-runtime-rs.fly.dev/health`
 - feed metrics endpoint: `https://ralph-runtime-rs.fly.dev/metrics`
 
+Internal inspection examples:
+
+```bash
+curl -fsS https://ralph-runtime-rs.fly.dev/api/internal/runtime/health \
+  -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
+
+curl -fsS https://ralph-runtime-rs.fly.dev/api/internal/runtime/runs/<deployment-id> \
+  -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
+```
+
 ### Pause a deployment
 
 Use pause when:
@@ -65,7 +76,7 @@ Use pause when:
 
 Expected effect:
 
-- new execution plans stop,
+- new shadow evaluations stop,
 - reconciliation continues,
 - existing state remains inspectable.
 
@@ -99,7 +110,9 @@ Response:
 
 1. Pause affected deployments.
 2. Confirm provider and socket health.
-3. Keep the runtime canary disabled until freshness is restored.
+3. Confirm `feature-stream-stale` or `feature-stream-missing` appears on the
+   affected shadow evaluations.
+4. Keep the runtime canary disabled until freshness is restored.
 
 ### Reconciliation incident
 
