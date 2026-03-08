@@ -141,29 +141,41 @@ jobs:
             retry 12 5 curl -fsS -o /dev/null "${WORKER_URL}${path}"
           done
 
-          curl -fsS "${PORTAL_URL}/endpoints.json" | grep -q "${WORKER_HOST}"
-          curl -fsS "${PORTAL_URL}/agent-registry/metadata.json" | grep -q "${WORKER_HOST}"
-          curl -fsS "${WORKER_URL}/agent-registry/metadata.json" | grep -q "${WORKER_HOST}"
+          assert_preview_host_wiring() {
+            curl -fsS "${PORTAL_URL}/endpoints.json" | grep -q "${WORKER_HOST}"
+            curl -fsS "${PORTAL_URL}/agent-registry/metadata.json" | grep -q "${WORKER_HOST}"
+            curl -fsS "${WORKER_URL}/agent-registry/metadata.json" | grep -q "${WORKER_HOST}"
+          }
 
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
+          retry 12 5 assert_preview_host_wiring
 
-          curl -fsSL "${PORTAL_URL}/login" > "${tmp}/login.html"
-          grep -oE '/_next/static/[^" ]+\.js' "${tmp}/login.html" | sort -u > "${tmp}/scripts.txt"
+          assert_preview_bundle() {
+            local tmp
+            tmp="$(mktemp -d)"
 
-          if [ ! -s "${tmp}/scripts.txt" ]; then
-            echo "No Next.js JS bundle references found on ${PORTAL_URL}/login" >&2
-            exit 1
-          fi
+            curl -fsSL "${PORTAL_URL}/login" > "${tmp}/login.html"
+            grep -oE '/_next/static/[^" ]+\.js' "${tmp}/login.html" | sort -u > "${tmp}/scripts.txt"
 
-          while read -r script_path; do
-            curl -fsSL "${PORTAL_URL}${script_path}" >> "${tmp}/bundle.js"
-          done < "${tmp}/scripts.txt"
+            if [ ! -s "${tmp}/scripts.txt" ]; then
+              echo "No Next.js JS bundle references found on ${PORTAL_URL}/login" >&2
+              rm -rf "${tmp}"
+              return 1
+            fi
 
-          if ! grep -q "${WORKER_HOST}" "${tmp}/bundle.js"; then
-            echo "Expected preview worker host ${WORKER_HOST} not found in login bundle" >&2
-            exit 1
-          fi
+            while read -r script_path; do
+              curl -fsSL "${PORTAL_URL}${script_path}" >> "${tmp}/bundle.js"
+            done < "${tmp}/scripts.txt"
+
+            if ! grep -q "${WORKER_HOST}" "${tmp}/bundle.js"; then
+              echo "Expected preview worker host ${WORKER_HOST} not found in login bundle" >&2
+              rm -rf "${tmp}"
+              return 1
+            fi
+
+            rm -rf "${tmp}"
+          }
+
+          retry 12 5 assert_preview_bundle
 
       - name: Write preview metadata
         env:
