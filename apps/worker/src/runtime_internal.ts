@@ -411,6 +411,7 @@ export async function handleRuntimeInternalRoute(
         ok: true,
         accepted: true,
         source: "stub",
+        submitRequestId: `submit_${plan.planId}`,
         coordination: {
           planId: plan.planId,
           deploymentId: plan.deploymentId,

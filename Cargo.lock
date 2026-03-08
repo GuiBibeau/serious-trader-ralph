@@ -857,6 +857,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "reconciler"
+version = "0.1.0"
+dependencies = [
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+]
+
+[[package]]
 name = "regex-automata"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -960,6 +973,7 @@ dependencies = [
  "market-adapters",
  "portfolio-ledger",
  "protocol",
+ "reconciler",
  "risk-engine",
  "runtime-ops",
  "serde",

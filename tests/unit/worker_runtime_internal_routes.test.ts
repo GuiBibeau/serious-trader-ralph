@@ -182,6 +182,7 @@ describe("worker runtime internal routes", () => {
       ok: true,
       accepted: true,
       source: "stub",
+      submitRequestId: "submit_plan_123",
       coordination: {
         planId: "plan_123",
         deploymentId: "deployment_123",

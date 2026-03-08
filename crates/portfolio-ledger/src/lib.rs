@@ -193,6 +193,95 @@ impl PortfolioLedger {
         Ok(())
     }
 
+    pub fn apply_observed_snapshot(
+        &self,
+        deployment_id: &str,
+        snapshot: &RuntimeLedgerSnapshot,
+    ) -> Result<RuntimeLedgerSnapshot, PortfolioLedgerError> {
+        let observed_equity_cents =
+            parse_non_negative_usd_cents("snapshot.totals.equityUsd", &snapshot.totals.equity_usd)?;
+        let observed_reserved_cents = parse_non_negative_usd_cents(
+            "snapshot.totals.reservedUsd",
+            &snapshot.totals.reserved_usd,
+        )?;
+        let observed_available_cents = parse_non_negative_usd_cents(
+            "snapshot.totals.availableUsd",
+            &snapshot.totals.available_usd,
+        )?;
+        let observed_realized_pnl_cents = parse_usd_cents(
+            "snapshot.totals.realizedPnlUsd",
+            &snapshot.totals.realized_pnl_usd,
+        )?;
+        if observed_reserved_cents + observed_available_cents != observed_equity_cents {
+            return Err(PortfolioLedgerError::InvalidCorrection {
+                sleeve_id: snapshot.sleeve_id.clone(),
+            });
+        }
+
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        let deployment = load_deployment_state(&transaction, deployment_id)?.ok_or_else(|| {
+            PortfolioLedgerError::DeploymentNotFound {
+                deployment_id: deployment_id.to_string(),
+            }
+        })?;
+        let sleeve = load_sleeve_state(&transaction, &deployment.sleeve_id)?.ok_or_else(|| {
+            PortfolioLedgerError::DeploymentNotFound {
+                deployment_id: deployment_id.to_string(),
+            }
+        })?;
+
+        let other_allocated_cents = sum_deployment_cents(
+            &transaction,
+            &deployment.sleeve_id,
+            "allocated_cents",
+            Some(deployment_id),
+        )?;
+        let other_reserved_cents = sum_deployment_cents(
+            &transaction,
+            &deployment.sleeve_id,
+            "reserved_cents",
+            Some(deployment_id),
+        )?;
+        let corrected_sleeve_equity_cents = sleeve
+            .equity_cents
+            .saturating_sub(deployment.allocated_cents)
+            .saturating_add(observed_equity_cents);
+
+        ensure_within_sleeve_capacity(
+            &deployment.sleeve_id,
+            corrected_sleeve_equity_cents,
+            other_allocated_cents + observed_equity_cents,
+        )?;
+        ensure_within_sleeve_capacity(
+            &deployment.sleeve_id,
+            corrected_sleeve_equity_cents,
+            other_reserved_cents + observed_reserved_cents,
+        )?;
+
+        upsert_sleeve_state(
+            &transaction,
+            &deployment.sleeve_id,
+            corrected_sleeve_equity_cents,
+            other_reserved_cents + observed_reserved_cents,
+            &deployment.quote_mint,
+            &deployment.quote_symbol,
+        )?;
+        upsert_deployment_ledger_state(
+            &transaction,
+            &deployment,
+            observed_equity_cents,
+            observed_reserved_cents,
+            observed_available_cents,
+            observed_realized_pnl_cents,
+        )?;
+        replace_positions(&transaction, deployment_id, &snapshot.positions)?;
+
+        let corrected_snapshot = build_snapshot(&transaction, deployment_id)?;
+        transaction.commit()?;
+        Ok(corrected_snapshot)
+    }
+
     pub fn upsert_position(
         &self,
         deployment_id: &str,
@@ -319,12 +408,27 @@ struct SleeveState {
 struct DeploymentLedgerState {
     deployment_id: String,
     sleeve_id: String,
+    strategy_key: String,
+    state: String,
     allocated_cents: i64,
     reserved_cents: i64,
     available_cents: i64,
     realized_pnl_cents: i64,
     quote_mint: String,
     quote_symbol: String,
+}
+
+struct DeploymentLedgerStateUpsert<'a> {
+    deployment_id: &'a str,
+    sleeve_id: &'a str,
+    strategy_key: &'a str,
+    state: &'a str,
+    allocated_cents: i64,
+    reserved_cents: i64,
+    available_cents: i64,
+    realized_pnl_cents: i64,
+    quote_mint: &'a str,
+    quote_symbol: &'a str,
 }
 
 fn initialize_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
@@ -482,6 +586,53 @@ fn upsert_deployment_state(
     reserved_cents: i64,
     available_cents: i64,
 ) -> Result<(), rusqlite::Error> {
+    let quote_symbol = quote_symbol(&deployment.pair.symbol);
+    upsert_deployment_ledger_state_record(
+        connection,
+        &DeploymentLedgerStateUpsert {
+            deployment_id: &deployment.deployment_id,
+            sleeve_id: &deployment.sleeve_id,
+            strategy_key: &deployment.strategy_key,
+            state: state_key(&deployment.state),
+            allocated_cents,
+            reserved_cents,
+            available_cents,
+            realized_pnl_cents: 0,
+            quote_mint: &deployment.pair.quote_mint,
+            quote_symbol: &quote_symbol,
+        },
+    )
+}
+
+fn upsert_deployment_ledger_state(
+    connection: &Connection,
+    deployment: &DeploymentLedgerState,
+    allocated_cents: i64,
+    reserved_cents: i64,
+    available_cents: i64,
+    realized_pnl_cents: i64,
+) -> Result<(), rusqlite::Error> {
+    upsert_deployment_ledger_state_record(
+        connection,
+        &DeploymentLedgerStateUpsert {
+            deployment_id: &deployment.deployment_id,
+            sleeve_id: &deployment.sleeve_id,
+            strategy_key: &deployment.strategy_key,
+            state: &deployment.state,
+            allocated_cents,
+            reserved_cents,
+            available_cents,
+            realized_pnl_cents,
+            quote_mint: &deployment.quote_mint,
+            quote_symbol: &deployment.quote_symbol,
+        },
+    )
+}
+
+fn upsert_deployment_ledger_state_record(
+    connection: &Connection,
+    record: &DeploymentLedgerStateUpsert<'_>,
+) -> Result<(), rusqlite::Error> {
     connection.execute(
         "INSERT INTO ledger_deployments (
             deployment_id,
@@ -495,7 +646,7 @@ fn upsert_deployment_state(
             quote_mint,
             quote_symbol,
             updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
         ON CONFLICT(deployment_id) DO UPDATE SET
             sleeve_id = excluded.sleeve_id,
             strategy_key = excluded.strategy_key,
@@ -503,22 +654,58 @@ fn upsert_deployment_state(
             allocated_cents = excluded.allocated_cents,
             reserved_cents = excluded.reserved_cents,
             available_cents = excluded.available_cents,
+            realized_pnl_cents = excluded.realized_pnl_cents,
             quote_mint = excluded.quote_mint,
             quote_symbol = excluded.quote_symbol,
             updated_at = excluded.updated_at",
         params![
-            &deployment.deployment_id,
-            &deployment.sleeve_id,
-            &deployment.strategy_key,
-            state_key(&deployment.state),
-            allocated_cents,
-            reserved_cents,
-            available_cents,
-            &deployment.pair.quote_mint,
-            quote_symbol(&deployment.pair.symbol),
+            record.deployment_id,
+            record.sleeve_id,
+            record.strategy_key,
+            record.state,
+            record.allocated_cents,
+            record.reserved_cents,
+            record.available_cents,
+            record.realized_pnl_cents,
+            record.quote_mint,
+            record.quote_symbol,
             now_rfc3339(),
         ],
     )?;
+    Ok(())
+}
+
+fn replace_positions(
+    connection: &Connection,
+    deployment_id: &str,
+    positions: &[RuntimeLedgerPosition],
+) -> Result<(), rusqlite::Error> {
+    connection.execute(
+        "DELETE FROM ledger_positions WHERE deployment_id = ?1",
+        params![deployment_id],
+    )?;
+    for position in positions {
+        connection.execute(
+            "INSERT INTO ledger_positions (
+                deployment_id,
+                instrument_id,
+                side,
+                quantity_atomic,
+                entry_price_usd,
+                mark_price_usd,
+                unrealized_pnl_usd
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                deployment_id,
+                &position.instrument_id,
+                side_key(&position.side),
+                &position.quantity_atomic,
+                &position.entry_price_usd,
+                &position.mark_price_usd,
+                &position.unrealized_pnl_usd,
+            ],
+        )?;
+    }
     Ok(())
 }
 
@@ -552,7 +739,7 @@ fn load_deployment_state(
 ) -> Result<Option<DeploymentLedgerState>, PortfolioLedgerError> {
     connection
         .query_row(
-            "SELECT deployment_id, sleeve_id, allocated_cents, reserved_cents, available_cents,
+            "SELECT deployment_id, sleeve_id, strategy_key, state, allocated_cents, reserved_cents, available_cents,
                     realized_pnl_cents, quote_mint, quote_symbol
              FROM ledger_deployments
              WHERE deployment_id = ?1",
@@ -561,12 +748,14 @@ fn load_deployment_state(
                 Ok(DeploymentLedgerState {
                     deployment_id: row.get(0)?,
                     sleeve_id: row.get(1)?,
-                    allocated_cents: row.get(2)?,
-                    reserved_cents: row.get(3)?,
-                    available_cents: row.get(4)?,
-                    realized_pnl_cents: row.get(5)?,
-                    quote_mint: row.get(6)?,
-                    quote_symbol: row.get(7)?,
+                    strategy_key: row.get(2)?,
+                    state: row.get(3)?,
+                    allocated_cents: row.get(4)?,
+                    reserved_cents: row.get(5)?,
+                    available_cents: row.get(6)?,
+                    realized_pnl_cents: row.get(7)?,
+                    quote_mint: row.get(8)?,
+                    quote_symbol: row.get(9)?,
                 })
             },
         )
@@ -992,6 +1181,65 @@ mod tests {
             Some("140.00")
         );
         assert_eq!(snapshot.totals.unrealized_pnl_usd, "2.00");
+    }
+
+    #[test]
+    fn applies_observed_snapshots_as_auditable_corrections() {
+        let ledger = ledger("observed-correction");
+        ledger
+            .sync_deployment(&deployment(
+                "deployment_1",
+                "sleeve_alpha",
+                "100.00",
+                "5.00",
+            ))
+            .expect("deployment to sync");
+
+        let corrected = ledger
+            .apply_observed_snapshot(
+                "deployment_1",
+                &RuntimeLedgerSnapshot {
+                    schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                    snapshot_id: "wallet_1".to_string(),
+                    deployment_id: "deployment_1".to_string(),
+                    sleeve_id: "sleeve_alpha".to_string(),
+                    as_of: "2026-03-08T15:10:00Z".to_string(),
+                    balances: vec![RuntimeLedgerBalance {
+                        mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                        symbol: "USDC".to_string(),
+                        decimals: 6,
+                        free_atomic: "103000000".to_string(),
+                        reserved_atomic: "7000000".to_string(),
+                        price_usd: Some("1.00".to_string()),
+                    }],
+                    positions: vec![RuntimeLedgerPosition {
+                        instrument_id: "SOL/USDC".to_string(),
+                        side: RuntimePositionSide::Long,
+                        quantity_atomic: "150000000".to_string(),
+                        entry_price_usd: Some("141.00".to_string()),
+                        mark_price_usd: Some("143.00".to_string()),
+                        unrealized_pnl_usd: Some("3.00".to_string()),
+                    }],
+                    totals: RuntimeLedgerTotals {
+                        equity_usd: "110.00".to_string(),
+                        reserved_usd: "7.00".to_string(),
+                        available_usd: "103.00".to_string(),
+                        realized_pnl_usd: "1.50".to_string(),
+                        unrealized_pnl_usd: "3.00".to_string(),
+                    },
+                },
+            )
+            .expect("observed snapshot to apply");
+
+        assert_eq!(corrected.totals.equity_usd, "110.00");
+        assert_eq!(corrected.totals.reserved_usd, "7.00");
+        assert_eq!(corrected.totals.available_usd, "103.00");
+        assert_eq!(corrected.totals.realized_pnl_usd, "1.50");
+        assert_eq!(corrected.positions.len(), 1);
+        assert_eq!(
+            corrected.positions[0].entry_price_usd.as_deref(),
+            Some("141.00")
+        );
     }
 
     #[test]

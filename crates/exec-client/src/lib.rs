@@ -24,6 +24,7 @@ pub struct ExecSubmitResponse {
     pub ok: bool,
     pub accepted: bool,
     pub source: String,
+    pub submit_request_id: String,
     pub coordination: ExecPlanCoordination,
 }
 
@@ -302,7 +303,7 @@ mod tests {
                 Router::new().route(
                     "/api/internal/runtime/execution-plans",
                     post(
-                        |headers: reqwest::header::HeaderMap,
+                        |headers: axum::http::HeaderMap,
                          Json(plan): Json<RuntimeExecutionPlan>| async move {
                             assert_eq!(
                                 headers
@@ -314,6 +315,7 @@ mod tests {
                                 "ok": true,
                                 "accepted": true,
                                 "source": "stub",
+                                "submitRequestId": "submit_runtime_1",
                                 "coordination": {
                                     "planId": plan.plan_id,
                                     "deploymentId": plan.deployment_id,
@@ -352,6 +354,7 @@ mod tests {
 
         let response = client.submit_plan(&plan).await.expect("submit to succeed");
         assert!(response.accepted);
+        assert_eq!(response.submit_request_id, "submit_runtime_1");
         assert_eq!(response.coordination.plan_id, "plan_1");
         assert_eq!(response.coordination.lane, RuntimeLane::Protected);
 

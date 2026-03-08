@@ -18,6 +18,7 @@ use portfolio_ledger::{
     PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
 };
 use protocol::{RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeRunRecord};
+use reconciler::{Reconciler, ReconcilerConfig, ReconcilerError, ReconcilerSnapshot};
 use risk_engine::{
     should_pause_runtime, RiskAssessmentInput, RiskEngine, RiskEngineConfig, RiskEngineError,
     RiskEngineSnapshot,
@@ -51,6 +52,7 @@ pub struct RuntimeAppState {
     portfolio_ledger: PortfolioLedger,
     risk_engine: RiskEngine,
     execution_planner: ExecutionPlanner,
+    reconciler: Reconciler,
 }
 
 impl RuntimeAppState {
@@ -79,6 +81,8 @@ impl RuntimeAppState {
         let execution_planner =
             ExecutionPlanner::new(ExecutionPlannerConfig::new(config.database_url.clone()))
                 .expect("execution planner to initialize");
+        let reconciler = Reconciler::new(ReconcilerConfig::new(config.database_url.clone()))
+            .expect("reconciler to initialize");
         let exec_client = ExecClient::new(ExecClientConfig {
             api_base: config.worker_api_base.clone(),
             submit_path: config.worker_execution_plan_path.clone(),
@@ -96,6 +100,7 @@ impl RuntimeAppState {
             portfolio_ledger,
             risk_engine,
             execution_planner,
+            reconciler,
         }
     }
 
@@ -128,6 +133,10 @@ impl RuntimeAppState {
     fn execution_planner_snapshot(&self) -> ExecutionPlannerSnapshot {
         self.execution_planner.snapshot_now()
     }
+
+    fn reconciler_snapshot(&self) -> ReconcilerSnapshot {
+        self.reconciler.snapshot_now()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -150,6 +159,7 @@ pub struct RuntimeHealthResponse {
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub risk_engine: RiskEngineSnapshot,
     pub execution_planner: ExecutionPlannerSnapshot,
+    pub reconciler: ReconcilerSnapshot,
     pub supported_strategies: Vec<String>,
 }
 
@@ -167,6 +177,7 @@ pub struct RuntimeMetricsResponse {
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub risk_engine: RiskEngineSnapshot,
     pub execution_planner: ExecutionPlannerSnapshot,
+    pub reconciler: ReconcilerSnapshot,
     pub supported_strategies: Vec<String>,
 }
 
@@ -174,6 +185,7 @@ pub struct RuntimeMetricsResponse {
 #[serde(rename_all = "camelCase")]
 struct RuntimeShadowEvaluationRequest {
     pub trigger: Option<ShadowEvaluationTrigger>,
+    pub observed_ledger_snapshot: Option<protocol::RuntimeLedgerSnapshot>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -223,6 +235,10 @@ pub fn app(config: RuntimeConfig) -> Router {
             get(execution_plans_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/reconciliations"),
+            get(reconciliations_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/risk"),
             get(risk_handler),
         )
@@ -242,12 +258,14 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let portfolio_ledger = state.portfolio_ledger_snapshot();
     let risk_engine = state.risk_engine_snapshot();
     let execution_planner = state.execution_planner_snapshot();
+    let reconciler = state.reconciler_snapshot();
     let status = if feed_gateway.status == "healthy"
         && feature_cache.status == "healthy"
         && strategy_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
         && risk_engine.status == "healthy"
         && execution_planner.status == "healthy"
+        && reconciler.status == "healthy"
     {
         snapshot.status
     } else {
@@ -271,6 +289,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         portfolio_ledger,
         risk_engine,
         execution_planner,
+        reconciler,
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
             .map(|strategy| strategy.as_key().to_string())
@@ -291,6 +310,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         portfolio_ledger: state.portfolio_ledger_snapshot(),
         risk_engine: state.risk_engine_snapshot(),
         execution_planner: state.execution_planner_snapshot(),
+        reconciler: state.reconciler_snapshot(),
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
             .map(|strategy| strategy.as_key().to_string())
@@ -480,6 +500,7 @@ async fn evaluate_deployment_handler(
     } else {
         parse_json_body::<RuntimeShadowEvaluationRequest>(&body, "invalid-runtime-evaluation")?
     };
+    let observed_ledger_override = request.observed_ledger_snapshot.clone();
     let result = state
         .strategy_registry
         .evaluate_shadow_trigger(
@@ -507,6 +528,8 @@ async fn evaluate_deployment_handler(
         .map_err(map_registry_error)?;
     let mut execution_plan = None;
     let mut coordination = None;
+    let mut reconciliation = None;
+    let mut observed_ledger_snapshot = None;
     let mut coordinated_run = run.clone();
     let ledger_snapshot = state
         .portfolio_ledger
@@ -528,6 +551,15 @@ async fn evaluate_deployment_handler(
                         )
                     })?,
             );
+            reconciliation = state
+                .reconciler
+                .get_result_by_run_id(&coordinated_run.run_id)
+                .map_err(map_reconciler_error)?;
+            observed_ledger_snapshot = state
+                .reconciler
+                .get_wallet_observation_by_run_id(&coordinated_run.run_id)
+                .map_err(map_reconciler_error)?
+                .map(|record| record.snapshot);
         } else {
             let planning = state
                 .execution_planner
@@ -545,19 +577,85 @@ async fn evaluate_deployment_handler(
                 .submit_plan(&plan)
                 .await
                 .map_err(map_exec_client_error)?;
+            state
+                .reconciler
+                .record_submit_attempt(
+                    &plan,
+                    &submit.submit_request_id,
+                    submit.accepted,
+                    &submit.source,
+                )
+                .map_err(map_reconciler_error)?;
             coordinated_run = state
                 .strategy_registry
                 .apply_execution_plan(
                     &coordinated_run.run_id,
                     &plan.plan_id,
-                    if plan.dry_run {
-                        None
-                    } else {
-                        Some(plan.idempotency_key.as_str())
-                    },
-                    plan.dry_run,
+                    &submit.submit_request_id,
                 )
                 .map_err(map_registry_error)?;
+            let receipt = state
+                .reconciler
+                .record_synthetic_receipt(
+                    &plan,
+                    &submit.submit_request_id,
+                    &submit.source,
+                    "accepted",
+                    &["execution coordination accepted"],
+                )
+                .map_err(map_reconciler_error)?;
+            coordinated_run = state
+                .strategy_registry
+                .apply_receipt(&coordinated_run.run_id, &receipt.receipt_id)
+                .map_err(map_registry_error)?;
+            let observed_ledger =
+                observed_ledger_override.unwrap_or_else(|| ledger_snapshot.clone());
+            state
+                .reconciler
+                .record_wallet_observation(
+                    &deployment_id,
+                    &coordinated_run.run_id,
+                    "runtime-rs",
+                    &observed_ledger,
+                )
+                .map_err(map_reconciler_error)?;
+            let reconciliation_outcome = state
+                .reconciler
+                .reconcile_and_store(&reconciler::ReconciliationInput {
+                    deployment_id: deployment_id.clone(),
+                    run_id: coordinated_run.run_id.clone(),
+                    plan: plan.clone(),
+                    receipt,
+                    expected_ledger: ledger_snapshot.clone(),
+                    observed_ledger: observed_ledger.clone(),
+                })
+                .map_err(map_reconciler_error)?;
+            let reconciliation_failure_code = match reconciliation_outcome.result.status {
+                protocol::RuntimeReconciliationStatus::Passed => None,
+                protocol::RuntimeReconciliationStatus::NeedsManualReview => {
+                    Some("reconciliation-needs-manual-review")
+                }
+                protocol::RuntimeReconciliationStatus::Failed => Some("reconciliation-failed"),
+            };
+            let reconciliation_failure_message =
+                reconciliation_outcome.result.notes.last().cloned();
+            coordinated_run = state
+                .strategy_registry
+                .apply_reconciliation_result(
+                    &coordinated_run.run_id,
+                    reconciliation_outcome.result.status.clone(),
+                    reconciliation_failure_code,
+                    reconciliation_failure_message.as_deref(),
+                )
+                .map_err(map_registry_error)?;
+            if reconciliation_outcome.should_apply_correction {
+                state
+                    .portfolio_ledger
+                    .apply_observed_snapshot(&deployment_id, &observed_ledger)
+                    .map_err(map_ledger_error)?;
+            }
+            reconciliation = Some(reconciliation_outcome.result);
+            observed_ledger_snapshot = Some(observed_ledger);
             execution_plan = Some(plan);
             coordination = Some(submit);
         }
@@ -588,6 +686,8 @@ async fn evaluate_deployment_handler(
         ledger_snapshot,
         execution_plan,
         coordination,
+        reconciliation,
+        observed_ledger_snapshot,
     }))
 }
 
@@ -656,6 +756,32 @@ async fn execution_plans_handler(
     ))
 }
 
+async fn reconciliations_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeDeploymentQuery>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let deployment_id = require_deployment_id(query)?;
+    let bundle = state
+        .reconciler
+        .bundle_for_deployment(&deployment_id)
+        .map_err(map_reconciler_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "deploymentId": deployment_id,
+            "submitAttempts": bundle.submit_attempts,
+            "receipts": bundle.receipts,
+            "walletObservations": bundle.wallet_observations,
+            "results": bundle.results,
+            "thresholds": bundle.thresholds,
+        }),
+    ))
+}
+
 async fn positions_handler(
     headers: HeaderMap,
     Query(query): Query<RuntimeDeploymentQuery>,
@@ -710,6 +836,8 @@ struct ShadowEvaluationResponse {
     ledger_snapshot: protocol::RuntimeLedgerSnapshot,
     execution_plan: Option<protocol::RuntimeExecutionPlan>,
     coordination: Option<ExecSubmitResponse>,
+    reconciliation: Option<protocol::RuntimeReconciliationResult>,
+    observed_ledger_snapshot: Option<protocol::RuntimeLedgerSnapshot>,
 }
 
 fn shadow_evaluation_json(payload: ShadowEvaluationResponse) -> JsonPayload {
@@ -730,6 +858,8 @@ fn shadow_evaluation_json(payload: ShadowEvaluationResponse) -> JsonPayload {
             "ledger": payload.ledger_snapshot,
             "executionPlan": payload.execution_plan,
             "coordination": payload.coordination,
+            "reconciliation": payload.reconciliation,
+            "observedLedger": payload.observed_ledger_snapshot,
         }),
     )
 }
@@ -1004,6 +1134,36 @@ fn map_execution_planner_error(error: ExecutionPlannerError) -> JsonPayload {
         ExecutionPlannerError::Serialization(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-execution-plan-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn map_reconciler_error(error: ReconcilerError) -> JsonPayload {
+    match error {
+        ReconcilerError::InvalidNumericValue { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-reconciliation-number",
+            json!({ "field": field, "value": value }),
+        ),
+        ReconcilerError::ResultNotFound { run_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "reconciliation-not-found",
+            json!({ "runId": run_id }),
+        ),
+        ReconcilerError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-reconciliation-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        ReconcilerError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-reconciliation-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        ReconcilerError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-reconciliation-error",
             json!({ "reason": error.to_string() }),
         ),
     }
@@ -1324,6 +1484,7 @@ mod tests {
                                 "ok": true,
                                 "accepted": true,
                                 "source": "test-stub",
+                                "submitRequestId": "submit_runtime_123",
                                 "coordination": {
                                     "planId": plan.plan_id,
                                     "deploymentId": plan.deployment_id,
@@ -1430,6 +1591,8 @@ mod tests {
         assert_eq!(payload.risk_engine.verdict_count, 0);
         assert_eq!(payload.execution_planner.status, "healthy");
         assert_eq!(payload.execution_planner.plan_count, 0);
+        assert_eq!(payload.reconciler.status, "healthy");
+        assert_eq!(payload.reconciler.reconciliation_count, 0);
         assert!(payload.internal_service_auth_configured);
     }
 
@@ -1461,6 +1624,7 @@ mod tests {
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.risk_engine.status, "healthy");
         assert_eq!(payload.execution_planner.status, "healthy");
+        assert_eq!(payload.reconciler.status, "healthy");
     }
 
     #[tokio::test]
@@ -1548,7 +1712,27 @@ mod tests {
             evaluation_payload["executionPlan"]["deploymentId"],
             json!("deployment_123")
         );
+        assert_eq!(
+            evaluation_payload["run"]["submitRequestId"],
+            json!("submit_runtime_123")
+        );
+        assert_eq!(
+            evaluation_payload["run"]["receiptId"],
+            evaluation_payload["reconciliation"]["receiptId"]
+        );
         assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
+        assert_eq!(
+            evaluation_payload["coordination"]["submitRequestId"],
+            json!("submit_runtime_123")
+        );
+        assert_eq!(
+            evaluation_payload["reconciliation"]["status"],
+            json!("passed")
+        );
+        assert_eq!(
+            evaluation_payload["observedLedger"]["totals"]["equityUsd"],
+            json!("1000.00")
+        );
 
         let duplicate_response = router
             .clone()
@@ -1602,6 +1786,7 @@ mod tests {
         assert_eq!(risk_payload["verdicts"].as_array().expect("array").len(), 1);
 
         let plans_response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/internal/runtime/execution-plans?deploymentId=deployment_123")
@@ -1614,6 +1799,128 @@ mod tests {
         assert_eq!(plans_response.status(), StatusCode::OK);
         let plans_payload = read_json(plans_response).await;
         assert_eq!(plans_payload["plans"].as_array().expect("array").len(), 1);
+
+        let reconciliations_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/reconciliations?deploymentId=deployment_123")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(reconciliations_response.status(), StatusCode::OK);
+        let reconciliations_payload = read_json(reconciliations_response).await;
+        assert_eq!(
+            reconciliations_payload["submitAttempts"]
+                .as_array()
+                .expect("array")
+                .len(),
+            1
+        );
+        assert_eq!(
+            reconciliations_payload["receipts"]
+                .as_array()
+                .expect("array")
+                .len(),
+            1
+        );
+        assert_eq!(
+            reconciliations_payload["walletObservations"]
+                .as_array()
+                .expect("array")
+                .len(),
+            1
+        );
+        assert_eq!(
+            reconciliations_payload["results"]
+                .as_array()
+                .expect("array")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn applies_small_reconciliation_drift_corrections() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let router = app(test_config_with_worker_api_base(Some(&worker_api_base)));
+        let deployment =
+            runtime_deployment("deployment_drift", "sleeve_alpha", "1000.00", "125.00");
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_drift/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "observedLedgerSnapshot": {
+                                "schemaVersion": "v1",
+                                "snapshotId": "wallet_drift_1",
+                                "deploymentId": "deployment_drift",
+                                "sleeveId": "sleeve_alpha",
+                                "asOf": "2026-03-08T15:00:10Z",
+                                "balances": [
+                                    {
+                                        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                                        "symbol": "USDC",
+                                        "decimals": 6,
+                                        "freeAtomic": "874500000",
+                                        "reservedAtomic": "125000000",
+                                        "priceUsd": "1.00"
+                                    }
+                                ],
+                                "positions": [],
+                                "totals": {
+                                    "equityUsd": "999.50",
+                                    "reservedUsd": "125.00",
+                                    "availableUsd": "874.50",
+                                    "realizedPnlUsd": "0.00",
+                                    "unrealizedPnlUsd": "0.00"
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(
+            evaluation_payload["reconciliation"]["correctionApplied"],
+            json!(true)
+        );
+        assert_eq!(
+            evaluation_payload["ledger"]["totals"]["equityUsd"],
+            json!("999.50")
+        );
+        assert_eq!(
+            evaluation_payload["ledger"]["totals"]["availableUsd"],
+            json!("874.50")
+        );
+        assert_eq!(evaluation_payload["run"]["state"], json!("completed"));
     }
 
     #[tokio::test]

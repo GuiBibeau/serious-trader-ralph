@@ -317,8 +317,7 @@ impl StrategyRegistry {
         &self,
         run_id: &str,
         plan_id: &str,
-        submit_request_id: Option<&str>,
-        complete_immediately: bool,
+        submit_request_id: &str,
     ) -> Result<RuntimeRunRecord, StrategyRegistryError> {
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
@@ -327,28 +326,104 @@ impl StrategyRegistry {
                 run_id: run_id.to_string(),
             })?;
 
-        if run.execution_plan_id.as_deref() == Some(plan_id)
-            && execution_state_matches(run.state.clone(), complete_immediately)
+        if run.execution_plan_id.as_deref() == Some(plan_id) && execution_state_matches(&run.state)
         {
             transaction.commit()?;
             return Ok(run);
         }
 
         run.execution_plan_id = Some(plan_id.to_string());
-        if let Some(submit_request_id) = submit_request_id {
-            run.submit_request_id = Some(submit_request_id.to_string());
-        }
-        transition_run_state(
-            &mut run,
-            if complete_immediately {
-                RuntimeRunState::Completed
-            } else {
-                RuntimeRunState::Submitted
-            },
-        )?;
+        run.submit_request_id = Some(submit_request_id.to_string());
+        transition_run_state(&mut run, RuntimeRunState::Submitted)?;
         run.updated_at = now_rfc3339();
         run.failure_code = None;
         run.failure_message = None;
+
+        update_run(&transaction, &run)?;
+        transaction.commit()?;
+        Ok(run)
+    }
+
+    pub fn apply_receipt(
+        &self,
+        run_id: &str,
+        receipt_id: &str,
+    ) -> Result<RuntimeRunRecord, StrategyRegistryError> {
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        let mut run =
+            load_run(&transaction, run_id)?.ok_or_else(|| StrategyRegistryError::RunNotFound {
+                run_id: run_id.to_string(),
+            })?;
+
+        if run.receipt_id.as_deref() == Some(receipt_id) && receipt_state_matches(&run.state) {
+            transaction.commit()?;
+            return Ok(run);
+        }
+
+        run.receipt_id = Some(receipt_id.to_string());
+        transition_run_state(&mut run, RuntimeRunState::ReceiptPending)?;
+        run.updated_at = now_rfc3339();
+        run.failure_code = None;
+        run.failure_message = None;
+
+        update_run(&transaction, &run)?;
+        transaction.commit()?;
+        Ok(run)
+    }
+
+    pub fn apply_reconciliation_result(
+        &self,
+        run_id: &str,
+        status: protocol::RuntimeReconciliationStatus,
+        failure_code: Option<&str>,
+        failure_message: Option<&str>,
+    ) -> Result<RuntimeRunRecord, StrategyRegistryError> {
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        let mut run =
+            load_run(&transaction, run_id)?.ok_or_else(|| StrategyRegistryError::RunNotFound {
+                run_id: run_id.to_string(),
+            })?;
+
+        if reconciliation_state_matches(&run.state, &status) {
+            transaction.commit()?;
+            return Ok(run);
+        }
+
+        match status {
+            protocol::RuntimeReconciliationStatus::Passed => {
+                transition_run_state(&mut run, RuntimeRunState::Reconciled)?;
+                transition_run_state(&mut run, RuntimeRunState::Completed)?;
+                run.failure_code = None;
+                run.failure_message = None;
+            }
+            protocol::RuntimeReconciliationStatus::NeedsManualReview => {
+                transition_run_state(&mut run, RuntimeRunState::Reconciled)?;
+                transition_run_state(&mut run, RuntimeRunState::NeedsManualReview)?;
+                run.failure_code = Some(
+                    failure_code
+                        .unwrap_or("reconciliation-needs-manual-review")
+                        .to_string(),
+                );
+                run.failure_message = Some(
+                    failure_message
+                        .unwrap_or("reconciliation requires manual review")
+                        .to_string(),
+                );
+            }
+            protocol::RuntimeReconciliationStatus::Failed => {
+                transition_run_state(&mut run, RuntimeRunState::Failed)?;
+                run.failure_code =
+                    Some(failure_code.unwrap_or("reconciliation-failed").to_string());
+                run.failure_message = Some(
+                    failure_message
+                        .unwrap_or("reconciliation failed")
+                        .to_string(),
+                );
+            }
+        }
+        run.updated_at = now_rfc3339();
 
         update_run(&transaction, &run)?;
         transaction.commit()?;
@@ -748,18 +823,53 @@ fn run_state_matches_verdict(state: &RuntimeRunState, verdict: &RuntimeRiskDecis
         (state, verdict),
         (RuntimeRunState::Planned, RuntimeRiskDecision::Allow)
             | (RuntimeRunState::Submitted, RuntimeRiskDecision::Allow)
+            | (RuntimeRunState::ReceiptPending, RuntimeRiskDecision::Allow)
+            | (
+                RuntimeRunState::NeedsManualReview,
+                RuntimeRiskDecision::Allow
+            )
             | (RuntimeRunState::Completed, RuntimeRiskDecision::Allow)
             | (RuntimeRunState::Rejected, RuntimeRiskDecision::Reject)
             | (RuntimeRunState::Killed, RuntimeRiskDecision::Pause)
     )
 }
 
-fn execution_state_matches(state: RuntimeRunState, complete_immediately: bool) -> bool {
-    if complete_immediately {
-        state == RuntimeRunState::Completed
-    } else {
-        state == RuntimeRunState::Submitted
-    }
+fn execution_state_matches(state: &RuntimeRunState) -> bool {
+    matches!(
+        state,
+        RuntimeRunState::Submitted
+            | RuntimeRunState::ReceiptPending
+            | RuntimeRunState::Completed
+            | RuntimeRunState::NeedsManualReview
+    )
+}
+
+fn receipt_state_matches(state: &RuntimeRunState) -> bool {
+    matches!(
+        state,
+        RuntimeRunState::ReceiptPending
+            | RuntimeRunState::Completed
+            | RuntimeRunState::NeedsManualReview
+    )
+}
+
+fn reconciliation_state_matches(
+    state: &RuntimeRunState,
+    status: &protocol::RuntimeReconciliationStatus,
+) -> bool {
+    matches!(
+        (state, status),
+        (
+            RuntimeRunState::Completed,
+            protocol::RuntimeReconciliationStatus::Passed
+        ) | (
+            RuntimeRunState::NeedsManualReview,
+            protocol::RuntimeReconciliationStatus::NeedsManualReview,
+        ) | (
+            RuntimeRunState::Failed,
+            protocol::RuntimeReconciliationStatus::Failed
+        )
+    )
 }
 
 fn select_feature_snapshot(
@@ -1263,10 +1373,25 @@ mod tests {
             })
             .expect("allow verdict to apply");
 
-        let completed = registry
-            .apply_execution_plan(&planned.run_id, "plan_123", None, true)
+        let submitted = registry
+            .apply_execution_plan(&planned.run_id, "plan_123", "submit_123")
             .expect("plan to apply");
+        let receipt_pending = registry
+            .apply_receipt(&planned.run_id, "receipt_123")
+            .expect("receipt to apply");
+        let completed = registry
+            .apply_reconciliation_result(
+                &planned.run_id,
+                protocol::RuntimeReconciliationStatus::Passed,
+                None,
+                None,
+            )
+            .expect("reconciliation to apply");
 
+        assert_eq!(submitted.state, RuntimeRunState::Submitted);
+        assert_eq!(submitted.submit_request_id.as_deref(), Some("submit_123"));
+        assert_eq!(receipt_pending.state, RuntimeRunState::ReceiptPending);
+        assert_eq!(receipt_pending.receipt_id.as_deref(), Some("receipt_123"));
         assert_eq!(completed.state, RuntimeRunState::Completed);
         assert_eq!(completed.execution_plan_id.as_deref(), Some("plan_123"));
     }
