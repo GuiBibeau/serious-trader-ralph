@@ -5,4 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+feature-cache = { path = "../feature-cache" }
 protocol = { path = "../protocol" }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10.9"
+thiserror.workspace = true
+time = { version = "=0.3.44", features = ["formatting", "parsing"] }

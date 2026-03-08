@@ -142,6 +142,7 @@ The first private route family is intentionally small:
 - `POST /api/internal/runtime/deployments/:id/resume`
 - `POST /api/internal/runtime/deployments/:id/kill`
 - `GET /api/internal/runtime/runs/:deploymentId`
+- `GET /api/internal/runtime/risk?deploymentId=:deploymentId`
 - `GET /api/internal/runtime/positions`
 - `GET /api/internal/runtime/pnl`
 - `GET /api/internal/runtime/health`

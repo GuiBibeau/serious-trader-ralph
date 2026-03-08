@@ -5,8 +5,9 @@ use std::{
 
 use feature_cache::{DerivedMarketFeatureSnapshot, FeatureCacheSnapshot};
 use protocol::{
-    RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeMode, RuntimeRunRecord,
-    RuntimeRunState, RuntimeTrigger, RuntimeTriggerKind, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeMode, RuntimeRiskDecision,
+    RuntimeRiskVerdict, RuntimeRunRecord, RuntimeRunState, RuntimeTrigger, RuntimeTriggerKind,
+    RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -114,6 +115,14 @@ pub enum StrategyRegistryError {
     FeatureStreamStale { symbol: String, reasons: String },
     #[error("invalid observedAt timestamp: {0}")]
     InvalidObservedAt(String),
+    #[error("run {run_id} not found")]
+    RunNotFound { run_id: String },
+    #[error("invalid run transition for {run_id}: {from_state:?} -> {to_state:?}")]
+    InvalidRunStateTransition {
+        run_id: String,
+        from_state: RuntimeRunState,
+        to_state: RuntimeRunState,
+    },
 }
 
 impl StrategyRegistry {
@@ -248,6 +257,62 @@ impl StrategyRegistry {
         Ok(runs)
     }
 
+    pub fn get_run(&self, run_id: &str) -> Result<Option<RuntimeRunRecord>, StrategyRegistryError> {
+        let connection = self.open_connection()?;
+        load_run(&connection, run_id)
+    }
+
+    pub fn apply_risk_verdict(
+        &self,
+        verdict: &RuntimeRiskVerdict,
+    ) -> Result<RuntimeRunRecord, StrategyRegistryError> {
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        let mut run = load_run(&transaction, &verdict.run_id)?.ok_or_else(|| {
+            StrategyRegistryError::RunNotFound {
+                run_id: verdict.run_id.clone(),
+            }
+        })?;
+
+        if run.risk_verdict_id.as_deref() == Some(verdict.verdict_id.as_str())
+            && run_state_matches_verdict(&run.state, &verdict.verdict)
+        {
+            transaction.commit()?;
+            return Ok(run);
+        }
+
+        match verdict.verdict {
+            RuntimeRiskDecision::Allow => {
+                if run.state == RuntimeRunState::Pending {
+                    transition_run_state(&mut run, RuntimeRunState::RiskChecked)?;
+                }
+                if run.state == RuntimeRunState::RiskChecked {
+                    transition_run_state(&mut run, RuntimeRunState::Planned)?;
+                }
+            }
+            RuntimeRiskDecision::Reject => {
+                transition_run_state(&mut run, RuntimeRunState::Rejected)?;
+            }
+            RuntimeRiskDecision::Pause => {
+                transition_run_state(&mut run, RuntimeRunState::Killed)?;
+            }
+        }
+
+        run.risk_verdict_id = Some(verdict.verdict_id.clone());
+        run.updated_at = now_rfc3339();
+        if verdict.verdict == RuntimeRiskDecision::Allow {
+            run.failure_code = None;
+            run.failure_message = None;
+        } else if let Some(reason) = verdict.reasons.first() {
+            run.failure_code = Some(reason.code.clone());
+            run.failure_message = Some(reason.message.clone());
+        }
+
+        update_run(&transaction, &run)?;
+        transaction.commit()?;
+        Ok(run)
+    }
+
     pub fn evaluate_shadow_trigger(
         &self,
         deployment_id: &str,
@@ -271,13 +336,6 @@ impl StrategyRegistry {
 
         let feature_snapshot =
             select_feature_snapshot(feature_cache_snapshot, &deployment.pair.symbol)?;
-        if feature_snapshot.stale {
-            return Err(StrategyRegistryError::FeatureStreamStale {
-                symbol: deployment.pair.symbol.clone(),
-                reasons: feature_snapshot.stale_reasons.join(","),
-            });
-        }
-
         let trigger = build_runtime_trigger(trigger, &feature_snapshot)?;
         let run_key = build_run_key(deployment_id, &trigger);
         if let Some(existing_run) = load_run_by_key(&transaction, &run_key)? {
@@ -296,7 +354,7 @@ impl StrategyRegistry {
             deployment_id: deployment_id.to_string(),
             run_key: run_key.clone(),
             trigger,
-            state: RuntimeRunState::Planned,
+            state: RuntimeRunState::Pending,
             planned_at: feature_snapshot.observed_at.clone(),
             updated_at: now_rfc3339(),
             risk_verdict_id: None,
@@ -412,7 +470,9 @@ fn should_fallback_to_tmp(database_path: &Path, error: &StrategyRegistryError) -
         | StrategyRegistryError::DeploymentNotShadow { .. }
         | StrategyRegistryError::FeatureStreamMissing { .. }
         | StrategyRegistryError::FeatureStreamStale { .. }
-        | StrategyRegistryError::InvalidObservedAt(_) => false,
+        | StrategyRegistryError::InvalidObservedAt(_)
+        | StrategyRegistryError::RunNotFound { .. }
+        | StrategyRegistryError::InvalidRunStateTransition { .. } => false,
     }
 }
 
@@ -571,6 +631,44 @@ fn persist_run(
     Ok(())
 }
 
+fn update_run(
+    connection: &Connection,
+    run: &RuntimeRunRecord,
+) -> Result<(), StrategyRegistryError> {
+    connection.execute(
+        "UPDATE runs
+         SET deployment_id = ?2,
+             run_key = ?3,
+             planned_at = ?4,
+             updated_at = ?5,
+             record_json = ?6
+         WHERE run_id = ?1",
+        params![
+            &run.run_id,
+            &run.deployment_id,
+            &run.run_key,
+            &run.planned_at,
+            &run.updated_at,
+            serialize_json(run)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn load_run(
+    connection: &Connection,
+    run_id: &str,
+) -> Result<Option<RuntimeRunRecord>, StrategyRegistryError> {
+    let raw = connection
+        .query_row(
+            "SELECT record_json FROM runs WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(raw.map(|value| deserialize_json(&value)).transpose()?)
+}
+
 fn load_run_by_key(
     connection: &Connection,
     run_key: &str,
@@ -583,6 +681,33 @@ fn load_run_by_key(
         )
         .optional()?;
     Ok(raw.map(|value| deserialize_json(&value)).transpose()?)
+}
+
+fn transition_run_state(
+    run: &mut RuntimeRunRecord,
+    next_state: RuntimeRunState,
+) -> Result<(), StrategyRegistryError> {
+    if run.state == next_state {
+        return Ok(());
+    }
+    if !run.state.can_transition_to(&next_state) {
+        return Err(StrategyRegistryError::InvalidRunStateTransition {
+            run_id: run.run_id.clone(),
+            from_state: run.state.clone(),
+            to_state: next_state,
+        });
+    }
+    run.state = next_state;
+    Ok(())
+}
+
+fn run_state_matches_verdict(state: &RuntimeRunState, verdict: &RuntimeRiskDecision) -> bool {
+    matches!(
+        (state, verdict),
+        (RuntimeRunState::Planned, RuntimeRiskDecision::Allow)
+            | (RuntimeRunState::Rejected, RuntimeRiskDecision::Reject)
+            | (RuntimeRunState::Killed, RuntimeRiskDecision::Pause)
+    )
 }
 
 fn select_feature_snapshot(
@@ -933,6 +1058,7 @@ mod tests {
         assert!(!second.created);
         assert_eq!(first.run.run_key, second.run.run_key);
         assert_eq!(first.run.run_id, second.run.run_id);
+        assert_eq!(first.run.state, RuntimeRunState::Pending);
         assert_eq!(
             registry
                 .list_runs("deployment_shadow")
@@ -943,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_stale_feature_streams() {
+    fn allows_stale_feature_streams_to_progress_to_risk_checks() {
         let registry = registry("stale");
         registry
             .upsert_deployment(&deployment(
@@ -953,14 +1079,98 @@ mod tests {
             ))
             .expect("deployment to store");
 
-        let error = registry
+        let result = registry
             .evaluate_shadow_trigger("deployment_stale", &feature_cache_snapshot(true), None)
-            .expect_err("stale feature stream should fail");
+            .expect("stale feature stream should still create a pending run");
 
-        assert!(matches!(
-            error,
-            StrategyRegistryError::FeatureStreamStale { .. }
-        ));
+        assert!(result.feature_snapshot.stale);
+        assert_eq!(result.run.state, RuntimeRunState::Pending);
+        assert!(result.run.risk_verdict_id.is_none());
+    }
+
+    #[test]
+    fn applies_risk_verdicts_to_runs() {
+        let registry = registry("risk-verdict");
+        registry
+            .upsert_deployment(&deployment(
+                "deployment_shadow",
+                RuntimeMode::Shadow,
+                RuntimeDeploymentState::Shadow,
+            ))
+            .expect("deployment to store");
+
+        let evaluation = registry
+            .evaluate_shadow_trigger("deployment_shadow", &feature_cache_snapshot(false), None)
+            .expect("run to create");
+        let planned = registry
+            .apply_risk_verdict(&RuntimeRiskVerdict {
+                schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                verdict_id: "risk_allow".to_string(),
+                deployment_id: "deployment_shadow".to_string(),
+                run_id: evaluation.run.run_id.clone(),
+                decided_at: "2026-03-07T00:00:06.000Z".to_string(),
+                verdict: RuntimeRiskDecision::Allow,
+                reasons: Vec::new(),
+                observed: protocol::RuntimeRiskObserved {
+                    requested_notional_usd: "5.00".to_string(),
+                    reserved_usd: "5.00".to_string(),
+                    concentration_bps: 500,
+                    feature_age_ms: 100,
+                },
+                limits: protocol::RuntimeRiskLimits {
+                    max_notional_usd: "25.00".to_string(),
+                    max_reserved_usd: "50.00".to_string(),
+                    max_concentration_bps: 3500,
+                    stale_after_ms: 20_000,
+                },
+            })
+            .expect("allow verdict to apply");
+
+        assert_eq!(planned.state, RuntimeRunState::Planned);
+        assert_eq!(planned.risk_verdict_id.as_deref(), Some("risk_allow"));
+
+        let rejected = registry
+            .apply_risk_verdict(&RuntimeRiskVerdict {
+                schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                verdict_id: "risk_reject".to_string(),
+                deployment_id: "deployment_shadow".to_string(),
+                run_id: registry
+                    .evaluate_shadow_trigger(
+                        "deployment_shadow",
+                        &feature_cache_snapshot(false),
+                        Some(ShadowEvaluationTrigger {
+                            observed_at: Some("2026-03-07T00:02:00.000Z".to_string()),
+                            feature_snapshot_id: Some("snapshot_2".to_string()),
+                            ..ShadowEvaluationTrigger::default()
+                        }),
+                    )
+                    .expect("second run to create")
+                    .run
+                    .run_id,
+                decided_at: "2026-03-07T00:02:01.000Z".to_string(),
+                verdict: RuntimeRiskDecision::Reject,
+                reasons: vec![protocol::RuntimeRiskReason {
+                    code: "cooldown_active".to_string(),
+                    message: "cooldown".to_string(),
+                    severity: protocol::RuntimeRiskSeverity::Warn,
+                }],
+                observed: protocol::RuntimeRiskObserved {
+                    requested_notional_usd: "5.00".to_string(),
+                    reserved_usd: "5.00".to_string(),
+                    concentration_bps: 500,
+                    feature_age_ms: 100,
+                },
+                limits: protocol::RuntimeRiskLimits {
+                    max_notional_usd: "25.00".to_string(),
+                    max_reserved_usd: "50.00".to_string(),
+                    max_concentration_bps: 3500,
+                    stale_after_ms: 20_000,
+                },
+            })
+            .expect("reject verdict to apply");
+
+        assert_eq!(rejected.state, RuntimeRunState::Rejected);
+        assert_eq!(rejected.failure_code.as_deref(), Some("cooldown_active"));
     }
 
     #[test]

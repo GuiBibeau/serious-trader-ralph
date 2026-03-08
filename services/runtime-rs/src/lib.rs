@@ -17,18 +17,23 @@ use portfolio_ledger::{
     PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
 };
 use protocol::{RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeRunRecord};
+use risk_engine::{
+    should_pause_runtime, RiskAssessmentInput, RiskEngine, RiskEngineConfig, RiskEngineError,
+    RiskEngineSnapshot,
+};
 use runtime_ops::{health_snapshot, RuntimeConfig};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use strategy_core::SUPPORTED_STRATEGIES;
 use strategy_registry::{
-    ShadowEvaluationResult, ShadowEvaluationTrigger, StrategyRegistry, StrategyRegistryConfig,
-    StrategyRegistryError, StrategyRegistrySnapshot,
+    ShadowEvaluationTrigger, StrategyRegistry, StrategyRegistryConfig, StrategyRegistryError,
+    StrategyRegistrySnapshot,
 };
 use time::OffsetDateTime;
 use tokio::time::{sleep, Duration};
 
 const INTERNAL_RUNTIME_PREFIX: &str = "/api/internal/runtime";
+const RUNTIME_KILL_SWITCH_TAG: &str = "runtime:kill-switch";
 
 type JsonPayload = (StatusCode, Json<Value>);
 type HandlerResult = Result<JsonPayload, JsonPayload>;
@@ -43,6 +48,7 @@ pub struct RuntimeAppState {
     feature_cache: Arc<RwLock<FeatureCache>>,
     strategy_registry: StrategyRegistry,
     portfolio_ledger: PortfolioLedger,
+    risk_engine: RiskEngine,
 }
 
 impl RuntimeAppState {
@@ -63,6 +69,11 @@ impl RuntimeAppState {
         let portfolio_ledger =
             PortfolioLedger::new(PortfolioLedgerConfig::new(config.database_url.clone()))
                 .expect("portfolio ledger to initialize");
+        let risk_engine = RiskEngine::new(RiskEngineConfig::new(
+            config.database_url.clone(),
+            config.feature_stale_after_ms,
+        ))
+        .expect("risk engine to initialize");
         Self {
             config,
             exec_client: ExecClient::from_lookup(|key| env::var(key).ok()),
@@ -72,6 +83,7 @@ impl RuntimeAppState {
             feature_cache,
             strategy_registry,
             portfolio_ledger,
+            risk_engine,
         }
     }
 
@@ -96,6 +108,10 @@ impl RuntimeAppState {
     fn portfolio_ledger_snapshot(&self) -> PortfolioLedgerSnapshot {
         self.portfolio_ledger.snapshot_now()
     }
+
+    fn risk_engine_snapshot(&self) -> RiskEngineSnapshot {
+        self.risk_engine.snapshot_now()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -116,6 +132,7 @@ pub struct RuntimeHealthResponse {
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
+    pub risk_engine: RiskEngineSnapshot,
     pub supported_strategies: Vec<String>,
 }
 
@@ -131,6 +148,7 @@ pub struct RuntimeMetricsResponse {
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
+    pub risk_engine: RiskEngineSnapshot,
     pub supported_strategies: Vec<String>,
 }
 
@@ -183,6 +201,10 @@ pub fn app(config: RuntimeConfig) -> Router {
             get(list_runs_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/risk"),
+            get(risk_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/positions"),
             get(positions_handler),
         )
@@ -196,10 +218,12 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let feature_cache = state.feature_cache_snapshot();
     let strategy_registry = state.strategy_registry_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
+    let risk_engine = state.risk_engine_snapshot();
     let status = if feed_gateway.status == "healthy"
         && feature_cache.status == "healthy"
         && strategy_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
+        && risk_engine.status == "healthy"
     {
         snapshot.status
     } else {
@@ -221,6 +245,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         feature_cache,
         strategy_registry,
         portfolio_ledger,
+        risk_engine,
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
             .map(|strategy| strategy.as_key().to_string())
@@ -239,6 +264,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         feature_cache: state.feature_cache_snapshot(),
         strategy_registry: state.strategy_registry_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
+        risk_engine: state.risk_engine_snapshot(),
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
             .map(|strategy| strategy.as_key().to_string())
@@ -436,7 +462,48 @@ async fn evaluate_deployment_handler(
             request.trigger,
         )
         .map_err(map_registry_error)?;
-    Ok(shadow_evaluation_json(result))
+    let assessment = state
+        .risk_engine
+        .assess_and_store(&RiskAssessmentInput {
+            deployment: result.deployment.clone(),
+            run: result.run.clone(),
+            feature_snapshot: result.feature_snapshot.clone(),
+            ledger_snapshot: state
+                .portfolio_ledger
+                .snapshot_for_deployment(&deployment_id)
+                .map_err(map_ledger_error)?,
+            kill_switch_active: deployment_has_kill_switch(&result.deployment),
+        })
+        .map_err(map_risk_error)?;
+    let run = state
+        .strategy_registry
+        .apply_risk_verdict(&assessment.verdict)
+        .map_err(map_registry_error)?;
+    let (deployment, ledger_snapshot) = if should_pause_runtime(&assessment.verdict) {
+        let previous = Some(result.deployment.clone());
+        let deployment = state
+            .strategy_registry
+            .transition_deployment(&deployment_id, RuntimeDeploymentState::Paused)
+            .map_err(map_registry_error)?;
+        let ledger = sync_ledger_with_rollback(&state, previous, &deployment)?;
+        (deployment, ledger.snapshot)
+    } else {
+        (
+            result.deployment,
+            state
+                .portfolio_ledger
+                .snapshot_for_deployment(&deployment_id)
+                .map_err(map_ledger_error)?,
+        )
+    };
+    Ok(shadow_evaluation_json(
+        result.created,
+        deployment,
+        run,
+        assessment.verdict,
+        result.feature_snapshot,
+        ledger_snapshot,
+    ))
 }
 
 async fn list_runs_handler(
@@ -456,6 +523,28 @@ async fn list_runs_handler(
             "source": "runtime-rs",
             "deploymentId": deployment_id,
             "runs": runs,
+        }),
+    ))
+}
+
+async fn risk_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeDeploymentQuery>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let deployment_id = require_deployment_id(query)?;
+    let verdicts = state
+        .risk_engine
+        .list_verdicts(&deployment_id)
+        .map_err(map_risk_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "deploymentId": deployment_id,
+            "verdicts": verdicts,
         }),
     ))
 }
@@ -505,9 +594,16 @@ async fn pnl_handler(
     ))
 }
 
-fn shadow_evaluation_json(result: ShadowEvaluationResult) -> JsonPayload {
+fn shadow_evaluation_json(
+    created: bool,
+    deployment: RuntimeDeploymentRecord,
+    run: RuntimeRunRecord,
+    risk_verdict: protocol::RuntimeRiskVerdict,
+    feature_snapshot: feature_cache::DerivedMarketFeatureSnapshot,
+    ledger_snapshot: protocol::RuntimeLedgerSnapshot,
+) -> JsonPayload {
     OkJson::with_status(
-        if result.created {
+        if created {
             StatusCode::CREATED
         } else {
             StatusCode::OK
@@ -515,10 +611,12 @@ fn shadow_evaluation_json(result: ShadowEvaluationResult) -> JsonPayload {
         json!({
             "ok": true,
             "source": "runtime-rs",
-            "created": result.created,
-            "deployment": result.deployment,
-            "run": result.run,
-            "featureSnapshot": result.feature_snapshot,
+            "created": created,
+            "deployment": deployment,
+            "run": run,
+            "riskVerdict": risk_verdict,
+            "featureSnapshot": feature_snapshot,
+            "ledger": ledger_snapshot,
         }),
     )
 }
@@ -692,6 +790,24 @@ fn map_registry_error(error: StrategyRegistryError) -> JsonPayload {
             "invalid-trigger",
             json!({ "observedAt": value }),
         ),
+        StrategyRegistryError::RunNotFound { run_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "run-not-found",
+            json!({ "runId": run_id }),
+        ),
+        StrategyRegistryError::InvalidRunStateTransition {
+            run_id,
+            from_state,
+            to_state,
+        } => error_json(
+            StatusCode::CONFLICT,
+            "invalid-run-state-transition",
+            json!({
+                "runId": run_id,
+                "fromState": from_state,
+                "toState": to_state,
+            }),
+        ),
         StrategyRegistryError::Io(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-registry-error",
@@ -708,6 +824,43 @@ fn map_registry_error(error: StrategyRegistryError) -> JsonPayload {
             json!({ "reason": error.to_string() }),
         ),
     }
+}
+
+fn map_risk_error(error: RiskEngineError) -> JsonPayload {
+    match error {
+        RiskEngineError::InvalidUsdAmount { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-risk-amount",
+            json!({ "field": field, "value": value }),
+        ),
+        RiskEngineError::InvalidTimestamp { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-risk-timestamp",
+            json!({ "field": field, "value": value }),
+        ),
+        RiskEngineError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-risk-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        RiskEngineError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-risk-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        RiskEngineError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-risk-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn deployment_has_kill_switch(deployment: &RuntimeDeploymentRecord) -> bool {
+    deployment
+        .tags
+        .iter()
+        .any(|tag| tag.eq_ignore_ascii_case(RUNTIME_KILL_SWITCH_TAG))
 }
 
 fn map_ledger_error(error: PortfolioLedgerError) -> JsonPayload {
@@ -1035,6 +1188,8 @@ mod tests {
         assert_eq!(payload.strategy_registry.deployment_count, 0);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.portfolio_ledger.deployment_count, 0);
+        assert_eq!(payload.risk_engine.status, "healthy");
+        assert_eq!(payload.risk_engine.verdict_count, 0);
         assert!(payload.internal_service_auth_configured);
     }
 
@@ -1064,6 +1219,7 @@ mod tests {
         assert_eq!(payload.feature_cache.total_market_samples, 1);
         assert_eq!(payload.strategy_registry.status, "healthy");
         assert_eq!(payload.portfolio_ledger.status, "healthy");
+        assert_eq!(payload.risk_engine.status, "healthy");
     }
 
     #[tokio::test]
@@ -1132,6 +1288,15 @@ mod tests {
         assert_eq!(evaluation_payload["ok"], json!(true));
         assert_eq!(evaluation_payload["created"], json!(true));
         assert_eq!(evaluation_payload["run"]["state"], json!("planned"));
+        assert_eq!(evaluation_payload["riskVerdict"]["verdict"], json!("allow"));
+        assert_eq!(
+            evaluation_payload["run"]["riskVerdictId"],
+            evaluation_payload["riskVerdict"]["verdictId"]
+        );
+        assert_eq!(
+            evaluation_payload["ledger"]["totals"]["reservedUsd"],
+            json!("125.00")
+        );
 
         let duplicate_response = router
             .clone()
@@ -1155,6 +1320,7 @@ mod tests {
         );
 
         let runs_response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/internal/runtime/runs/deployment_123")
@@ -1167,6 +1333,109 @@ mod tests {
         assert_eq!(runs_response.status(), StatusCode::OK);
         let runs_payload = read_json(runs_response).await;
         assert_eq!(runs_payload["runs"].as_array().expect("array").len(), 1);
+
+        let risk_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/risk?deploymentId=deployment_123")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(risk_response.status(), StatusCode::OK);
+        let risk_payload = read_json(risk_response).await;
+        assert_eq!(risk_payload["verdicts"].as_array().expect("array").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_runs_when_risk_limits_fail() {
+        let router = app(test_config());
+        let deployment =
+            runtime_deployment("deployment_reject", "sleeve_alpha", "1000.00", "300.00");
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_reject/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(evaluation_payload["run"]["state"], json!("rejected"));
+        assert_eq!(
+            evaluation_payload["riskVerdict"]["verdict"],
+            json!("reject")
+        );
+        assert_eq!(
+            evaluation_payload["run"]["failureCode"],
+            json!("requested_notional_exceeded")
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_switch_tags_pause_the_deployment() {
+        let router = app(test_config());
+        let mut deployment =
+            runtime_deployment("deployment_pause", "sleeve_alpha", "1000.00", "125.00");
+        deployment["tags"] = json!(["fixture", "runtime:kill-switch"]);
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_pause/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(evaluation_payload["run"]["state"], json!("killed"));
+        assert_eq!(evaluation_payload["riskVerdict"]["verdict"], json!("pause"));
+        assert_eq!(evaluation_payload["deployment"]["state"], json!("paused"));
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@ In this phase it remains shadow-only and exposes:
 - public health and metrics endpoints,
 - authenticated internal deployment and run-inspection routes,
 - a runtime-owned SQLite strategy registry,
+- persisted machine-readable risk verdicts and deployment-safe pause behavior,
 - deterministic shadow trigger evaluation backed by the feature cache.
 
 ## Local commands
@@ -72,8 +73,8 @@ curl -fsS http://127.0.0.1:8081/metrics
 
 Expected output is a JSON document describing the service name, environment,
 protocol version, bind address, strategy support, feed freshness contracts,
-slot lag, feature freshness windows, derived signal snapshots, and strategy
-registry status.
+slot lag, feature freshness windows, derived signal snapshots, strategy
+registry status, ledger health, and risk-engine health.
 
 ## Internal routes
 
@@ -93,6 +94,9 @@ Route surface:
 - `POST /api/internal/runtime/deployments/:deploymentId/kill`
 - `POST /api/internal/runtime/deployments/:deploymentId/evaluate`
 - `GET /api/internal/runtime/runs/:deploymentId`
+- `GET /api/internal/runtime/risk?deploymentId=:deploymentId`
+- `GET /api/internal/runtime/positions?deploymentId=:deploymentId`
+- `GET /api/internal/runtime/pnl?deploymentId=:deploymentId`
 
 Example shadow evaluation flow:
 
@@ -109,6 +113,9 @@ curl -fsS http://127.0.0.1:8081/api/internal/runtime/deployments/dep_runtime_sol
   --data '{}'
 
 curl -fsS http://127.0.0.1:8081/api/internal/runtime/runs/dep_runtime_sol_usdc_shadow \
+  -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
+
+curl -fsS "http://127.0.0.1:8081/api/internal/runtime/risk?deploymentId=dep_runtime_sol_usdc_shadow" \
   -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
 ```
 

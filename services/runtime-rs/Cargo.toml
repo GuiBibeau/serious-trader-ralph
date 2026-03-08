@@ -11,6 +11,7 @@ feature-cache = { path = "../../crates/feature-cache" }
 market-adapters = { path = "../../crates/market-adapters" }
 portfolio-ledger = { path = "../../crates/portfolio-ledger" }
 protocol = { path = "../../crates/protocol" }
+risk-engine = { path = "../../crates/risk-engine" }
 runtime-ops = { path = "../../crates/runtime-ops" }
 serde.workspace = true
 serde_json.workspace = true
