@@ -313,6 +313,48 @@ impl StrategyRegistry {
         Ok(run)
     }
 
+    pub fn apply_execution_plan(
+        &self,
+        run_id: &str,
+        plan_id: &str,
+        submit_request_id: Option<&str>,
+        complete_immediately: bool,
+    ) -> Result<RuntimeRunRecord, StrategyRegistryError> {
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        let mut run =
+            load_run(&transaction, run_id)?.ok_or_else(|| StrategyRegistryError::RunNotFound {
+                run_id: run_id.to_string(),
+            })?;
+
+        if run.execution_plan_id.as_deref() == Some(plan_id)
+            && execution_state_matches(run.state.clone(), complete_immediately)
+        {
+            transaction.commit()?;
+            return Ok(run);
+        }
+
+        run.execution_plan_id = Some(plan_id.to_string());
+        if let Some(submit_request_id) = submit_request_id {
+            run.submit_request_id = Some(submit_request_id.to_string());
+        }
+        transition_run_state(
+            &mut run,
+            if complete_immediately {
+                RuntimeRunState::Completed
+            } else {
+                RuntimeRunState::Submitted
+            },
+        )?;
+        run.updated_at = now_rfc3339();
+        run.failure_code = None;
+        run.failure_message = None;
+
+        update_run(&transaction, &run)?;
+        transaction.commit()?;
+        Ok(run)
+    }
+
     pub fn evaluate_shadow_trigger(
         &self,
         deployment_id: &str,
@@ -705,9 +747,19 @@ fn run_state_matches_verdict(state: &RuntimeRunState, verdict: &RuntimeRiskDecis
     matches!(
         (state, verdict),
         (RuntimeRunState::Planned, RuntimeRiskDecision::Allow)
+            | (RuntimeRunState::Submitted, RuntimeRiskDecision::Allow)
+            | (RuntimeRunState::Completed, RuntimeRiskDecision::Allow)
             | (RuntimeRunState::Rejected, RuntimeRiskDecision::Reject)
             | (RuntimeRunState::Killed, RuntimeRiskDecision::Pause)
     )
+}
+
+fn execution_state_matches(state: RuntimeRunState, complete_immediately: bool) -> bool {
+    if complete_immediately {
+        state == RuntimeRunState::Completed
+    } else {
+        state == RuntimeRunState::Submitted
+    }
 }
 
 fn select_feature_snapshot(
@@ -1171,6 +1223,52 @@ mod tests {
 
         assert_eq!(rejected.state, RuntimeRunState::Rejected);
         assert_eq!(rejected.failure_code.as_deref(), Some("cooldown_active"));
+    }
+
+    #[test]
+    fn applies_execution_plans_to_allowed_runs() {
+        let registry = registry("execution-plan");
+        registry
+            .upsert_deployment(&deployment(
+                "deployment_shadow",
+                RuntimeMode::Shadow,
+                RuntimeDeploymentState::Shadow,
+            ))
+            .expect("deployment to store");
+
+        let evaluation = registry
+            .evaluate_shadow_trigger("deployment_shadow", &feature_cache_snapshot(false), None)
+            .expect("run to create");
+        let planned = registry
+            .apply_risk_verdict(&RuntimeRiskVerdict {
+                schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                verdict_id: "risk_allow".to_string(),
+                deployment_id: "deployment_shadow".to_string(),
+                run_id: evaluation.run.run_id.clone(),
+                decided_at: "2026-03-07T00:00:06.000Z".to_string(),
+                verdict: RuntimeRiskDecision::Allow,
+                reasons: Vec::new(),
+                observed: protocol::RuntimeRiskObserved {
+                    requested_notional_usd: "5.00".to_string(),
+                    reserved_usd: "5.00".to_string(),
+                    concentration_bps: 500,
+                    feature_age_ms: 100,
+                },
+                limits: protocol::RuntimeRiskLimits {
+                    max_notional_usd: "25.00".to_string(),
+                    max_reserved_usd: "50.00".to_string(),
+                    max_concentration_bps: 3500,
+                    stale_after_ms: 20_000,
+                },
+            })
+            .expect("allow verdict to apply");
+
+        let completed = registry
+            .apply_execution_plan(&planned.run_id, "plan_123", None, true)
+            .expect("plan to apply");
+
+        assert_eq!(completed.state, RuntimeRunState::Completed);
+        assert_eq!(completed.execution_plan_id.as_deref(), Some("plan_123"));
     }
 
     #[test]

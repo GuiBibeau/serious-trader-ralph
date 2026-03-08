@@ -39,6 +39,9 @@ pub struct RuntimeConfig {
     pub log_level: String,
     pub protocol_version: String,
     pub internal_service_token: Option<String>,
+    pub worker_api_base: String,
+    pub worker_execution_plan_path: String,
+    pub worker_health_path: String,
     pub database_url: String,
     pub feed_provider: String,
     pub feed_websocket_url: String,
@@ -81,6 +84,14 @@ impl RuntimeConfig {
             internal_service_token: lookup("RUNTIME_INTERNAL_SERVICE_TOKEN")
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            worker_api_base: lookup("RUNTIME_WORKER_API_BASE")
+                .unwrap_or_else(|| "http://127.0.0.1:8888".to_string())
+                .trim_end_matches('/')
+                .to_string(),
+            worker_execution_plan_path: lookup("RUNTIME_WORKER_EXECUTION_PLAN_PATH")
+                .unwrap_or_else(|| "/api/internal/runtime/execution-plans".to_string()),
+            worker_health_path: lookup("RUNTIME_WORKER_HEALTH_PATH")
+                .unwrap_or_else(|| "/api/internal/runtime/health".to_string()),
             database_url: lookup("RUNTIME_DATABASE_URL")
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
@@ -170,6 +181,12 @@ mod tests {
         assert_eq!(config.environment, RuntimeEnvironment::Local);
         assert_eq!(config.protocol_version, "v1");
         assert_eq!(config.internal_service_token, None);
+        assert_eq!(config.worker_api_base, "http://127.0.0.1:8888");
+        assert_eq!(
+            config.worker_execution_plan_path,
+            "/api/internal/runtime/execution-plans"
+        );
+        assert_eq!(config.worker_health_path, "/api/internal/runtime/health");
         assert_eq!(
             config.database_url,
             ".tmp/runtime-rs/strategy-registry.sqlite3"
@@ -193,6 +210,11 @@ mod tests {
             "RUNTIME_RS_ENV" => Some("preview".to_string()),
             "RUNTIME_RS_LOG" => Some("debug".to_string()),
             "RUNTIME_INTERNAL_SERVICE_TOKEN" => Some("runtime-token".to_string()),
+            "RUNTIME_WORKER_API_BASE" => Some("https://worker.preview.internal".to_string()),
+            "RUNTIME_WORKER_EXECUTION_PLAN_PATH" => {
+                Some("/api/internal/runtime/execution-plans".to_string())
+            }
+            "RUNTIME_WORKER_HEALTH_PATH" => Some("/api/internal/runtime/health".to_string()),
             "RUNTIME_DATABASE_URL" => Some("/tmp/runtime-state.sqlite3".to_string()),
             "RUNTIME_FEED_PROVIDER" => Some("jupiter".to_string()),
             "RUNTIME_FEED_WS_URL" => Some("wss://feeds.jupiter.example/runtime".to_string()),
@@ -217,6 +239,12 @@ mod tests {
             config.internal_service_token.as_deref(),
             Some("runtime-token")
         );
+        assert_eq!(config.worker_api_base, "https://worker.preview.internal");
+        assert_eq!(
+            config.worker_execution_plan_path,
+            "/api/internal/runtime/execution-plans"
+        );
+        assert_eq!(config.worker_health_path, "/api/internal/runtime/health");
         assert_eq!(config.database_url, "/tmp/runtime-state.sqlite3");
         assert_eq!(config.feed_provider, "jupiter");
         assert_eq!(

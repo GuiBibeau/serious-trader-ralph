@@ -1,7 +1,4 @@
-use std::{
-    env,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use axum::{
     body::Bytes,
@@ -10,7 +7,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use exec_client::ExecClient;
+use exec_client::{ExecClient, ExecClientConfig, ExecClientError, ExecSubmitResponse};
+use execution_planner::{
+    ExecutionPlanner, ExecutionPlannerConfig, ExecutionPlannerError, ExecutionPlannerInput,
+    ExecutionPlannerSnapshot,
+};
 use feature_cache::{FeatureCache, FeatureCacheConfig, FeatureCacheSnapshot};
 use market_adapters::{FeedGateway, FeedGatewayConfig, FeedGatewaySnapshot, FeedReplayFixture};
 use portfolio_ledger::{
@@ -49,6 +50,7 @@ pub struct RuntimeAppState {
     strategy_registry: StrategyRegistry,
     portfolio_ledger: PortfolioLedger,
     risk_engine: RiskEngine,
+    execution_planner: ExecutionPlanner,
 }
 
 impl RuntimeAppState {
@@ -74,9 +76,18 @@ impl RuntimeAppState {
             config.feature_stale_after_ms,
         ))
         .expect("risk engine to initialize");
+        let execution_planner =
+            ExecutionPlanner::new(ExecutionPlannerConfig::new(config.database_url.clone()))
+                .expect("execution planner to initialize");
+        let exec_client = ExecClient::new(ExecClientConfig {
+            api_base: config.worker_api_base.clone(),
+            submit_path: config.worker_execution_plan_path.clone(),
+            health_path: config.worker_health_path.clone(),
+            service_auth_token: config.internal_service_token.clone(),
+        });
         Self {
             config,
-            exec_client: ExecClient::from_lookup(|key| env::var(key).ok()),
+            exec_client,
             feed_bootstrap_source,
             feed_bootstrap_error,
             feed_gateway,
@@ -84,6 +95,7 @@ impl RuntimeAppState {
             strategy_registry,
             portfolio_ledger,
             risk_engine,
+            execution_planner,
         }
     }
 
@@ -112,6 +124,10 @@ impl RuntimeAppState {
     fn risk_engine_snapshot(&self) -> RiskEngineSnapshot {
         self.risk_engine.snapshot_now()
     }
+
+    fn execution_planner_snapshot(&self) -> ExecutionPlannerSnapshot {
+        self.execution_planner.snapshot_now()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -133,6 +149,7 @@ pub struct RuntimeHealthResponse {
     pub strategy_registry: StrategyRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub risk_engine: RiskEngineSnapshot,
+    pub execution_planner: ExecutionPlannerSnapshot,
     pub supported_strategies: Vec<String>,
 }
 
@@ -149,6 +166,7 @@ pub struct RuntimeMetricsResponse {
     pub strategy_registry: StrategyRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub risk_engine: RiskEngineSnapshot,
+    pub execution_planner: ExecutionPlannerSnapshot,
     pub supported_strategies: Vec<String>,
 }
 
@@ -201,6 +219,10 @@ pub fn app(config: RuntimeConfig) -> Router {
             get(list_runs_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/execution-plans"),
+            get(execution_plans_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/risk"),
             get(risk_handler),
         )
@@ -219,11 +241,13 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let strategy_registry = state.strategy_registry_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
     let risk_engine = state.risk_engine_snapshot();
+    let execution_planner = state.execution_planner_snapshot();
     let status = if feed_gateway.status == "healthy"
         && feature_cache.status == "healthy"
         && strategy_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
         && risk_engine.status == "healthy"
+        && execution_planner.status == "healthy"
     {
         snapshot.status
     } else {
@@ -246,6 +270,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         strategy_registry,
         portfolio_ledger,
         risk_engine,
+        execution_planner,
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
             .map(|strategy| strategy.as_key().to_string())
@@ -265,6 +290,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         strategy_registry: state.strategy_registry_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
         risk_engine: state.risk_engine_snapshot(),
+        execution_planner: state.execution_planner_snapshot(),
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
             .map(|strategy| strategy.as_key().to_string())
@@ -479,6 +505,63 @@ async fn evaluate_deployment_handler(
         .strategy_registry
         .apply_risk_verdict(&assessment.verdict)
         .map_err(map_registry_error)?;
+    let mut execution_plan = None;
+    let mut coordination = None;
+    let mut coordinated_run = run.clone();
+    let ledger_snapshot = state
+        .portfolio_ledger
+        .snapshot_for_deployment(&deployment_id)
+        .map_err(map_ledger_error)?;
+
+    if assessment.verdict.verdict == protocol::RuntimeRiskDecision::Allow {
+        if let Some(plan_id) = coordinated_run.execution_plan_id.as_deref() {
+            execution_plan = Some(
+                state
+                    .execution_planner
+                    .get_plan(plan_id)
+                    .map_err(map_execution_planner_error)?
+                    .ok_or_else(|| {
+                        error_json(
+                            StatusCode::NOT_FOUND,
+                            "execution-plan-not-found",
+                            json!({ "planId": plan_id }),
+                        )
+                    })?,
+            );
+        } else {
+            let planning = state
+                .execution_planner
+                .plan_and_store(&ExecutionPlannerInput {
+                    deployment: result.deployment.clone(),
+                    run: coordinated_run.clone(),
+                    feature_snapshot: result.feature_snapshot.clone(),
+                    ledger_snapshot: ledger_snapshot.clone(),
+                    risk_verdict: assessment.verdict.clone(),
+                })
+                .map_err(map_execution_planner_error)?;
+            let plan = planning.plan;
+            let submit = state
+                .exec_client
+                .submit_plan(&plan)
+                .await
+                .map_err(map_exec_client_error)?;
+            coordinated_run = state
+                .strategy_registry
+                .apply_execution_plan(
+                    &coordinated_run.run_id,
+                    &plan.plan_id,
+                    if plan.dry_run {
+                        None
+                    } else {
+                        Some(plan.idempotency_key.as_str())
+                    },
+                    plan.dry_run,
+                )
+                .map_err(map_registry_error)?;
+            execution_plan = Some(plan);
+            coordination = Some(submit);
+        }
+    }
     let (deployment, ledger_snapshot) = if should_pause_runtime(&assessment.verdict) {
         let previous = Some(result.deployment.clone());
         let deployment = state
@@ -496,14 +579,16 @@ async fn evaluate_deployment_handler(
                 .map_err(map_ledger_error)?,
         )
     };
-    Ok(shadow_evaluation_json(
-        result.created,
+    Ok(shadow_evaluation_json(ShadowEvaluationResponse {
+        created: result.created,
         deployment,
-        run,
-        assessment.verdict,
-        result.feature_snapshot,
+        run: coordinated_run,
+        risk_verdict: assessment.verdict,
+        feature_snapshot: result.feature_snapshot,
         ledger_snapshot,
-    ))
+        execution_plan,
+        coordination,
+    }))
 }
 
 async fn list_runs_handler(
@@ -545,6 +630,28 @@ async fn risk_handler(
             "source": "runtime-rs",
             "deploymentId": deployment_id,
             "verdicts": verdicts,
+        }),
+    ))
+}
+
+async fn execution_plans_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeDeploymentQuery>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let deployment_id = require_deployment_id(query)?;
+    let plans = state
+        .execution_planner
+        .list_plans(&deployment_id)
+        .map_err(map_execution_planner_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "deploymentId": deployment_id,
+            "plans": plans,
         }),
     ))
 }
@@ -594,16 +701,20 @@ async fn pnl_handler(
     ))
 }
 
-fn shadow_evaluation_json(
+struct ShadowEvaluationResponse {
     created: bool,
     deployment: RuntimeDeploymentRecord,
     run: RuntimeRunRecord,
     risk_verdict: protocol::RuntimeRiskVerdict,
     feature_snapshot: feature_cache::DerivedMarketFeatureSnapshot,
     ledger_snapshot: protocol::RuntimeLedgerSnapshot,
-) -> JsonPayload {
+    execution_plan: Option<protocol::RuntimeExecutionPlan>,
+    coordination: Option<ExecSubmitResponse>,
+}
+
+fn shadow_evaluation_json(payload: ShadowEvaluationResponse) -> JsonPayload {
     OkJson::with_status(
-        if created {
+        if payload.created {
             StatusCode::CREATED
         } else {
             StatusCode::OK
@@ -611,12 +722,14 @@ fn shadow_evaluation_json(
         json!({
             "ok": true,
             "source": "runtime-rs",
-            "created": created,
-            "deployment": deployment,
-            "run": run,
-            "riskVerdict": risk_verdict,
-            "featureSnapshot": feature_snapshot,
-            "ledger": ledger_snapshot,
+            "created": payload.created,
+            "deployment": payload.deployment,
+            "run": payload.run,
+            "riskVerdict": payload.risk_verdict,
+            "featureSnapshot": payload.feature_snapshot,
+            "ledger": payload.ledger_snapshot,
+            "executionPlan": payload.execution_plan,
+            "coordination": payload.coordination,
         }),
     )
 }
@@ -856,6 +969,57 @@ fn map_risk_error(error: RiskEngineError) -> JsonPayload {
     }
 }
 
+fn map_execution_planner_error(error: ExecutionPlannerError) -> JsonPayload {
+    match error {
+        ExecutionPlannerError::InvalidUsdAmount { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-execution-plan-amount",
+            json!({ "field": field, "value": value }),
+        ),
+        ExecutionPlannerError::InvalidNumericValue { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-execution-plan-number",
+            json!({ "field": field, "value": value }),
+        ),
+        ExecutionPlannerError::RiskNotAllowed { verdict_id } => error_json(
+            StatusCode::CONFLICT,
+            "risk-not-allowed",
+            json!({ "verdictId": verdict_id }),
+        ),
+        ExecutionPlannerError::PlanNotFound { plan_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "execution-plan-not-found",
+            json!({ "planId": plan_id }),
+        ),
+        ExecutionPlannerError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-execution-plan-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        ExecutionPlannerError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-execution-plan-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        ExecutionPlannerError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-execution-plan-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn map_exec_client_error(error: ExecClientError) -> JsonPayload {
+    error_json(
+        StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_GATEWAY),
+        "runtime-exec-coordination-error",
+        json!({
+            "code": error.code,
+            "message": error.message,
+        }),
+    )
+}
+
 fn deployment_has_kill_switch(deployment: &RuntimeDeploymentRecord) -> bool {
     deployment
         .tags
@@ -1079,35 +1243,109 @@ fn apply_fixture(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use axum::{
         body::Body,
-        http::{Request, StatusCode},
+        extract::State,
+        http::{HeaderMap, Request, StatusCode},
+        routing::{get, post},
+        Json, Router,
     };
     use http_body_util::BodyExt;
+    use tokio::net::TcpListener;
     use tower::ServiceExt;
 
     use super::*;
+
+    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
     fn temp_database_url(test_name: &str) -> String {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
+        let sequence = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir()
-            .join(format!("runtime-rs-{test_name}-{unique}.sqlite3"))
+            .join(format!(
+                "runtime-rs-{test_name}-{unique}-{sequence}.sqlite3"
+            ))
             .display()
             .to_string()
     }
 
+    #[derive(Clone)]
+    struct ExecStubState {
+        expected_auth: String,
+    }
+
     fn test_config() -> RuntimeConfig {
+        test_config_with_worker_api_base(None)
+    }
+
+    fn test_config_with_worker_api_base(worker_api_base: Option<&str>) -> RuntimeConfig {
         RuntimeConfig::from_lookup(|key| match key {
             "RUNTIME_INTERNAL_SERVICE_TOKEN" => Some("runtime-service-secret".to_string()),
+            "RUNTIME_WORKER_API_BASE" => worker_api_base.map(str::to_string),
             "RUNTIME_DATABASE_URL" => Some(temp_database_url("config")),
             _ => None,
         })
         .expect("config to load")
+    }
+
+    async fn spawn_exec_coordination_stub() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener to bind");
+        let address = listener.local_addr().expect("local addr");
+        let app = Router::new()
+            .route(
+                "/api/internal/runtime/health",
+                get(|| async { Json(json!({ "ok": true, "source": "test-stub" })) }),
+            )
+            .route(
+                "/api/internal/runtime/execution-plans",
+                post(
+                    |State(state): State<ExecStubState>,
+                     headers: HeaderMap,
+                     Json(plan): Json<protocol::RuntimeExecutionPlan>| async move {
+                        assert_eq!(
+                            headers
+                                .get("authorization")
+                                .and_then(|value| value.to_str().ok()),
+                            Some(state.expected_auth.as_str())
+                        );
+                        (
+                            StatusCode::ACCEPTED,
+                            Json(json!({
+                                "ok": true,
+                                "accepted": true,
+                                "source": "test-stub",
+                                "coordination": {
+                                    "planId": plan.plan_id,
+                                    "deploymentId": plan.deployment_id,
+                                    "runId": plan.run_id,
+                                    "mode": plan.mode,
+                                    "lane": plan.lane,
+                                    "sliceCount": plan.slices.len(),
+                                }
+                            })),
+                        )
+                    },
+                ),
+            )
+            .with_state(ExecStubState {
+                expected_auth: "Bearer runtime-service-secret".to_string(),
+            });
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("exec stub to serve");
+        });
+        format!("http://{address}")
     }
 
     fn runtime_deployment(
@@ -1190,6 +1428,8 @@ mod tests {
         assert_eq!(payload.portfolio_ledger.deployment_count, 0);
         assert_eq!(payload.risk_engine.status, "healthy");
         assert_eq!(payload.risk_engine.verdict_count, 0);
+        assert_eq!(payload.execution_planner.status, "healthy");
+        assert_eq!(payload.execution_planner.plan_count, 0);
         assert!(payload.internal_service_auth_configured);
     }
 
@@ -1220,6 +1460,7 @@ mod tests {
         assert_eq!(payload.strategy_registry.status, "healthy");
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.risk_engine.status, "healthy");
+        assert_eq!(payload.execution_planner.status, "healthy");
     }
 
     #[tokio::test]
@@ -1247,7 +1488,8 @@ mod tests {
 
     #[tokio::test]
     async fn stores_and_evaluates_shadow_deployments() {
-        let router = app(test_config());
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let router = app(test_config_with_worker_api_base(Some(&worker_api_base)));
         let deployment = runtime_deployment("deployment_123", "sleeve_alpha", "1000.00", "125.00");
 
         let create_response = router
@@ -1287,7 +1529,7 @@ mod tests {
         let evaluation_payload = read_json(evaluate_response).await;
         assert_eq!(evaluation_payload["ok"], json!(true));
         assert_eq!(evaluation_payload["created"], json!(true));
-        assert_eq!(evaluation_payload["run"]["state"], json!("planned"));
+        assert_eq!(evaluation_payload["run"]["state"], json!("completed"));
         assert_eq!(evaluation_payload["riskVerdict"]["verdict"], json!("allow"));
         assert_eq!(
             evaluation_payload["run"]["riskVerdictId"],
@@ -1297,6 +1539,16 @@ mod tests {
             evaluation_payload["ledger"]["totals"]["reservedUsd"],
             json!("125.00")
         );
+        assert_eq!(evaluation_payload["executionPlan"]["lane"], json!("safe"));
+        assert_eq!(
+            evaluation_payload["executionPlan"]["runId"],
+            evaluation_payload["run"]["runId"]
+        );
+        assert_eq!(
+            evaluation_payload["executionPlan"]["deploymentId"],
+            json!("deployment_123")
+        );
+        assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
 
         let duplicate_response = router
             .clone()
@@ -1335,6 +1587,7 @@ mod tests {
         assert_eq!(runs_payload["runs"].as_array().expect("array").len(), 1);
 
         let risk_response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/internal/runtime/risk?deploymentId=deployment_123")
@@ -1347,6 +1600,20 @@ mod tests {
         assert_eq!(risk_response.status(), StatusCode::OK);
         let risk_payload = read_json(risk_response).await;
         assert_eq!(risk_payload["verdicts"].as_array().expect("array").len(), 1);
+
+        let plans_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/execution-plans?deploymentId=deployment_123")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(plans_response.status(), StatusCode::OK);
+        let plans_payload = read_json(plans_response).await;
+        assert_eq!(plans_payload["plans"].as_array().expect("array").len(), 1);
     }
 
     #[tokio::test]
@@ -1394,6 +1661,7 @@ mod tests {
             evaluation_payload["run"]["failureCode"],
             json!("requested_notional_exceeded")
         );
+        assert_eq!(evaluation_payload["executionPlan"], json!(null));
     }
 
     #[tokio::test]
@@ -1436,6 +1704,7 @@ mod tests {
         assert_eq!(evaluation_payload["run"]["state"], json!("killed"));
         assert_eq!(evaluation_payload["riskVerdict"]["verdict"], json!("pause"));
         assert_eq!(evaluation_payload["deployment"]["state"], json!("paused"));
+        assert_eq!(evaluation_payload["executionPlan"], json!(null));
     }
 
     #[tokio::test]
