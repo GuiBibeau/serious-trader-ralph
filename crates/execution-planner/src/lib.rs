@@ -1,0 +1,937 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use feature_cache::DerivedMarketFeatureSnapshot;
+use protocol::{
+    RuntimeDeploymentRecord, RuntimeExecutionAction, RuntimeExecutionPlan, RuntimeExecutionSlice,
+    RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerSnapshot, RuntimeMode, RuntimeRiskDecision,
+    RuntimeRiskVerdict, RuntimeRunRecord, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use thiserror::Error;
+use time::OffsetDateTime;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionPlannerConfig {
+    pub database_url: String,
+}
+
+impl ExecutionPlannerConfig {
+    #[must_use]
+    pub fn new(database_url: impl Into<String>) -> Self {
+        Self {
+            database_url: database_url.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionPlanner {
+    database_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionPlannerSnapshot {
+    pub status: String,
+    pub plan_count: u64,
+    pub latest_plan_at: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionPlannerInput {
+    pub deployment: RuntimeDeploymentRecord,
+    pub run: RuntimeRunRecord,
+    pub feature_snapshot: DerivedMarketFeatureSnapshot,
+    pub ledger_snapshot: RuntimeLedgerSnapshot,
+    pub risk_verdict: RuntimeRiskVerdict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionPlanningResult {
+    pub plan: RuntimeExecutionPlan,
+    pub created: bool,
+}
+
+#[derive(Debug, Error)]
+pub enum ExecutionPlannerError {
+    #[error("storage io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("storage error: {0}")]
+    Storage(#[from] rusqlite::Error),
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+    #[error("invalid usd amount for {field}: {value}")]
+    InvalidUsdAmount { field: &'static str, value: String },
+    #[error("invalid numeric value for {field}: {value}")]
+    InvalidNumericValue { field: &'static str, value: String },
+    #[error("risk verdict {verdict_id} is not allow")]
+    RiskNotAllowed { verdict_id: String },
+    #[error("execution plan {plan_id} not found")]
+    PlanNotFound { plan_id: String },
+}
+
+impl ExecutionPlanner {
+    pub fn new(config: ExecutionPlannerConfig) -> Result<Self, ExecutionPlannerError> {
+        let requested_path = normalize_database_path(&config.database_url);
+        match Self::initialize_at_path(requested_path.clone()) {
+            Ok(planner) => Ok(planner),
+            Err(error) if should_fallback_to_tmp(&requested_path, &error) => {
+                Self::initialize_at_path(fallback_database_path())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn plan_and_store(
+        &self,
+        input: &ExecutionPlannerInput,
+    ) -> Result<ExecutionPlanningResult, ExecutionPlannerError> {
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+
+        if let Some(existing) = load_plan_by_run_id(&transaction, &input.run.run_id)? {
+            transaction.commit()?;
+            return Ok(ExecutionPlanningResult {
+                plan: existing,
+                created: false,
+            });
+        }
+
+        let plan = build_plan(input)?;
+        persist_plan(&transaction, &plan)?;
+        transaction.commit()?;
+
+        Ok(ExecutionPlanningResult {
+            plan,
+            created: true,
+        })
+    }
+
+    pub fn get_plan(
+        &self,
+        plan_id: &str,
+    ) -> Result<Option<RuntimeExecutionPlan>, ExecutionPlannerError> {
+        let connection = self.open_connection()?;
+        load_plan(&connection, plan_id)
+    }
+
+    pub fn list_plans(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<RuntimeExecutionPlan>, ExecutionPlannerError> {
+        let connection = self.open_connection()?;
+        let mut statement = connection.prepare(
+            "SELECT record_json
+             FROM execution_plans
+             WHERE deployment_id = ?1
+             ORDER BY created_at DESC, plan_id DESC",
+        )?;
+        let rows = statement.query_map(params![deployment_id], |row| row.get::<_, String>(0))?;
+        let mut plans = Vec::new();
+        for row in rows {
+            plans.push(deserialize_json(&row?)?);
+        }
+        Ok(plans)
+    }
+
+    #[must_use]
+    pub fn snapshot_now(&self) -> ExecutionPlannerSnapshot {
+        match self.snapshot_counts() {
+            Ok((plan_count, latest_plan_at)) => ExecutionPlannerSnapshot {
+                status: "healthy".to_string(),
+                plan_count,
+                latest_plan_at,
+                last_error: None,
+            },
+            Err(error) => ExecutionPlannerSnapshot {
+                status: "degraded".to_string(),
+                plan_count: 0,
+                latest_plan_at: None,
+                last_error: Some(error.to_string()),
+            },
+        }
+    }
+
+    fn snapshot_counts(&self) -> Result<(u64, Option<String>), ExecutionPlannerError> {
+        let connection = self.open_connection()?;
+        let plan_count =
+            connection.query_row("SELECT COUNT(*) FROM execution_plans", [], |row| {
+                row.get::<_, u64>(0)
+            })?;
+        let latest_plan_at = connection
+            .query_row(
+                "SELECT created_at
+                 FROM execution_plans
+                 ORDER BY created_at DESC, plan_id DESC
+                 LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok((plan_count, latest_plan_at))
+    }
+
+    fn open_connection(&self) -> Result<Connection, ExecutionPlannerError> {
+        let connection = Connection::open(&self.database_path)?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        Ok(connection)
+    }
+
+    fn initialize_at_path(database_path: PathBuf) -> Result<Self, ExecutionPlannerError> {
+        if database_path != Path::new(":memory:") {
+            if let Some(parent) = database_path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+            {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let planner = Self { database_path };
+        let connection = planner.open_connection()?;
+        initialize_schema(&connection)?;
+        Ok(planner)
+    }
+}
+
+fn initialize_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS execution_plans (
+            plan_id TEXT PRIMARY KEY,
+            deployment_id TEXT NOT NULL,
+            run_id TEXT NOT NULL UNIQUE,
+            lane TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            record_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_execution_plans_deployment_created
+            ON execution_plans (deployment_id, created_at DESC);",
+    )
+}
+
+fn normalize_database_path(database_url: &str) -> PathBuf {
+    let trimmed = database_url.trim();
+    if trimmed.is_empty() {
+        return PathBuf::from(".tmp/runtime-rs/execution-planner.sqlite3");
+    }
+    if let Some(stripped) = trimmed.strip_prefix("sqlite://") {
+        return PathBuf::from(stripped);
+    }
+    if let Some(stripped) = trimmed.strip_prefix("file:") {
+        return PathBuf::from(stripped);
+    }
+    PathBuf::from(trimmed)
+}
+
+fn fallback_database_path() -> PathBuf {
+    std::env::temp_dir()
+        .join("runtime-rs")
+        .join("execution-planner.sqlite3")
+}
+
+fn should_fallback_to_tmp(database_path: &Path, error: &ExecutionPlannerError) -> bool {
+    if database_path == Path::new(":memory:") || database_path == fallback_database_path() {
+        return false;
+    }
+
+    match error {
+        ExecutionPlannerError::Io(inner) => inner.kind() == std::io::ErrorKind::PermissionDenied,
+        ExecutionPlannerError::Storage(inner) => {
+            matches!(
+                inner,
+                rusqlite::Error::SqliteFailure(code, _)
+                    if code.code == rusqlite::ErrorCode::CannotOpen
+            )
+        }
+        ExecutionPlannerError::Serialization(_)
+        | ExecutionPlannerError::InvalidUsdAmount { .. }
+        | ExecutionPlannerError::InvalidNumericValue { .. }
+        | ExecutionPlannerError::RiskNotAllowed { .. }
+        | ExecutionPlannerError::PlanNotFound { .. } => false,
+    }
+}
+
+fn build_plan(
+    input: &ExecutionPlannerInput,
+) -> Result<RuntimeExecutionPlan, ExecutionPlannerError> {
+    if input.risk_verdict.verdict != RuntimeRiskDecision::Allow {
+        return Err(ExecutionPlannerError::RiskNotAllowed {
+            verdict_id: input.risk_verdict.verdict_id.clone(),
+        });
+    }
+
+    let lane = selected_lane(&input.deployment);
+    let (simulate_only, dry_run) = execution_flags(&input.deployment.mode);
+    let notional_cents = desired_notional_cents(&input.deployment)?;
+    let mid_price = parse_decimal(
+        "featureSnapshot.midPriceUsd",
+        &input.feature_snapshot.mid_price_usd,
+    )?;
+    let quote_decimals = balance_decimals(
+        &input.ledger_snapshot.balances,
+        &input.deployment.pair.quote_mint,
+        6,
+    );
+    let base_decimals = balance_decimals(
+        &input.ledger_snapshot.balances,
+        &input.deployment.pair.base_mint,
+        9,
+    );
+    let action = plan_action(input)?;
+    let slippage_bps = input.deployment.policy.max_slippage_bps;
+    let notional_usd = format_usd_cents(notional_cents);
+    let input_amount_atomic = match action {
+        RuntimeExecutionAction::Buy | RuntimeExecutionAction::Rebalance => {
+            atomic_from_usd_cents(notional_cents, quote_decimals)
+        }
+        RuntimeExecutionAction::Sell => {
+            let quantity = ((notional_cents as f64) / 100.0) / mid_price;
+            atomic_from_token_amount(quantity, base_decimals)
+        }
+    };
+    let min_output_amount_atomic = Some(match action {
+        RuntimeExecutionAction::Buy | RuntimeExecutionAction::Rebalance => {
+            let quantity = (((notional_cents as f64) / 100.0) / mid_price)
+                * (1.0 - (f64::from(slippage_bps) / 10_000.0));
+            atomic_from_token_amount(quantity, base_decimals)
+        }
+        RuntimeExecutionAction::Sell => {
+            let output_usd =
+                ((notional_cents as f64) / 100.0) * (1.0 - (f64::from(slippage_bps) / 10_000.0));
+            atomic_from_token_amount(output_usd, quote_decimals)
+        }
+    });
+    let (input_mint, output_mint) = match action {
+        RuntimeExecutionAction::Buy | RuntimeExecutionAction::Rebalance => (
+            input.deployment.pair.quote_mint.clone(),
+            input.deployment.pair.base_mint.clone(),
+        ),
+        RuntimeExecutionAction::Sell => (
+            input.deployment.pair.base_mint.clone(),
+            input.deployment.pair.quote_mint.clone(),
+        ),
+    };
+    let idempotency_key = format!("{}:{}", input.deployment.deployment_id, input.run.run_id);
+
+    Ok(RuntimeExecutionPlan {
+        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+        plan_id: build_plan_id(&idempotency_key),
+        deployment_id: input.deployment.deployment_id.clone(),
+        run_id: input.run.run_id.clone(),
+        created_at: now_rfc3339(),
+        mode: input.deployment.mode.clone(),
+        lane,
+        idempotency_key,
+        simulate_only,
+        dry_run,
+        slices: vec![RuntimeExecutionSlice {
+            slice_id: "slice_1".to_string(),
+            action,
+            input_mint,
+            output_mint,
+            input_amount_atomic,
+            min_output_amount_atomic,
+            notional_usd,
+            slippage_bps,
+        }],
+    })
+}
+
+fn plan_action(
+    input: &ExecutionPlannerInput,
+) -> Result<RuntimeExecutionAction, ExecutionPlannerError> {
+    let signal = input
+        .feature_snapshot
+        .short_return_bps
+        .as_deref()
+        .map(|value| parse_signed_decimal("featureSnapshot.shortReturnBps", value))
+        .transpose()?
+        .unwrap_or(0.0);
+    Ok(match input.deployment.strategy_key.as_str() {
+        "threshold_rebalance" => RuntimeExecutionAction::Rebalance,
+        "trend_following" => {
+            if signal >= 0.0 {
+                RuntimeExecutionAction::Buy
+            } else {
+                RuntimeExecutionAction::Sell
+            }
+        }
+        "mean_reversion" => {
+            if signal >= 0.0 {
+                RuntimeExecutionAction::Sell
+            } else {
+                RuntimeExecutionAction::Buy
+            }
+        }
+        _ => RuntimeExecutionAction::Buy,
+    })
+}
+
+fn selected_lane(deployment: &RuntimeDeploymentRecord) -> RuntimeLane {
+    if deployment.mode == RuntimeMode::Shadow {
+        RuntimeLane::Safe
+    } else {
+        deployment.lane.clone()
+    }
+}
+
+fn execution_flags(mode: &RuntimeMode) -> (bool, bool) {
+    match mode {
+        RuntimeMode::Shadow => (true, true),
+        RuntimeMode::Paper => (false, true),
+        RuntimeMode::Live => (false, false),
+    }
+}
+
+fn desired_notional_cents(
+    deployment: &RuntimeDeploymentRecord,
+) -> Result<i64, ExecutionPlannerError> {
+    let reserved_cents =
+        parse_non_negative_usd_cents("capital.reservedUsd", &deployment.capital.reserved_usd)?;
+    let max_notional_cents =
+        parse_non_negative_usd_cents("policy.maxNotionalUsd", &deployment.policy.max_notional_usd)?;
+    Ok(reserved_cents.min(max_notional_cents))
+}
+
+fn balance_decimals(balances: &[RuntimeLedgerBalance], mint: &str, fallback: u8) -> u8 {
+    balances
+        .iter()
+        .find(|balance| balance.mint == mint)
+        .map(|balance| balance.decimals)
+        .unwrap_or(fallback)
+}
+
+fn atomic_from_usd_cents(cents: i64, decimals: u8) -> String {
+    let multiplier = 10_i128.pow(u32::from(decimals.saturating_sub(2)));
+    (i128::from(cents) * multiplier).to_string()
+}
+
+fn atomic_from_token_amount(amount: f64, decimals: u8) -> String {
+    let scale = 10_f64.powi(i32::from(decimals));
+    amount.max(0.0).mul_add(scale, 0.0).floor().to_string()
+}
+
+fn parse_decimal(field: &'static str, value: &str) -> Result<f64, ExecutionPlannerError> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|parsed| parsed.is_finite() && *parsed >= 0.0)
+        .ok_or_else(|| ExecutionPlannerError::InvalidNumericValue {
+            field,
+            value: value.to_string(),
+        })
+}
+
+fn parse_signed_decimal(field: &'static str, value: &str) -> Result<f64, ExecutionPlannerError> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|parsed| parsed.is_finite())
+        .ok_or_else(|| ExecutionPlannerError::InvalidNumericValue {
+            field,
+            value: value.to_string(),
+        })
+}
+
+fn load_plan(
+    connection: &Connection,
+    plan_id: &str,
+) -> Result<Option<RuntimeExecutionPlan>, ExecutionPlannerError> {
+    let raw = connection
+        .query_row(
+            "SELECT record_json FROM execution_plans WHERE plan_id = ?1",
+            params![plan_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(raw.map(|value| deserialize_json(&value)).transpose()?)
+}
+
+fn load_plan_by_run_id(
+    connection: &Connection,
+    run_id: &str,
+) -> Result<Option<RuntimeExecutionPlan>, ExecutionPlannerError> {
+    let raw = connection
+        .query_row(
+            "SELECT record_json FROM execution_plans WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(raw.map(|value| deserialize_json(&value)).transpose()?)
+}
+
+fn persist_plan(
+    connection: &Connection,
+    plan: &RuntimeExecutionPlan,
+) -> Result<(), ExecutionPlannerError> {
+    connection.execute(
+        "INSERT INTO execution_plans (
+            plan_id,
+            deployment_id,
+            run_id,
+            lane,
+            mode,
+            created_at,
+            record_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            &plan.plan_id,
+            &plan.deployment_id,
+            &plan.run_id,
+            lane_key(&plan.lane),
+            mode_key(&plan.mode),
+            &plan.created_at,
+            serialize_json(plan)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn lane_key(lane: &RuntimeLane) -> &'static str {
+    match lane {
+        RuntimeLane::Safe => "safe",
+        RuntimeLane::Protected => "protected",
+        RuntimeLane::Fast => "fast",
+    }
+}
+
+fn mode_key(mode: &RuntimeMode) -> &'static str {
+    match mode {
+        RuntimeMode::Shadow => "shadow",
+        RuntimeMode::Paper => "paper",
+        RuntimeMode::Live => "live",
+    }
+}
+
+fn build_plan_id(idempotency_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(idempotency_key.as_bytes());
+    let digest = hasher.finalize();
+    format!("plan_{}", hex_encode(&digest[..12]))
+}
+
+fn parse_usd_cents(field: &'static str, value: &str) -> Result<i64, ExecutionPlannerError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ExecutionPlannerError::InvalidUsdAmount {
+            field,
+            value: trimmed.to_string(),
+        });
+    }
+
+    let (sign, digits) = if let Some(rest) = trimmed.strip_prefix('-') {
+        (-1_i64, rest)
+    } else if let Some(rest) = trimmed.strip_prefix('+') {
+        (1_i64, rest)
+    } else {
+        (1_i64, trimmed)
+    };
+
+    let (whole_raw, fraction_raw) = digits.split_once('.').unwrap_or((digits, ""));
+    if whole_raw.is_empty()
+        || !whole_raw
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        || !fraction_raw
+            .chars()
+            .all(|character| character.is_ascii_digit())
+    {
+        return Err(ExecutionPlannerError::InvalidUsdAmount {
+            field,
+            value: trimmed.to_string(),
+        });
+    }
+
+    let whole = whole_raw
+        .parse::<i64>()
+        .map_err(|_| ExecutionPlannerError::InvalidUsdAmount {
+            field,
+            value: trimmed.to_string(),
+        })?;
+    let fraction_bytes = fraction_raw.as_bytes();
+    let tenths = fraction_bytes
+        .first()
+        .map(|digit| i64::from(digit - b'0'))
+        .unwrap_or(0);
+    let hundredths = fraction_bytes
+        .get(1)
+        .map(|digit| i64::from(digit - b'0'))
+        .unwrap_or(0);
+    let mut fraction = tenths * 10 + hundredths;
+    if fraction_bytes.get(2).is_some_and(|digit| *digit >= b'5') {
+        fraction += 1;
+    }
+    let cents = whole
+        .checked_mul(100)
+        .and_then(|value| value.checked_add(fraction))
+        .ok_or_else(|| ExecutionPlannerError::InvalidUsdAmount {
+            field,
+            value: trimmed.to_string(),
+        })?;
+
+    Ok(sign * cents)
+}
+
+fn parse_non_negative_usd_cents(
+    field: &'static str,
+    value: &str,
+) -> Result<i64, ExecutionPlannerError> {
+    let cents = parse_usd_cents(field, value)?;
+    if cents < 0 {
+        return Err(ExecutionPlannerError::InvalidUsdAmount {
+            field,
+            value: value.trim().to_string(),
+        });
+    }
+    Ok(cents)
+}
+
+fn format_usd_cents(value: i64) -> String {
+    let sign = if value < 0 { "-" } else { "" };
+    let absolute = value.abs();
+    format!("{sign}{}.{:02}", absolute / 100, absolute % 100)
+}
+
+fn serialize_json<T: Serialize>(value: &T) -> Result<String, serde_json::Error> {
+    serde_json::to_string(value)
+}
+
+fn deserialize_json<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, serde_json::Error> {
+    serde_json::from_str(raw)
+}
+
+fn hex_encode(input: &[u8]) -> String {
+    let mut output = String::with_capacity(input.len() * 2);
+    for byte in input {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
+}
+
+fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("current time to format")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use protocol::{
+        RuntimeCapital, RuntimeDeploymentState, RuntimeLedgerTotals, RuntimePair, RuntimePolicy,
+        RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason, RuntimeRiskSeverity,
+        RuntimeRunState, RuntimeTrigger, RuntimeTriggerKind,
+    };
+
+    use super::*;
+
+    fn temp_database_url(test_name: &str) -> String {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("execution-planner-{test_name}-{unique}.sqlite3"))
+            .display()
+            .to_string()
+    }
+
+    fn planner(test_name: &str) -> ExecutionPlanner {
+        ExecutionPlanner::new(ExecutionPlannerConfig::new(temp_database_url(test_name)))
+            .expect("planner to initialize")
+    }
+
+    fn deployment(
+        strategy_key: &str,
+        mode: RuntimeMode,
+        lane: RuntimeLane,
+    ) -> RuntimeDeploymentRecord {
+        RuntimeDeploymentRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            deployment_id: "dep_1".to_string(),
+            strategy_key: strategy_key.to_string(),
+            sleeve_id: "sleeve_1".to_string(),
+            owner_user_id: "user_1".to_string(),
+            pair: RuntimePair {
+                symbol: "SOL/USDC".to_string(),
+                base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            },
+            mode,
+            state: RuntimeDeploymentState::Shadow,
+            lane,
+            created_at: "2026-03-07T18:00:00Z".to_string(),
+            updated_at: "2026-03-07T18:00:00Z".to_string(),
+            promoted_at: None,
+            paused_at: None,
+            killed_at: None,
+            policy: RuntimePolicy {
+                max_notional_usd: "25".to_string(),
+                daily_loss_limit_usd: "35".to_string(),
+                max_slippage_bps: 50,
+                max_concurrent_runs: 2,
+                rebalance_tolerance_bps: 100,
+            },
+            capital: RuntimeCapital {
+                allocated_usd: "100".to_string(),
+                reserved_usd: "5".to_string(),
+                available_usd: "95".to_string(),
+            },
+            tags: vec!["fixture".to_string()],
+        }
+    }
+
+    fn run(run_id: &str) -> RuntimeRunRecord {
+        RuntimeRunRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            run_id: run_id.to_string(),
+            deployment_id: "dep_1".to_string(),
+            run_key: format!("dep_1:{run_id}"),
+            trigger: RuntimeTrigger {
+                kind: RuntimeTriggerKind::Signal,
+                source: "test".to_string(),
+                observed_at: "2026-03-07T18:05:00Z".to_string(),
+                feature_snapshot_id: Some("snapshot_1".to_string()),
+                reason: Some("test".to_string()),
+            },
+            state: RuntimeRunState::Planned,
+            planned_at: "2026-03-07T18:05:00Z".to_string(),
+            updated_at: "2026-03-07T18:05:00Z".to_string(),
+            risk_verdict_id: Some("risk_1".to_string()),
+            execution_plan_id: None,
+            submit_request_id: None,
+            receipt_id: None,
+            failure_code: None,
+            failure_message: None,
+        }
+    }
+
+    fn feature_snapshot(short_return_bps: &str) -> DerivedMarketFeatureSnapshot {
+        DerivedMarketFeatureSnapshot {
+            cache_key: "fixture:SOL/USDC".to_string(),
+            symbol: "SOL/USDC".to_string(),
+            source: "fixture".to_string(),
+            last_sequence: 1,
+            observed_at: "2026-03-07T18:05:00Z".to_string(),
+            age_ms: 100,
+            stale: false,
+            stale_reasons: Vec::new(),
+            sample_count: 8,
+            window_short_ms: 10_000,
+            window_long_ms: 25_000,
+            mid_price_usd: "150.00".to_string(),
+            bid_price_usd: Some("149.95".to_string()),
+            ask_price_usd: Some("150.05".to_string()),
+            spread_bps: Some("15.0".to_string()),
+            short_return_bps: Some(short_return_bps.to_string()),
+            long_return_bps: Some("20.0".to_string()),
+            realized_volatility_bps: Some("18.0".to_string()),
+            processed_slot: Some(123),
+            slot_age_ms: Some(100),
+            slot_gap: Some(0),
+            last_ingest_lag_ms: 10,
+        }
+    }
+
+    fn ledger_snapshot() -> RuntimeLedgerSnapshot {
+        RuntimeLedgerSnapshot {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            snapshot_id: "ledger_1".to_string(),
+            deployment_id: "dep_1".to_string(),
+            sleeve_id: "sleeve_1".to_string(),
+            as_of: "2026-03-07T18:05:00Z".to_string(),
+            balances: vec![
+                RuntimeLedgerBalance {
+                    mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    symbol: "USDC".to_string(),
+                    decimals: 6,
+                    free_atomic: "95000000".to_string(),
+                    reserved_atomic: "5000000".to_string(),
+                    price_usd: Some("1.00".to_string()),
+                },
+                RuntimeLedgerBalance {
+                    mint: "So11111111111111111111111111111111111111112".to_string(),
+                    symbol: "SOL".to_string(),
+                    decimals: 9,
+                    free_atomic: "100000000".to_string(),
+                    reserved_atomic: "0".to_string(),
+                    price_usd: Some("150.00".to_string()),
+                },
+            ],
+            positions: Vec::new(),
+            totals: RuntimeLedgerTotals {
+                equity_usd: "100".to_string(),
+                reserved_usd: "5".to_string(),
+                available_usd: "95".to_string(),
+                realized_pnl_usd: "0".to_string(),
+                unrealized_pnl_usd: "0".to_string(),
+            },
+        }
+    }
+
+    fn allow_verdict() -> RuntimeRiskVerdict {
+        RuntimeRiskVerdict {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            verdict_id: "risk_1".to_string(),
+            deployment_id: "dep_1".to_string(),
+            run_id: "run_1".to_string(),
+            decided_at: "2026-03-07T18:05:01Z".to_string(),
+            verdict: RuntimeRiskDecision::Allow,
+            reasons: vec![RuntimeRiskReason {
+                code: "within_limits".to_string(),
+                message: "within limits".to_string(),
+                severity: RuntimeRiskSeverity::Info,
+            }],
+            observed: RuntimeRiskObserved {
+                requested_notional_usd: "5".to_string(),
+                reserved_usd: "5".to_string(),
+                concentration_bps: 500,
+                feature_age_ms: 100,
+            },
+            limits: RuntimeRiskLimits {
+                max_notional_usd: "25".to_string(),
+                max_reserved_usd: "50".to_string(),
+                max_concentration_bps: 3500,
+                stale_after_ms: 5000,
+            },
+        }
+    }
+
+    fn input(
+        run_id: &str,
+        strategy_key: &str,
+        mode: RuntimeMode,
+        lane: RuntimeLane,
+        short_return_bps: &str,
+    ) -> ExecutionPlannerInput {
+        let mut verdict = allow_verdict();
+        verdict.run_id = run_id.to_string();
+        ExecutionPlannerInput {
+            deployment: deployment(strategy_key, mode, lane),
+            run: run(run_id),
+            feature_snapshot: feature_snapshot(short_return_bps),
+            ledger_snapshot: ledger_snapshot(),
+            risk_verdict: verdict,
+        }
+    }
+
+    #[test]
+    fn builds_shadow_dca_plans_deterministically() {
+        let planner = planner("shadow-dca");
+        let result = planner
+            .plan_and_store(&input(
+                "run_1",
+                "dca",
+                RuntimeMode::Shadow,
+                RuntimeLane::Fast,
+                "10.0",
+            ))
+            .expect("plan to store");
+
+        assert!(result.created);
+        assert_eq!(result.plan.lane, RuntimeLane::Safe);
+        assert!(result.plan.simulate_only);
+        assert!(result.plan.dry_run);
+        assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Buy);
+        assert_eq!(result.plan.slices[0].input_amount_atomic, "5000000");
+    }
+
+    #[test]
+    fn preserves_lane_for_paper_mode() {
+        let planner = planner("paper-lane");
+        let result = planner
+            .plan_and_store(&input(
+                "run_2",
+                "dca",
+                RuntimeMode::Paper,
+                RuntimeLane::Protected,
+                "10.0",
+            ))
+            .expect("plan to store");
+
+        assert_eq!(result.plan.lane, RuntimeLane::Protected);
+        assert!(!result.plan.simulate_only);
+        assert!(result.plan.dry_run);
+    }
+
+    #[test]
+    fn trend_following_can_plan_sells() {
+        let planner = planner("sell");
+        let result = planner
+            .plan_and_store(&input(
+                "run_3",
+                "trend_following",
+                RuntimeMode::Paper,
+                RuntimeLane::Fast,
+                "-15.0",
+            ))
+            .expect("plan to store");
+
+        assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Sell);
+        assert_eq!(
+            result.plan.slices[0].input_mint,
+            "So11111111111111111111111111111111111111112"
+        );
+    }
+
+    #[test]
+    fn is_idempotent_for_existing_run_ids() {
+        let planner = planner("idempotent");
+        let first = planner
+            .plan_and_store(&input(
+                "run_4",
+                "dca",
+                RuntimeMode::Shadow,
+                RuntimeLane::Safe,
+                "10.0",
+            ))
+            .expect("first plan");
+        let second = planner
+            .plan_and_store(&input(
+                "run_4",
+                "dca",
+                RuntimeMode::Shadow,
+                RuntimeLane::Safe,
+                "10.0",
+            ))
+            .expect("second plan");
+
+        assert!(first.created);
+        assert!(!second.created);
+        assert_eq!(first.plan.plan_id, second.plan.plan_id);
+    }
+
+    #[test]
+    fn rejects_non_allow_risk_verdicts() {
+        let planner = planner("deny");
+        let mut input = input(
+            "run_5",
+            "dca",
+            RuntimeMode::Shadow,
+            RuntimeLane::Safe,
+            "10.0",
+        );
+        input.risk_verdict.verdict = RuntimeRiskDecision::Reject;
+
+        let error = planner
+            .plan_and_store(&input)
+            .expect_err("rejected verdict should fail");
+
+        assert!(matches!(
+            error,
+            ExecutionPlannerError::RiskNotAllowed { .. }
+        ));
+    }
+}
