@@ -697,7 +697,6 @@ fn parse_usd_cents(field: &'static str, value: &str) -> Result<i64, PortfolioLed
         || !fraction_raw
             .chars()
             .all(|character| character.is_ascii_digit())
-        || fraction_raw.len() > 2
     {
         return Err(PortfolioLedgerError::InvalidUsdAmount {
             field,
@@ -711,16 +710,19 @@ fn parse_usd_cents(field: &'static str, value: &str) -> Result<i64, PortfolioLed
             field,
             value: trimmed.to_string(),
         })?;
-    let fraction = match fraction_raw.len() {
-        0 => Ok(0),
-        1 => fraction_raw.parse::<i64>().map(|value| value * 10),
-        2 => fraction_raw.parse::<i64>(),
-        _ => unreachable!("fraction length checked above"),
+    let fraction_bytes = fraction_raw.as_bytes();
+    let tenths = fraction_bytes
+        .first()
+        .map(|digit| i64::from(digit - b'0'))
+        .unwrap_or(0);
+    let hundredths = fraction_bytes
+        .get(1)
+        .map(|digit| i64::from(digit - b'0'))
+        .unwrap_or(0);
+    let mut fraction = tenths * 10 + hundredths;
+    if fraction_bytes.get(2).is_some_and(|digit| *digit >= b'5') {
+        fraction += 1;
     }
-    .map_err(|_| PortfolioLedgerError::InvalidUsdAmount {
-        field,
-        value: trimmed.to_string(),
-    })?;
 
     let cents = whole
         .checked_mul(100)
@@ -972,5 +974,23 @@ mod tests {
             Some("140.00")
         );
         assert_eq!(snapshot.totals.unrealized_pnl_usd, "2.00");
+    }
+
+    #[test]
+    fn accepts_subcent_precision_and_rounds_to_cents() {
+        let ledger = ledger("subcent");
+
+        let result = ledger
+            .sync_deployment(&deployment(
+                "deployment_1",
+                "sleeve_alpha",
+                "100.005",
+                "5.125",
+            ))
+            .expect("deployment to sync");
+
+        assert_eq!(result.snapshot.totals.equity_usd, "100.01");
+        assert_eq!(result.snapshot.totals.reserved_usd, "5.13");
+        assert_eq!(result.snapshot.totals.available_usd, "94.88");
     }
 }
