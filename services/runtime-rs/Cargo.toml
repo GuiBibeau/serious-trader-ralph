@@ -14,6 +14,7 @@ runtime-ops = { path = "../../crates/runtime-ops" }
 serde.workspace = true
 serde_json.workspace = true
 strategy-core = { path = "../../crates/strategy-core" }
+strategy-registry = { path = "../../crates/strategy-registry" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -1,8 +1,12 @@
 # runtime-rs
 
-`runtime-rs` is the minimal Rust service skeleton for the autonomous runtime
-program. In this phase it is intentionally internal-only and exposes health and
-feed-metric endpoints plus config loading.
+`runtime-rs` is the internal Rust hot path for the autonomous runtime program.
+In this phase it remains shadow-only and exposes:
+
+- public health and metrics endpoints,
+- authenticated internal deployment and run-inspection routes,
+- a runtime-owned SQLite strategy registry,
+- deterministic shadow trigger evaluation backed by the feature cache.
 
 ## Local commands
 
@@ -54,7 +58,8 @@ bun run runtime:fly:smoke
 - `RUNTIME_FEATURE_MAX_SAMPLES_PER_STREAM`
   Default: `64`
 - `RUNTIME_DATABASE_URL`
-  Optional runtime-owned relational store bootstrap secret for later phases.
+  SQLite database path or `sqlite://` URL for the runtime-owned registry.
+  Default: `.tmp/runtime-rs/strategy-registry.sqlite3`
 
 ## Health check
 
@@ -65,8 +70,45 @@ curl -fsS http://127.0.0.1:8081/metrics
 
 Expected output is a JSON document describing the service name, environment,
 protocol version, bind address, strategy support, feed freshness contracts,
-duplicate suppression counters, slot lag, feature freshness windows, derived
-signal snapshots, and internal dependency stubs.
+slot lag, feature freshness windows, derived signal snapshots, and strategy
+registry status.
+
+## Internal routes
+
+All internal routes require:
+
+```bash
+export RUNTIME_INTERNAL_SERVICE_TOKEN=...
+```
+
+Route surface:
+
+- `GET /api/internal/runtime/health`
+- `POST /api/internal/runtime/deployments`
+- `GET /api/internal/runtime/deployments/:deploymentId`
+- `POST /api/internal/runtime/deployments/:deploymentId/pause`
+- `POST /api/internal/runtime/deployments/:deploymentId/resume`
+- `POST /api/internal/runtime/deployments/:deploymentId/kill`
+- `POST /api/internal/runtime/deployments/:deploymentId/evaluate`
+- `GET /api/internal/runtime/runs/:deploymentId`
+
+Example shadow evaluation flow:
+
+```bash
+curl -fsS http://127.0.0.1:8081/api/internal/runtime/deployments \
+  -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}" \
+  -H "content-type: application/json" \
+  --data @docs/runtime-contracts/fixtures/runtime.deployment.valid.v1.json
+
+curl -fsS http://127.0.0.1:8081/api/internal/runtime/deployments/dep_runtime_sol_usdc_shadow/evaluate \
+  -X POST \
+  -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}" \
+  -H "content-type: application/json" \
+  --data '{}'
+
+curl -fsS http://127.0.0.1:8081/api/internal/runtime/runs/dep_runtime_sol_usdc_shadow \
+  -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
+```
 
 ## Fly foundation
 

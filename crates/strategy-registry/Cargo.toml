@@ -1,0 +1,16 @@
+[package]
+name = "strategy-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+feature-cache = { path = "../feature-cache" }
+protocol = { path = "../protocol" }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10.9"
+strategy-core = { path = "../strategy-core" }
+thiserror.workspace = true
+time = { version = "=0.3.44", features = ["formatting", "parsing"] }
