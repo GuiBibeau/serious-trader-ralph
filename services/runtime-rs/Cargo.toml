@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 axum.workspace = true
 exec-client = { path = "../../crates/exec-client" }
+feature-cache = { path = "../../crates/feature-cache" }
 market-adapters = { path = "../../crates/market-adapters" }
 protocol = { path = "../../crates/protocol" }
 runtime-ops = { path = "../../crates/runtime-ops" }

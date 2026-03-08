@@ -8,6 +8,8 @@ const DEFAULT_MARKET_SYMBOL: &str = "SOL/USDC";
 const DEFAULT_BASE_MINT: &str = "So11111111111111111111111111111111111111112";
 const DEFAULT_QUOTE_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const DEFAULT_MARKET_PRICE_USD: &str = "142.00";
+const DEFAULT_BID_PRICE_USD: &str = "141.95";
+const DEFAULT_ASK_PRICE_USD: &str = "142.05";
 const DEFAULT_SLOT_HEAD: u64 = 310_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +150,8 @@ pub struct MarketFeedEvent {
     pub base_mint: String,
     pub quote_mint: String,
     pub price_usd: String,
+    pub bid_price_usd: Option<String>,
+    pub ask_price_usd: Option<String>,
     pub observed_at: String,
     pub received_at: String,
     pub sequence: u64,
@@ -203,6 +207,8 @@ impl FeedReplayFixture {
                 base_mint: DEFAULT_BASE_MINT.to_string(),
                 quote_mint: DEFAULT_QUOTE_MINT.to_string(),
                 price_usd: DEFAULT_MARKET_PRICE_USD.to_string(),
+                bid_price_usd: Some(DEFAULT_BID_PRICE_USD.to_string()),
+                ask_price_usd: Some(DEFAULT_ASK_PRICE_USD.to_string()),
                 observed_at: observed_at.clone(),
                 received_at,
                 sequence: sequence_seed + 1,
@@ -710,5 +716,13 @@ mod tests {
         .expect("bootstrap fixture");
         assert_eq!(fixture.market_events.len(), 1);
         assert_eq!(fixture.slot_events.len(), 3);
+        assert_eq!(
+            fixture.market_events[0].bid_price_usd.as_deref(),
+            Some(DEFAULT_BID_PRICE_USD)
+        );
+        assert_eq!(
+            fixture.market_events[0].ask_price_usd.as_deref(),
+            Some(DEFAULT_ASK_PRICE_USD)
+        );
     }
 }

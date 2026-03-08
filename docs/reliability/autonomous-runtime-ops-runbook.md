@@ -35,6 +35,7 @@ Verify:
 - active region and standby region status,
 - provider connectivity,
 - feed freshness,
+- feature freshness and ingest lag,
 - reconciliation backlog,
 - runtime canary status.
 
@@ -90,6 +91,7 @@ Expected effect:
 Symptoms:
 
 - freshness budget breach,
+- feature cache marked degraded or stale,
 - risk rejects spike,
 - strategy engine stops promoting runs.
 

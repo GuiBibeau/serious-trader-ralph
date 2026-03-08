@@ -1,0 +1,11 @@
+[package]
+name = "feature-cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+market-adapters = { path = "../market-adapters" }
+serde.workspace = true
+thiserror.workspace = true
+time = { version = "=0.3.44", features = ["formatting", "parsing"] }
