@@ -469,6 +469,10 @@ name = "portfolio-ledger"
 version = "0.1.0"
 dependencies = [
  "protocol",
+ "rusqlite",
+ "serde",
+ "thiserror",
+ "time",
 ]
 
 [[package]]
@@ -545,6 +549,7 @@ dependencies = [
  "feature-cache",
  "http-body-util",
  "market-adapters",
+ "portfolio-ledger",
  "protocol",
  "runtime-ops",
  "serde",

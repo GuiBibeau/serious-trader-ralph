@@ -5,7 +5,7 @@ use std::{
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -13,6 +13,9 @@ use axum::{
 use exec_client::ExecClient;
 use feature_cache::{FeatureCache, FeatureCacheConfig, FeatureCacheSnapshot};
 use market_adapters::{FeedGateway, FeedGatewayConfig, FeedGatewaySnapshot, FeedReplayFixture};
+use portfolio_ledger::{
+    PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
+};
 use protocol::{RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeRunRecord};
 use runtime_ops::{health_snapshot, RuntimeConfig};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -39,6 +42,7 @@ pub struct RuntimeAppState {
     feed_gateway: Arc<RwLock<FeedGateway>>,
     feature_cache: Arc<RwLock<FeatureCache>>,
     strategy_registry: StrategyRegistry,
+    portfolio_ledger: PortfolioLedger,
 }
 
 impl RuntimeAppState {
@@ -56,6 +60,9 @@ impl RuntimeAppState {
         let strategy_registry =
             StrategyRegistry::new(StrategyRegistryConfig::new(config.database_url.clone()))
                 .expect("strategy registry to initialize");
+        let portfolio_ledger =
+            PortfolioLedger::new(PortfolioLedgerConfig::new(config.database_url.clone()))
+                .expect("portfolio ledger to initialize");
         Self {
             config,
             exec_client: ExecClient::from_lookup(|key| env::var(key).ok()),
@@ -64,6 +71,7 @@ impl RuntimeAppState {
             feed_gateway,
             feature_cache,
             strategy_registry,
+            portfolio_ledger,
         }
     }
 
@@ -84,6 +92,10 @@ impl RuntimeAppState {
     fn strategy_registry_snapshot(&self) -> StrategyRegistrySnapshot {
         self.strategy_registry.snapshot_now()
     }
+
+    fn portfolio_ledger_snapshot(&self) -> PortfolioLedgerSnapshot {
+        self.portfolio_ledger.snapshot_now()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -103,6 +115,7 @@ pub struct RuntimeHealthResponse {
     pub feed_gateway: FeedGatewaySnapshot,
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
+    pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub supported_strategies: Vec<String>,
 }
 
@@ -117,6 +130,7 @@ pub struct RuntimeMetricsResponse {
     pub feed_gateway: FeedGatewaySnapshot,
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
+    pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub supported_strategies: Vec<String>,
 }
 
@@ -124,6 +138,12 @@ pub struct RuntimeMetricsResponse {
 #[serde(rename_all = "camelCase")]
 struct RuntimeShadowEvaluationRequest {
     pub trigger: Option<ShadowEvaluationTrigger>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeDeploymentQuery {
+    pub deployment_id: Option<String>,
 }
 
 pub fn app(config: RuntimeConfig) -> Router {
@@ -162,6 +182,11 @@ pub fn app(config: RuntimeConfig) -> Router {
             &format!("{INTERNAL_RUNTIME_PREFIX}/runs/{{deployment_id}}"),
             get(list_runs_handler),
         )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/positions"),
+            get(positions_handler),
+        )
+        .route(&format!("{INTERNAL_RUNTIME_PREFIX}/pnl"), get(pnl_handler))
         .with_state(RuntimeAppState::new(config))
 }
 
@@ -170,9 +195,11 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let feed_gateway = state.feed_gateway_snapshot();
     let feature_cache = state.feature_cache_snapshot();
     let strategy_registry = state.strategy_registry_snapshot();
+    let portfolio_ledger = state.portfolio_ledger_snapshot();
     let status = if feed_gateway.status == "healthy"
         && feature_cache.status == "healthy"
         && strategy_registry.status == "healthy"
+        && portfolio_ledger.status == "healthy"
     {
         snapshot.status
     } else {
@@ -193,6 +220,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         feed_gateway,
         feature_cache,
         strategy_registry,
+        portfolio_ledger,
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
             .map(|strategy| strategy.as_key().to_string())
@@ -210,6 +238,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         feed_gateway: state.feed_gateway_snapshot(),
         feature_cache: state.feature_cache_snapshot(),
         strategy_registry: state.strategy_registry_snapshot(),
+        portfolio_ledger: state.portfolio_ledger_snapshot(),
         supported_strategies: SUPPORTED_STRATEGIES
             .iter()
             .map(|strategy| strategy.as_key().to_string())
@@ -247,10 +276,15 @@ async fn create_deployment_handler(
 ) -> HandlerResult {
     authorize_internal_request(&headers, &state)?;
     let deployment: RuntimeDeploymentRecord = parse_json_body(&body, "invalid-runtime-deployment")?;
+    let previous = state
+        .strategy_registry
+        .get_deployment(&deployment.deployment_id)
+        .map_err(map_registry_error)?;
     let result = state
         .strategy_registry
         .upsert_deployment(&deployment)
         .map_err(map_registry_error)?;
+    let ledger = sync_ledger_with_rollback(&state, previous, &result.deployment)?;
     Ok(OkJson::with_status(
         if result.created {
             StatusCode::CREATED
@@ -262,6 +296,7 @@ async fn create_deployment_handler(
             "source": "runtime-rs",
             "created": result.created,
             "deployment": result.deployment,
+            "ledger": ledger.snapshot,
         }),
     ))
 }
@@ -329,7 +364,7 @@ async fn resume_deployment_handler(
         protocol::RuntimeMode::Paper => RuntimeDeploymentState::Paper,
         protocol::RuntimeMode::Live => RuntimeDeploymentState::Live,
     };
-    transition_deployment(deployment_id, state, next_state)
+    transition_deployment(&deployment_id, &state, next_state)
 }
 
 async fn kill_deployment_handler(
@@ -353,24 +388,30 @@ async fn transition_deployment_handler(
     next_state: RuntimeDeploymentState,
 ) -> HandlerResult {
     authorize_internal_request(&headers, &state)?;
-    transition_deployment(deployment_id, state, next_state)
+    transition_deployment(&deployment_id, &state, next_state)
 }
 
 fn transition_deployment(
-    deployment_id: String,
-    state: RuntimeAppState,
+    deployment_id: &str,
+    state: &RuntimeAppState,
     next_state: RuntimeDeploymentState,
 ) -> HandlerResult {
+    let previous = state
+        .strategy_registry
+        .get_deployment(deployment_id)
+        .map_err(map_registry_error)?;
     let deployment = state
         .strategy_registry
-        .transition_deployment(&deployment_id, next_state)
+        .transition_deployment(deployment_id, next_state)
         .map_err(map_registry_error)?;
+    let ledger = sync_ledger_with_rollback(state, previous, &deployment)?;
     Ok(OkJson::with_status(
         StatusCode::OK,
         json!({
             "ok": true,
             "source": "runtime-rs",
             "deployment": deployment,
+            "ledger": ledger.snapshot,
         }),
     ))
 }
@@ -419,6 +460,51 @@ async fn list_runs_handler(
     ))
 }
 
+async fn positions_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeDeploymentQuery>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let deployment_id = require_deployment_id(query)?;
+    let snapshot = state
+        .portfolio_ledger
+        .snapshot_for_deployment(&deployment_id)
+        .map_err(map_ledger_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "deploymentId": deployment_id,
+            "snapshot": snapshot,
+        }),
+    ))
+}
+
+async fn pnl_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeDeploymentQuery>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let deployment_id = require_deployment_id(query)?;
+    let snapshot = state
+        .portfolio_ledger
+        .snapshot_for_deployment(&deployment_id)
+        .map_err(map_ledger_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "deploymentId": deployment_id,
+            "asOf": snapshot.as_of,
+            "totals": snapshot.totals,
+        }),
+    ))
+}
+
 fn shadow_evaluation_json(result: ShadowEvaluationResult) -> JsonPayload {
     OkJson::with_status(
         if result.created {
@@ -445,6 +531,55 @@ fn parse_json_body<T: DeserializeOwned>(body: &[u8], error_code: &str) -> Result
             json!({ "reason": error.to_string() }),
         )
     })
+}
+
+fn require_deployment_id(query: RuntimeDeploymentQuery) -> Result<String, JsonPayload> {
+    query
+        .deployment_id
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| error_json(StatusCode::BAD_REQUEST, "deployment-id-required", json!({})))
+}
+
+fn sync_ledger_with_rollback(
+    state: &RuntimeAppState,
+    previous: Option<RuntimeDeploymentRecord>,
+    deployment: &RuntimeDeploymentRecord,
+) -> Result<portfolio_ledger::LedgerSyncResult, JsonPayload> {
+    match state.portfolio_ledger.sync_deployment(deployment) {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            rollback_registry_change(
+                &state.strategy_registry,
+                previous,
+                &deployment.deployment_id,
+            )
+            .map_err(|rollback_error| {
+                error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "runtime-ledger-rollback-failed",
+                    json!({
+                        "deploymentId": deployment.deployment_id,
+                        "reason": error.to_string(),
+                        "rollbackReason": rollback_error.to_string(),
+                    }),
+                )
+            })?;
+            Err(map_ledger_error(error))
+        }
+    }
+}
+
+fn rollback_registry_change(
+    strategy_registry: &StrategyRegistry,
+    previous: Option<RuntimeDeploymentRecord>,
+    deployment_id: &str,
+) -> Result<(), StrategyRegistryError> {
+    if let Some(previous) = previous {
+        strategy_registry.upsert_deployment(&previous)?;
+    } else {
+        let _ = strategy_registry.delete_deployment(deployment_id)?;
+    }
+    Ok(())
 }
 
 fn authorize_internal_request(
@@ -570,6 +705,49 @@ fn map_registry_error(error: StrategyRegistryError) -> JsonPayload {
         StrategyRegistryError::Serialization(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-registry-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn map_ledger_error(error: PortfolioLedgerError) -> JsonPayload {
+    match error {
+        PortfolioLedgerError::DeploymentNotFound { deployment_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "deployment-not-found",
+            json!({ "deploymentId": deployment_id }),
+        ),
+        PortfolioLedgerError::SleeveOversubscribed {
+            sleeve_id,
+            requested_usd,
+            available_usd,
+        } => error_json(
+            StatusCode::CONFLICT,
+            "sleeve-oversubscribed",
+            json!({
+                "sleeveId": sleeve_id,
+                "requestedUsd": requested_usd,
+                "availableUsd": available_usd,
+            }),
+        ),
+        PortfolioLedgerError::InvalidUsdAmount { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-ledger-amount",
+            json!({ "field": field, "value": value }),
+        ),
+        PortfolioLedgerError::InvalidCorrection { sleeve_id } => error_json(
+            StatusCode::CONFLICT,
+            "invalid-ledger-correction",
+            json!({ "sleeveId": sleeve_id }),
+        ),
+        PortfolioLedgerError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-ledger-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        PortfolioLedgerError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-ledger-error",
             json!({ "reason": error.to_string() }),
         ),
     }
@@ -779,6 +957,44 @@ mod tests {
         .expect("config to load")
     }
 
+    fn runtime_deployment(
+        deployment_id: &str,
+        sleeve_id: &str,
+        allocated_usd: &str,
+        reserved_usd: &str,
+    ) -> Value {
+        json!({
+            "schemaVersion": "v1",
+            "deploymentId": deployment_id,
+            "strategyKey": "dca",
+            "sleeveId": sleeve_id,
+            "ownerUserId": "user_123",
+            "pair": {
+                "symbol": "SOL/USDC",
+                "baseMint": "So11111111111111111111111111111111111111112",
+                "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            },
+            "mode": "shadow",
+            "state": "shadow",
+            "lane": "safe",
+            "createdAt": "2026-03-07T00:00:00.000Z",
+            "updatedAt": "2026-03-07T00:00:00.000Z",
+            "policy": {
+                "maxNotionalUsd": "250.00",
+                "dailyLossLimitUsd": "35.00",
+                "maxSlippageBps": 50,
+                "maxConcurrentRuns": 2,
+                "rebalanceToleranceBps": 100
+            },
+            "capital": {
+                "allocatedUsd": allocated_usd,
+                "reservedUsd": reserved_usd,
+                "availableUsd": "0.00"
+            },
+            "tags": ["fixture"]
+        })
+    }
+
     async fn read_json(response: axum::response::Response) -> Value {
         let body = response
             .into_body()
@@ -817,6 +1033,8 @@ mod tests {
         assert_eq!(payload.feed_gateway.status, "healthy");
         assert_eq!(payload.strategy_registry.status, "healthy");
         assert_eq!(payload.strategy_registry.deployment_count, 0);
+        assert_eq!(payload.portfolio_ledger.status, "healthy");
+        assert_eq!(payload.portfolio_ledger.deployment_count, 0);
         assert!(payload.internal_service_auth_configured);
     }
 
@@ -845,6 +1063,7 @@ mod tests {
         assert_eq!(payload.feature_cache.feature_streams.len(), 1);
         assert_eq!(payload.feature_cache.total_market_samples, 1);
         assert_eq!(payload.strategy_registry.status, "healthy");
+        assert_eq!(payload.portfolio_ledger.status, "healthy");
     }
 
     #[tokio::test]
@@ -873,36 +1092,7 @@ mod tests {
     #[tokio::test]
     async fn stores_and_evaluates_shadow_deployments() {
         let router = app(test_config());
-        let deployment = json!({
-            "schemaVersion": "v1",
-            "deploymentId": "deployment_123",
-            "strategyKey": "dca",
-            "sleeveId": "sleeve_alpha",
-            "ownerUserId": "user_123",
-            "pair": {
-                "symbol": "SOL/USDC",
-                "baseMint": "So11111111111111111111111111111111111111112",
-                "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-            },
-            "mode": "shadow",
-            "state": "shadow",
-            "lane": "safe",
-            "createdAt": "2026-03-07T00:00:00.000Z",
-            "updatedAt": "2026-03-07T00:00:00.000Z",
-            "policy": {
-                "maxNotionalUsd": "250.00",
-                "dailyLossLimitUsd": "35.00",
-                "maxSlippageBps": 50,
-                "maxConcurrentRuns": 2,
-                "rebalanceToleranceBps": 100
-            },
-            "capital": {
-                "allocatedUsd": "1000.00",
-                "reservedUsd": "125.00",
-                "availableUsd": "875.00"
-            },
-            "tags": ["fixture"]
-        });
+        let deployment = runtime_deployment("deployment_123", "sleeve_alpha", "1000.00", "125.00");
 
         let create_response = router
             .clone()
@@ -918,6 +1108,11 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(create_response.status(), StatusCode::CREATED);
+        let create_payload = read_json(create_response).await;
+        assert_eq!(
+            create_payload["ledger"]["totals"]["reservedUsd"],
+            json!("125.00")
+        );
 
         let evaluate_response = router
             .clone()
@@ -972,5 +1167,100 @@ mod tests {
         assert_eq!(runs_response.status(), StatusCode::OK);
         let runs_payload = read_json(runs_response).await;
         assert_eq!(runs_payload["runs"].as_array().expect("array").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn serves_real_ledger_snapshots_and_rolls_back_conflicts() {
+        let router = app(test_config());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        runtime_deployment("deployment_alpha", "sleeve_alpha", "100.00", "60.00")
+                            .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let positions_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/positions?deploymentId=deployment_alpha")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(positions_response.status(), StatusCode::OK);
+        let positions_payload = read_json(positions_response).await;
+        assert_eq!(
+            positions_payload["snapshot"]["totals"]["reservedUsd"],
+            json!("60.00")
+        );
+        assert_eq!(
+            positions_payload["snapshot"]["totals"]["availableUsd"],
+            json!("40.00")
+        );
+
+        let pnl_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/pnl?deploymentId=deployment_alpha")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(pnl_response.status(), StatusCode::OK);
+        let pnl_payload = read_json(pnl_response).await;
+        assert_eq!(pnl_payload["totals"]["equityUsd"], json!("100.00"));
+        assert_eq!(pnl_payload["totals"]["reservedUsd"], json!("60.00"));
+
+        let conflict_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        runtime_deployment("deployment_beta", "sleeve_alpha", "50.00", "50.00")
+                            .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(conflict_response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            read_json(conflict_response).await["error"],
+            json!("sleeve-oversubscribed")
+        );
+
+        let missing_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/deployments/deployment_beta")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -218,6 +218,15 @@ impl StrategyRegistry {
         Ok(deployment)
     }
 
+    pub fn delete_deployment(&self, deployment_id: &str) -> Result<bool, StrategyRegistryError> {
+        let connection = self.open_connection()?;
+        let deleted = connection.execute(
+            "DELETE FROM deployments WHERE deployment_id = ?1",
+            params![deployment_id],
+        )?;
+        Ok(deleted > 0)
+    }
+
     pub fn list_runs(
         &self,
         deployment_id: &str,
@@ -952,5 +961,34 @@ mod tests {
             error,
             StrategyRegistryError::FeatureStreamStale { .. }
         ));
+    }
+
+    #[test]
+    fn deletes_deployments_and_associated_runs() {
+        let registry = registry("delete");
+        registry
+            .upsert_deployment(&deployment(
+                "deployment_delete",
+                RuntimeMode::Shadow,
+                RuntimeDeploymentState::Shadow,
+            ))
+            .expect("deployment to store");
+        registry
+            .evaluate_shadow_trigger("deployment_delete", &feature_cache_snapshot(false), None)
+            .expect("run to store");
+
+        let deleted = registry
+            .delete_deployment("deployment_delete")
+            .expect("deployment to delete");
+
+        assert!(deleted);
+        assert!(registry
+            .get_deployment("deployment_delete")
+            .expect("lookup to succeed")
+            .is_none());
+        assert!(registry
+            .list_runs("deployment_delete")
+            .expect("runs lookup to succeed")
+            .is_empty());
     }
 }
