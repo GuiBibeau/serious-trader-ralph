@@ -399,6 +399,33 @@ describe("worker ops controls routes", () => {
     }
   });
 
+  test("fails closed on malformed runtime admin deployment IDs", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/deployments/%E0%A4%A/resume",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: "not-found",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("returns aggregated admin ops dashboard", async () => {
     const { env, sqlite } = createOpsEnv();
     try {

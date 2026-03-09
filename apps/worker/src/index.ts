@@ -458,8 +458,14 @@ function parseRuntimeAdminControlPath(pathname: string): {
   if (action !== "pause" && action !== "resume" && action !== "kill") {
     return null;
   }
+  let decodedDeploymentId: string;
+  try {
+    decodedDeploymentId = decodeURIComponent(deploymentId);
+  } catch {
+    return null;
+  }
   return {
-    deploymentId: decodeURIComponent(deploymentId),
+    deploymentId: decodedDeploymentId,
     action,
   };
 }
