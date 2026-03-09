@@ -66,6 +66,16 @@ curl -fsS https://ralph-runtime-rs.fly.dev/api/internal/runtime/runs/<deployment
   -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
 ```
 
+Worker control-plane inspection:
+
+```bash
+curl -fsS https://api.trader-ralph.com/api/admin/ops/runtime \
+  -H "authorization: Bearer ${ADMIN_TOKEN}"
+
+curl -fsS "https://api.trader-ralph.com/api/admin/ops/dashboard?windowMinutes=360&maxRequests=10000" \
+  -H "authorization: Bearer ${ADMIN_TOKEN}"
+```
+
 ### Pause a deployment
 
 Use pause when:
@@ -79,6 +89,14 @@ Expected effect:
 - new shadow evaluations stop,
 - reconciliation continues,
 - existing state remains inspectable.
+
+Control-plane command:
+
+```bash
+curl -fsS https://api.trader-ralph.com/api/admin/ops/runtime/deployments/<deployment-id>/pause \
+  -X POST \
+  -H "authorization: Bearer ${ADMIN_TOKEN}"
+```
 
 ### Kill a deployment
 
@@ -95,6 +113,45 @@ Expected effect:
 - deployment state is marked killed,
 - follow-up requires explicit human action.
 
+Control-plane command:
+
+```bash
+curl -fsS https://api.trader-ralph.com/api/admin/ops/runtime/deployments/<deployment-id>/kill \
+  -X POST \
+  -H "authorization: Bearer ${ADMIN_TOKEN}"
+```
+
+### Force shadow-only mode
+
+Use shadow-only when:
+
+- live rollout is still gated,
+- paper or live resumes must be blocked without disabling runtime inspection,
+- an incident requires investigation before wider runtime promotion.
+
+Expected effect:
+
+- runtime resumes through the Worker control plane are allowed only for shadow
+  deployments,
+- paper and live deployment resumes return `runtime-shadow-only`,
+- the ops dashboard reflects the current shadow-only reason.
+
+Control-plane command:
+
+```bash
+curl -fsS https://api.trader-ralph.com/api/admin/ops/controls \
+  -X POST \
+  -H "authorization: Bearer ${ADMIN_TOKEN}" \
+  -H "content-type: application/json" \
+  --data '{
+    "updatedBy": "runtime-ops-runbook",
+    "runtime": {
+      "shadowOnly": true,
+      "shadowOnlyReason": "incident-review"
+    }
+  }'
+```
+
 ## Incident classes
 
 ### Stale data incident
@@ -110,9 +167,12 @@ Response:
 
 1. Pause affected deployments.
 2. Confirm provider and socket health.
-3. Confirm `feature-stream-stale` or `feature-stream-missing` appears on the
+3. Pull `GET /api/admin/ops/runtime` and confirm the runtime lag lines
+   (`maxMarketAgeMs`, `maxFeatureAgeMs`, `maxSlotAgeMs`) identify the stale
+   source.
+4. Confirm `feature-stream-stale` or `feature-stream-missing` appears on the
    affected shadow evaluations.
-4. Keep the runtime canary disabled until freshness is restored.
+5. Keep the runtime canary disabled until freshness is restored.
 
 ### Reconciliation incident
 
@@ -127,6 +187,7 @@ Response:
 1. Kill affected deployments.
 2. Freeze further live promotion.
 3. Export reconciliation evidence and compare with chain and Worker receipts.
+4. Keep `runtime.shadowOnly=true` until reconciliation explains the drift.
 
 ### Region failover incident
 
@@ -146,6 +207,8 @@ Response:
 ## Rollback policy
 
 - Prefer pause or kill controls before code rollback.
+- Prefer `runtime.shadowOnly=true` before widening any rollout again after an
+  incident.
 - If code rollback is required, revert the offending PR and redeploy through the
   same harness flow.
 - Runtime-rs code rollback uses `.github/workflows/rollback-runtime-rs.yml`.

@@ -9,6 +9,7 @@ so Worker and runtime-rs do not invent separate shapes.
 | Route family | Canonical schema |
 | --- | --- |
 | `POST /api/internal/runtime/deployments` | `RuntimeDeploymentRecord` |
+| `GET /api/internal/runtime/deployments` | `RuntimeDeploymentRecord[]` |
 | `GET /api/internal/runtime/deployments/:id` | `RuntimeDeploymentRecord` |
 | `GET /api/internal/runtime/runs/:deploymentId` | `RuntimeRunRecord` |
 | `GET /api/internal/runtime/positions` | `RuntimeLedgerSnapshot` |

@@ -71,6 +71,49 @@ describe("ops dashboard helpers", () => {
           enabled: true,
           disabledReason: null,
         },
+        runtime: {
+          enabled: true,
+          disabledReason: null,
+          shadowOnly: true,
+          shadowOnlyReason: "live-rollout-pending",
+        },
+      },
+      runtime: {
+        ok: true,
+        source: "runtime-rs",
+        controls: {
+          enabled: true,
+          shadowOnly: true,
+          shadowOnlyReason: "live-rollout-pending",
+        },
+        integration: {
+          stubModeEnabled: false,
+          runtimeBaseUrl: "https://ralph-runtime-rs.fly.dev",
+        },
+        health: {
+          status: "healthy",
+          feedGateway: {
+            maxMarketAgeMs: 2400,
+            maxSlotAgeMs: 1700,
+            staleMarketStreams: [],
+          },
+          featureCache: {
+            maxFeatureAgeMs: 2600,
+            maxSlotAgeMs: 1800,
+            staleFeatureKeys: [],
+          },
+        },
+        deployments: [
+          {
+            deploymentId: "deployment_shadow",
+            state: "shadow",
+          },
+          {
+            deploymentId: "deployment_paused",
+            state: "paused",
+          },
+        ],
+        error: null,
       },
       previews: [
         {
@@ -93,6 +136,10 @@ describe("ops dashboard helpers", () => {
 
     expect(markdown).toContain("# Ops Dashboard");
     expect(markdown).toContain("## Execution");
+    expect(markdown).toContain("## Runtime");
+    expect(markdown).toContain(
+      "deployments: total=2, states=shadow=1, paused=1",
+    );
     expect(markdown).toContain("## Preview Health");
     expect(markdown).toContain("PR #247: portal=ok, worker=down");
     expect(markdown).toContain("## Runner Health");

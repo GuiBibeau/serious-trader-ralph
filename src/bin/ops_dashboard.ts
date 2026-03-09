@@ -117,6 +117,7 @@ async function main(): Promise<void> {
   const executionPath = requireArg("--execution");
   const canaryPath = requireArg("--canary");
   const controlsPath = requireArg("--controls");
+  const runtimePath = readArg("--runtime");
   const outputJsonPath = requireArg("--output-json");
   const outputMarkdownPath = requireArg("--output-markdown");
   const runnerHeartbeatPath = readArg("--runner-heartbeat");
@@ -138,6 +139,7 @@ async function main(): Promise<void> {
     execution: readJsonFile(executionPath),
     canary: readJsonFile(canaryPath),
     controls: readJsonFile(controlsPath),
+    runtime: runtimePath ? readJsonFile(runtimePath) : { ok: false },
     previews,
     runner,
   };

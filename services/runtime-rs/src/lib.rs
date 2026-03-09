@@ -207,7 +207,7 @@ pub fn app(config: RuntimeConfig) -> Router {
         )
         .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/deployments"),
-            post(create_deployment_handler),
+            get(list_deployments_handler).post(create_deployment_handler),
         )
         .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/deployments/{{deployment_id}}"),
@@ -376,6 +376,25 @@ async fn create_deployment_handler(
             "created": result.created,
             "deployment": result.deployment,
             "ledger": ledger.snapshot,
+        }),
+    ))
+}
+
+async fn list_deployments_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let deployments = state
+        .strategy_registry
+        .list_deployments()
+        .map_err(map_registry_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "deployments": deployments,
         }),
     ))
 }
@@ -1759,6 +1778,31 @@ mod tests {
         assert_eq!(
             create_payload["ledger"]["totals"]["reservedUsd"],
             json!("125.00")
+        );
+
+        let deployments_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(deployments_response.status(), StatusCode::OK);
+        let deployments_payload = read_json(deployments_response).await;
+        assert_eq!(
+            deployments_payload["deployments"]
+                .as_array()
+                .expect("array")
+                .len(),
+            1
+        );
+        assert_eq!(
+            deployments_payload["deployments"][0]["deploymentId"],
+            json!("deployment_123")
         );
 
         let evaluate_response = router

@@ -56,7 +56,13 @@ jobs:
             "https://api.trader-ralph.com/api/admin/ops/controls" \
             > .tmp/ops-dashboard/controls-envelope.json
 
+          curl -fsS \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" \
+            "https://api.trader-ralph.com/api/admin/ops/runtime" \
+            > .tmp/ops-dashboard/runtime-envelope.json
+
           jq '.controls' .tmp/ops-dashboard/controls-envelope.json > .tmp/ops-dashboard/controls.json
+          jq '.runtime' .tmp/ops-dashboard/runtime-envelope.json > .tmp/ops-dashboard/runtime.json
 
       - name: Build ops dashboard
         env:
@@ -69,6 +75,7 @@ jobs:
             --execution .tmp/ops-dashboard/execution.json
             --canary .tmp/ops-dashboard/canary.json
             --controls .tmp/ops-dashboard/controls.json
+            --runtime .tmp/ops-dashboard/runtime.json
             --output-json .tmp/ops-dashboard/dashboard.json
             --output-markdown .tmp/ops-dashboard/dashboard.md
           )

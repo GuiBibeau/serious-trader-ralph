@@ -3,6 +3,7 @@ import type { Env } from "./types";
 
 const OPS_CONTROL_KV_KEY = "ops:controls:v1";
 const EXECUTION_LANES: ExecutionLane[] = ["fast", "protected", "safe"];
+const DEFAULT_RUNTIME_SHADOW_ONLY_REASON = "live-rollout-pending";
 
 type OpsControlJson = Record<string, unknown>;
 
@@ -16,6 +17,12 @@ export type OpsControlSnapshot = {
   canary: {
     enabled: boolean;
     disabledReason: string | null;
+  };
+  runtime: {
+    enabled: boolean;
+    disabledReason: string | null;
+    shadowOnly: boolean;
+    shadowOnlyReason: string | null;
   };
   metadata: {
     source: "default" | "kv";
@@ -33,6 +40,12 @@ export type OpsControlPatch = {
   canary?: {
     enabled?: boolean;
     disabledReason?: string | null;
+  };
+  runtime?: {
+    enabled?: boolean;
+    disabledReason?: string | null;
+    shadowOnly?: boolean;
+    shadowOnlyReason?: string | null;
   };
   updatedAt?: string;
   updatedBy?: string | null;
@@ -78,6 +91,12 @@ function defaultOpsControlSnapshot(): OpsControlSnapshot {
       enabled: true,
       disabledReason: null,
     },
+    runtime: {
+      enabled: true,
+      disabledReason: null,
+      shadowOnly: true,
+      shadowOnlyReason: DEFAULT_RUNTIME_SHADOW_ONLY_REASON,
+    },
     metadata: {
       source: "default",
       updatedAt: null,
@@ -114,6 +133,7 @@ function normalizeOpsControlSnapshot(
   }
   const execution = isRecord(value.execution) ? value.execution : {};
   const canary = isRecord(value.canary) ? value.canary : {};
+  const runtime = isRecord(value.runtime) ? value.runtime : {};
   const metadata = isRecord(value.metadata) ? value.metadata : {};
   return {
     schemaVersion: "v1",
@@ -129,6 +149,16 @@ function normalizeOpsControlSnapshot(
       disabledReason:
         readStringOrNull(canary.disabledReason) ??
         fallback.canary.disabledReason,
+    },
+    runtime: {
+      enabled: readBoolean(runtime.enabled, fallback.runtime.enabled),
+      disabledReason:
+        readStringOrNull(runtime.disabledReason) ??
+        fallback.runtime.disabledReason,
+      shadowOnly: readBoolean(runtime.shadowOnly, fallback.runtime.shadowOnly),
+      shadowOnlyReason:
+        readStringOrNull(runtime.shadowOnlyReason) ??
+        fallback.runtime.shadowOnlyReason,
     },
     metadata: {
       source,
@@ -176,6 +206,9 @@ export async function writeOpsControlSnapshot(
   const nextExecutionEnabled =
     patch.execution?.enabled ?? current.execution.enabled;
   const nextCanaryEnabled = patch.canary?.enabled ?? current.canary.enabled;
+  const nextRuntimeEnabled = patch.runtime?.enabled ?? current.runtime.enabled;
+  const nextRuntimeShadowOnly =
+    patch.runtime?.shadowOnly ?? current.runtime.shadowOnly;
   const next: OpsControlSnapshot = {
     schemaVersion: "v1",
     execution: {
@@ -199,6 +232,23 @@ export async function writeOpsControlSnapshot(
           : nextCanaryEnabled
             ? null
             : current.canary.disabledReason,
+    },
+    runtime: {
+      enabled: nextRuntimeEnabled,
+      disabledReason:
+        patch.runtime?.disabledReason !== undefined
+          ? readStringOrNull(patch.runtime.disabledReason)
+          : nextRuntimeEnabled
+            ? null
+            : current.runtime.disabledReason,
+      shadowOnly: nextRuntimeShadowOnly,
+      shadowOnlyReason:
+        patch.runtime?.shadowOnlyReason !== undefined
+          ? readStringOrNull(patch.runtime.shadowOnlyReason)
+          : nextRuntimeShadowOnly
+            ? (current.runtime.shadowOnlyReason ??
+              DEFAULT_RUNTIME_SHADOW_ONLY_REASON)
+            : null,
     },
     metadata: {
       source: "kv",
@@ -227,6 +277,12 @@ export async function resetOpsControlSnapshot(
     canary: {
       enabled: true,
       disabledReason: null,
+    },
+    runtime: {
+      enabled: true,
+      disabledReason: null,
+      shadowOnly: true,
+      shadowOnlyReason: DEFAULT_RUNTIME_SHADOW_ONLY_REASON,
     },
     updatedBy: updatedBy ?? null,
   });

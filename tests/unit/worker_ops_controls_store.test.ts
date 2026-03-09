@@ -24,6 +24,11 @@ describe("worker ops controls store", () => {
       canary: {
         enabled: true,
       },
+      runtime: {
+        enabled: true,
+        shadowOnly: true,
+        shadowOnlyReason: "live-rollout-pending",
+      },
       metadata: {
         source: "default",
       },

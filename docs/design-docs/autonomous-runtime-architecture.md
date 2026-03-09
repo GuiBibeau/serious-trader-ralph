@@ -137,6 +137,7 @@ single-writer source of truth for automation.
 The first private route family is intentionally small:
 
 - `POST /api/internal/runtime/deployments`
+- `GET /api/internal/runtime/deployments`
 - `GET /api/internal/runtime/deployments/:id`
 - `POST /api/internal/runtime/deployments/:id/pause`
 - `POST /api/internal/runtime/deployments/:id/resume`
@@ -152,6 +153,15 @@ The first private route family is intentionally small:
 Transport starts as HTTP+JSON with service auth. Shared schemas and fixtures
 arrive in `#257`. In `#259`, control and inspection routes are fixture-backed
 stubs until later issues replace them with real runtime integration.
+
+Operator-facing runtime controls stay on the Worker boundary:
+
+- `GET /api/admin/ops/runtime`
+- `POST /api/admin/ops/runtime/deployments/:deploymentId/pause`
+- `POST /api/admin/ops/runtime/deployments/:deploymentId/resume`
+- `POST /api/admin/ops/runtime/deployments/:deploymentId/kill`
+- `POST /api/admin/ops/controls` with `runtime.shadowOnly=true` to keep live
+  promotion disabled until the dedicated rollout issue lands
 
 ## Harness compatibility requirements
 

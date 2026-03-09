@@ -26,6 +26,7 @@ export type OpsDashboardSnapshot = {
   execution: Record<string, unknown>;
   canary: Record<string, unknown>;
   controls: Record<string, unknown>;
+  runtime: Record<string, unknown>;
   previews: PreviewHealthResult[];
   runner: RunnerHealthSnapshot;
 };
@@ -134,6 +135,7 @@ function formatCanarySummary(canary: Record<string, unknown>): string[] {
 function formatControlSummary(controls: Record<string, unknown>): string[] {
   const execution = isRecord(controls.execution) ? controls.execution : {};
   const canary = isRecord(controls.canary) ? controls.canary : {};
+  const runtime = isRecord(controls.runtime) ? controls.runtime : {};
   const lanes = isRecord(execution.lanes) ? execution.lanes : {};
   return [
     `- execution enabled: ${String(execution.enabled ?? true)}`,
@@ -141,6 +143,62 @@ function formatControlSummary(controls: Record<string, unknown>): string[] {
     `- lane toggles: fast=${String(lanes.fast ?? true)}, protected=${String(lanes.protected ?? true)}, safe=${String(lanes.safe ?? true)}`,
     `- canary enabled: ${String(canary.enabled ?? true)}`,
     `- canary disabledReason: ${readString(canary.disabledReason) ?? "n/a"}`,
+    `- runtime enabled: ${String(runtime.enabled ?? true)}`,
+    `- runtime shadowOnly: ${String(runtime.shadowOnly ?? true)}`,
+    `- runtime disabledReason: ${readString(runtime.disabledReason) ?? "n/a"}`,
+    `- runtime shadowOnlyReason: ${readString(runtime.shadowOnlyReason) ?? "n/a"}`,
+  ];
+}
+
+function formatRuntimeSummary(runtime: Record<string, unknown>): string[] {
+  const integration = isRecord(runtime.integration) ? runtime.integration : {};
+  const controls = isRecord(runtime.controls) ? runtime.controls : {};
+  const health = isRecord(runtime.health) ? runtime.health : {};
+  const feedGateway = isRecord(health.feedGateway) ? health.feedGateway : {};
+  const featureCache = isRecord(health.featureCache) ? health.featureCache : {};
+  const deployments = Array.isArray(runtime.deployments)
+    ? runtime.deployments.filter(isRecord)
+    : [];
+  const stateCounts = deployments.reduce<Record<string, number>>(
+    (acc, item) => {
+      const state = readString(item.state) ?? "unknown";
+      acc[state] = (acc[state] ?? 0) + 1;
+      return acc;
+    },
+    {},
+  );
+  const stateSummary =
+    Object.keys(stateCounts).length > 0
+      ? Object.entries(stateCounts)
+          .map(([state, count]) => `${state}=${count}`)
+          .join(", ")
+      : "none";
+  const staleCount =
+    (Array.isArray(feedGateway.staleMarketStreams)
+      ? feedGateway.staleMarketStreams.length
+      : 0) +
+    (Array.isArray(featureCache.staleFeatureKeys)
+      ? featureCache.staleFeatureKeys.length
+      : 0);
+  const maxSlotAgeMs = Math.max(
+    readNumber(feedGateway.maxSlotAgeMs) ?? 0,
+    readNumber(featureCache.maxSlotAgeMs) ?? 0,
+  );
+
+  return [
+    `- status: ${String(runtime.ok ?? false)}`,
+    `- source: ${readString(runtime.source) ?? "n/a"}`,
+    `- runtime enabled: ${String(controls.enabled ?? true)}`,
+    `- shadow only: ${String(controls.shadowOnly ?? true)}`,
+    `- shadowOnlyReason: ${readString(controls.shadowOnlyReason) ?? "n/a"}`,
+    `- integration: stub=${String(integration.stubModeEnabled ?? false)}, baseUrl=${readString(integration.runtimeBaseUrl) ?? "n/a"}`,
+    `- health status: ${readString(health.status) ?? "n/a"}`,
+    `- max market age ms: ${readNumber(feedGateway.maxMarketAgeMs) ?? "n/a"}`,
+    `- max feature age ms: ${readNumber(featureCache.maxFeatureAgeMs) ?? "n/a"}`,
+    `- max slot age ms: ${maxSlotAgeMs || "n/a"}`,
+    `- stale streams/features: ${staleCount}`,
+    `- deployments: total=${deployments.length}, states=${stateSummary}`,
+    `- error: ${readString(runtime.error) ?? "n/a"}`,
   ];
 }
 
@@ -168,6 +226,9 @@ export function buildOpsDashboardMarkdown(
     "",
     "## Controls",
     ...formatControlSummary(snapshot.controls),
+    "",
+    "## Runtime",
+    ...formatRuntimeSummary(snapshot.runtime),
     "",
     "## Preview Health",
     `- total previews: ${previewSummary.total}`,

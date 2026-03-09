@@ -184,6 +184,23 @@ impl StrategyRegistry {
         load_deployment(&connection, deployment_id)
     }
 
+    pub fn list_deployments(&self) -> Result<Vec<RuntimeDeploymentRecord>, StrategyRegistryError> {
+        let connection = self.open_connection()?;
+        let mut statement = connection.prepare(
+            "SELECT record_json
+             FROM deployments
+             ORDER BY updated_at DESC, deployment_id DESC",
+        )?;
+
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut deployments = Vec::new();
+        for row in rows {
+            deployments.push(deserialize_json(&row?)?);
+        }
+
+        Ok(deployments)
+    }
+
     pub fn transition_deployment(
         &self,
         deployment_id: &str,

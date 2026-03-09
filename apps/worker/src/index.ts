@@ -132,7 +132,13 @@ import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
-import { handleRuntimeInternalRoute } from "./runtime_internal";
+import {
+  applyRuntimeDeploymentControl,
+  handleRuntimeInternalRoute,
+  type RuntimeControlAction,
+  readRuntimeAdminSnapshot,
+  readRuntimeDeployment,
+} from "./runtime_internal";
 import { SolanaRpc } from "./solana_rpc";
 import type { Env, ExecutionConfig } from "./types";
 import type { UserRow } from "./users_db";
@@ -417,7 +423,51 @@ function parseOpsControlPatch(
     }
   }
 
+  if (isRecord(value.runtime)) {
+    patch.runtime = {};
+    if (value.runtime.enabled !== undefined) {
+      patch.runtime.enabled = readBooleanEnv(value.runtime.enabled, true);
+    }
+    if (value.runtime.disabledReason !== undefined) {
+      patch.runtime.disabledReason = readOptionalString(
+        value.runtime.disabledReason,
+      );
+    }
+    if (value.runtime.shadowOnly !== undefined) {
+      patch.runtime.shadowOnly = readBooleanEnv(value.runtime.shadowOnly, true);
+    }
+    if (value.runtime.shadowOnlyReason !== undefined) {
+      patch.runtime.shadowOnlyReason = readOptionalString(
+        value.runtime.shadowOnlyReason,
+      );
+    }
+  }
+
   return patch;
+}
+
+function parseRuntimeAdminControlPath(pathname: string): {
+  deploymentId: string;
+  action: RuntimeControlAction;
+} | null {
+  const prefix = "/api/admin/ops/runtime/deployments/";
+  if (!pathname.startsWith(prefix)) return null;
+  const suffix = pathname.slice(prefix.length);
+  const [deploymentId, action, extra] = suffix.split("/");
+  if (!deploymentId || extra) return null;
+  if (action !== "pause" && action !== "resume" && action !== "kill") {
+    return null;
+  }
+  let decodedDeploymentId: string;
+  try {
+    decodedDeploymentId = decodeURIComponent(deploymentId);
+  } catch {
+    return null;
+  }
+  return {
+    deploymentId: decodedDeploymentId,
+    action,
+  };
 }
 
 function newExecutionAttemptId(): string {
@@ -2094,6 +2144,105 @@ const worker = {
 
       if (
         request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const controls = await readOpsControlSnapshot(env);
+        const runtime = await readRuntimeAdminSnapshot(env);
+        return withCors(
+          json({
+            ok: true,
+            runtime: {
+              ...runtime,
+              controls: controls.runtime,
+            },
+          }),
+          env,
+        );
+      }
+
+      const runtimeControl =
+        request.method === "POST"
+          ? parseRuntimeAdminControlPath(url.pathname)
+          : null;
+      if (request.method === "POST" && runtimeControl) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const controls = await readOpsControlSnapshot(env);
+        if (runtimeControl.action === "resume") {
+          if (!controls.runtime.enabled) {
+            return withCors(
+              json(
+                {
+                  ok: false,
+                  error: "runtime-disabled",
+                  deploymentId: runtimeControl.deploymentId,
+                  controls: controls.runtime,
+                },
+                { status: 409 },
+              ),
+              env,
+            );
+          }
+
+          const deploymentResult = await readRuntimeDeployment(
+            env,
+            runtimeControl.deploymentId,
+          );
+          if (!deploymentResult.ok) {
+            return withCors(
+              json(deploymentResult.payload, {
+                status: deploymentResult.status,
+              }),
+              env,
+            );
+          }
+          const deployment = isRecord(deploymentResult.payload.deployment)
+            ? deploymentResult.payload.deployment
+            : null;
+          const deploymentMode = readOptionalString(deployment?.mode);
+          if (
+            controls.runtime.shadowOnly &&
+            deploymentMode &&
+            deploymentMode !== "shadow"
+          ) {
+            return withCors(
+              json(
+                {
+                  ok: false,
+                  error: "runtime-shadow-only",
+                  deploymentId: runtimeControl.deploymentId,
+                  mode: deploymentMode,
+                  controls: controls.runtime,
+                },
+                { status: 409 },
+              ),
+              env,
+            );
+          }
+        }
+
+        const result = await applyRuntimeDeploymentControl({
+          env,
+          deploymentId: runtimeControl.deploymentId,
+          action: runtimeControl.action,
+        });
+        return withCors(json(result.payload, { status: result.status }), env);
+      }
+
+      if (
+        request.method === "GET" &&
         url.pathname === "/api/admin/ops/dashboard"
       ) {
         const auth = authorizeAdminRoute(request, env);
@@ -2121,7 +2270,7 @@ const worker = {
           100,
           20_000,
         );
-        const [controls, execution, canary] = await Promise.all([
+        const [controls, execution, canary, runtime] = await Promise.all([
           readOpsControlSnapshot(env),
           readExecutionObservabilitySnapshot({
             db: env.WAITLIST_DB,
@@ -2130,6 +2279,7 @@ const worker = {
             thresholds: readExecObservabilityThresholds(env),
           }),
           readExecutionCanarySnapshot(env),
+          readRuntimeAdminSnapshot(env),
         ]);
         return withCors(
           json({
@@ -2138,6 +2288,10 @@ const worker = {
             controls,
             execution,
             canary,
+            runtime: {
+              ...runtime,
+              controls: controls.runtime,
+            },
           }),
           env,
         );

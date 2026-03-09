@@ -14,6 +14,8 @@ import type { Env } from "./types";
 
 const BEARER_RE = /^bearer\s+/i;
 const INTERNAL_RUNTIME_PREFIX = "/api/internal/runtime";
+const INTERNAL_RUNTIME_HEALTH_PATH = `${INTERNAL_RUNTIME_PREFIX}/health`;
+const INTERNAL_RUNTIME_DEPLOYMENTS_PATH = `${INTERNAL_RUNTIME_PREFIX}/deployments`;
 const INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX = `${INTERNAL_RUNTIME_PREFIX}/deployments/`;
 const INTERNAL_RUNTIME_RUNS_PREFIX = `${INTERNAL_RUNTIME_PREFIX}/runs/`;
 const INTERNAL_RUNTIME_EXECUTION_PLANS_PATH = `${INTERNAL_RUNTIME_PREFIX}/execution-plans`;
@@ -23,7 +25,26 @@ const FIXTURE_BASE_MINT = "So11111111111111111111111111111111111111112";
 const FIXTURE_QUOTE_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const DEFAULT_RUNTIME_SERVICE = "runtime-rs";
 
-type RuntimeControlAction = "pause" | "resume" | "kill";
+export type RuntimeControlAction = "pause" | "resume" | "kill";
+
+export type RuntimeInternalJsonResult = {
+  status: number;
+  ok: boolean;
+  payload: Record<string, unknown>;
+};
+
+export type RuntimeAdminSnapshot = {
+  ok: boolean;
+  source: string;
+  integration: {
+    stubModeEnabled: boolean;
+    runtimeBaseUrl: string | null;
+    serviceName: string;
+  };
+  health: Record<string, unknown> | null;
+  deployments: RuntimeDeploymentRecord[];
+  error: string | null;
+};
 
 function parseBearerToken(value: string | null): string | null {
   const raw = String(value ?? "").trim();
@@ -41,9 +62,28 @@ function configuredRuntimeServiceName(env: Env): string {
   return configured || DEFAULT_RUNTIME_SERVICE;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readStringOrNull(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  return normalized ? normalized : null;
+}
+
 function readRuntimeServiceBaseUrl(env: Env): string | null {
   const raw = String(env.RUNTIME_INTERNAL_BASE_URL ?? "").trim();
   return raw || null;
+}
+
+function buildRuntimeIntegration(
+  env: Env,
+): RuntimeAdminSnapshot["integration"] {
+  return {
+    stubModeEnabled: isRuntimeStubModeEnabled(env),
+    runtimeBaseUrl: readRuntimeServiceBaseUrl(env),
+    serviceName: configuredRuntimeServiceName(env),
+  };
 }
 
 function authorizeRuntimeServiceRoute(
@@ -78,10 +118,32 @@ function authorizeRuntimeServiceRoute(
   };
 }
 
+function inferFixtureDeploymentMode(
+  deploymentId: string,
+): RuntimeDeploymentRecord["mode"] {
+  const normalized = deploymentId.trim().toLowerCase();
+  if (normalized.includes("live")) return "live";
+  if (normalized.includes("paper")) return "paper";
+  return "shadow";
+}
+
+function resumeStateForDeploymentId(
+  deploymentId: string,
+): RuntimeDeploymentRecord["state"] {
+  const mode = inferFixtureDeploymentMode(deploymentId);
+  if (mode === "paper") return "paper";
+  if (mode === "live") return "live";
+  return "shadow";
+}
+
 function createRuntimeDeploymentFixture(
   deploymentId: string,
-  state: RuntimeDeploymentRecord["state"] = "shadow",
+  state?: RuntimeDeploymentRecord["state"],
+  mode?: RuntimeDeploymentRecord["mode"],
 ): RuntimeDeploymentRecord {
+  const fixtureMode = mode ?? inferFixtureDeploymentMode(deploymentId);
+  const fixtureState =
+    state ?? (fixtureMode === "shadow" ? "shadow" : fixtureMode);
   return parseRuntimeDeploymentRecord({
     schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
     deploymentId,
@@ -93,13 +155,13 @@ function createRuntimeDeploymentFixture(
       baseMint: FIXTURE_BASE_MINT,
       quoteMint: FIXTURE_QUOTE_MINT,
     },
-    mode: state === "live" ? "live" : state === "paper" ? "paper" : "shadow",
-    state,
+    mode: fixtureMode,
+    state: fixtureState,
     lane: "safe",
     createdAt: FIXTURE_TIMESTAMP,
     updatedAt: FIXTURE_TIMESTAMP,
-    ...(state === "paused" ? { pausedAt: FIXTURE_TIMESTAMP } : {}),
-    ...(state === "killed" ? { killedAt: FIXTURE_TIMESTAMP } : {}),
+    ...(fixtureState === "paused" ? { pausedAt: FIXTURE_TIMESTAMP } : {}),
+    ...(fixtureState === "killed" ? { killedAt: FIXTURE_TIMESTAMP } : {}),
     policy: {
       maxNotionalUsd: "250.00",
       dailyLossLimitUsd: "35.00",
@@ -280,6 +342,38 @@ function createRuntimeScorecardFixture(deploymentId: string) {
   };
 }
 
+function createRuntimeHealthFixture() {
+  return {
+    serviceName: DEFAULT_RUNTIME_SERVICE,
+    status: "healthy",
+    environment: "local",
+    protocolVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    marketAdapterStatus: "healthy",
+    feedBootstrapSource: "stub",
+    feedGateway: {
+      status: "healthy",
+      maxMarketAgeMs: 2400,
+      maxSlotAgeMs: 1700,
+      maxSlotGapObserved: 0,
+      staleMarketStreams: [],
+      staleSlotCommitments: [],
+    },
+    featureCache: {
+      status: "healthy",
+      maxFeatureAgeMs: 2600,
+      maxSlotAgeMs: 1800,
+      maxSlotGapObserved: 0,
+      staleFeatureKeys: [],
+    },
+    strategyRegistry: {
+      status: "healthy",
+      deploymentCount: 1,
+      runCount: 0,
+      lastError: null,
+    },
+  };
+}
+
 async function readJsonBody(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -311,7 +405,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       runtimeBaseUrl: readRuntimeServiceBaseUrl(env),
     },
     routes: {
-      deployments: `${INTERNAL_RUNTIME_PREFIX}/deployments`,
+      deployments: INTERNAL_RUNTIME_DEPLOYMENTS_PATH,
       runs: `${INTERNAL_RUNTIME_PREFIX}/runs/:deploymentId`,
       positions: `${INTERNAL_RUNTIME_PREFIX}/positions`,
       pnl: `${INTERNAL_RUNTIME_PREFIX}/pnl`,
@@ -324,9 +418,10 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
 
 function mapControlActionToState(
   action: RuntimeControlAction,
+  deploymentId: string,
 ): RuntimeDeploymentRecord["state"] {
   if (action === "pause") return "paused";
-  if (action === "resume") return "shadow";
+  if (action === "resume") return resumeStateForDeploymentId(deploymentId);
   return "killed";
 }
 
@@ -344,14 +439,193 @@ function controlActionFromPath(pathname: string): {
   return null;
 }
 
+async function dispatchRuntimeInternalJson(input: {
+  env: Env;
+  method: string;
+  pathname: string;
+  body?: unknown;
+}): Promise<RuntimeInternalJsonResult> {
+  const headers = new Headers({
+    authorization: `Bearer ${String(input.env.RUNTIME_INTERNAL_SERVICE_TOKEN ?? "").trim()}`,
+    accept: "application/json",
+  });
+  let body: string | undefined;
+  if (input.body !== undefined) {
+    headers.set("content-type", "application/json");
+    body = JSON.stringify(input.body);
+  }
+
+  let response: Response;
+  if (isRuntimeStubModeEnabled(input.env)) {
+    const url = new URL(input.pathname, "http://runtime-internal.local");
+    const request = new Request(url.toString(), {
+      method: input.method,
+      headers,
+      ...(body !== undefined ? { body } : {}),
+    });
+    response =
+      (await handleRuntimeInternalRoute(request, url, input.env)) ??
+      json({ ok: false, error: "runtime-route-not-handled" }, { status: 404 });
+  } else {
+    const baseUrl = readRuntimeServiceBaseUrl(input.env);
+    if (!baseUrl) {
+      response = runtimeInternalUnavailable(input.env);
+    } else {
+      try {
+        response = await fetch(new URL(input.pathname, baseUrl), {
+          method: input.method,
+          headers,
+          ...(body !== undefined ? { body } : {}),
+        });
+      } catch (error) {
+        response = json(
+          {
+            ok: false,
+            error: "runtime-integration-request-failed",
+            details: {
+              reason: error instanceof Error ? error.message : "unknown-error",
+            },
+          },
+          { status: 502 },
+        );
+      }
+    }
+  }
+
+  const payload = (await response.json().catch(() => null)) as unknown;
+  return {
+    status: response.status,
+    ok: response.ok,
+    payload: isRecord(payload)
+      ? payload
+      : {
+          ok: response.ok,
+          error: "invalid-runtime-json-response",
+          status: response.status,
+        },
+  };
+}
+
+function parseRuntimeDeploymentList(value: unknown): RuntimeDeploymentRecord[] {
+  if (!Array.isArray(value)) return [];
+  const deployments: RuntimeDeploymentRecord[] = [];
+  for (const entry of value) {
+    try {
+      deployments.push(parseRuntimeDeploymentRecord(entry));
+    } catch {}
+  }
+  return deployments;
+}
+
+function runtimeErrorFromPayload(
+  payload: Record<string, unknown>,
+  fallback: string,
+): string {
+  return (
+    readStringOrNull(payload.error) ??
+    readStringOrNull(payload.message) ??
+    fallback
+  );
+}
+
+export async function readRuntimeAdminSnapshot(
+  env: Env,
+): Promise<RuntimeAdminSnapshot> {
+  const integration = buildRuntimeIntegration(env);
+  const healthResult = await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: INTERNAL_RUNTIME_HEALTH_PATH,
+  });
+  if (!healthResult.ok) {
+    return {
+      ok: false,
+      source: "worker",
+      integration,
+      health: null,
+      deployments: [],
+      error: runtimeErrorFromPayload(
+        healthResult.payload,
+        "runtime-health-unavailable",
+      ),
+    };
+  }
+
+  const health = isRecord(healthResult.payload.health)
+    ? healthResult.payload.health
+    : integration.stubModeEnabled
+      ? createRuntimeHealthFixture()
+      : null;
+  const source =
+    readStringOrNull(healthResult.payload.source) ??
+    (integration.stubModeEnabled ? "stub" : "runtime-rs");
+
+  const deploymentsResult = await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: INTERNAL_RUNTIME_DEPLOYMENTS_PATH,
+  });
+  if (!deploymentsResult.ok) {
+    return {
+      ok: false,
+      source,
+      integration,
+      health,
+      deployments: [],
+      error: runtimeErrorFromPayload(
+        deploymentsResult.payload,
+        "runtime-deployments-unavailable",
+      ),
+    };
+  }
+
+  return {
+    ok: true,
+    source: readStringOrNull(deploymentsResult.payload.source) ?? source,
+    integration,
+    health,
+    deployments: parseRuntimeDeploymentList(
+      deploymentsResult.payload.deployments,
+    ),
+    error: null,
+  };
+}
+
+export async function readRuntimeDeployment(
+  env: Env,
+  deploymentId: string,
+): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: `${INTERNAL_RUNTIME_DEPLOYMENTS_PATH}/${encodeURIComponent(
+      deploymentId,
+    )}`,
+  });
+}
+
+export async function applyRuntimeDeploymentControl(input: {
+  env: Env;
+  deploymentId: string;
+  action: RuntimeControlAction;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: `${INTERNAL_RUNTIME_DEPLOYMENTS_PATH}/${encodeURIComponent(
+      input.deploymentId,
+    )}/${input.action}`,
+  });
+}
+
 export async function handleRuntimeInternalRoute(
   request: Request,
   url: URL,
   env: Env,
 ): Promise<Response | null> {
   const isRuntimeRoute =
-    url.pathname === `${INTERNAL_RUNTIME_PREFIX}/health` ||
-    url.pathname === `${INTERNAL_RUNTIME_PREFIX}/deployments` ||
+    url.pathname === INTERNAL_RUNTIME_HEALTH_PATH ||
+    url.pathname === INTERNAL_RUNTIME_DEPLOYMENTS_PATH ||
     url.pathname === `${INTERNAL_RUNTIME_PREFIX}/positions` ||
     url.pathname === `${INTERNAL_RUNTIME_PREFIX}/pnl` ||
     url.pathname === INTERNAL_RUNTIME_SCORECARDS_PATH ||
@@ -367,7 +641,7 @@ export async function handleRuntimeInternalRoute(
 
   if (
     request.method === "GET" &&
-    url.pathname === `${INTERNAL_RUNTIME_PREFIX}/health`
+    url.pathname === INTERNAL_RUNTIME_HEALTH_PATH
   ) {
     return json(buildRuntimeHealthPayload(env, auth.service));
   }
@@ -377,8 +651,21 @@ export async function handleRuntimeInternalRoute(
   }
 
   if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_DEPLOYMENTS_PATH
+  ) {
+    const deploymentId =
+      url.searchParams.get("deploymentId") ?? "deployment_shadow_fixture";
+    return json({
+      ok: true,
+      source: "stub",
+      deployments: [createRuntimeDeploymentFixture(deploymentId)],
+    });
+  }
+
+  if (
     request.method === "POST" &&
-    url.pathname === `${INTERNAL_RUNTIME_PREFIX}/deployments`
+    url.pathname === INTERNAL_RUNTIME_DEPLOYMENTS_PATH
   ) {
     let deployment: RuntimeDeploymentRecord;
     try {
@@ -433,7 +720,7 @@ export async function handleRuntimeInternalRoute(
         action: control.action,
         deployment: createRuntimeDeploymentFixture(
           control.deploymentId,
-          mapControlActionToState(control.action),
+          mapControlActionToState(control.action, control.deploymentId),
         ),
       });
     }

@@ -191,6 +191,12 @@ describe("worker ops controls routes", () => {
               enabled: false,
               disabledReason: "incident-123",
             },
+            runtime: {
+              enabled: false,
+              disabledReason: "runtime-incident-123",
+              shadowOnly: false,
+              shadowOnlyReason: null,
+            },
           }),
         }),
         env,
@@ -224,7 +230,196 @@ describe("worker ops controls routes", () => {
             enabled: true,
             disabledReason: null,
           },
+          runtime: {
+            enabled: true,
+            disabledReason: null,
+            shadowOnly: true,
+            shadowOnlyReason: "live-rollout-pending",
+          },
         },
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("returns runtime admin snapshot with health, lag, and deployment state", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/admin/ops/runtime", {
+          headers: {
+            authorization: "Bearer admin-secret",
+          },
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        runtime: {
+          ok: true,
+          controls: {
+            enabled: true,
+            shadowOnly: true,
+            shadowOnlyReason: "live-rollout-pending",
+          },
+          integration: {
+            stubModeEnabled: true,
+          },
+          health: {
+            status: "healthy",
+            feedGateway: {
+              maxMarketAgeMs: expect.any(Number),
+            },
+            featureCache: {
+              maxFeatureAgeMs: expect.any(Number),
+            },
+          },
+          deployments: [
+            {
+              deploymentId: "deployment_shadow_fixture",
+              mode: "shadow",
+              state: "shadow",
+            },
+          ],
+        },
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("blocks runtime resumes when the global runtime kill switch is enabled", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const patchResponse = await worker.fetch(
+        new Request("http://localhost/api/admin/ops/controls", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer admin-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            runtime: {
+              enabled: false,
+              disabledReason: "runtime-incident-456",
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(patchResponse.status).toBe(200);
+
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/deployments/deployment_shadow_fixture/resume",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: "runtime-disabled",
+        deploymentId: "deployment_shadow_fixture",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("blocks non-shadow runtime resumes while shadow-only mode is enabled", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/deployments/deployment_paper_fixture/resume",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: "runtime-shadow-only",
+        deploymentId: "deployment_paper_fixture",
+        mode: "paper",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("proxies runtime deployment pause controls through the worker admin surface", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/deployments/deployment_shadow_fixture/pause",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        action: "pause",
+        deployment: {
+          deploymentId: "deployment_shadow_fixture",
+          state: "paused",
+        },
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("fails closed on malformed runtime admin deployment IDs", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/deployments/%E0%A4%A/resume",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: "not-found",
       });
     } finally {
       sqlite.close();
@@ -250,6 +445,10 @@ describe("worker ops controls routes", () => {
           execution: {
             enabled: true,
           },
+          runtime: {
+            enabled: true,
+            shadowOnly: true,
+          },
         },
         canary: {
           ok: true,
@@ -258,6 +457,14 @@ describe("worker ops controls routes", () => {
           totals: {
             accepted: 0,
           },
+        },
+        runtime: {
+          ok: true,
+          deployments: [
+            {
+              deploymentId: "deployment_shadow_fixture",
+            },
+          ],
         },
       });
     } finally {

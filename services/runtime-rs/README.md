@@ -88,6 +88,7 @@ Route surface:
 
 - `GET /api/internal/runtime/health`
 - `POST /api/internal/runtime/deployments`
+- `GET /api/internal/runtime/deployments`
 - `GET /api/internal/runtime/deployments/:deploymentId`
 - `POST /api/internal/runtime/deployments/:deploymentId/pause`
 - `POST /api/internal/runtime/deployments/:deploymentId/resume`
@@ -107,6 +108,9 @@ curl -fsS http://127.0.0.1:8081/api/internal/runtime/deployments \
   -H "content-type: application/json" \
   --data @docs/runtime-contracts/fixtures/runtime.deployment.valid.v1.json
 
+curl -fsS http://127.0.0.1:8081/api/internal/runtime/deployments \
+  -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
+
 curl -fsS http://127.0.0.1:8081/api/internal/runtime/deployments/dep_runtime_sol_usdc_shadow/evaluate \
   -X POST \
   -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}" \
@@ -119,6 +123,23 @@ curl -fsS http://127.0.0.1:8081/api/internal/runtime/runs/dep_runtime_sol_usdc_s
 curl -fsS "http://127.0.0.1:8081/api/internal/runtime/risk?deploymentId=dep_runtime_sol_usdc_shadow" \
   -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
 ```
+
+## Worker-admin ops surface
+
+Operators should use the Worker as the public control plane:
+
+- `GET /api/admin/ops/runtime`
+- `POST /api/admin/ops/runtime/deployments/:deploymentId/pause`
+- `POST /api/admin/ops/runtime/deployments/:deploymentId/resume`
+- `POST /api/admin/ops/runtime/deployments/:deploymentId/kill`
+- `POST /api/admin/ops/controls` with `runtime.shadowOnly=true` to keep the
+  runtime shadow-only until live rollout is explicitly enabled in a later issue
+
+The default runtime control baseline is:
+
+- `runtime.enabled=true`
+- `runtime.shadowOnly=true`
+- `runtime.shadowOnlyReason=live-rollout-pending`
 
 ## Fly foundation
 
