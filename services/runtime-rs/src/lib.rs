@@ -7,7 +7,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use exec_client::{ExecClient, ExecClientConfig, ExecClientError, ExecSubmitResponse};
+use exec_client::{
+    ExecClient, ExecClientConfig, ExecClientError, ExecReceiptObservation, ExecSubmitResponse,
+};
 use execution_planner::{
     ExecutionPlanner, ExecutionPlannerConfig, ExecutionPlannerError, ExecutionPlannerInput,
     ExecutionPlannerSnapshot,
@@ -529,7 +531,7 @@ async fn evaluate_deployment_handler(
     let observed_ledger_override = request.observed_ledger_snapshot.clone();
     let result = state
         .strategy_registry
-        .evaluate_shadow_trigger(
+        .evaluate_deployment_trigger(
             &deployment_id,
             &state.feature_cache_snapshot(),
             request.trigger,
@@ -620,22 +622,33 @@ async fn evaluate_deployment_handler(
                     &submit.submit_request_id,
                 )
                 .map_err(map_registry_error)?;
-            let receipt = state
-                .reconciler
-                .record_synthetic_receipt(
-                    &plan,
-                    &submit.submit_request_id,
-                    &submit.source,
-                    "accepted",
-                    &["execution coordination accepted"],
-                )
-                .map_err(map_reconciler_error)?;
+            let receipt = if let Some(receipt) = submit.receipt.as_ref() {
+                state
+                    .reconciler
+                    .record_receipt_observation(
+                        &plan,
+                        &runtime_receipt_from_exec_response(&plan, &submit, receipt),
+                    )
+                    .map_err(map_reconciler_error)?
+            } else {
+                state
+                    .reconciler
+                    .record_synthetic_receipt(
+                        &plan,
+                        &submit.submit_request_id,
+                        &submit.source,
+                        "accepted",
+                        &["execution coordination accepted"],
+                    )
+                    .map_err(map_reconciler_error)?
+            };
             coordinated_run = state
                 .strategy_registry
                 .apply_receipt(&coordinated_run.run_id, &receipt.receipt_id)
                 .map_err(map_registry_error)?;
-            let observed_ledger =
-                observed_ledger_override.unwrap_or_else(|| ledger_snapshot.clone());
+            let observed_ledger = observed_ledger_override
+                .or_else(|| submit.observed_ledger.clone())
+                .unwrap_or_else(|| ledger_snapshot.clone());
             state
                 .reconciler
                 .record_wallet_observation(
@@ -958,6 +971,23 @@ fn shadow_evaluation_json(payload: ShadowEvaluationResponse) -> JsonPayload {
     )
 }
 
+fn runtime_receipt_from_exec_response(
+    plan: &protocol::RuntimeExecutionPlan,
+    submit: &ExecSubmitResponse,
+    receipt: &ExecReceiptObservation,
+) -> reconciler::RuntimeReceiptObservation {
+    reconciler::RuntimeReceiptObservation {
+        receipt_id: receipt.receipt_id.clone(),
+        deployment_id: plan.deployment_id.clone(),
+        run_id: plan.run_id.clone(),
+        submit_request_id: submit.submit_request_id.clone(),
+        observed_at: receipt.observed_at.clone(),
+        source: submit.source.clone(),
+        status: receipt.status.clone(),
+        notes: receipt.notes.clone(),
+    }
+}
+
 fn parse_json_body<T: DeserializeOwned>(body: &[u8], error_code: &str) -> Result<T, JsonPayload> {
     serde_json::from_slice(body).map_err(|error| {
         error_json(
@@ -1107,6 +1137,17 @@ fn map_registry_error(error: StrategyRegistryError) -> JsonPayload {
         } => error_json(
             StatusCode::CONFLICT,
             "deployment-not-shadow",
+            json!({
+                "deploymentId": deployment_id,
+                "state": state,
+            }),
+        ),
+        StrategyRegistryError::DeploymentNotRunnable {
+            deployment_id,
+            state,
+        } => error_json(
+            StatusCode::CONFLICT,
+            "deployment-not-runnable",
             json!({
                 "deploymentId": deployment_id,
                 "state": state,

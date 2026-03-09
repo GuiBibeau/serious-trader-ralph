@@ -109,6 +109,11 @@ pub enum StrategyRegistryError {
         deployment_id: String,
         state: RuntimeDeploymentState,
     },
+    #[error("deployment {deployment_id} is not runnable, found {state:?}")]
+    DeploymentNotRunnable {
+        deployment_id: String,
+        state: RuntimeDeploymentState,
+    },
     #[error("feature stream missing for pair {symbol}")]
     FeatureStreamMissing { symbol: String },
     #[error("feature stream stale for pair {symbol}: {reasons}")]
@@ -468,12 +473,61 @@ impl StrategyRegistry {
             });
         }
 
+        let result = self.evaluate_trigger_with_deployment(
+            &transaction,
+            deployment,
+            feature_cache_snapshot,
+            trigger,
+        )?;
+        transaction.commit()?;
+        Ok(result)
+    }
+
+    pub fn evaluate_deployment_trigger(
+        &self,
+        deployment_id: &str,
+        feature_cache_snapshot: &FeatureCacheSnapshot,
+        trigger: Option<ShadowEvaluationTrigger>,
+    ) -> Result<ShadowEvaluationResult, StrategyRegistryError> {
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        let deployment = load_deployment(&transaction, deployment_id)?.ok_or_else(|| {
+            StrategyRegistryError::DeploymentNotFound {
+                deployment_id: deployment_id.to_string(),
+            }
+        })?;
+
+        if !deployment_is_runnable(&deployment.state) {
+            return Err(StrategyRegistryError::DeploymentNotRunnable {
+                deployment_id: deployment_id.to_string(),
+                state: deployment.state,
+            });
+        }
+
+        let result = self.evaluate_trigger_with_deployment(
+            &transaction,
+            deployment,
+            feature_cache_snapshot,
+            trigger,
+        )?;
+        transaction.commit()?;
+        Ok(result)
+    }
+
+    fn evaluate_trigger_with_deployment(
+        &self,
+        transaction: &Connection,
+        deployment: RuntimeDeploymentRecord,
+        feature_cache_snapshot: &FeatureCacheSnapshot,
+        trigger: Option<ShadowEvaluationTrigger>,
+    ) -> Result<ShadowEvaluationResult, StrategyRegistryError> {
+        let deployment_id = deployment.deployment_id.clone();
+
         let feature_snapshot =
             select_feature_snapshot(feature_cache_snapshot, &deployment.pair.symbol)?;
         let trigger = build_runtime_trigger(trigger, &feature_snapshot)?;
-        let run_key = build_run_key(deployment_id, &trigger);
-        if let Some(existing_run) = load_run_by_key(&transaction, &run_key)? {
-            transaction.commit()?;
+        let run_key = build_run_key(&deployment_id, &trigger);
+        if let Some(existing_run) = load_run_by_key(transaction, &run_key)? {
             return Ok(ShadowEvaluationResult {
                 deployment,
                 run: existing_run,
@@ -499,8 +553,7 @@ impl StrategyRegistry {
             failure_message: None,
         };
 
-        persist_run(&transaction, &run)?;
-        transaction.commit()?;
+        persist_run(transaction, &run)?;
 
         Ok(ShadowEvaluationResult {
             deployment,
@@ -602,6 +655,7 @@ fn should_fallback_to_tmp(database_path: &Path, error: &StrategyRegistryError) -
         | StrategyRegistryError::ImmutableFieldChanged { .. }
         | StrategyRegistryError::InvalidStateTransition { .. }
         | StrategyRegistryError::DeploymentNotShadow { .. }
+        | StrategyRegistryError::DeploymentNotRunnable { .. }
         | StrategyRegistryError::FeatureStreamMissing { .. }
         | StrategyRegistryError::FeatureStreamStale { .. }
         | StrategyRegistryError::InvalidObservedAt(_)
@@ -647,6 +701,15 @@ fn ensure_supported_strategy(strategy_key: &str) -> Result<(), StrategyRegistryE
     Err(StrategyRegistryError::UnsupportedStrategy(
         strategy_key.to_string(),
     ))
+}
+
+fn deployment_is_runnable(state: &RuntimeDeploymentState) -> bool {
+    matches!(
+        state,
+        RuntimeDeploymentState::Shadow
+            | RuntimeDeploymentState::Paper
+            | RuntimeDeploymentState::Live
+    )
 }
 
 fn ensure_immutable_deployment_fields(
@@ -1265,6 +1328,58 @@ mod tests {
         assert!(result.feature_snapshot.stale);
         assert_eq!(result.run.state, RuntimeRunState::Pending);
         assert!(result.run.risk_verdict_id.is_none());
+    }
+
+    #[test]
+    fn evaluates_live_deployments_through_the_general_trigger_path() {
+        let registry = registry("live-evaluation");
+        registry
+            .upsert_deployment(&deployment(
+                "deployment_live",
+                RuntimeMode::Live,
+                RuntimeDeploymentState::Live,
+            ))
+            .expect("deployment to store");
+
+        let result = registry
+            .evaluate_deployment_trigger(
+                "deployment_live",
+                &feature_cache_snapshot(false),
+                Some(ShadowEvaluationTrigger {
+                    kind: RuntimeTriggerKind::Canary,
+                    source: "runtime-canary".to_string(),
+                    observed_at: Some("2026-03-08T12:00:00.000Z".to_string()),
+                    feature_snapshot_id: Some("snapshot_live".to_string()),
+                    reason: Some("limited-live-canary".to_string()),
+                }),
+            )
+            .expect("live evaluation to create a run");
+
+        assert!(result.created);
+        assert_eq!(result.deployment.state, RuntimeDeploymentState::Live);
+        assert_eq!(result.run.trigger.kind, RuntimeTriggerKind::Canary);
+        assert_eq!(result.run.state, RuntimeRunState::Pending);
+    }
+
+    #[test]
+    fn rejects_non_runnable_deployments_from_general_evaluation() {
+        let registry = registry("paused-evaluation");
+        registry
+            .upsert_deployment(&deployment(
+                "deployment_paused",
+                RuntimeMode::Live,
+                RuntimeDeploymentState::Paused,
+            ))
+            .expect("deployment to store");
+
+        let error = registry
+            .evaluate_deployment_trigger("deployment_paused", &feature_cache_snapshot(false), None)
+            .expect_err("paused deployment should not evaluate");
+
+        assert!(matches!(
+            error,
+            StrategyRegistryError::DeploymentNotRunnable { .. }
+        ));
     }
 
     #[test]

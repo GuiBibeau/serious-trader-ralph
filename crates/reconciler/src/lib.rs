@@ -225,23 +225,32 @@ impl Reconciler {
         status: &str,
         notes: &[&str],
     ) -> Result<RuntimeReceiptObservation, ReconcilerError> {
+        self.record_receipt_observation(
+            plan,
+            &RuntimeReceiptObservation {
+                receipt_id: build_prefixed_id("receipt", submit_request_id),
+                deployment_id: plan.deployment_id.clone(),
+                run_id: plan.run_id.clone(),
+                submit_request_id: submit_request_id.to_string(),
+                observed_at: now_rfc3339(),
+                source: source.to_string(),
+                status: status.to_string(),
+                notes: notes.iter().map(|note| (*note).to_string()).collect(),
+            },
+        )
+    }
+
+    pub fn record_receipt_observation(
+        &self,
+        plan: &RuntimeExecutionPlan,
+        receipt: &RuntimeReceiptObservation,
+    ) -> Result<RuntimeReceiptObservation, ReconcilerError> {
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
         if let Some(existing) = load_receipt_by_run_id(&transaction, &plan.run_id)? {
             transaction.commit()?;
             return Ok(existing);
         }
-
-        let record = RuntimeReceiptObservation {
-            receipt_id: build_prefixed_id("receipt", submit_request_id),
-            deployment_id: plan.deployment_id.clone(),
-            run_id: plan.run_id.clone(),
-            submit_request_id: submit_request_id.to_string(),
-            observed_at: now_rfc3339(),
-            source: source.to_string(),
-            status: status.to_string(),
-            notes: notes.iter().map(|note| (*note).to_string()).collect(),
-        };
         transaction.execute(
             "INSERT INTO runtime_receipts (
                 receipt_id,
@@ -254,18 +263,18 @@ impl Reconciler {
                 record_json
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                &record.receipt_id,
-                &record.deployment_id,
-                &record.run_id,
-                &record.submit_request_id,
-                &record.observed_at,
-                &record.source,
-                &record.status,
-                serialize_json(&record)?,
+                &receipt.receipt_id,
+                &receipt.deployment_id,
+                &receipt.run_id,
+                &receipt.submit_request_id,
+                &receipt.observed_at,
+                &receipt.source,
+                &receipt.status,
+                serialize_json(receipt)?,
             ],
         )?;
         transaction.commit()?;
-        Ok(record)
+        Ok(receipt.clone())
     }
 
     pub fn record_wallet_observation(
@@ -329,10 +338,8 @@ impl Reconciler {
         }
 
         let wallet_deltas = wallet_deltas(&input.expected_ledger, &input.observed_ledger)?;
-        let total_wallet_delta_cents = wallet_deltas
-            .iter()
-            .map(wallet_delta_usd_cents)
-            .sum::<Result<i64, _>>()?;
+        let total_wallet_delta_cents =
+            total_wallet_delta_usd_cents(&input.expected_ledger, &input.observed_ledger)?;
         let position_delta_cents = position_delta_usd_cents(
             &input.expected_ledger.positions,
             &input.observed_ledger.positions,
@@ -711,12 +718,19 @@ fn total_atomic(balance: Option<&RuntimeLedgerBalance>) -> Result<i128, Reconcil
     Ok(free + reserved)
 }
 
-fn wallet_delta_usd_cents(delta: &RuntimeWalletDelta) -> Result<i64, ReconcilerError> {
-    let absolute_atomic = parse_atomic_i128("walletDeltas.deltaAtomic", &delta.delta_atomic)?.abs();
-    if delta.mint == "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" {
-        return Ok((absolute_atomic / 10_000_i128) as i64);
-    }
-    Ok(0)
+fn total_wallet_delta_usd_cents(
+    expected: &RuntimeLedgerSnapshot,
+    observed: &RuntimeLedgerSnapshot,
+) -> Result<i64, ReconcilerError> {
+    let expected_cents = parse_usd_cents(
+        "expectedLedger.totals.equityUsd",
+        &expected.totals.equity_usd,
+    )?;
+    let observed_cents = parse_usd_cents(
+        "observedLedger.totals.equityUsd",
+        &observed.totals.equity_usd,
+    )?;
+    Ok((observed_cents - expected_cents).abs())
 }
 
 fn position_delta_usd_cents(

@@ -133,6 +133,13 @@ import { createPrivySolanaWallet } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
 import {
+  bootstrapRuntimeCanary,
+  isRuntimeCanaryScheduledTick,
+  readRuntimeCanarySnapshot,
+  resetRuntimeCanary,
+  runRuntimeCanary,
+} from "./runtime_canary";
+import {
   applyRuntimeDeploymentControl,
   handleRuntimeInternalRoute,
   type RuntimeControlAction,
@@ -2054,6 +2061,70 @@ const worker = {
 
       if (
         request.method === "GET" &&
+        url.pathname === "/api/admin/runtime/canary"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await readRuntimeCanarySnapshot(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/runtime/canary/bootstrap"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await bootstrapRuntimeCanary(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/runtime/canary/reset"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        return withCors(json(await resetRuntimeCanary(env)), env);
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/runtime/canary/run"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const payload = (await request.json().catch(() => null)) as unknown;
+        const triggerSource =
+          isRecord(payload) && payload.trigger === "post_deploy"
+            ? "post_deploy"
+            : "manual";
+        return withCors(
+          json(await runRuntimeCanary({ env, triggerSource })),
+          env,
+        );
+      }
+
+      if (
+        request.method === "GET" &&
         url.pathname === "/api/admin/ops/controls"
       ) {
         const auth = authorizeAdminRoute(request, env);
@@ -2153,14 +2224,18 @@ const worker = {
             env,
           );
         }
-        const controls = await readOpsControlSnapshot(env);
-        const runtime = await readRuntimeAdminSnapshot(env);
+        const [controls, runtime, canary] = await Promise.all([
+          readOpsControlSnapshot(env),
+          readRuntimeAdminSnapshot(env),
+          readRuntimeCanarySnapshot(env),
+        ]);
         return withCors(
           json({
             ok: true,
             runtime: {
               ...runtime,
               controls: controls.runtime,
+              canary,
             },
           }),
           env,
@@ -2270,17 +2345,19 @@ const worker = {
           100,
           20_000,
         );
-        const [controls, execution, canary, runtime] = await Promise.all([
-          readOpsControlSnapshot(env),
-          readExecutionObservabilitySnapshot({
-            db: env.WAITLIST_DB,
-            windowMinutes,
-            maxRequests,
-            thresholds: readExecObservabilityThresholds(env),
-          }),
-          readExecutionCanarySnapshot(env),
-          readRuntimeAdminSnapshot(env),
-        ]);
+        const [controls, execution, canary, runtime, runtimeCanary] =
+          await Promise.all([
+            readOpsControlSnapshot(env),
+            readExecutionObservabilitySnapshot({
+              db: env.WAITLIST_DB,
+              windowMinutes,
+              maxRequests,
+              thresholds: readExecObservabilityThresholds(env),
+            }),
+            readExecutionCanarySnapshot(env),
+            readRuntimeAdminSnapshot(env),
+            readRuntimeCanarySnapshot(env),
+          ]);
         return withCors(
           json({
             ok: true,
@@ -2291,6 +2368,7 @@ const worker = {
             runtime: {
               ...runtime,
               controls: controls.runtime,
+              canary: runtimeCanary,
             },
           }),
           env,
@@ -4369,17 +4447,34 @@ const worker = {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
-    if (isExecutionCanaryScheduledTick(_event)) {
-      try {
-        await runExecutionCanary({
-          env,
-          triggerSource: "schedule",
-        });
-      } catch (error) {
-        console.error("execution.canary.scheduled.error", {
-          message: error instanceof Error ? error.message : "unknown-error",
-          stack: error instanceof Error ? error.stack : undefined,
-        });
+    const runExecutionCanaryTick = isExecutionCanaryScheduledTick(_event);
+    const runRuntimeCanaryTick = isRuntimeCanaryScheduledTick(_event);
+    if (runExecutionCanaryTick || runRuntimeCanaryTick) {
+      if (runExecutionCanaryTick) {
+        try {
+          await runExecutionCanary({
+            env,
+            triggerSource: "schedule",
+          });
+        } catch (error) {
+          console.error("execution.canary.scheduled.error", {
+            message: error instanceof Error ? error.message : "unknown-error",
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+        }
+      }
+      if (runRuntimeCanaryTick) {
+        try {
+          await runRuntimeCanary({
+            env,
+            triggerSource: "schedule",
+          });
+        } catch (error) {
+          console.error("runtime.canary.scheduled.error", {
+            message: error instanceof Error ? error.message : "unknown-error",
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+        }
       }
       return;
     }

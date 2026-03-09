@@ -30,12 +30,13 @@ jobs:
 
       - name: Check runtime deploy credentials
         env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
         run: |
           set -euo pipefail
 
-          for secret_name in FLY_API_TOKEN RUNTIME_INTERNAL_SERVICE_TOKEN; do
+          for secret_name in ADMIN_TOKEN FLY_API_TOKEN RUNTIME_INTERNAL_SERVICE_TOKEN; do
             if [ -z "${!secret_name:-}" ]; then
               echo "::error::Missing required secret ${secret_name} for runtime-rs deploy."
               exit 1
@@ -70,3 +71,16 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/runtime_rs/fly_smoke.mjs
+
+      - name: Trigger production runtime canary
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          curl -fsS \
+            -X POST \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" \
+            -H "content-type: application/json" \
+            https://api.trader-ralph.com/api/admin/runtime/canary/run \
+            --data '{"trigger":"post_deploy"}'

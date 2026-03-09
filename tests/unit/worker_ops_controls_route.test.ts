@@ -53,6 +53,7 @@ function createOpsEnv(overrides?: Partial<Env>) {
   for (const migrationName of [
     "0025_execution_fabric.sql",
     "0026_execution_canary.sql",
+    "0027_runtime_canary.sql",
   ]) {
     const migrationPath = resolve(
       import.meta.dir,
@@ -70,6 +71,14 @@ function createOpsEnv(overrides?: Partial<Env>) {
       ADMIN_TOKEN: "admin-secret",
       EXEC_CANARY_ENABLED: "1",
       EXEC_CANARY_AUTO_CREATE_WALLET: "0",
+      RUNTIME_CANARY_ENABLED: "1",
+      RUNTIME_CANARY_AUTO_CREATE_WALLET: "0",
+      RUNTIME_CANARY_DEPLOYMENT_ID: "runtime_canary_live_dca",
+      RUNTIME_CANARY_NOTIONAL_USD: "5",
+      RUNTIME_CANARY_ALLOCATED_USD: "25",
+      RUNTIME_CANARY_DAILY_CAP_USD: "25",
+      RUNTIME_CANARY_MAX_SLIPPAGE_BPS: "50",
+      RUNTIME_CANARY_MIN_SOL_RESERVE_LAMPORTS: "50000000",
       ...overrides,
     },
   });
@@ -285,6 +294,20 @@ describe("worker ops controls routes", () => {
               state: "shadow",
             },
           ],
+          canary: {
+            ok: true,
+            config: {
+              enabled: true,
+              deploymentId: "runtime_canary_live_dca",
+              dailyCapUsd: 25,
+              maxSlippageBps: 50,
+            },
+            deployment: {
+              deploymentId: "runtime_canary_live_dca",
+              mode: "live",
+              state: "live",
+            },
+          },
         },
       });
     } finally {

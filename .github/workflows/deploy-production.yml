@@ -99,3 +99,16 @@ jobs:
             -H "content-type: application/json" \
             https://api.trader-ralph.com/api/admin/execution/canary/run \
             --data '{"trigger":"post_deploy"}'
+
+      - name: Trigger production runtime canary
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          curl -fsS \
+            -X POST \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" \
+            -H "content-type: application/json" \
+            https://api.trader-ralph.com/api/admin/runtime/canary/run \
+            --data '{"trigger":"post_deploy"}'

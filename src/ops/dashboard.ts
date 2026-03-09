@@ -154,6 +154,12 @@ function formatRuntimeSummary(runtime: Record<string, unknown>): string[] {
   const integration = isRecord(runtime.integration) ? runtime.integration : {};
   const controls = isRecord(runtime.controls) ? runtime.controls : {};
   const health = isRecord(runtime.health) ? runtime.health : {};
+  const canary = isRecord(runtime.canary) ? runtime.canary : {};
+  const canaryState = isRecord(canary.state) ? canary.state : {};
+  const canaryRuns = Array.isArray(canary.latestRuns)
+    ? canary.latestRuns.filter(isRecord)
+    : [];
+  const latestCanaryRun = canaryRuns[0] ?? null;
   const feedGateway = isRecord(health.feedGateway) ? health.feedGateway : {};
   const featureCache = isRecord(health.featureCache) ? health.featureCache : {};
   const deployments = Array.isArray(runtime.deployments)
@@ -197,6 +203,9 @@ function formatRuntimeSummary(runtime: Record<string, unknown>): string[] {
     `- max feature age ms: ${readNumber(featureCache.maxFeatureAgeMs) ?? "n/a"}`,
     `- max slot age ms: ${maxSlotAgeMs || "n/a"}`,
     `- stale streams/features: ${staleCount}`,
+    `- runtime canary disabled: ${String(canaryState.disabled ?? false)}`,
+    `- runtime canary latest status: ${readString(latestCanaryRun?.status) ?? "n/a"}`,
+    `- runtime canary reconciliation: ${readString(latestCanaryRun?.reconciliationStatus) ?? "n/a"}`,
     `- deployments: total=${deployments.length}, states=${stateSummary}`,
     `- error: ${readString(runtime.error) ?? "n/a"}`,
   ];

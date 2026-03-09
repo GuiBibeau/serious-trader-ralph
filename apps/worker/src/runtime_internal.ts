@@ -1,3 +1,7 @@
+import {
+  executionErrorStatus,
+  normalizeExecutionErrorCode,
+} from "./execution/error_taxonomy";
 import { json } from "./response";
 import {
   parseRuntimeDeploymentRecord,
@@ -604,6 +608,59 @@ export async function readRuntimeDeployment(
   });
 }
 
+export async function upsertRuntimeDeployment(
+  env: Env,
+  deployment: RuntimeDeploymentRecord,
+): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_DEPLOYMENTS_PATH,
+    body: deployment,
+  });
+}
+
+export async function evaluateRuntimeDeployment(input: {
+  env: Env;
+  deploymentId: string;
+  body?: Record<string, unknown>;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: `${INTERNAL_RUNTIME_DEPLOYMENTS_PATH}/${encodeURIComponent(
+      input.deploymentId,
+    )}/evaluate`,
+    body: input.body ?? {},
+  });
+}
+
+export async function readRuntimeDeploymentRuns(
+  env: Env,
+  deploymentId: string,
+): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: `${INTERNAL_RUNTIME_PREFIX}/runs/${encodeURIComponent(
+      deploymentId,
+    )}`,
+  });
+}
+
+export async function readRuntimeScorecard(
+  env: Env,
+  deploymentId: string,
+): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: `${INTERNAL_RUNTIME_SCORECARDS_PATH}?deploymentId=${encodeURIComponent(
+      deploymentId,
+    )}`,
+  });
+}
+
 export async function applyRuntimeDeploymentControl(input: {
   env: Env;
   deploymentId: string;
@@ -647,6 +704,52 @@ export async function handleRuntimeInternalRoute(
   }
 
   if (!isRuntimeStubModeEnabled(env)) {
+    if (
+      request.method === "POST" &&
+      url.pathname === INTERNAL_RUNTIME_EXECUTION_PLANS_PATH
+    ) {
+      let plan: RuntimeExecutionPlan;
+      try {
+        const payload = await readJsonBody(request);
+        plan = parseRuntimeExecutionPlan(payload);
+      } catch (error) {
+        return json(
+          {
+            ok: false,
+            error: "invalid-runtime-execution-plan",
+            details: {
+              reason: error instanceof Error ? error.message : "unknown-error",
+            },
+          },
+          { status: 400 },
+        );
+      }
+      try {
+        const { submitRuntimeCanaryExecutionPlan } = await import(
+          "./runtime_canary"
+        );
+        return json(await submitRuntimeCanaryExecutionPlan({ env, plan }), {
+          status: 202,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "runtime-execution-failed";
+        const code = normalizeExecutionErrorCode({
+          error: message,
+          fallback: "submission-failed",
+        });
+        return json(
+          {
+            ok: false,
+            error: code,
+            details: {
+              reason: message,
+            },
+          },
+          { status: executionErrorStatus(code) },
+        );
+      }
+    }
     return runtimeInternalUnavailable(env);
   }
 

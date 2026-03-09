@@ -90,6 +90,17 @@ describe("ops dashboard helpers", () => {
           stubModeEnabled: false,
           runtimeBaseUrl: "https://ralph-runtime-rs.fly.dev",
         },
+        canary: {
+          state: {
+            disabled: false,
+          },
+          latestRuns: [
+            {
+              status: "success",
+              reconciliationStatus: "passed",
+            },
+          ],
+        },
         health: {
           status: "healthy",
           feedGateway: {
@@ -137,6 +148,7 @@ describe("ops dashboard helpers", () => {
     expect(markdown).toContain("# Ops Dashboard");
     expect(markdown).toContain("## Execution");
     expect(markdown).toContain("## Runtime");
+    expect(markdown).toContain("runtime canary latest status: success");
     expect(markdown).toContain(
       "deployments: total=2, states=shadow=1, paused=1",
     );

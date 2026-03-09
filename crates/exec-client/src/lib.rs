@@ -1,4 +1,4 @@
-use protocol::{RuntimeExecutionPlan, RuntimeLane, RuntimeMode};
+use protocol::{RuntimeExecutionPlan, RuntimeLane, RuntimeLedgerSnapshot, RuntimeMode};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -20,12 +20,27 @@ pub struct ExecPlanCoordination {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecReceiptObservation {
+    pub receipt_id: String,
+    pub observed_at: String,
+    pub status: String,
+    pub notes: Vec<String>,
+    pub signature: Option<String>,
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecSubmitResponse {
     pub ok: bool,
     pub accepted: bool,
     pub source: String,
     pub submit_request_id: String,
     pub coordination: ExecPlanCoordination,
+    #[serde(default)]
+    pub receipt: Option<ExecReceiptObservation>,
+    #[serde(default)]
+    pub observed_ledger: Option<RuntimeLedgerSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
