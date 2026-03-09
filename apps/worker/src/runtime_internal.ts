@@ -443,6 +443,19 @@ function controlActionFromPath(pathname: string): {
   return null;
 }
 
+function runtimeEvaluateDeploymentIdFromPath(pathname: string): string | null {
+  if (!pathname.startsWith(INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX)) {
+    return null;
+  }
+  const suffix = pathname.slice(INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX.length);
+  const evaluateSuffix = "/evaluate";
+  if (!suffix.endsWith(evaluateSuffix)) {
+    return null;
+  }
+  const deploymentId = suffix.slice(0, -evaluateSuffix.length);
+  return deploymentId && !deploymentId.includes("/") ? deploymentId : null;
+}
+
 async function dispatchRuntimeInternalJson(input: {
   env: Env;
   method: string;
@@ -530,6 +543,48 @@ function runtimeErrorFromPayload(
     readStringOrNull(payload.message) ??
     fallback
   );
+}
+
+function createRuntimeEvaluationFixture(deploymentId: string) {
+  const deployment = createRuntimeDeploymentFixture(deploymentId);
+  return {
+    ok: true,
+    source: "stub",
+    deployment,
+    run: {
+      schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+      runId: `run_${deploymentId}`,
+      deploymentId,
+      runKey: `${deploymentId}:${FIXTURE_TIMESTAMP}`,
+      trigger: {
+        kind: "canary",
+        source: "runtime-internal-fixture",
+        observedAt: FIXTURE_TIMESTAMP,
+        reason: "post_deploy",
+      },
+      state: "completed",
+      plannedAt: FIXTURE_TIMESTAMP,
+      submittedAt: FIXTURE_TIMESTAMP,
+      completedAt: FIXTURE_TIMESTAMP,
+      updatedAt: FIXTURE_TIMESTAMP,
+      executionPlanId: `plan_${deploymentId}`,
+    },
+    coordination: {
+      planId: `plan_${deploymentId}`,
+      deploymentId,
+      runId: `run_${deploymentId}`,
+      mode: deployment.mode,
+      lane: deployment.lane,
+      sliceCount: 1,
+      submitRequestId: `submit_${deploymentId}`,
+    },
+    reconciliation: {
+      receiptId: `receipt_${deploymentId}`,
+      status: "passed",
+      driftUsd: "0.00",
+      autoCorrected: false,
+    },
+  };
 }
 
 export async function readRuntimeAdminSnapshot(
@@ -814,6 +869,13 @@ export async function handleRuntimeInternalRoute(
   }
 
   if (request.method === "POST") {
+    const evaluateDeploymentId = runtimeEvaluateDeploymentIdFromPath(
+      url.pathname,
+    );
+    if (evaluateDeploymentId) {
+      return json(createRuntimeEvaluationFixture(evaluateDeploymentId));
+    }
+
     const control = controlActionFromPath(url.pathname);
     if (control) {
       return json({

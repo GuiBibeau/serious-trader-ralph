@@ -174,4 +174,115 @@ describe("worker runtime canary admin routes", () => {
       sqlite.close();
     }
   });
+
+  test("allows post-deploy runs to recover transient disabled state", async () => {
+    const { env, sqlite } = createRuntimeCanaryEnv();
+    try {
+      sqlite
+        .query(
+          `insert into runtime_canary_state (
+            state_key,
+            schema_version,
+            deployment_id,
+            wallet_id,
+            wallet_address,
+            disabled,
+            disabled_reason,
+            created_at,
+            updated_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "mainnet",
+          "v1",
+          "runtime_canary_live_dca",
+          "wallet_fixture",
+          "BHHLtSgm43YiJLe5gXstq3hojYswDNTnbLxp6hxAAUKz",
+          1,
+          "deployment-not-shadow",
+          "2026-03-09T14:34:43.242Z",
+          "2026-03-09T14:34:44.988Z",
+        );
+
+      const response = await worker.fetch(
+        new Request("http://localhost/api/admin/runtime/canary/run", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer admin-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ trigger: "post_deploy" }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        status: "success",
+        triggerSource: "post_deploy",
+        state: {
+          disabled: false,
+          disabledReason: null,
+        },
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("keeps manual runs blocked when the runtime canary is disabled", async () => {
+    const { env, sqlite } = createRuntimeCanaryEnv();
+    try {
+      sqlite
+        .query(
+          `insert into runtime_canary_state (
+            state_key,
+            schema_version,
+            deployment_id,
+            wallet_id,
+            wallet_address,
+            disabled,
+            disabled_reason,
+            created_at,
+            updated_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "mainnet",
+          "v1",
+          "runtime_canary_live_dca",
+          "wallet_fixture",
+          "BHHLtSgm43YiJLe5gXstq3hojYswDNTnbLxp6hxAAUKz",
+          1,
+          "deployment-not-shadow",
+          "2026-03-09T14:34:43.242Z",
+          "2026-03-09T14:34:44.988Z",
+        );
+
+      const response = await worker.fetch(
+        new Request("http://localhost/api/admin/runtime/canary/run", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer admin-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ trigger: "manual" }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        status: "disabled",
+        triggerSource: "manual",
+        error: "deployment-not-shadow",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
 });

@@ -58,6 +58,11 @@ const RUNTIME_CANARY_DEFAULT_DEPLOYMENT_ID = "runtime_canary_live_dca";
 const RUNTIME_CANARY_OWNER_USER_ID = "system:runtime-canary";
 const RUNTIME_CANARY_SLEEVE_ID = "sleeve_runtime_canary";
 const RUNTIME_CANARY_ACTIVE_REGION = "ord";
+const RUNTIME_CANARY_RETRYABLE_DISABLE_REASONS = new Set([
+  "deployment-not-runnable",
+  "deployment-not-shadow",
+  "runtime-deployment-unavailable",
+]);
 const USDC_DECIMALS = 6;
 const SOL_DECIMALS = 9;
 
@@ -548,6 +553,40 @@ function runtimeCanaryDisabledReason(
     disabled: true,
     disabledReason: error,
   };
+}
+
+function isRetryableRuntimeCanaryDisableReason(
+  reason: string | null | undefined,
+): boolean {
+  const normalized = String(reason ?? "")
+    .trim()
+    .toLowerCase();
+  return RUNTIME_CANARY_RETRYABLE_DISABLE_REASONS.has(normalized);
+}
+
+function canAutoRecoverRuntimeCanaryRun(input: {
+  state: RuntimeCanaryStateRecord | null;
+  triggerSource: RuntimeCanaryTriggerSource;
+}): boolean {
+  return (
+    input.triggerSource === "post_deploy" &&
+    Boolean(input.state?.disabled) &&
+    isRetryableRuntimeCanaryDisableReason(input.state?.disabledReason)
+  );
+}
+
+function runtimeCanaryFailureStatePatch(input: {
+  state: RuntimeCanaryStateRecord | null;
+  triggerSource: RuntimeCanaryTriggerSource;
+  error: string;
+}) {
+  if (
+    input.triggerSource === "post_deploy" &&
+    isRetryableRuntimeCanaryDisableReason(input.error)
+  ) {
+    return undefined;
+  }
+  return runtimeCanaryDisabledReason(input.state, input.error);
 }
 
 async function buildRuntimeCanarySnapshot(
@@ -1117,7 +1156,7 @@ export async function runRuntimeCanary(input: {
 }): Promise<RuntimeCanaryRunResponse> {
   const { env, triggerSource } = input;
   const config = readRuntimeCanaryConfig(env);
-  const state = await getRuntimeCanaryState(env.WAITLIST_DB);
+  let state = await getRuntimeCanaryState(env.WAITLIST_DB);
   const opsControls = await readOpsControlSnapshot(env);
 
   if (!config.enabled) {
@@ -1142,14 +1181,25 @@ export async function runRuntimeCanary(input: {
     };
   }
   if (state?.disabled) {
-    return {
-      ok: false,
-      status: "disabled",
-      triggerSource,
-      run: null,
-      state,
-      error: state.disabledReason ?? "runtime-canary-disabled",
-    };
+    if (canAutoRecoverRuntimeCanaryRun({ state, triggerSource })) {
+      state = await updateRuntimeCanaryState(
+        env.WAITLIST_DB,
+        {
+          disabled: false,
+          disabledReason: null,
+        },
+        new Date().toISOString(),
+      );
+    } else {
+      return {
+        ok: false,
+        status: "disabled",
+        triggerSource,
+        run: null,
+        state,
+        error: state.disabledReason ?? "runtime-canary-disabled",
+      };
+    }
   }
 
   const wallet = await ensureRuntimeCanaryWallet(env, config);
@@ -1258,7 +1308,11 @@ export async function runRuntimeCanary(input: {
     return await finalizeRuntimeCanaryRun(env, {
       runId,
       status: "failed",
-      statePatch: runtimeCanaryDisabledReason(state, error),
+      statePatch: runtimeCanaryFailureStatePatch({
+        state,
+        triggerSource,
+        error,
+      }),
       runPatch: {
         runtimeDeploymentState: deploymentStateFromPayload(evaluation.payload),
         errorCode: "runtime-canary-evaluation-failed",
