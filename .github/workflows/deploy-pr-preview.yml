@@ -81,6 +81,8 @@ jobs:
               --scope guivercelpro \
               --token "$VERCEL_TOKEN" \
               --yes \
+              --env "NEXT_PUBLIC_EDGE_API_BASE=${{ steps.preview.outputs.worker_url }}" \
+              --env "NEXT_PUBLIC_SITE_URL=https://trader-ralph.com" \
               --build-env "NEXT_PUBLIC_EDGE_API_BASE=${{ steps.preview.outputs.worker_url }}" \
               --build-env "NEXT_PUBLIC_SITE_URL=https://trader-ralph.com"
           )"

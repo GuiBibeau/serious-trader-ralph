@@ -116,6 +116,8 @@ jobs:
               --token "$VERCEL_TOKEN" \
               --prod \
               --yes \
+              --env "NEXT_PUBLIC_EDGE_API_BASE=https://api.trader-ralph.com" \
+              --env "NEXT_PUBLIC_SITE_URL=https://trader-ralph.com" \
               --build-env "NEXT_PUBLIC_EDGE_API_BASE=https://api.trader-ralph.com" \
               --build-env "NEXT_PUBLIC_SITE_URL=https://trader-ralph.com"
           )"

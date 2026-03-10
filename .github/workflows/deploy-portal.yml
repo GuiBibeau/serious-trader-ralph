@@ -82,6 +82,8 @@ jobs:
             --scope guivercelpro
             --token "$VERCEL_TOKEN"
             --yes
+            --env "NEXT_PUBLIC_EDGE_API_BASE=${{ steps.lane.outputs.edge_api_base }}"
+            --env "NEXT_PUBLIC_SITE_URL=${{ steps.lane.outputs.site_url }}"
             --build-env "NEXT_PUBLIC_EDGE_API_BASE=${{ steps.lane.outputs.edge_api_base }}"
             --build-env "NEXT_PUBLIC_SITE_URL=${{ steps.lane.outputs.site_url }}"
           )
