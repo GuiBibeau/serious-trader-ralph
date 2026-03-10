@@ -1218,4 +1218,24 @@ mod tests {
         );
         assert_eq!(result.plan.slices[0].notional_usd, "2.50");
     }
+
+    #[test]
+    fn mean_reversion_buys_after_negative_signal() {
+        let planner = planner("mean-reversion-buy");
+        let result = planner
+            .plan_and_store(&input(
+                "run_10",
+                "mean_reversion",
+                RuntimeMode::Paper,
+                RuntimeLane::Safe,
+                "-12.0",
+            ))
+            .expect("plan to store");
+
+        assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Buy);
+        assert_eq!(
+            result.plan.slices[0].input_mint,
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        );
+    }
 }

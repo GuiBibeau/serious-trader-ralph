@@ -16,6 +16,20 @@ Pack 1 managed strategy semantics are now wired through the runtime contract:
 - `twap`: per-run slices derived from `maxConcurrentRuns`, with buy or sell
   direction chosen from current base exposure
 
+Pack 2 signal-driven managed strategy semantics extend the same runtime path:
+
+- `trend_following`: follows the short-window return direction from the feature
+  cache
+- `mean_reversion`: fades the short-window return direction from the feature
+  cache
+
+Promotion for signal-driven templates is intentionally stricter:
+
+- replay evidence must show expected behavior across both positive and negative
+  return windows
+- scorecards must keep stale-feature rejects at zero before promotion
+- fresh feature inputs are required for every shadow and paper evidence run
+
 The bounded live bridge remains intentionally narrow in v1:
 
 - live runtime execution is allowlisted with

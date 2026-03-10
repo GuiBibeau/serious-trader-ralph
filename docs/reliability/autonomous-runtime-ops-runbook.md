@@ -38,6 +38,13 @@ Until later phases land, live runtime execution must stay bounded by:
 - `safe` lane only
 - single-slice live execution plans only
 
+Pack 2 signal-driven templates add more rollout evidence requirements:
+
+- replay evidence must cover both rising and falling short-return windows
+- stale-feature rejects must stay at zero across the promotion window
+- operators should treat any freshness degradation as an immediate reason to
+  pause signal-driven deployments
+
 ## Routine operator actions
 
 ### Inspect health
@@ -215,6 +222,8 @@ Response:
 4. Confirm `feature-stream-stale` or `feature-stream-missing` appears on the
    affected shadow evaluations.
 5. Keep the runtime canary disabled until freshness is restored.
+6. Pause all signal-driven managed deployments until replay and scorecard
+   evidence are clean again.
 
 ### Reconciliation incident
 

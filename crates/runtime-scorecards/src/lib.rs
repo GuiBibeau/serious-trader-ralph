@@ -23,6 +23,7 @@ pub struct RuntimeScorecardConfig {
     pub shadow_max_pause_verdicts: u64,
     pub paper_max_pause_verdicts: u64,
     pub paper_max_correction_count: u64,
+    pub signal_max_stale_feature_rejects: u64,
 }
 
 impl Default for RuntimeScorecardConfig {
@@ -37,6 +38,7 @@ impl Default for RuntimeScorecardConfig {
             shadow_max_pause_verdicts: 0,
             paper_max_pause_verdicts: 0,
             paper_max_correction_count: 0,
+            signal_max_stale_feature_rejects: 0,
         }
     }
 }
@@ -295,7 +297,7 @@ fn shadow_to_paper_gate(
         );
     }
 
-    let checks = vec![
+    let mut checks = vec![
         exact_match_check(
             "shadow-state-active",
             input.deployment.state == RuntimeDeploymentState::Shadow,
@@ -334,6 +336,14 @@ fn shadow_to_paper_gate(
             "Pause verdicts must be zero before paper promotion.",
         ),
     ];
+    if signal_strategy_requires_fresh_features(&input.deployment) {
+        checks.push(maximum_check(
+            "shadow-signal-max-stale-feature-rejects",
+            scorecard.trigger_quality.stale_feature_reject_count,
+            config.signal_max_stale_feature_rejects,
+            "Signal-driven templates require fresh feature inputs for every shadow evidence run.",
+        ));
+    }
 
     gate_from_checks(
         RuntimeMode::Shadow,
@@ -368,7 +378,7 @@ fn paper_to_live_gate(
         "scorecard.pnl.maxDrawdownUsd",
         &scorecard.pnl.max_drawdown_usd,
     )?;
-    let checks = vec![
+    let mut checks = vec![
         exact_match_check(
             "paper-state-active",
             input.deployment.state == RuntimeDeploymentState::Paper,
@@ -425,6 +435,14 @@ fn paper_to_live_gate(
             "Observed drawdown must stay within the deployment daily loss limit.",
         ),
     ];
+    if signal_strategy_requires_fresh_features(&input.deployment) {
+        checks.push(maximum_check(
+            "paper-signal-max-stale-feature-rejects",
+            scorecard.trigger_quality.stale_feature_reject_count,
+            config.signal_max_stale_feature_rejects,
+            "Signal-driven templates require fresh feature inputs for every paper evidence run.",
+        ));
+    }
 
     Ok(gate_from_checks(
         RuntimeMode::Paper,
@@ -457,6 +475,13 @@ fn not_applicable_gate(
             message: message.to_string(),
         }],
     }
+}
+
+fn signal_strategy_requires_fresh_features(deployment: &RuntimeDeploymentRecord) -> bool {
+    matches!(
+        deployment.strategy_key.as_str(),
+        "trend_following" | "mean_reversion"
+    )
 }
 
 fn gate_from_checks(
@@ -1114,15 +1139,183 @@ mod tests {
                 && check.status == RuntimePromotionGateStatus::Blocked));
     }
 
+    #[test]
+    fn blocks_trend_following_shadow_promotion_on_stale_feature_rejects() {
+        let deployment = deployment_with_strategy(
+            "deployment_trend_shadow",
+            "trend_following",
+            RuntimeMode::Shadow,
+            RuntimeDeploymentState::Shadow,
+        );
+        let runs = vec![
+            run(
+                "run_trend_shadow_1",
+                RuntimeRunState::Completed,
+                trigger("signal"),
+            ),
+            run(
+                "run_trend_shadow_2",
+                RuntimeRunState::Completed,
+                trigger("signal"),
+            ),
+            run(
+                "run_trend_shadow_3",
+                RuntimeRunState::Completed,
+                trigger("signal"),
+            ),
+        ];
+        let verdicts = vec![
+            allow_verdict(&deployment, &runs[0]),
+            allow_verdict(&deployment, &runs[1]),
+            stale_feature_reject_verdict(&deployment, &runs[2]),
+        ];
+        let plans = runs[..2]
+            .iter()
+            .map(|run| plan(&deployment, run, true, true))
+            .collect::<Vec<_>>();
+        let reconciliations = runs[..2]
+            .iter()
+            .map(|run| reconciliation(&deployment, run, RuntimeReconciliationStatus::Passed, false))
+            .collect::<Vec<_>>();
+        let snapshots = vec![ledger_snapshot(
+            &deployment,
+            "1000.00",
+            "0.00",
+            "1000.00",
+            "1.00",
+            "0.00",
+            "2026-03-08T10:00:00Z",
+        )];
+
+        let report = build_readiness_report(
+            &RuntimeScorecardConfig::default(),
+            &RuntimeScorecardInput {
+                deployment,
+                runs,
+                verdicts,
+                plans,
+                submit_attempt_count: 2,
+                receipt_count: 2,
+                reconciliations,
+                observed_ledger_snapshots: snapshots.clone(),
+                latest_ledger_snapshot: snapshots.last().cloned(),
+            },
+        )
+        .expect("report to build");
+
+        assert_eq!(
+            report.promotion_gates[0].status,
+            RuntimePromotionGateStatus::Blocked
+        );
+        assert!(report.promotion_gates[0]
+            .checks
+            .iter()
+            .any(
+                |check| check.gate_id == "shadow-signal-max-stale-feature-rejects"
+                    && check.status == RuntimePromotionGateStatus::Blocked
+            ));
+    }
+
+    #[test]
+    fn blocks_mean_reversion_live_promotion_on_stale_feature_rejects() {
+        let deployment = deployment_with_strategy(
+            "deployment_mean_paper",
+            "mean_reversion",
+            RuntimeMode::Paper,
+            RuntimeDeploymentState::Paper,
+        );
+        let runs = (1..=5)
+            .map(|index| {
+                run(
+                    &format!("run_mean_paper_{index}"),
+                    RuntimeRunState::Completed,
+                    trigger("signal"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let verdicts = vec![
+            allow_verdict(&deployment, &runs[0]),
+            allow_verdict(&deployment, &runs[1]),
+            allow_verdict(&deployment, &runs[2]),
+            allow_verdict(&deployment, &runs[3]),
+            stale_feature_reject_verdict(&deployment, &runs[4]),
+        ];
+        let plans = runs[..4]
+            .iter()
+            .map(|run| plan(&deployment, run, true, false))
+            .collect::<Vec<_>>();
+        let reconciliations = runs[..4]
+            .iter()
+            .map(|run| reconciliation(&deployment, run, RuntimeReconciliationStatus::Passed, false))
+            .collect::<Vec<_>>();
+        let snapshots = vec![
+            ledger_snapshot(
+                &deployment,
+                "1000.00",
+                "5.00",
+                "995.00",
+                "1.00",
+                "0.00",
+                "2026-03-08T10:00:00Z",
+            ),
+            ledger_snapshot(
+                &deployment,
+                "1001.00",
+                "5.00",
+                "996.00",
+                "1.50",
+                "0.25",
+                "2026-03-08T10:05:00Z",
+            ),
+        ];
+
+        let report = build_readiness_report(
+            &RuntimeScorecardConfig::default(),
+            &RuntimeScorecardInput {
+                deployment,
+                runs,
+                verdicts,
+                plans,
+                submit_attempt_count: 4,
+                receipt_count: 4,
+                reconciliations,
+                observed_ledger_snapshots: snapshots.clone(),
+                latest_ledger_snapshot: snapshots.last().cloned(),
+            },
+        )
+        .expect("report to build");
+
+        assert_eq!(
+            report.promotion_gates[1].status,
+            RuntimePromotionGateStatus::Blocked
+        );
+        assert!(report.promotion_gates[1]
+            .checks
+            .iter()
+            .any(
+                |check| check.gate_id == "paper-signal-max-stale-feature-rejects"
+                    && check.status == RuntimePromotionGateStatus::Blocked
+            ));
+    }
+
     fn deployment(
         deployment_id: &str,
+        mode: RuntimeMode,
+        state: RuntimeDeploymentState,
+    ) -> RuntimeDeploymentRecord {
+        deployment_with_strategy(deployment_id, "dca", mode, state)
+    }
+
+    fn deployment_with_strategy(
+        deployment_id: &str,
+        strategy_key: &str,
         mode: RuntimeMode,
         state: RuntimeDeploymentState,
     ) -> RuntimeDeploymentRecord {
         RuntimeDeploymentRecord {
             schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
             deployment_id: deployment_id.to_string(),
-            strategy_key: "dca".to_string(),
+            strategy_key: strategy_key.to_string(),
             sleeve_id: "sleeve_alpha".to_string(),
             owner_user_id: "user_123".to_string(),
             pair: RuntimePair {
@@ -1204,6 +1397,37 @@ mod tests {
                 reserved_usd: "5.00".to_string(),
                 concentration_bps: 500,
                 feature_age_ms: 500,
+            },
+            limits: RuntimeRiskLimits {
+                max_notional_usd: "25.00".to_string(),
+                max_reserved_usd: "25.00".to_string(),
+                max_concentration_bps: 3500,
+                stale_after_ms: 20_000,
+            },
+        }
+    }
+
+    fn stale_feature_reject_verdict(
+        deployment: &RuntimeDeploymentRecord,
+        run: &RuntimeRunRecord,
+    ) -> RuntimeRiskVerdict {
+        RuntimeRiskVerdict {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            verdict_id: format!("stale_{}", run.run_id),
+            deployment_id: deployment.deployment_id.clone(),
+            run_id: run.run_id.clone(),
+            decided_at: "2026-03-08T10:00:00Z".to_string(),
+            verdict: RuntimeRiskDecision::Reject,
+            reasons: vec![RuntimeRiskReason {
+                code: "feature_stale".to_string(),
+                message: "Feature snapshot is stale".to_string(),
+                severity: RuntimeRiskSeverity::Warn,
+            }],
+            observed: RuntimeRiskObserved {
+                requested_notional_usd: "5.00".to_string(),
+                reserved_usd: "5.00".to_string(),
+                concentration_bps: 500,
+                feature_age_ms: 25_000,
             },
             limits: RuntimeRiskLimits {
                 max_notional_usd: "25.00".to_string(),
