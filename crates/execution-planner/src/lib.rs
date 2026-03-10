@@ -71,6 +71,15 @@ struct StrategyTradeDecision {
     notional_cents: i64,
 }
 
+const BREAKOUT_SIGNAL_THRESHOLD_BPS: f64 = 15.0;
+const BREAKOUT_CONFIRMATION_THRESHOLD_BPS: f64 = 10.0;
+const MACRO_ROTATION_REGIME_THRESHOLD_BPS: f64 = 12.0;
+const VOLATILITY_TARGET_LOW_THRESHOLD_BPS: f64 = 12.0;
+const VOLATILITY_TARGET_MEDIUM_THRESHOLD_BPS: f64 = 20.0;
+const VOLATILITY_TARGET_LOW_BPS: i64 = 7_500;
+const VOLATILITY_TARGET_MEDIUM_BPS: i64 = 5_000;
+const VOLATILITY_TARGET_HIGH_BPS: i64 = 2_500;
+
 #[derive(Debug, Error)]
 pub enum ExecutionPlannerError {
     #[error("storage io error: {0}")]
@@ -360,18 +369,45 @@ fn strategy_trade_decision(
     input: &ExecutionPlannerInput,
 ) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
     let base_notional_cents = desired_notional_cents(&input.deployment)?;
-    let signal = input
+    let short_signal = input
         .feature_snapshot
         .short_return_bps
         .as_deref()
         .map(|value| parse_signed_decimal("featureSnapshot.shortReturnBps", value))
         .transpose()?
         .unwrap_or(0.0);
+    let long_signal = input
+        .feature_snapshot
+        .long_return_bps
+        .as_deref()
+        .map(|value| parse_signed_decimal("featureSnapshot.longReturnBps", value))
+        .transpose()?
+        .unwrap_or(short_signal);
+    let realized_volatility_bps = input
+        .feature_snapshot
+        .realized_volatility_bps
+        .as_deref()
+        .map(|value| parse_decimal("featureSnapshot.realizedVolatilityBps", value))
+        .transpose()?
+        .unwrap_or(0.0);
     match input.deployment.strategy_key.as_str() {
         "threshold_rebalance" => threshold_rebalance_decision(input, base_notional_cents),
         "twap" => Ok(twap_decision(input, base_notional_cents)),
-        "trend_following" => Ok(signal_following_decision(signal, base_notional_cents)),
-        "mean_reversion" => Ok(mean_reversion_decision(signal, base_notional_cents)),
+        "trend_following" => Ok(signal_following_decision(short_signal, base_notional_cents)),
+        "mean_reversion" => Ok(mean_reversion_decision(short_signal, base_notional_cents)),
+        "breakout" => Ok(breakout_decision(
+            short_signal,
+            long_signal,
+            base_notional_cents,
+        )),
+        "macro_rotation" => Ok(macro_rotation_decision(
+            short_signal,
+            long_signal,
+            base_notional_cents,
+        )),
+        "volatility_target" => {
+            volatility_target_decision(input, realized_volatility_bps, base_notional_cents)
+        }
         _ => Ok(StrategyTradeDecision {
             action: RuntimeExecutionAction::Buy,
             direction: SwapDirection::BuyBase,
@@ -412,6 +448,115 @@ fn mean_reversion_decision(signal: f64, notional_cents: i64) -> StrategyTradeDec
     }
 }
 
+fn breakout_decision(
+    short_signal: f64,
+    long_signal: f64,
+    notional_cents: i64,
+) -> StrategyTradeDecision {
+    if short_signal >= BREAKOUT_SIGNAL_THRESHOLD_BPS
+        && long_signal >= BREAKOUT_CONFIRMATION_THRESHOLD_BPS
+    {
+        return StrategyTradeDecision {
+            action: RuntimeExecutionAction::Buy,
+            direction: SwapDirection::BuyBase,
+            notional_cents,
+        };
+    }
+
+    if short_signal <= -BREAKOUT_SIGNAL_THRESHOLD_BPS
+        && long_signal <= -BREAKOUT_CONFIRMATION_THRESHOLD_BPS
+    {
+        return StrategyTradeDecision {
+            action: RuntimeExecutionAction::Sell,
+            direction: SwapDirection::SellBase,
+            notional_cents,
+        };
+    }
+
+    noop_decision(
+        RuntimeExecutionAction::Buy,
+        if short_signal >= 0.0 {
+            SwapDirection::BuyBase
+        } else {
+            SwapDirection::SellBase
+        },
+    )
+}
+
+fn macro_rotation_decision(
+    short_signal: f64,
+    long_signal: f64,
+    notional_cents: i64,
+) -> StrategyTradeDecision {
+    if long_signal >= MACRO_ROTATION_REGIME_THRESHOLD_BPS && short_signal >= 0.0 {
+        return StrategyTradeDecision {
+            action: RuntimeExecutionAction::Buy,
+            direction: SwapDirection::BuyBase,
+            notional_cents,
+        };
+    }
+
+    if long_signal <= -MACRO_ROTATION_REGIME_THRESHOLD_BPS && short_signal <= 0.0 {
+        return StrategyTradeDecision {
+            action: RuntimeExecutionAction::Sell,
+            direction: SwapDirection::SellBase,
+            notional_cents,
+        };
+    }
+
+    noop_decision(
+        RuntimeExecutionAction::Buy,
+        if long_signal >= 0.0 {
+            SwapDirection::BuyBase
+        } else {
+            SwapDirection::SellBase
+        },
+    )
+}
+
+fn volatility_target_decision(
+    input: &ExecutionPlannerInput,
+    realized_volatility_bps: f64,
+    notional_cents: i64,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    let equity_cents = parse_non_negative_usd_cents(
+        "ledgerSnapshot.totals.equityUsd",
+        &input.ledger_snapshot.totals.equity_usd,
+    )?;
+    let base_exposure_cents = current_base_exposure_cents(input, &input.deployment.pair.base_mint)?;
+    let target_bps = if realized_volatility_bps <= VOLATILITY_TARGET_LOW_THRESHOLD_BPS {
+        VOLATILITY_TARGET_LOW_BPS
+    } else if realized_volatility_bps <= VOLATILITY_TARGET_MEDIUM_THRESHOLD_BPS {
+        VOLATILITY_TARGET_MEDIUM_BPS
+    } else {
+        VOLATILITY_TARGET_HIGH_BPS
+    };
+    let target_base_cents = (equity_cents * target_bps) / 10_000;
+    let delta_cents = target_base_cents - base_exposure_cents;
+    let trade_cents = notional_cents.min(delta_cents.abs());
+
+    if trade_cents == 0 {
+        return Ok(noop_decision(
+            RuntimeExecutionAction::Rebalance,
+            if delta_cents >= 0 {
+                SwapDirection::BuyBase
+            } else {
+                SwapDirection::SellBase
+            },
+        ));
+    }
+
+    Ok(StrategyTradeDecision {
+        action: RuntimeExecutionAction::Rebalance,
+        direction: if delta_cents >= 0 {
+            SwapDirection::BuyBase
+        } else {
+            SwapDirection::SellBase
+        },
+        notional_cents: trade_cents,
+    })
+}
+
 fn twap_decision(input: &ExecutionPlannerInput, notional_cents: i64) -> StrategyTradeDecision {
     let divisor = i64::from(input.deployment.policy.max_concurrent_runs.max(1));
     let per_run_notional = (notional_cents / divisor).max(1);
@@ -430,6 +575,17 @@ fn twap_decision(input: &ExecutionPlannerInput, notional_cents: i64) -> Strategy
             direction: SwapDirection::BuyBase,
             notional_cents: per_run_notional,
         }
+    }
+}
+
+fn noop_decision(
+    action: RuntimeExecutionAction,
+    direction: SwapDirection,
+) -> StrategyTradeDecision {
+    StrategyTradeDecision {
+        action,
+        direction,
+        notional_cents: 0,
     }
 }
 
@@ -1018,6 +1174,21 @@ mod tests {
         input
     }
 
+    fn input_with_feature_snapshot(
+        run_id: &str,
+        strategy_key: &str,
+        mode: RuntimeMode,
+        lane: RuntimeLane,
+        short_return_bps: &str,
+        long_return_bps: &str,
+        realized_volatility_bps: &str,
+    ) -> ExecutionPlannerInput {
+        let mut input = input(run_id, strategy_key, mode, lane, short_return_bps);
+        input.feature_snapshot.long_return_bps = Some(long_return_bps.to_string());
+        input.feature_snapshot.realized_volatility_bps = Some(realized_volatility_bps.to_string());
+        input
+    }
+
     #[test]
     fn builds_shadow_dca_plans_deterministically() {
         let planner = planner("shadow-dca");
@@ -1237,5 +1408,72 @@ mod tests {
             result.plan.slices[0].input_mint,
             "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
         );
+    }
+
+    #[test]
+    fn breakout_waits_for_directional_confirmation() {
+        let planner = planner("breakout-confirmation");
+        let result = planner
+            .plan_and_store(&input_with_feature_snapshot(
+                "run_11",
+                "breakout",
+                RuntimeMode::Shadow,
+                RuntimeLane::Safe,
+                "24.0",
+                "-2.0",
+                "18.0",
+            ))
+            .expect("plan to store");
+
+        assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Buy);
+        assert_eq!(result.plan.slices[0].input_amount_atomic, "0");
+        assert_eq!(result.plan.slices[0].notional_usd, "0.00");
+    }
+
+    #[test]
+    fn macro_rotation_sells_in_negative_regime() {
+        let planner = planner("macro-rotation-sell");
+        let result = planner
+            .plan_and_store(&input_with_feature_snapshot(
+                "run_12",
+                "macro_rotation",
+                RuntimeMode::Paper,
+                RuntimeLane::Safe,
+                "-4.0",
+                "-18.0",
+                "18.0",
+            ))
+            .expect("plan to store");
+
+        assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Sell);
+        assert_eq!(
+            result.plan.slices[0].input_mint,
+            "So11111111111111111111111111111111111111112"
+        );
+    }
+
+    #[test]
+    fn volatility_target_reduces_base_when_realized_volatility_is_high() {
+        let planner = planner("volatility-target-sell");
+        let result = planner
+            .plan_and_store(&input_with_ledger_snapshot(
+                "run_13",
+                "volatility_target",
+                RuntimeMode::Live,
+                RuntimeLane::Safe,
+                "0.0",
+                ledger_snapshot_with_balances("400000000", "35000000", "100"),
+            ))
+            .expect("plan to store");
+
+        assert_eq!(
+            result.plan.slices[0].action,
+            RuntimeExecutionAction::Rebalance
+        );
+        assert_eq!(
+            result.plan.slices[0].input_mint,
+            "So11111111111111111111111111111111111111112"
+        );
+        assert_eq!(result.plan.slices[0].notional_usd, "5.00");
     }
 }

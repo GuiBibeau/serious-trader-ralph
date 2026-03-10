@@ -5,6 +5,9 @@ pub enum StrategyKind {
     Twap,
     TrendFollowing,
     MeanReversion,
+    Breakout,
+    MacroRotation,
+    VolatilityTarget,
 }
 
 impl StrategyKind {
@@ -16,16 +19,22 @@ impl StrategyKind {
             Self::Twap => "twap",
             Self::TrendFollowing => "trend_following",
             Self::MeanReversion => "mean_reversion",
+            Self::Breakout => "breakout",
+            Self::MacroRotation => "macro_rotation",
+            Self::VolatilityTarget => "volatility_target",
         }
     }
 }
 
-pub const SUPPORTED_STRATEGIES: [StrategyKind; 5] = [
+pub const SUPPORTED_STRATEGIES: [StrategyKind; 8] = [
     StrategyKind::Dca,
     StrategyKind::ThresholdRebalance,
     StrategyKind::Twap,
     StrategyKind::TrendFollowing,
     StrategyKind::MeanReversion,
+    StrategyKind::Breakout,
+    StrategyKind::MacroRotation,
+    StrategyKind::VolatilityTarget,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +70,9 @@ mod tests {
                 "twap",
                 "trend_following",
                 "mean_reversion",
+                "breakout",
+                "macro_rotation",
+                "volatility_target",
             ],
         );
     }

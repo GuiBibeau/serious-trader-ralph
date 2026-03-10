@@ -2508,6 +2508,231 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn breakout_replay_buys_in_shadow_mode() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let fixture_path = write_replay_fixture("breakout-up", &["140.00", "141.80", "144.60"]);
+        let router = app(test_config_with_runtime(
+            Some(&worker_api_base),
+            Some(&fixture_path),
+        ));
+        let deployment = runtime_deployment_with_strategy(
+            "deployment_breakout_shadow",
+            "sleeve_alpha",
+            "breakout",
+            "1000.00",
+            "5.00",
+        );
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_breakout_shadow/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["action"],
+            json!("buy")
+        );
+        assert_eq!(
+            evaluation_payload["executionPlan"]["simulateOnly"],
+            json!(true)
+        );
+        assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn macro_rotation_replay_sells_in_paper_mode() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let fixture_path = write_replay_fixture("macro-down", &["144.60", "141.80", "140.00"]);
+        let router = app(test_config_with_runtime(
+            Some(&worker_api_base),
+            Some(&fixture_path),
+        ));
+        let mut deployment = runtime_deployment_with_strategy(
+            "deployment_macro_paper",
+            "sleeve_alpha",
+            "macro_rotation",
+            "1000.00",
+            "5.00",
+        );
+        deployment["mode"] = json!("paper");
+        deployment["state"] = json!("paper");
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_macro_paper/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["action"],
+            json!("sell")
+        );
+        assert_eq!(evaluation_payload["executionPlan"]["dryRun"], json!(true));
+        assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn volatility_target_replay_sells_on_bounded_live_path() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let fixture_path = write_replay_fixture(
+            "vol-target-live",
+            &["140.00", "150.00", "136.00", "151.00", "135.00"],
+        );
+        let state = RuntimeAppState::new(test_config_with_runtime(
+            Some(&worker_api_base),
+            Some(&fixture_path),
+        ));
+        let mut deployment = runtime_deployment_with_strategy(
+            "deployment_vol_target_live",
+            "sleeve_alpha",
+            "volatility_target",
+            "1000.00",
+            "5.00",
+        );
+        deployment["mode"] = json!("live");
+        deployment["state"] = json!("live");
+        let deployment: RuntimeDeploymentRecord =
+            serde_json::from_value(deployment).expect("deployment");
+        state
+            .strategy_registry
+            .upsert_deployment(&deployment)
+            .expect("deployment to store");
+        state
+            .portfolio_ledger
+            .sync_deployment(&deployment)
+            .expect("ledger to sync");
+        let observed_ledger: protocol::RuntimeLedgerSnapshot = serde_json::from_value(json!({
+            "schemaVersion": "v1",
+            "snapshotId": "wallet_vol_target_live_1",
+            "deploymentId": "deployment_vol_target_live",
+            "sleeveId": "sleeve_alpha",
+            "asOf": "2026-03-10T19:00:10Z",
+            "balances": [
+                {
+                    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                    "symbol": "USDC",
+                    "decimals": 6,
+                    "freeAtomic": "35000000",
+                    "reservedAtomic": "5000000",
+                    "priceUsd": "1.00"
+                },
+                {
+                    "mint": "So11111111111111111111111111111111111111112",
+                    "symbol": "SOL",
+                    "decimals": 9,
+                    "freeAtomic": "400000000",
+                    "reservedAtomic": "0",
+                    "priceUsd": "150.00"
+                }
+            ],
+            "positions": [
+                {
+                    "instrumentId": "SOL/USDC",
+                    "side": "long",
+                    "quantityAtomic": "400000000",
+                    "entryPriceUsd": "149.00",
+                    "markPriceUsd": "150.00",
+                    "unrealizedPnlUsd": "0.40"
+                }
+            ],
+            "totals": {
+                "equityUsd": "100.00",
+                "reservedUsd": "5.00",
+                "availableUsd": "95.00",
+                "realizedPnlUsd": "0.00",
+                "unrealizedPnlUsd": "0.40"
+            }
+        }))
+        .expect("observed ledger");
+        state
+            .portfolio_ledger
+            .apply_observed_snapshot("deployment_vol_target_live", &observed_ledger)
+            .expect("observed snapshot to apply");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer runtime-service-secret"),
+        );
+        let (status, Json(evaluation_payload)) = evaluate_deployment_handler(
+            headers,
+            Path("deployment_vol_target_live".to_string()),
+            State(state),
+            Bytes::from(
+                json!({
+                    "observedLedgerSnapshot": observed_ledger,
+                })
+                .to_string(),
+            ),
+        )
+        .await
+        .expect("response");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["action"],
+            json!("rebalance")
+        );
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["inputMint"],
+            json!("So11111111111111111111111111111111111111112")
+        );
+        assert_eq!(evaluation_payload["executionPlan"]["dryRun"], json!(false));
+        assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
+    }
+
+    #[tokio::test]
     async fn applies_small_reconciliation_drift_corrections() {
         let worker_api_base = spawn_exec_coordination_stub().await;
         let router = app(test_config_with_worker_api_base(Some(&worker_api_base)));

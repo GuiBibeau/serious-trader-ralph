@@ -16,6 +16,8 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 pub struct RuntimeScorecardConfig {
     pub shadow_min_runs: u64,
     pub paper_min_runs: u64,
+    pub advanced_shadow_min_runs: u64,
+    pub advanced_paper_min_runs: u64,
     pub required_plan_coverage_bps: u16,
     pub required_reconciliation_pass_bps: u16,
     pub shadow_max_failed_runs: u64,
@@ -31,6 +33,8 @@ impl Default for RuntimeScorecardConfig {
         Self {
             shadow_min_runs: 3,
             paper_min_runs: 5,
+            advanced_shadow_min_runs: 5,
+            advanced_paper_min_runs: 7,
             required_plan_coverage_bps: 10_000,
             required_reconciliation_pass_bps: 10_000,
             shadow_max_failed_runs: 0,
@@ -336,7 +340,15 @@ fn shadow_to_paper_gate(
             "Pause verdicts must be zero before paper promotion.",
         ),
     ];
-    if signal_strategy_requires_fresh_features(&input.deployment) {
+    if advanced_strategy_requires_extended_evidence(&input.deployment) {
+        checks.push(minimum_check(
+            "shadow-advanced-min-runs",
+            scorecard.trigger_quality.total_runs,
+            config.advanced_shadow_min_runs,
+            "Advanced templates require a wider shadow evidence window before paper promotion.",
+        ));
+    }
+    if feature_driven_strategy_requires_fresh_features(&input.deployment) {
         checks.push(maximum_check(
             "shadow-signal-max-stale-feature-rejects",
             scorecard.trigger_quality.stale_feature_reject_count,
@@ -435,7 +447,15 @@ fn paper_to_live_gate(
             "Observed drawdown must stay within the deployment daily loss limit.",
         ),
     ];
-    if signal_strategy_requires_fresh_features(&input.deployment) {
+    if advanced_strategy_requires_extended_evidence(&input.deployment) {
+        checks.push(minimum_check(
+            "paper-advanced-min-runs",
+            scorecard.trigger_quality.total_runs,
+            config.advanced_paper_min_runs,
+            "Advanced templates require a wider paper evidence window before bounded live promotion.",
+        ));
+    }
+    if feature_driven_strategy_requires_fresh_features(&input.deployment) {
         checks.push(maximum_check(
             "paper-signal-max-stale-feature-rejects",
             scorecard.trigger_quality.stale_feature_reject_count,
@@ -477,10 +497,17 @@ fn not_applicable_gate(
     }
 }
 
-fn signal_strategy_requires_fresh_features(deployment: &RuntimeDeploymentRecord) -> bool {
+fn feature_driven_strategy_requires_fresh_features(deployment: &RuntimeDeploymentRecord) -> bool {
     matches!(
         deployment.strategy_key.as_str(),
-        "trend_following" | "mean_reversion"
+        "trend_following" | "mean_reversion" | "breakout" | "macro_rotation" | "volatility_target"
+    )
+}
+
+fn advanced_strategy_requires_extended_evidence(deployment: &RuntimeDeploymentRecord) -> bool {
+    matches!(
+        deployment.strategy_key.as_str(),
+        "breakout" | "macro_rotation" | "volatility_target"
     )
 }
 
@@ -1296,6 +1323,169 @@ mod tests {
                 |check| check.gate_id == "paper-signal-max-stale-feature-rejects"
                     && check.status == RuntimePromotionGateStatus::Blocked
             ));
+    }
+
+    #[test]
+    fn blocks_breakout_shadow_promotion_without_extended_evidence_window() {
+        let deployment = deployment_with_strategy(
+            "deployment_breakout_shadow",
+            "breakout",
+            RuntimeMode::Shadow,
+            RuntimeDeploymentState::Shadow,
+        );
+        let runs = vec![
+            run(
+                "run_breakout_shadow_1",
+                RuntimeRunState::Completed,
+                trigger("signal"),
+            ),
+            run(
+                "run_breakout_shadow_2",
+                RuntimeRunState::Completed,
+                trigger("signal"),
+            ),
+            run(
+                "run_breakout_shadow_3",
+                RuntimeRunState::Completed,
+                trigger("signal"),
+            ),
+        ];
+        let verdicts = runs
+            .iter()
+            .map(|run| allow_verdict(&deployment, run))
+            .collect::<Vec<_>>();
+        let plans = runs
+            .iter()
+            .map(|run| plan(&deployment, run, true, true))
+            .collect::<Vec<_>>();
+        let reconciliations = runs
+            .iter()
+            .map(|run| reconciliation(&deployment, run, RuntimeReconciliationStatus::Passed, false))
+            .collect::<Vec<_>>();
+        let snapshots = vec![ledger_snapshot(
+            &deployment,
+            "1000.00",
+            "0.00",
+            "1000.00",
+            "1.00",
+            "0.00",
+            "2026-03-08T10:00:00Z",
+        )];
+
+        let report = build_readiness_report(
+            &RuntimeScorecardConfig::default(),
+            &RuntimeScorecardInput {
+                deployment,
+                runs,
+                verdicts,
+                plans,
+                submit_attempt_count: 3,
+                receipt_count: 3,
+                reconciliations,
+                observed_ledger_snapshots: snapshots.clone(),
+                latest_ledger_snapshot: snapshots.last().cloned(),
+            },
+        )
+        .expect("report to build");
+
+        assert_eq!(
+            report.promotion_gates[0].status,
+            RuntimePromotionGateStatus::Blocked
+        );
+        assert!(report.promotion_gates[0]
+            .checks
+            .iter()
+            .any(|check| check.gate_id == "shadow-advanced-min-runs"
+                && check.status == RuntimePromotionGateStatus::Blocked));
+    }
+
+    #[test]
+    fn blocks_volatility_target_live_promotion_on_stale_feature_rejects() {
+        let deployment = deployment_with_strategy(
+            "deployment_vol_target_paper",
+            "volatility_target",
+            RuntimeMode::Paper,
+            RuntimeDeploymentState::Paper,
+        );
+        let runs = (1..=7)
+            .map(|index| {
+                run(
+                    &format!("run_vol_target_{index}"),
+                    RuntimeRunState::Completed,
+                    trigger("signal"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let verdicts = vec![
+            allow_verdict(&deployment, &runs[0]),
+            allow_verdict(&deployment, &runs[1]),
+            allow_verdict(&deployment, &runs[2]),
+            allow_verdict(&deployment, &runs[3]),
+            allow_verdict(&deployment, &runs[4]),
+            allow_verdict(&deployment, &runs[5]),
+            stale_feature_reject_verdict(&deployment, &runs[6]),
+        ];
+        let plans = runs[..6]
+            .iter()
+            .map(|run| plan(&deployment, run, true, false))
+            .collect::<Vec<_>>();
+        let reconciliations = runs[..6]
+            .iter()
+            .map(|run| reconciliation(&deployment, run, RuntimeReconciliationStatus::Passed, false))
+            .collect::<Vec<_>>();
+        let snapshots = vec![
+            ledger_snapshot(
+                &deployment,
+                "1000.00",
+                "5.00",
+                "995.00",
+                "1.00",
+                "0.00",
+                "2026-03-08T10:00:00Z",
+            ),
+            ledger_snapshot(
+                &deployment,
+                "1003.00",
+                "5.00",
+                "998.00",
+                "2.00",
+                "0.50",
+                "2026-03-08T10:05:00Z",
+            ),
+        ];
+
+        let report = build_readiness_report(
+            &RuntimeScorecardConfig::default(),
+            &RuntimeScorecardInput {
+                deployment,
+                runs,
+                verdicts,
+                plans,
+                submit_attempt_count: 6,
+                receipt_count: 6,
+                reconciliations,
+                observed_ledger_snapshots: snapshots.clone(),
+                latest_ledger_snapshot: snapshots.last().cloned(),
+            },
+        )
+        .expect("report to build");
+
+        assert_eq!(
+            report.promotion_gates[1].status,
+            RuntimePromotionGateStatus::Blocked
+        );
+        assert!(report.promotion_gates[1]
+            .checks
+            .iter()
+            .any(
+                |check| check.gate_id == "paper-signal-max-stale-feature-rejects"
+                    && check.status == RuntimePromotionGateStatus::Blocked
+            ));
+        assert!(report.promotion_gates[1]
+            .checks
+            .iter()
+            .any(|check| check.gate_id == "paper-advanced-min-runs"
+                && check.status == RuntimePromotionGateStatus::Pass));
     }
 
     fn deployment(

@@ -23,12 +23,29 @@ Pack 2 signal-driven managed strategy semantics extend the same runtime path:
 - `mean_reversion`: fades the short-window return direction from the feature
   cache
 
+Pack 3 advanced managed templates stay on the same deterministic runtime path:
+
+- `breakout`: requires short-window momentum plus long-window confirmation
+  before it opens or exits risk
+- `macro_rotation`: rotates exposure from the long-window regime and avoids
+  mixed-regime churn
+- `volatility_target`: scales target base exposure from realized volatility and
+  rebalances toward that budget
+
 Promotion for signal-driven templates is intentionally stricter:
 
 - replay evidence must show expected behavior across both positive and negative
   return windows
 - scorecards must keep stale-feature rejects at zero before promotion
 - fresh feature inputs are required for every shadow and paper evidence run
+
+Promotion for advanced templates is stricter again:
+
+- shadow promotion requires an extended five-run evidence window
+- paper promotion requires an extended seven-run evidence window
+- stale-feature rejects must still remain at zero across the promotion window
+- replay evidence must cover the exact template behavior that would reach the
+  bounded live bridge
 
 The bounded live bridge remains intentionally narrow in v1:
 
