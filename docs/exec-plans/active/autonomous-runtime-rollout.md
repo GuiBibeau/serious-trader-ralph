@@ -64,6 +64,9 @@
 - Phase 5 pack 1 is intentionally bounded to `dca`, `threshold_rebalance`, and
   `twap`, with live execution limited to allowlisted single-slice safe-lane
   deployments.
+- Phase 5 pack 2 adds `trend_following` and `mean_reversion`, but promotion is
+  gated on replay evidence across opposing return regimes and zero
+  stale-feature rejects in scorecards.
 - Do not treat phase 5 completion as arbitrary-strategy support; phase 6 still
   covers advanced templates and multi-strategy capital coordination.
 

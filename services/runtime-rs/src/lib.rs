@@ -1584,6 +1584,7 @@ fn apply_fixture(
 #[cfg(test)]
 mod tests {
     use std::{
+        fs,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -1627,13 +1628,88 @@ mod tests {
     }
 
     fn test_config_with_worker_api_base(worker_api_base: Option<&str>) -> RuntimeConfig {
+        test_config_with_runtime(worker_api_base, None)
+    }
+
+    fn test_config_with_runtime(
+        worker_api_base: Option<&str>,
+        replay_fixture_path: Option<&str>,
+    ) -> RuntimeConfig {
         RuntimeConfig::from_lookup(|key| match key {
             "RUNTIME_INTERNAL_SERVICE_TOKEN" => Some("runtime-service-secret".to_string()),
             "RUNTIME_WORKER_API_BASE" => worker_api_base.map(str::to_string),
+            "RUNTIME_FEED_REPLAY_FIXTURE_PATH" => replay_fixture_path.map(str::to_string),
             "RUNTIME_DATABASE_URL" => Some(temp_database_url("config")),
             _ => None,
         })
         .expect("config to load")
+    }
+
+    fn write_replay_fixture(test_name: &str, prices: &[&str]) -> String {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let base_time = OffsetDateTime::now_utc() - time::Duration::seconds(10);
+        let path =
+            std::env::temp_dir().join(format!("runtime-rs-replay-{test_name}-{unique}.json"));
+        let market_events = prices
+            .iter()
+            .enumerate()
+            .map(|(index, price)| {
+                let observed_at = (base_time + time::Duration::seconds((index as i64) * 5))
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("timestamp");
+                market_adapters::MarketFeedEvent {
+                    source: "fixture.jupiter".to_string(),
+                    symbol: "SOL/USDC".to_string(),
+                    base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                    quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    price_usd: (*price).to_string(),
+                    bid_price_usd: Some((*price).to_string()),
+                    ask_price_usd: Some((*price).to_string()),
+                    observed_at: observed_at.clone(),
+                    received_at: observed_at,
+                    sequence: 100 + index as u64,
+                }
+            })
+            .collect::<Vec<_>>();
+        let slot_observed_at = (base_time + time::Duration::seconds(10))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("timestamp");
+        let fixture = FeedReplayFixture {
+            schema_version: "v1".to_string(),
+            market_events,
+            slot_events: vec![
+                market_adapters::SlotFeedEvent {
+                    source: "fixture.helius".to_string(),
+                    commitment: market_adapters::SlotCommitment::Processed,
+                    slot: 310_000_000,
+                    observed_at: slot_observed_at.clone(),
+                    sequence: 201,
+                },
+                market_adapters::SlotFeedEvent {
+                    source: "fixture.helius".to_string(),
+                    commitment: market_adapters::SlotCommitment::Confirmed,
+                    slot: 309_999_999,
+                    observed_at: slot_observed_at.clone(),
+                    sequence: 202,
+                },
+                market_adapters::SlotFeedEvent {
+                    source: "fixture.helius".to_string(),
+                    commitment: market_adapters::SlotCommitment::Finalized,
+                    slot: 309_999_998,
+                    observed_at: slot_observed_at,
+                    sequence: 203,
+                },
+            ],
+        };
+        fs::write(
+            &path,
+            serde_json::to_string(&fixture).expect("fixture to serialize"),
+        )
+        .expect("fixture to write");
+        path.display().to_string()
     }
 
     async fn spawn_exec_coordination_stub() -> String {
@@ -2249,6 +2325,186 @@ mod tests {
             evaluation_payload["coordination"]["submitRequestId"],
             json!("submit_runtime_123")
         );
+    }
+
+    #[tokio::test]
+    async fn trend_following_replay_buys_in_shadow_mode() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let fixture_path = write_replay_fixture("trend-up", &["140.00", "141.20", "142.80"]);
+        let router = app(test_config_with_runtime(
+            Some(&worker_api_base),
+            Some(&fixture_path),
+        ));
+        let deployment = runtime_deployment_with_strategy(
+            "deployment_trend_shadow",
+            "sleeve_alpha",
+            "trend_following",
+            "1000.00",
+            "5.00",
+        );
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_trend_shadow/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["action"],
+            json!("buy")
+        );
+        assert_eq!(
+            evaluation_payload["executionPlan"]["simulateOnly"],
+            json!(true)
+        );
+        assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn mean_reversion_replay_sells_in_paper_mode() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let fixture_path = write_replay_fixture("mean-up", &["140.00", "141.20", "142.80"]);
+        let router = app(test_config_with_runtime(
+            Some(&worker_api_base),
+            Some(&fixture_path),
+        ));
+        let mut deployment = runtime_deployment_with_strategy(
+            "deployment_mean_paper",
+            "sleeve_alpha",
+            "mean_reversion",
+            "1000.00",
+            "5.00",
+        );
+        deployment["mode"] = json!("paper");
+        deployment["state"] = json!("paper");
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_mean_paper/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["action"],
+            json!("sell")
+        );
+        assert_eq!(evaluation_payload["executionPlan"]["dryRun"], json!(true));
+        assert_eq!(
+            evaluation_payload["executionPlan"]["simulateOnly"],
+            json!(false)
+        );
+        assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn trend_following_replay_sells_on_bounded_live_path() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let fixture_path = write_replay_fixture("trend-down", &["142.80", "141.20", "140.00"]);
+        let router = app(test_config_with_runtime(
+            Some(&worker_api_base),
+            Some(&fixture_path),
+        ));
+        let mut deployment = runtime_deployment_with_strategy(
+            "deployment_trend_live",
+            "sleeve_alpha",
+            "trend_following",
+            "1000.00",
+            "5.00",
+        );
+        deployment["mode"] = json!("live");
+        deployment["state"] = json!("live");
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_trend_live/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["action"],
+            json!("sell")
+        );
+        assert_eq!(evaluation_payload["executionPlan"]["dryRun"], json!(false));
+        assert_eq!(
+            evaluation_payload["executionPlan"]["simulateOnly"],
+            json!(false)
+        );
+        assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
     }
 
     #[tokio::test]
