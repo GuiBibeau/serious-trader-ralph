@@ -192,11 +192,10 @@ impl RuntimeAllocator {
 
     fn snapshot_counts(&self) -> Result<(u64, u64, Option<String>), RuntimeAllocatorError> {
         let connection = self.open_connection()?;
-        let decision_count = connection.query_row(
-            "SELECT COUNT(*) FROM allocator_decisions",
-            [],
-            |row| row.get::<_, u64>(0),
-        )?;
+        let decision_count =
+            connection.query_row("SELECT COUNT(*) FROM allocator_decisions", [], |row| {
+                row.get::<_, u64>(0)
+            })?;
         let constrained_decision_count = connection.query_row(
             "SELECT COUNT(*) FROM allocator_decisions WHERE constrained = 1",
             [],
@@ -212,7 +211,11 @@ impl RuntimeAllocator {
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
-        Ok((decision_count, constrained_decision_count, latest_decision_at))
+        Ok((
+            decision_count,
+            constrained_decision_count,
+            latest_decision_at,
+        ))
     }
 
     fn open_connection(&self) -> Result<Connection, RuntimeAllocatorError> {
@@ -273,7 +276,11 @@ fn build_decision(
         right
             .priority_score
             .cmp(&left.priority_score)
-            .then_with(|| left.deployment.deployment_id.cmp(&right.deployment.deployment_id))
+            .then_with(|| {
+                left.deployment
+                    .deployment_id
+                    .cmp(&right.deployment.deployment_id)
+            })
     });
 
     let mut total_requested_allocated_cents = 0_i64;
@@ -332,14 +339,10 @@ fn build_decision(
         total_granted_reserved_cents +=
             parse_non_negative_usd_cents("grantedReservedUsd", &grant.granted_reserved_usd)?;
     }
-    let target_granted_allocated_cents = parse_non_negative_usd_cents(
-        "grantedAllocatedUsd",
-        &target_grant.granted_allocated_usd,
-    )?;
-    let target_granted_reserved_cents = parse_non_negative_usd_cents(
-        "grantedReservedUsd",
-        &target_grant.granted_reserved_usd,
-    )?;
+    let target_granted_allocated_cents =
+        parse_non_negative_usd_cents("grantedAllocatedUsd", &target_grant.granted_allocated_usd)?;
+    let target_granted_reserved_cents =
+        parse_non_negative_usd_cents("grantedReservedUsd", &target_grant.granted_reserved_usd)?;
 
     Ok(RuntimeAllocatorDecisionRecord {
         schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
@@ -573,7 +576,9 @@ fn parse_usd_cents(field: &'static str, value: &str) -> Result<i64, RuntimeAlloc
 
     let (whole_raw, fraction_raw) = digits.split_once('.').unwrap_or((digits, ""));
     if whole_raw.is_empty()
-        || !whole_raw.chars().all(|character| character.is_ascii_digit())
+        || !whole_raw
+            .chars()
+            .all(|character| character.is_ascii_digit())
         || !fraction_raw
             .chars()
             .all(|character| character.is_ascii_digit())
@@ -801,11 +806,11 @@ mod tests {
         assert_eq!(result.decision.granted_reserved_usd, "20.00");
         assert!(result.decision.constrained);
         assert_eq!(result.decision.priority_rank, 2);
-        assert_eq!(result.decision.peer_grants[0].deployment_id, "deployment_high");
         assert_eq!(
-            result.effective_deployment.capital.allocated_usd,
-            "20.00"
+            result.decision.peer_grants[0].deployment_id,
+            "deployment_high"
         );
+        assert_eq!(result.effective_deployment.capital.allocated_usd, "20.00");
     }
 
     #[test]

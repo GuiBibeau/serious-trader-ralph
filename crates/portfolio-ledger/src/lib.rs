@@ -367,7 +367,10 @@ impl PortfolioLedger {
             return Ok(None);
         };
         let deployments = load_sleeve_deployment_states(&connection, sleeve_id)?;
-        let reserved_cents = deployments.iter().map(|deployment| deployment.reserved_cents).sum();
+        let reserved_cents = deployments
+            .iter()
+            .map(|deployment| deployment.reserved_cents)
+            .sum();
         Ok(Some(SleeveLedgerSnapshot {
             sleeve_id: sleeve.sleeve_id,
             equity_usd: format_usd_cents(sleeve.equity_cents),

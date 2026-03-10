@@ -158,6 +158,30 @@ function buildPayload(selectedDeploymentId: string): RuntimeOperatorApiPayload {
           failureMessage: undefined,
         },
       ],
+      allocator: {
+        currentDecision: {
+          deploymentId: deployment.deploymentId,
+          grantedAllocatedUsd: deployment.capital.allocatedUsd,
+          grantedReservedUsd: deployment.capital.reservedUsd,
+          priorityRank: deployment.mode === "live" ? 1 : 2,
+          constrained: false,
+        },
+        decisions: [
+          {
+            deploymentId: deployment.deploymentId,
+            grantedAllocatedUsd: deployment.capital.allocatedUsd,
+            grantedReservedUsd: deployment.capital.reservedUsd,
+            priorityRank: deployment.mode === "live" ? 1 : 2,
+            constrained: false,
+          },
+        ],
+        sleeve: {
+          sleeveId: deployment.sleeveId,
+          equityUsd: deployment.mode === "live" ? "25.00" : "320.00",
+          reservedUsd: deployment.capital.reservedUsd,
+          availableUsd: deployment.capital.availableUsd,
+        },
+      },
       positions: {
         schemaVersion: "v1",
         snapshotId: `ledger_${deployment.deploymentId}`,

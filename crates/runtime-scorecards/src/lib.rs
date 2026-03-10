@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use protocol::{
-    RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard,
-    RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeExecutionPlan,
-    RuntimeExpectedObservedScorecard, RuntimeLedgerSnapshot, RuntimeMode,
-    RuntimePlanQualityScorecard, RuntimePnlScorecard, RuntimePromotionGateCheck,
-    RuntimePromotionGateDecision, RuntimePromotionGateStatus, RuntimePromotionReadinessReport,
-    RuntimeReconciliationResult, RuntimeReconciliationStatus, RuntimeRiskDecision,
-    RuntimeRiskScorecard, RuntimeRiskVerdict, RuntimeRunRecord, RuntimeRunState, RuntimeScorecard,
-    RuntimeTriggerQualityScorecard, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard, RuntimeDeploymentRecord,
+    RuntimeDeploymentState, RuntimeExecutionPlan, RuntimeExpectedObservedScorecard,
+    RuntimeLedgerSnapshot, RuntimeMode, RuntimePlanQualityScorecard, RuntimePnlScorecard,
+    RuntimePromotionGateCheck, RuntimePromotionGateDecision, RuntimePromotionGateStatus,
+    RuntimePromotionReadinessReport, RuntimeReconciliationResult, RuntimeReconciliationStatus,
+    RuntimeRiskDecision, RuntimeRiskScorecard, RuntimeRiskVerdict, RuntimeRunRecord,
+    RuntimeRunState, RuntimeScorecard, RuntimeTriggerQualityScorecard,
+    RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -294,10 +294,7 @@ fn build_scorecard(
             full_grant_count: allocator_full_grant_count,
             constrained_count: allocator_constrained_count,
             zero_grant_count: allocator_zero_grant_count,
-            full_grant_rate_bps: ratio_bps(
-                allocator_full_grant_count,
-                allocator_decision_count,
-            ),
+            full_grant_rate_bps: ratio_bps(allocator_full_grant_count, allocator_decision_count),
         },
     })
 }

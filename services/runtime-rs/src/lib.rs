@@ -2357,10 +2357,7 @@ mod tests {
             allocator_payload["currentDecision"]["deploymentId"],
             json!("deployment_123")
         );
-        assert_eq!(
-            allocator_payload["sleeve"]["availableUsd"],
-            json!("875.00")
-        );
+        assert_eq!(allocator_payload["sleeve"]["availableUsd"], json!("875.00"));
     }
 
     #[tokio::test]
