@@ -716,6 +716,32 @@ export async function readRuntimeScorecard(
   });
 }
 
+export async function readRuntimePositionSnapshot(
+  env: Env,
+  deploymentId: string,
+): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: `${INTERNAL_RUNTIME_PREFIX}/positions?deploymentId=${encodeURIComponent(
+      deploymentId,
+    )}`,
+  });
+}
+
+export async function readRuntimePnlSummary(
+  env: Env,
+  deploymentId: string,
+): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: `${INTERNAL_RUNTIME_PREFIX}/pnl?deploymentId=${encodeURIComponent(
+      deploymentId,
+    )}`,
+  });
+}
+
 export async function applyRuntimeDeploymentControl(input: {
   env: Env;
   deploymentId: string;

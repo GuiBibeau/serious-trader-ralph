@@ -145,6 +145,10 @@ import {
   type RuntimeControlAction,
   readRuntimeAdminSnapshot,
   readRuntimeDeployment,
+  readRuntimeDeploymentRuns,
+  readRuntimePnlSummary,
+  readRuntimePositionSnapshot,
+  readRuntimeScorecard,
 } from "./runtime_internal";
 import { SolanaRpc } from "./solana_rpc";
 import type { Env, ExecutionConfig } from "./types";
@@ -475,6 +479,18 @@ function parseRuntimeAdminControlPath(pathname: string): {
     deploymentId: decodedDeploymentId,
     action,
   };
+}
+
+function parseRuntimeAdminDetailPath(pathname: string): string | null {
+  const prefix = "/api/admin/ops/runtime/deployments/";
+  if (!pathname.startsWith(prefix)) return null;
+  const suffix = pathname.slice(prefix.length);
+  if (!suffix || suffix.includes("/")) return null;
+  try {
+    return decodeURIComponent(suffix);
+  } catch {
+    return null;
+  }
 }
 
 function newExecutionAttemptId(): string {
@@ -2237,6 +2253,75 @@ const worker = {
               controls: controls.runtime,
               canary,
             },
+          }),
+          env,
+        );
+      }
+
+      const runtimeDetailDeploymentId =
+        request.method === "GET"
+          ? parseRuntimeAdminDetailPath(url.pathname)
+          : null;
+      if (request.method === "GET" && runtimeDetailDeploymentId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        const [
+          deploymentResult,
+          runsResult,
+          positionsResult,
+          pnlResult,
+          scorecardResult,
+        ] = await Promise.all([
+          readRuntimeDeployment(env, runtimeDetailDeploymentId),
+          readRuntimeDeploymentRuns(env, runtimeDetailDeploymentId),
+          readRuntimePositionSnapshot(env, runtimeDetailDeploymentId),
+          readRuntimePnlSummary(env, runtimeDetailDeploymentId),
+          readRuntimeScorecard(env, runtimeDetailDeploymentId),
+        ]);
+        const failedResult =
+          [
+            deploymentResult,
+            runsResult,
+            positionsResult,
+            pnlResult,
+            scorecardResult,
+          ].find((result) => !result.ok) ?? null;
+        if (failedResult) {
+          return withCors(
+            json(failedResult.payload, { status: failedResult.status }),
+            env,
+          );
+        }
+        return withCors(
+          json({
+            ok: true,
+            source:
+              readOptionalString(deploymentResult.payload.source) ??
+              "runtime-rs",
+            deploymentId: runtimeDetailDeploymentId,
+            deployment: isRecord(deploymentResult.payload.deployment)
+              ? deploymentResult.payload.deployment
+              : null,
+            runs: Array.isArray(runsResult.payload.runs)
+              ? runsResult.payload.runs
+              : [],
+            positions: isRecord(positionsResult.payload.snapshot)
+              ? positionsResult.payload.snapshot
+              : null,
+            pnl: isRecord(pnlResult.payload.totals)
+              ? {
+                  asOf: readOptionalString(pnlResult.payload.asOf),
+                  totals: pnlResult.payload.totals,
+                }
+              : null,
+            scorecard: isRecord(scorecardResult.payload.report)
+              ? scorecardResult.payload.report
+              : null,
           }),
           env,
         );

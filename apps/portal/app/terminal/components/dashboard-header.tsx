@@ -139,6 +139,12 @@ export function DashboardHeader({
           >
             Refresh
           </button>
+          <Link
+            className={cn(BTN_SECONDARY, "h-8 shrink-0 px-4 text-xs")}
+            href="/terminal/runtime"
+          >
+            Runtime
+          </Link>
           <button
             className={cn(BTN_SECONDARY, "h-8 shrink-0 px-4 text-xs")}
             onClick={logout}

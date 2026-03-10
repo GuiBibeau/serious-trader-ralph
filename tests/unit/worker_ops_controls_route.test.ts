@@ -315,6 +315,63 @@ describe("worker ops controls routes", () => {
     }
   });
 
+  test("returns runtime deployment detail bundles for operator surfaces", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/deployments/deployment_shadow_fixture",
+          {
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        deploymentId: "deployment_shadow_fixture",
+        deployment: {
+          deploymentId: "deployment_shadow_fixture",
+          state: "shadow",
+        },
+        runs: [
+          {
+            deploymentId: "deployment_shadow_fixture",
+            state: "planned",
+          },
+        ],
+        positions: {
+          deploymentId: "deployment_shadow_fixture",
+          totals: {
+            equityUsd: "1088.00",
+            reservedUsd: "125.00",
+          },
+        },
+        pnl: {
+          totals: {
+            realizedPnlUsd: "10.00",
+            unrealizedPnlUsd: "3.00",
+          },
+        },
+        scorecard: {
+          deploymentId: "deployment_shadow_fixture",
+          scorecard: {
+            triggerQuality: {
+              totalRuns: 3,
+            },
+          },
+        },
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("blocks runtime resumes when the global runtime kill switch is enabled", async () => {
     const { env, sqlite } = createOpsEnv();
     try {

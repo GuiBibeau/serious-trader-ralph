@@ -166,3 +166,28 @@ test("proof route exercises market render, trade validation, and receipt drilldo
   await expect(inspector.getByText(`signature: ${SIGNATURE}`)).toBeVisible();
   await captureCheckpoint(page, "receipt-drawer.png");
 });
+
+test("runtime operator proof shows deployment detail and control affordances", async ({
+  page,
+}) => {
+  await page.goto("/proof/runtime");
+
+  await expect(page.getByTestId("runtime-operator-proof-page")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Runtime deployments/i }),
+  ).toBeVisible();
+  await captureCheckpoint(page, "runtime-operator-home.png");
+
+  await page.getByRole("button", { name: /mean_reversion/i }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "deployment_mean_reversion_paper",
+    }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Pause" }).click();
+  await expect(
+    page.getByText("paused", { exact: false }).first(),
+  ).toBeVisible();
+  await captureCheckpoint(page, "runtime-operator-paused.png");
+});
