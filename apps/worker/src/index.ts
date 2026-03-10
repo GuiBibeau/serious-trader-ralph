@@ -144,6 +144,7 @@ import {
   handleRuntimeInternalRoute,
   type RuntimeControlAction,
   readRuntimeAdminSnapshot,
+  readRuntimeAllocatorSummary,
   readRuntimeDeployment,
   readRuntimeDeploymentRuns,
   readRuntimePnlSummary,
@@ -2273,12 +2274,14 @@ const worker = {
         const [
           deploymentResult,
           runsResult,
+          allocatorResult,
           positionsResult,
           pnlResult,
           scorecardResult,
         ] = await Promise.all([
           readRuntimeDeployment(env, runtimeDetailDeploymentId),
           readRuntimeDeploymentRuns(env, runtimeDetailDeploymentId),
+          readRuntimeAllocatorSummary(env, runtimeDetailDeploymentId),
           readRuntimePositionSnapshot(env, runtimeDetailDeploymentId),
           readRuntimePnlSummary(env, runtimeDetailDeploymentId),
           readRuntimeScorecard(env, runtimeDetailDeploymentId),
@@ -2287,6 +2290,7 @@ const worker = {
           [
             deploymentResult,
             runsResult,
+            allocatorResult,
             positionsResult,
             pnlResult,
             scorecardResult,
@@ -2310,6 +2314,21 @@ const worker = {
             runs: Array.isArray(runsResult.payload.runs)
               ? runsResult.payload.runs
               : [],
+            allocator: isRecord(allocatorResult.payload)
+              ? {
+                  currentDecision: isRecord(
+                    allocatorResult.payload.currentDecision,
+                  )
+                    ? allocatorResult.payload.currentDecision
+                    : null,
+                  decisions: Array.isArray(allocatorResult.payload.decisions)
+                    ? allocatorResult.payload.decisions
+                    : [],
+                  sleeve: isRecord(allocatorResult.payload.sleeve)
+                    ? allocatorResult.payload.sleeve
+                    : null,
+                }
+              : null,
             positions: isRecord(positionsResult.payload.snapshot)
               ? positionsResult.payload.snapshot
               : null,

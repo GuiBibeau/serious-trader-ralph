@@ -268,6 +268,7 @@ describe("worker runtime internal routes", () => {
         executionPlans: "/api/internal/runtime/execution-plans",
         health: "/api/internal/runtime/health",
         scorecards: "/api/internal/runtime/scorecards",
+        allocator: "/api/internal/runtime/allocator",
       },
     });
   });
@@ -674,6 +675,39 @@ describe("worker runtime internal routes", () => {
       sourceMode: "shadow",
       targetMode: "paper",
       status: "pass",
+    });
+  });
+
+  test("returns stubbed runtime allocator decisions", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/allocator?deploymentId=deployment_123",
+        {
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+          },
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "stub",
+      deploymentId: "deployment_123",
+      currentDecision: {
+        deploymentId: "deployment_123",
+        grantedReservedUsd: "125.00",
+      },
+      sleeve: {
+        sleeveId: "sleeve_alpha",
+        availableUsd: "875.00",
+      },
     });
   });
 });

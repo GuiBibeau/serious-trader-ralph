@@ -24,6 +24,7 @@ const INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX = `${INTERNAL_RUNTIME_PREFIX}/deployme
 const INTERNAL_RUNTIME_RUNS_PREFIX = `${INTERNAL_RUNTIME_PREFIX}/runs/`;
 const INTERNAL_RUNTIME_EXECUTION_PLANS_PATH = `${INTERNAL_RUNTIME_PREFIX}/execution-plans`;
 const INTERNAL_RUNTIME_SCORECARDS_PATH = `${INTERNAL_RUNTIME_PREFIX}/scorecards`;
+const INTERNAL_RUNTIME_ALLOCATOR_PATH = `${INTERNAL_RUNTIME_PREFIX}/allocator`;
 const FIXTURE_TIMESTAMP = "2026-03-07T00:00:00.000Z";
 const FIXTURE_BASE_MINT = "So11111111111111111111111111111111111111112";
 const FIXTURE_QUOTE_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -306,6 +307,13 @@ function createRuntimeScorecardFixture(deploymentId: string) {
         concentrationRejectCount: 0,
         killSwitchPauseCount: 0,
       },
+      allocator: {
+        decisionCount: 3,
+        fullGrantCount: 3,
+        constrainedCount: 0,
+        zeroGrantCount: 0,
+        fullGrantRateBps: 10000,
+      },
     },
     promotionGates: [
       {
@@ -346,6 +354,70 @@ function createRuntimeScorecardFixture(deploymentId: string) {
   };
 }
 
+function createRuntimeAllocatorFixture(deploymentId: string) {
+  return {
+    ok: true,
+    source: "stub",
+    deploymentId,
+    sleeveId: "sleeve_alpha",
+    currentDecision: {
+      schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+      decisionId: `alloc_${deploymentId}`,
+      runId: `run_${deploymentId}`,
+      deploymentId,
+      sleeveId: "sleeve_alpha",
+      decidedAt: FIXTURE_TIMESTAMP,
+      sleeveEquityUsd: "1000.00",
+      totalRequestedAllocatedUsd: "1000.00",
+      totalGrantedAllocatedUsd: "1000.00",
+      totalRequestedReservedUsd: "250.00",
+      totalGrantedReservedUsd: "250.00",
+      requestedAllocatedUsd: "1000.00",
+      grantedAllocatedUsd: "1000.00",
+      requestedReservedUsd: "125.00",
+      grantedReservedUsd: "125.00",
+      grantedAvailableUsd: "875.00",
+      priorityRank: 1,
+      priorityScore: 136,
+      constrained: false,
+      peerGrants: [
+        {
+          deploymentId,
+          strategyKey: "dca",
+          mode: "shadow",
+          state: "shadow",
+          priorityRank: 1,
+          priorityScore: 136,
+          requestedAllocatedUsd: "1000.00",
+          grantedAllocatedUsd: "1000.00",
+          requestedReservedUsd: "125.00",
+          grantedReservedUsd: "125.00",
+          constrained: false,
+        },
+      ],
+    },
+    decisions: [],
+    sleeve: {
+      sleeveId: "sleeve_alpha",
+      equityUsd: "1000.00",
+      reservedUsd: "125.00",
+      availableUsd: "875.00",
+      quoteMint: FIXTURE_QUOTE_MINT,
+      quoteSymbol: "USDC",
+      deployments: [
+        {
+          deploymentId,
+          strategyKey: "dca",
+          state: "shadow",
+          allocatedUsd: "1000.00",
+          reservedUsd: "125.00",
+          availableUsd: "875.00",
+        },
+      ],
+    },
+  };
+}
+
 function createRuntimeHealthFixture() {
   return {
     serviceName: DEFAULT_RUNTIME_SERVICE,
@@ -373,6 +445,13 @@ function createRuntimeHealthFixture() {
       status: "healthy",
       deploymentCount: 1,
       runCount: 0,
+      lastError: null,
+    },
+    allocator: {
+      status: "healthy",
+      decisionCount: 1,
+      constrainedDecisionCount: 0,
+      latestDecisionAt: FIXTURE_TIMESTAMP,
       lastError: null,
     },
   };
@@ -414,6 +493,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       positions: `${INTERNAL_RUNTIME_PREFIX}/positions`,
       pnl: `${INTERNAL_RUNTIME_PREFIX}/pnl`,
       scorecards: INTERNAL_RUNTIME_SCORECARDS_PATH,
+      allocator: INTERNAL_RUNTIME_ALLOCATOR_PATH,
       executionPlans: INTERNAL_RUNTIME_EXECUTION_PLANS_PATH,
       health: `${INTERNAL_RUNTIME_PREFIX}/health`,
     },
@@ -716,6 +796,19 @@ export async function readRuntimeScorecard(
   });
 }
 
+export async function readRuntimeAllocatorSummary(
+  env: Env,
+  deploymentId: string,
+): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: `${INTERNAL_RUNTIME_ALLOCATOR_PATH}?deploymentId=${encodeURIComponent(
+      deploymentId,
+    )}`,
+  });
+}
+
 export async function readRuntimePositionSnapshot(
   env: Env,
   deploymentId: string,
@@ -767,6 +860,7 @@ export async function handleRuntimeInternalRoute(
     url.pathname === `${INTERNAL_RUNTIME_PREFIX}/positions` ||
     url.pathname === `${INTERNAL_RUNTIME_PREFIX}/pnl` ||
     url.pathname === INTERNAL_RUNTIME_SCORECARDS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_ALLOCATOR_PATH ||
     url.pathname === INTERNAL_RUNTIME_EXECUTION_PLANS_PATH ||
     url.pathname.startsWith(INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX) ||
     url.pathname.startsWith(INTERNAL_RUNTIME_RUNS_PREFIX);
@@ -988,6 +1082,15 @@ export async function handleRuntimeInternalRoute(
       deploymentId,
       report: createRuntimeScorecardFixture(deploymentId),
     });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_ALLOCATOR_PATH
+  ) {
+    const deploymentId =
+      url.searchParams.get("deploymentId") ?? "deployment_fixture";
+    return json(createRuntimeAllocatorFixture(deploymentId));
   }
 
   if (

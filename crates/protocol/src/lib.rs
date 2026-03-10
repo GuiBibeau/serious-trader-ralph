@@ -441,12 +441,64 @@ pub struct RuntimeRiskScorecard {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeAllocatorPeerGrant {
+    pub deployment_id: String,
+    pub strategy_key: String,
+    pub mode: RuntimeMode,
+    pub state: RuntimeDeploymentState,
+    pub priority_rank: u32,
+    pub priority_score: i64,
+    pub requested_allocated_usd: String,
+    pub granted_allocated_usd: String,
+    pub requested_reserved_usd: String,
+    pub granted_reserved_usd: String,
+    pub constrained: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAllocatorDecisionRecord {
+    pub schema_version: String,
+    pub decision_id: String,
+    pub run_id: String,
+    pub deployment_id: String,
+    pub sleeve_id: String,
+    pub decided_at: String,
+    pub sleeve_equity_usd: String,
+    pub total_requested_allocated_usd: String,
+    pub total_granted_allocated_usd: String,
+    pub total_requested_reserved_usd: String,
+    pub total_granted_reserved_usd: String,
+    pub requested_allocated_usd: String,
+    pub granted_allocated_usd: String,
+    pub requested_reserved_usd: String,
+    pub granted_reserved_usd: String,
+    pub granted_available_usd: String,
+    pub priority_rank: u32,
+    pub priority_score: i64,
+    pub constrained: bool,
+    pub peer_grants: Vec<RuntimeAllocatorPeerGrant>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAllocatorScorecard {
+    pub decision_count: u64,
+    pub full_grant_count: u64,
+    pub constrained_count: u64,
+    pub zero_grant_count: u64,
+    pub full_grant_rate_bps: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeScorecard {
     pub trigger_quality: RuntimeTriggerQualityScorecard,
     pub plan_quality: RuntimePlanQualityScorecard,
     pub expected_vs_observed: RuntimeExpectedObservedScorecard,
     pub pnl: RuntimePnlScorecard,
     pub risk: RuntimeRiskScorecard,
+    pub allocator: RuntimeAllocatorScorecard,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -22,7 +22,7 @@
 | 3 | `#265`, `#266`, `#267` | Ledger, reservations, risk engine, execution planner, paper trading | Paper scorecards stable, unsafe orders rejected, proof bundle artifacts complete |
 | 4 | `#268`, `#269`, `#270`, `#271` | Reconciliation loop, scorecards, ops controls, first live runtime canary | Reconciliation passes, runtime canary stable, rollback controls verified |
 | 5 | `#272`, `#273`, `#274` | Operator visibility, managed template packs 1 and 2 | First live template pack is supportable and incident playbooks are proven |
-| 6 | `#275`, `#276` | Advanced templates and multi-strategy capital coordination | Strategy interaction is stable and capital control remains deterministic |
+| 6 | `#275`, `#276` | Advanced templates, allocator scorecards, and multi-strategy capital coordination | Strategy interaction is stable, allocator pressure is visible, and capital control remains deterministic |
 
 ## Phase-specific rollout notes
 
@@ -71,6 +71,9 @@
   without widening the public contract; promotion stays bounded to the same
   single-slice safe-lane live bridge, with extended shadow and paper evidence
   windows.
+- Phase 6 pack 2 adds sleeve-level allocator coordination and allocator
+  scorecards; paper constrained or zero-grant runs are live-promotion blockers
+  until capital budgets or priorities are corrected.
 - Do not treat phase 5 completion as arbitrary-strategy support; phase 6 still
   covers advanced templates and multi-strategy capital coordination.
 
@@ -90,3 +93,6 @@ Every issue in this program must preserve:
 
 UI or operator-surface issues also require browser proof through
 `bun run harness:proof`.
+
+Phase 6 allocator work must also include auditable allocator decisions and
+runtime/operator evidence showing sleeve coordination behavior.

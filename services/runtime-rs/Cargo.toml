@@ -14,6 +14,7 @@ portfolio-ledger = { path = "../../crates/portfolio-ledger" }
 protocol = { path = "../../crates/protocol" }
 reconciler = { path = "../../crates/reconciler" }
 risk-engine = { path = "../../crates/risk-engine" }
+runtime-allocator = { path = "../../crates/runtime-allocator" }
 runtime-scorecards = { path = "../../crates/runtime-scorecards" }
 runtime-ops = { path = "../../crates/runtime-ops" }
 serde.workspace = true

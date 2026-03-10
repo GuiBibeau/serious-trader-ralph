@@ -284,6 +284,128 @@ function renderPromotion(detail: RuntimeOperatorDetail | null) {
   );
 }
 
+function renderAllocator(detail: RuntimeOperatorDetail | null) {
+  const allocator = isRecord(detail?.allocator) ? detail?.allocator : {};
+  const currentDecision = isRecord(allocator.currentDecision)
+    ? allocator.currentDecision
+    : null;
+  const sleeve = isRecord(allocator.sleeve) ? allocator.sleeve : null;
+  const peerGrants = Array.isArray(currentDecision?.peerGrants)
+    ? currentDecision.peerGrants
+    : [];
+
+  if (!currentDecision) {
+    return (
+      <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
+        Allocator evidence not available yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {summaryItem(
+          "Grant allocated",
+          `${readString(currentDecision.grantedAllocatedUsd) ?? "0.00"} USD`,
+        )}
+        {summaryItem(
+          "Grant reserved",
+          `${readString(currentDecision.grantedReservedUsd) ?? "0.00"} USD`,
+        )}
+        {summaryItem(
+          "Priority rank",
+          readString(currentDecision.priorityRank) ??
+            String(currentDecision.priorityRank ?? "n/a"),
+        )}
+        {summaryItem(
+          "Decision",
+          readBoolean(currentDecision.constrained, false)
+            ? "constrained"
+            : "full grant",
+        )}
+        {summaryItem(
+          "Sleeve equity",
+          `${readString(currentDecision.sleeveEquityUsd) ?? "0.00"} USD`,
+        )}
+      </div>
+      <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded border border-border bg-surface/80 p-4">
+          <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+            Peer grants
+          </p>
+          <div className="mt-3 space-y-3">
+            {peerGrants.length === 0 ? (
+              <p className="text-sm text-muted">
+                No peer grant records available.
+              </p>
+            ) : (
+              peerGrants.map((grant, index) => {
+                const record = isRecord(grant) ? grant : {};
+                const constrained = readBoolean(record.constrained, false);
+                return (
+                  <div
+                    key={`${readString(record.deploymentId) ?? "peer"}:${index}`}
+                    className="rounded border border-border bg-paper/70 p-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-mono text-xs text-muted">
+                        {readString(record.deploymentId) ?? "unknown"}
+                      </p>
+                      <span
+                        className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] ${statusClasses(
+                          constrained ? "blocked" : "pass",
+                        )}`}
+                      >
+                        {constrained ? "constrained" : "full grant"}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid gap-2 text-xs text-muted sm:grid-cols-3">
+                      <p>
+                        requested{" "}
+                        {readString(record.requestedAllocatedUsd) ?? "--"} USD
+                      </p>
+                      <p>
+                        granted {readString(record.grantedAllocatedUsd) ?? "--"}{" "}
+                        USD
+                      </p>
+                      <p>
+                        reserved {readString(record.grantedReservedUsd) ?? "--"}{" "}
+                        USD
+                      </p>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+        <div className="rounded border border-border bg-surface/80 p-4">
+          <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+            Sleeve coordination
+          </p>
+          {sleeve ? (
+            <div className="mt-3 space-y-3 text-sm">
+              <p className="text-muted">
+                {readString(sleeve.sleeveId) ?? "unknown sleeve"}
+              </p>
+              <div className="grid gap-2 text-xs text-muted">
+                <p>equity {readString(sleeve.equityUsd) ?? "0.00"} USD</p>
+                <p>reserved {readString(sleeve.reservedUsd) ?? "0.00"} USD</p>
+                <p>available {readString(sleeve.availableUsd) ?? "0.00"} USD</p>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-muted">
+              Sleeve summary unavailable.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function RuntimeOperatorView({
   authenticated,
   loading,
@@ -492,6 +614,18 @@ export function RuntimeOperatorView({
                 )}
               </div>
             ) : null}
+          </section>
+
+          <section className="card p-5">
+            <div className="mb-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                Capital coordination
+              </p>
+              <h2 className="mt-2 text-lg font-semibold text-ink">
+                Allocator grants and sleeve priority
+              </h2>
+            </div>
+            {renderAllocator(detail)}
           </section>
 
           <section className="card p-5">

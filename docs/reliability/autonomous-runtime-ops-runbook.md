@@ -69,6 +69,7 @@ Verify:
 - feed freshness,
 - feature freshness and ingest lag,
 - strategy registry health and deployment/run counts,
+- allocator pressure and zero-grant behavior,
 - reconciliation backlog,
 - runtime canary status.
 
@@ -95,6 +96,9 @@ curl -fsS https://ralph-runtime-rs.fly.dev/api/internal/runtime/health \
   -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
 
 curl -fsS https://ralph-runtime-rs.fly.dev/api/internal/runtime/runs/<deployment-id> \
+  -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
+
+curl -fsS "https://ralph-runtime-rs.fly.dev/api/internal/runtime/allocator?deploymentId=<deployment-id>" \
   -H "authorization: Bearer ${RUNTIME_INTERNAL_SERVICE_TOKEN}"
 ```
 
@@ -204,6 +208,37 @@ For advanced templates, also verify:
 - no stale-feature rejects appear in the current promotion window
 - the replay artifact attached to the PR covers the same template and market
   regime being promoted
+- allocator scorecards show no paper zero-grant or constrained runs for the
+  candidate deployment
+
+### Review allocator pressure
+
+Use allocator review when:
+
+- multiple deployments share the same sleeve,
+- paper scorecards show constrained or zero-grant runs,
+- operators are considering a priority override before live rollout.
+
+Expected effect:
+
+- the current deployment grant and peer grants are inspectable,
+- sleeve equity pressure is explicit before any live promotion decision,
+- operator changes remain reversible through deployment edits or pause actions.
+
+Control-plane inspection path:
+
+```bash
+curl -fsS https://api.trader-ralph.com/api/admin/ops/runtime \
+  -H "authorization: Bearer ${ADMIN_TOKEN}"
+```
+
+Operator rules:
+
+- use the deployment tag `allocator:priority=<integer>` only with explicit
+  human review
+- prefer reducing allocated capital or pausing peers before raising priority
+- do not promote a deployment while allocator contention is still visible in
+  paper evidence
 
 Control-plane command:
 

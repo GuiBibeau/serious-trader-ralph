@@ -25,6 +25,9 @@ use risk_engine::{
     should_pause_runtime, RiskAssessmentInput, RiskEngine, RiskEngineConfig, RiskEngineError,
     RiskEngineSnapshot,
 };
+use runtime_allocator::{
+    RuntimeAllocator, RuntimeAllocatorConfig, RuntimeAllocatorError, RuntimeAllocatorSnapshot,
+};
 use runtime_ops::{health_snapshot, RuntimeConfig};
 use runtime_scorecards::{
     build_readiness_report, RuntimeScorecardConfig, RuntimeScorecardError, RuntimeScorecardInput,
@@ -66,6 +69,7 @@ pub struct RuntimeAppState {
     feature_cache: Arc<RwLock<FeatureCache>>,
     strategy_registry: StrategyRegistry,
     portfolio_ledger: PortfolioLedger,
+    runtime_allocator: RuntimeAllocator,
     risk_engine: RiskEngine,
     execution_planner: ExecutionPlanner,
     reconciler: Reconciler,
@@ -89,6 +93,9 @@ impl RuntimeAppState {
         let portfolio_ledger =
             PortfolioLedger::new(PortfolioLedgerConfig::new(config.database_url.clone()))
                 .expect("portfolio ledger to initialize");
+        let runtime_allocator =
+            RuntimeAllocator::new(RuntimeAllocatorConfig::new(config.database_url.clone()))
+                .expect("runtime allocator to initialize");
         let risk_engine = RiskEngine::new(RiskEngineConfig::new(
             config.database_url.clone(),
             config.feature_stale_after_ms,
@@ -114,6 +121,7 @@ impl RuntimeAppState {
             feature_cache,
             strategy_registry,
             portfolio_ledger,
+            runtime_allocator,
             risk_engine,
             execution_planner,
             reconciler,
@@ -146,6 +154,10 @@ impl RuntimeAppState {
         self.risk_engine.snapshot_now()
     }
 
+    fn runtime_allocator_snapshot(&self) -> RuntimeAllocatorSnapshot {
+        self.runtime_allocator.snapshot_now()
+    }
+
     fn execution_planner_snapshot(&self) -> ExecutionPlannerSnapshot {
         self.execution_planner.snapshot_now()
     }
@@ -173,6 +185,7 @@ pub struct RuntimeHealthResponse {
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
+    pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
     pub execution_planner: ExecutionPlannerSnapshot,
     pub reconciler: ReconcilerSnapshot,
@@ -191,6 +204,7 @@ pub struct RuntimeMetricsResponse {
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
+    pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
     pub execution_planner: ExecutionPlannerSnapshot,
     pub reconciler: ReconcilerSnapshot,
@@ -208,6 +222,13 @@ struct RuntimeShadowEvaluationRequest {
 #[serde(rename_all = "camelCase")]
 struct RuntimeDeploymentQuery {
     pub deployment_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeAllocatorQuery {
+    pub deployment_id: Option<String>,
+    pub sleeve_id: Option<String>,
 }
 
 pub fn app(config: RuntimeConfig) -> Router {
@@ -259,6 +280,10 @@ pub fn app(config: RuntimeConfig) -> Router {
             get(scorecards_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/allocator"),
+            get(allocator_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/risk"),
             get(risk_handler),
         )
@@ -276,6 +301,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let feature_cache = state.feature_cache_snapshot();
     let strategy_registry = state.strategy_registry_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
+    let allocator = state.runtime_allocator_snapshot();
     let risk_engine = state.risk_engine_snapshot();
     let execution_planner = state.execution_planner_snapshot();
     let reconciler = state.reconciler_snapshot();
@@ -283,6 +309,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         && feature_cache.status == "healthy"
         && strategy_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
+        && allocator.status == "healthy"
         && risk_engine.status == "healthy"
         && execution_planner.status == "healthy"
         && reconciler.status == "healthy"
@@ -307,6 +334,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         feature_cache,
         strategy_registry,
         portfolio_ledger,
+        allocator,
         risk_engine,
         execution_planner,
         reconciler,
@@ -328,6 +356,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         feature_cache: state.feature_cache_snapshot(),
         strategy_registry: state.strategy_registry_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
+        allocator: state.runtime_allocator_snapshot(),
         risk_engine: state.risk_engine_snapshot(),
         execution_planner: state.execution_planner_snapshot(),
         reconciler: state.reconciler_snapshot(),
@@ -549,16 +578,46 @@ async fn evaluate_deployment_handler(
             request.trigger,
         )
         .map_err(map_registry_error)?;
+    let ledger_snapshot = state
+        .portfolio_ledger
+        .snapshot_for_deployment(&deployment_id)
+        .map_err(map_ledger_error)?;
+    let sleeve_snapshot = state
+        .portfolio_ledger
+        .sleeve_snapshot(&result.deployment.sleeve_id)
+        .map_err(map_ledger_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "sleeve-not-found",
+                json!({ "sleeveId": result.deployment.sleeve_id }),
+            )
+        })?;
+    let sleeve_deployments = state
+        .strategy_registry
+        .list_deployments()
+        .map_err(map_registry_error)?
+        .into_iter()
+        .filter(|deployment| deployment.sleeve_id == result.deployment.sleeve_id)
+        .collect::<Vec<_>>();
+    let allocation = state
+        .runtime_allocator
+        .allocate_and_store(&runtime_allocator::RuntimeAllocatorInput {
+            run_id: result.run.run_id.clone(),
+            deployment: result.deployment.clone(),
+            sleeve_equity_usd: sleeve_snapshot.equity_usd.clone(),
+            sleeve_deployments,
+        })
+        .map_err(map_allocator_error)?;
+    let coordinated_deployment = allocation.effective_deployment.clone();
+    let allocator_decision = Some(allocation.decision.clone());
     let assessment = state
         .risk_engine
         .assess_and_store(&RiskAssessmentInput {
-            deployment: result.deployment.clone(),
+            deployment: coordinated_deployment.clone(),
             run: result.run.clone(),
             feature_snapshot: result.feature_snapshot.clone(),
-            ledger_snapshot: state
-                .portfolio_ledger
-                .snapshot_for_deployment(&deployment_id)
-                .map_err(map_ledger_error)?,
+            ledger_snapshot: ledger_snapshot.clone(),
             kill_switch_active: deployment_has_kill_switch(&result.deployment),
         })
         .map_err(map_risk_error)?;
@@ -571,10 +630,6 @@ async fn evaluate_deployment_handler(
     let mut reconciliation = None;
     let mut observed_ledger_snapshot = None;
     let mut coordinated_run = run.clone();
-    let ledger_snapshot = state
-        .portfolio_ledger
-        .snapshot_for_deployment(&deployment_id)
-        .map_err(map_ledger_error)?;
 
     if assessment.verdict.verdict == protocol::RuntimeRiskDecision::Allow {
         if let Some(plan_id) = coordinated_run.execution_plan_id.as_deref() {
@@ -604,7 +659,7 @@ async fn evaluate_deployment_handler(
             let planning = state
                 .execution_planner
                 .plan_and_store(&ExecutionPlannerInput {
-                    deployment: result.deployment.clone(),
+                    deployment: coordinated_deployment.clone(),
                     run: coordinated_run.clone(),
                     feature_snapshot: result.feature_snapshot.clone(),
                     ledger_snapshot: ledger_snapshot.clone(),
@@ -747,6 +802,7 @@ async fn evaluate_deployment_handler(
         risk_verdict: assessment.verdict,
         feature_snapshot: result.feature_snapshot,
         ledger_snapshot,
+        allocator_decision,
         execution_plan,
         coordination,
         reconciliation,
@@ -879,6 +935,10 @@ async fn scorecards_handler(
         .reconciler
         .bundle_for_deployment(&deployment_id)
         .map_err(map_reconciler_error)?;
+    let allocator_decisions = state
+        .runtime_allocator
+        .list_decisions_for_deployment(&deployment_id)
+        .map_err(map_allocator_error)?;
     let latest_ledger_snapshot = state
         .portfolio_ledger
         .snapshot_for_deployment(&deployment_id)
@@ -890,6 +950,7 @@ async fn scorecards_handler(
             runs,
             verdicts,
             plans,
+            allocator_decisions,
             submit_attempt_count: reconciliation_bundle.submit_attempts.len() as u64,
             receipt_count: reconciliation_bundle.receipts.len() as u64,
             reconciliations: reconciliation_bundle.results,
@@ -958,6 +1019,76 @@ async fn pnl_handler(
     ))
 }
 
+async fn allocator_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeAllocatorQuery>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+
+    if let Some(deployment_id) = query.deployment_id.filter(|value| !value.trim().is_empty()) {
+        let deployment = state
+            .strategy_registry
+            .get_deployment(&deployment_id)
+            .map_err(map_registry_error)?
+            .ok_or_else(|| {
+                error_json(
+                    StatusCode::NOT_FOUND,
+                    "deployment-not-found",
+                    json!({ "deploymentId": deployment_id }),
+                )
+            })?;
+        let decisions = state
+            .runtime_allocator
+            .list_decisions_for_deployment(&deployment_id)
+            .map_err(map_allocator_error)?;
+        let sleeve = state
+            .portfolio_ledger
+            .sleeve_snapshot(&deployment.sleeve_id)
+            .map_err(map_ledger_error)?;
+        return Ok(OkJson::with_status(
+            StatusCode::OK,
+            json!({
+                "ok": true,
+                "source": "runtime-rs",
+                "deploymentId": deployment_id,
+                "sleeveId": deployment.sleeve_id,
+                "currentDecision": decisions.first(),
+                "decisions": decisions,
+                "sleeve": sleeve,
+            }),
+        ));
+    }
+
+    if let Some(sleeve_id) = query.sleeve_id.filter(|value| !value.trim().is_empty()) {
+        let decisions = state
+            .runtime_allocator
+            .list_decisions_for_sleeve(&sleeve_id)
+            .map_err(map_allocator_error)?;
+        let sleeve = state
+            .portfolio_ledger
+            .sleeve_snapshot(&sleeve_id)
+            .map_err(map_ledger_error)?;
+        return Ok(OkJson::with_status(
+            StatusCode::OK,
+            json!({
+                "ok": true,
+                "source": "runtime-rs",
+                "sleeveId": sleeve_id,
+                "currentDecision": decisions.first(),
+                "decisions": decisions,
+                "sleeve": sleeve,
+            }),
+        ));
+    }
+
+    Err(error_json(
+        StatusCode::BAD_REQUEST,
+        "allocator-query-required",
+        json!({ "fields": ["deploymentId", "sleeveId"] }),
+    ))
+}
+
 struct ShadowEvaluationResponse {
     created: bool,
     deployment: RuntimeDeploymentRecord,
@@ -965,6 +1096,7 @@ struct ShadowEvaluationResponse {
     risk_verdict: protocol::RuntimeRiskVerdict,
     feature_snapshot: feature_cache::DerivedMarketFeatureSnapshot,
     ledger_snapshot: protocol::RuntimeLedgerSnapshot,
+    allocator_decision: Option<protocol::RuntimeAllocatorDecisionRecord>,
     execution_plan: Option<protocol::RuntimeExecutionPlan>,
     coordination: Option<ExecSubmitResponse>,
     reconciliation: Option<protocol::RuntimeReconciliationResult>,
@@ -987,6 +1119,7 @@ fn shadow_evaluation_json(payload: ShadowEvaluationResponse) -> JsonPayload {
             "riskVerdict": payload.risk_verdict,
             "featureSnapshot": payload.feature_snapshot,
             "ledger": payload.ledger_snapshot,
+            "allocatorDecision": payload.allocator_decision,
             "executionPlan": payload.execution_plan,
             "coordination": payload.coordination,
             "reconciliation": payload.reconciliation,
@@ -1347,6 +1480,36 @@ fn map_exec_client_error(error: ExecClientError) -> JsonPayload {
             "message": error.message,
         }),
     )
+}
+
+fn map_allocator_error(error: RuntimeAllocatorError) -> JsonPayload {
+    match error {
+        RuntimeAllocatorError::InvalidUsdAmount { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-allocator-amount",
+            json!({ "field": field, "value": value }),
+        ),
+        RuntimeAllocatorError::DecisionNotFound { run_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "allocator-decision-not-found",
+            json!({ "runId": run_id }),
+        ),
+        RuntimeAllocatorError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-allocator-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        RuntimeAllocatorError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-allocator-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        RuntimeAllocatorError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-allocator-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
 }
 
 fn deployment_has_kill_switch(deployment: &RuntimeDeploymentRecord) -> bool {
@@ -1859,6 +2022,8 @@ mod tests {
         assert_eq!(payload.strategy_registry.deployment_count, 0);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.portfolio_ledger.deployment_count, 0);
+        assert_eq!(payload.allocator.status, "healthy");
+        assert_eq!(payload.allocator.decision_count, 0);
         assert_eq!(payload.risk_engine.status, "healthy");
         assert_eq!(payload.risk_engine.verdict_count, 0);
         assert_eq!(payload.execution_planner.status, "healthy");
@@ -1894,6 +2059,7 @@ mod tests {
         assert_eq!(payload.feature_cache.total_market_samples, 1);
         assert_eq!(payload.strategy_registry.status, "healthy");
         assert_eq!(payload.portfolio_ledger.status, "healthy");
+        assert_eq!(payload.allocator.status, "healthy");
         assert_eq!(payload.risk_engine.status, "healthy");
         assert_eq!(payload.execution_planner.status, "healthy");
         assert_eq!(payload.reconciler.status, "healthy");
@@ -1998,6 +2164,10 @@ mod tests {
         );
         assert_eq!(
             evaluation_payload["ledger"]["totals"]["reservedUsd"],
+            json!("125.00")
+        );
+        assert_eq!(
+            evaluation_payload["allocatorDecision"]["grantedReservedUsd"],
             json!("125.00")
         );
         assert_eq!(evaluation_payload["executionPlan"]["lane"], json!("safe"));
@@ -2157,6 +2327,10 @@ mod tests {
             json!(1)
         );
         assert_eq!(
+            scorecards_payload["report"]["scorecard"]["allocator"]["decisionCount"],
+            json!(1)
+        );
+        assert_eq!(
             scorecards_payload["report"]["promotionGates"][0]["targetMode"],
             json!("paper")
         );
@@ -2164,6 +2338,26 @@ mod tests {
             .as_str()
             .expect("markdown")
             .contains("Runtime Promotion Readiness"));
+
+        let allocator_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/allocator?deploymentId=deployment_123")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(allocator_response.status(), StatusCode::OK);
+        let allocator_payload = read_json(allocator_response).await;
+        assert_eq!(allocator_payload["deploymentId"], json!("deployment_123"));
+        assert_eq!(
+            allocator_payload["currentDecision"]["deploymentId"],
+            json!("deployment_123")
+        );
+        assert_eq!(allocator_payload["sleeve"]["availableUsd"], json!("875.00"));
     }
 
     #[tokio::test]

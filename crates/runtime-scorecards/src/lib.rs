@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
 use protocol::{
-    RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeExecutionPlan,
-    RuntimeExpectedObservedScorecard, RuntimeLedgerSnapshot, RuntimeMode,
-    RuntimePlanQualityScorecard, RuntimePnlScorecard, RuntimePromotionGateCheck,
-    RuntimePromotionGateDecision, RuntimePromotionGateStatus, RuntimePromotionReadinessReport,
-    RuntimeReconciliationResult, RuntimeReconciliationStatus, RuntimeRiskDecision,
-    RuntimeRiskScorecard, RuntimeRiskVerdict, RuntimeRunRecord, RuntimeRunState, RuntimeScorecard,
-    RuntimeTriggerQualityScorecard, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard, RuntimeDeploymentRecord,
+    RuntimeDeploymentState, RuntimeExecutionPlan, RuntimeExpectedObservedScorecard,
+    RuntimeLedgerSnapshot, RuntimeMode, RuntimePlanQualityScorecard, RuntimePnlScorecard,
+    RuntimePromotionGateCheck, RuntimePromotionGateDecision, RuntimePromotionGateStatus,
+    RuntimePromotionReadinessReport, RuntimeReconciliationResult, RuntimeReconciliationStatus,
+    RuntimeRiskDecision, RuntimeRiskScorecard, RuntimeRiskVerdict, RuntimeRunRecord,
+    RuntimeRunState, RuntimeScorecard, RuntimeTriggerQualityScorecard,
+    RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -53,6 +54,7 @@ pub struct RuntimeScorecardInput {
     pub runs: Vec<RuntimeRunRecord>,
     pub verdicts: Vec<RuntimeRiskVerdict>,
     pub plans: Vec<RuntimeExecutionPlan>,
+    pub allocator_decisions: Vec<RuntimeAllocatorDecisionRecord>,
     pub submit_attempt_count: u64,
     pub receipt_count: u64,
     pub reconciliations: Vec<RuntimeReconciliationResult>,
@@ -188,6 +190,22 @@ fn build_scorecard(
                 .any(|reason| reason.code == "kill_switch_active")
         })
         .count() as u64;
+    let allocator_decision_count = input.allocator_decisions.len() as u64;
+    let allocator_full_grant_count = input
+        .allocator_decisions
+        .iter()
+        .filter(|decision| !decision.constrained)
+        .count() as u64;
+    let allocator_constrained_count = input
+        .allocator_decisions
+        .iter()
+        .filter(|decision| decision.constrained)
+        .count() as u64;
+    let allocator_zero_grant_count = input
+        .allocator_decisions
+        .iter()
+        .filter(|decision| decision.granted_reserved_usd == "0.00")
+        .count() as u64;
 
     let latest_ledger = latest_ledger_snapshot(input);
     let (
@@ -270,6 +288,13 @@ fn build_scorecard(
             stale_feature_reject_count,
             concentration_reject_count,
             kill_switch_pause_count,
+        },
+        allocator: RuntimeAllocatorScorecard {
+            decision_count: allocator_decision_count,
+            full_grant_count: allocator_full_grant_count,
+            constrained_count: allocator_constrained_count,
+            zero_grant_count: allocator_zero_grant_count,
+            full_grant_rate_bps: ratio_bps(allocator_full_grant_count, allocator_decision_count),
         },
     })
 }
@@ -354,6 +379,14 @@ fn shadow_to_paper_gate(
             scorecard.trigger_quality.stale_feature_reject_count,
             config.signal_max_stale_feature_rejects,
             "Signal-driven templates require fresh feature inputs for every shadow evidence run.",
+        ));
+    }
+    if allocator_coordination_required(&input.deployment) {
+        checks.push(maximum_check(
+            "shadow-allocator-zero-grant-runs",
+            scorecard.allocator.zero_grant_count,
+            0,
+            "Allocator zero-grant outcomes block promotion until sleeve coordination is stable.",
         ));
     }
 
@@ -463,6 +496,20 @@ fn paper_to_live_gate(
             "Signal-driven templates require fresh feature inputs for every paper evidence run.",
         ));
     }
+    if allocator_coordination_required(&input.deployment) {
+        checks.push(maximum_check(
+            "paper-allocator-constrained-runs",
+            scorecard.allocator.constrained_count,
+            0,
+            "Allocator-constrained paper runs block bounded live promotion.",
+        ));
+        checks.push(maximum_check(
+            "paper-allocator-zero-grant-runs",
+            scorecard.allocator.zero_grant_count,
+            0,
+            "Allocator zero-grant paper runs block bounded live promotion.",
+        ));
+    }
 
     Ok(gate_from_checks(
         RuntimeMode::Paper,
@@ -508,6 +555,13 @@ fn advanced_strategy_requires_extended_evidence(deployment: &RuntimeDeploymentRe
     matches!(
         deployment.strategy_key.as_str(),
         "breakout" | "macro_rotation" | "volatility_target"
+    )
+}
+
+fn allocator_coordination_required(deployment: &RuntimeDeploymentRecord) -> bool {
+    !matches!(
+        deployment.state,
+        RuntimeDeploymentState::Killed | RuntimeDeploymentState::Archived
     )
 }
 
@@ -701,6 +755,13 @@ fn build_proof_artifact_markdown(
     markdown.push_str(&format!(
         "- Risk verdicts: {} allow, {} reject, {} pause\n",
         scorecard.risk.allow_count, scorecard.risk.reject_count, scorecard.risk.pause_count,
+    ));
+    markdown.push_str(&format!(
+        "- Allocator: {} decisions, {} constrained, {} zero-grant ({})\n",
+        scorecard.allocator.decision_count,
+        scorecard.allocator.constrained_count,
+        scorecard.allocator.zero_grant_count,
+        format_bps(scorecard.allocator.full_grant_rate_bps),
     ));
     markdown.push_str(&format!(
         "- Latest PnL: total {}, realized {}, unrealized {}, max drawdown {}\n",
@@ -965,6 +1026,7 @@ mod tests {
                 runs,
                 verdicts,
                 plans,
+                allocator_decisions: vec![],
                 submit_attempt_count: 3,
                 receipt_count: 3,
                 reconciliations,
@@ -1052,6 +1114,7 @@ mod tests {
                 runs,
                 verdicts,
                 plans,
+                allocator_decisions: vec![],
                 submit_attempt_count: 5,
                 receipt_count: 5,
                 reconciliations,
@@ -1141,6 +1204,7 @@ mod tests {
                 runs,
                 verdicts,
                 plans,
+                allocator_decisions: vec![],
                 submit_attempt_count: 5,
                 receipt_count: 5,
                 reconciliations,
@@ -1221,6 +1285,7 @@ mod tests {
                 runs,
                 verdicts,
                 plans,
+                allocator_decisions: vec![],
                 submit_attempt_count: 2,
                 receipt_count: 2,
                 reconciliations,
@@ -1303,6 +1368,7 @@ mod tests {
                 runs,
                 verdicts,
                 plans,
+                allocator_decisions: vec![],
                 submit_attempt_count: 4,
                 receipt_count: 4,
                 reconciliations,
@@ -1379,6 +1445,7 @@ mod tests {
                 runs,
                 verdicts,
                 plans,
+                allocator_decisions: vec![],
                 submit_attempt_count: 3,
                 receipt_count: 3,
                 reconciliations,
@@ -1461,6 +1528,7 @@ mod tests {
                 runs,
                 verdicts,
                 plans,
+                allocator_decisions: vec![],
                 submit_attempt_count: 6,
                 receipt_count: 6,
                 reconciliations,
@@ -1486,6 +1554,78 @@ mod tests {
             .iter()
             .any(|check| check.gate_id == "paper-advanced-min-runs"
                 && check.status == RuntimePromotionGateStatus::Pass));
+    }
+
+    #[test]
+    fn blocks_live_promotion_when_allocator_constrains_paper_runs() {
+        let deployment = deployment(
+            "deployment_allocator_paper",
+            RuntimeMode::Paper,
+            RuntimeDeploymentState::Paper,
+        );
+        let runs = (1..=5)
+            .map(|index| {
+                run(
+                    &format!("run_allocator_{index}"),
+                    RuntimeRunState::Completed,
+                    trigger("operator"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let verdicts = runs
+            .iter()
+            .map(|run| allow_verdict(&deployment, run))
+            .collect::<Vec<_>>();
+        let plans = runs
+            .iter()
+            .map(|run| plan(&deployment, run, true, false))
+            .collect::<Vec<_>>();
+        let reconciliations = runs
+            .iter()
+            .map(|run| reconciliation(&deployment, run, RuntimeReconciliationStatus::Passed, false))
+            .collect::<Vec<_>>();
+        let snapshots = vec![ledger_snapshot(
+            &deployment,
+            "1000.00",
+            "5.00",
+            "995.00",
+            "1.00",
+            "0.00",
+            "2026-03-08T10:00:00Z",
+        )];
+        let allocator_decisions = vec![
+            allocator_decision(&deployment, &runs[0], false, "25.00", "5.00"),
+            allocator_decision(&deployment, &runs[1], true, "20.00", "4.00"),
+        ];
+
+        let report = build_readiness_report(
+            &RuntimeScorecardConfig::default(),
+            &RuntimeScorecardInput {
+                deployment,
+                runs,
+                verdicts,
+                plans,
+                allocator_decisions,
+                submit_attempt_count: 5,
+                receipt_count: 5,
+                reconciliations,
+                observed_ledger_snapshots: snapshots.clone(),
+                latest_ledger_snapshot: snapshots.last().cloned(),
+            },
+        )
+        .expect("report to build");
+
+        assert_eq!(report.scorecard.allocator.decision_count, 2);
+        assert_eq!(report.scorecard.allocator.constrained_count, 1);
+        assert_eq!(
+            report.promotion_gates[1].status,
+            RuntimePromotionGateStatus::Blocked
+        );
+        assert!(report.promotion_gates[1]
+            .checks
+            .iter()
+            .any(|check| check.gate_id == "paper-allocator-constrained-runs"
+                && check.status == RuntimePromotionGateStatus::Blocked));
     }
 
     fn deployment(
@@ -1709,6 +1849,45 @@ mod tests {
             position_delta_usd: "0.00".to_string(),
             notes: vec![],
             correction_applied,
+        }
+    }
+
+    fn allocator_decision(
+        deployment: &RuntimeDeploymentRecord,
+        run: &RuntimeRunRecord,
+        constrained: bool,
+        granted_allocated_usd: &str,
+        granted_reserved_usd: &str,
+    ) -> RuntimeAllocatorDecisionRecord {
+        RuntimeAllocatorDecisionRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            decision_id: format!("alloc_{}", run.run_id),
+            run_id: run.run_id.clone(),
+            deployment_id: deployment.deployment_id.clone(),
+            sleeve_id: deployment.sleeve_id.clone(),
+            decided_at: "2026-03-08T10:00:00Z".to_string(),
+            sleeve_equity_usd: "1000.00".to_string(),
+            total_requested_allocated_usd: "1000.00".to_string(),
+            total_granted_allocated_usd: "1000.00".to_string(),
+            total_requested_reserved_usd: "25.00".to_string(),
+            total_granted_reserved_usd: if constrained {
+                "24.00".to_string()
+            } else {
+                "25.00".to_string()
+            },
+            requested_allocated_usd: deployment.capital.allocated_usd.clone(),
+            granted_allocated_usd: granted_allocated_usd.to_string(),
+            requested_reserved_usd: deployment.capital.reserved_usd.clone(),
+            granted_reserved_usd: granted_reserved_usd.to_string(),
+            granted_available_usd: if constrained {
+                "16.00".to_string()
+            } else {
+                "20.00".to_string()
+            },
+            priority_rank: 1,
+            priority_score: 100,
+            constrained,
+            peer_grants: vec![],
         }
     }
 

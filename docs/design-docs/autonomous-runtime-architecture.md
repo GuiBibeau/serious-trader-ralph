@@ -36,11 +36,14 @@ The design goal is simple:
 
 1. Runtime-rs ingests feeds and computes features.
 2. The strategy engine evaluates triggers and produces a deterministic run key.
-3. The risk engine evaluates freshness, exposure, reservation, and lane rules.
-4. The execution planner turns desired state into execution plans.
-5. The exec client coordinates submit, status, and receipt handling through
+3. The runtime allocator coordinates sleeve-level capital across peer
+   deployments and records an auditable grant decision.
+4. The risk engine evaluates freshness, exposure, reservation, and lane rules
+   against the coordinated deployment budget.
+5. The execution planner turns desired state into execution plans.
+6. The exec client coordinates submit, status, and receipt handling through
    private Worker-facing paths that preserve the existing domain contract.
-6. The reconciler updates runtime state and publishes derived read models as
+7. The reconciler updates runtime state and publishes derived read models as
    needed for terminal and admin surfaces.
 
 ## Runtime modules
@@ -72,6 +75,13 @@ The design goal is simple:
 - positions,
 - cost basis and PnL attribution,
 - capital availability checks.
+
+### `runtime_allocator`
+
+- sleeve-level capital coordination across deployments,
+- deterministic grant ordering and peer budget snapshots,
+- auditable allocator decisions for scorecards and operator review,
+- explicit failure signals when a deployment is capital-constrained.
 
 ### `risk_engine`
 
@@ -147,6 +157,7 @@ The first private route family is intentionally small:
 - `GET /api/internal/runtime/positions`
 - `GET /api/internal/runtime/pnl`
 - `GET /api/internal/runtime/scorecards`
+- `GET /api/internal/runtime/allocator`
 - `GET /api/internal/runtime/health`
 - `POST /api/internal/runtime/execution-plans`
 
@@ -181,8 +192,8 @@ Operator-facing runtime controls stay on the Worker boundary:
   shared schemas, fixtures, and contract tests are required before Worker and
   runtime coordination is allowed in production.
 - Capital leakage:
-  logical sleeve reservations prevent one deployment from spending another
-  deployment's capital in v1.
+  logical sleeve reservations plus allocator grants prevent one deployment from
+  spending another deployment's capital in v1.
 
 ## Related ADRs
 

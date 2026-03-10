@@ -28,6 +28,7 @@ export type RuntimeOperatorDetail = {
   deploymentId: string;
   deployment: RuntimeDeploymentRecord | null;
   runs: RuntimeRunRecord[];
+  allocator: Record<string, unknown> | null;
   positions: RuntimeLedgerSnapshot | null;
   pnl: {
     asOf: string | null;

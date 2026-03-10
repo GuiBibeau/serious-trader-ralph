@@ -47,6 +47,19 @@ Promotion for advanced templates is stricter again:
 - replay evidence must cover the exact template behavior that would reach the
   bounded live bridge
 
+Allocator coordination now sits in front of risk and planning for any sleeve
+with multiple runtime deployments:
+
+- each evaluation records an auditable allocator decision for the deployment
+  and its peers in the same sleeve
+- allocator grants clamp requested allocated and reserved capital to the
+  current sleeve equity before risk and planning run
+- allocator priority is deterministic by mode, lane, strategy key, and
+  deployment id, with an operator escape hatch through the deployment tag
+  `allocator:priority=<integer>`
+- allocator scorecards surface constrained and zero-grant runs so live
+  promotion fails closed when capital contention appears in paper mode
+
 The bounded live bridge remains intentionally narrow in v1:
 
 - live runtime execution is allowlisted with
@@ -146,6 +159,7 @@ Route surface:
 - `GET /api/internal/runtime/positions?deploymentId=:deploymentId`
 - `GET /api/internal/runtime/pnl?deploymentId=:deploymentId`
 - `GET /api/internal/runtime/scorecards?deploymentId=:deploymentId`
+- `GET /api/internal/runtime/allocator?deploymentId=:deploymentId`
 
 Example shadow evaluation flow:
 
@@ -181,6 +195,17 @@ Operators should use the Worker as the public control plane:
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/kill`
 - `POST /api/admin/ops/controls` with `runtime.shadowOnly=true` to keep the
   runtime shadow-only until live rollout is explicitly enabled in a later issue
+
+The runtime operator surface now includes allocator details for a deployment:
+
+- current grant allocated and reserved USD,
+- priority rank and priority score,
+- constrained versus full-grant status,
+- peer grants inside the same sleeve,
+- sleeve equity and aggregate grant totals.
+
+Operators should treat repeated constrained or zero-grant paper runs as a
+promotion blocker until capital budgets or priorities are corrected.
 
 The default runtime control baseline is:
 

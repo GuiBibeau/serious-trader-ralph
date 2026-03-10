@@ -953,6 +953,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime-allocator"
+version = "0.1.0"
+dependencies = [
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+]
+
+[[package]]
 name = "runtime-ops"
 version = "0.1.0"
 dependencies = [
@@ -975,6 +988,7 @@ dependencies = [
  "protocol",
  "reconciler",
  "risk-engine",
+ "runtime-allocator",
  "runtime-ops",
  "runtime-scorecards",
  "serde",

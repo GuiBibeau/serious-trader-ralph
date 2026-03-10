@@ -42,6 +42,29 @@ pub struct PortfolioLedgerSnapshot {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SleeveDeploymentBudgetSnapshot {
+    pub deployment_id: String,
+    pub strategy_key: String,
+    pub state: String,
+    pub allocated_usd: String,
+    pub reserved_usd: String,
+    pub available_usd: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SleeveLedgerSnapshot {
+    pub sleeve_id: String,
+    pub equity_usd: String,
+    pub reserved_usd: String,
+    pub available_usd: String,
+    pub quote_mint: String,
+    pub quote_symbol: String,
+    pub deployments: Vec<SleeveDeploymentBudgetSnapshot>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LedgerSyncResult {
     pub snapshot: RuntimeLedgerSnapshot,
@@ -332,6 +355,41 @@ impl PortfolioLedger {
         deployment_id: &str,
     ) -> Result<RuntimeLedgerTotals, PortfolioLedgerError> {
         Ok(self.snapshot_for_deployment(deployment_id)?.totals)
+    }
+
+    pub fn sleeve_snapshot(
+        &self,
+        sleeve_id: &str,
+    ) -> Result<Option<SleeveLedgerSnapshot>, PortfolioLedgerError> {
+        let connection = self.open_connection()?;
+        let sleeve = load_sleeve_state(&connection, sleeve_id)?;
+        let Some(sleeve) = sleeve else {
+            return Ok(None);
+        };
+        let deployments = load_sleeve_deployment_states(&connection, sleeve_id)?;
+        let reserved_cents = deployments
+            .iter()
+            .map(|deployment| deployment.reserved_cents)
+            .sum();
+        Ok(Some(SleeveLedgerSnapshot {
+            sleeve_id: sleeve.sleeve_id,
+            equity_usd: format_usd_cents(sleeve.equity_cents),
+            reserved_usd: format_usd_cents(reserved_cents),
+            available_usd: format_usd_cents(sleeve.equity_cents.saturating_sub(reserved_cents)),
+            quote_mint: sleeve.quote_mint,
+            quote_symbol: sleeve.quote_symbol,
+            deployments: deployments
+                .into_iter()
+                .map(|deployment| SleeveDeploymentBudgetSnapshot {
+                    deployment_id: deployment.deployment_id,
+                    strategy_key: deployment.strategy_key,
+                    state: deployment.state,
+                    allocated_usd: format_usd_cents(deployment.allocated_cents),
+                    reserved_usd: format_usd_cents(deployment.reserved_cents),
+                    available_usd: format_usd_cents(deployment.available_cents),
+                })
+                .collect(),
+        }))
     }
 
     #[must_use]
@@ -761,6 +819,38 @@ fn load_deployment_state(
         )
         .optional()
         .map_err(PortfolioLedgerError::from)
+}
+
+fn load_sleeve_deployment_states(
+    connection: &Connection,
+    sleeve_id: &str,
+) -> Result<Vec<DeploymentLedgerState>, PortfolioLedgerError> {
+    let mut statement = connection.prepare(
+        "SELECT deployment_id, sleeve_id, strategy_key, state, allocated_cents, reserved_cents, available_cents,
+                realized_pnl_cents, quote_mint, quote_symbol
+         FROM ledger_deployments
+         WHERE sleeve_id = ?1
+         ORDER BY deployment_id ASC",
+    )?;
+    let rows = statement.query_map(params![sleeve_id], |row| {
+        Ok(DeploymentLedgerState {
+            deployment_id: row.get(0)?,
+            sleeve_id: row.get(1)?,
+            strategy_key: row.get(2)?,
+            state: row.get(3)?,
+            allocated_cents: row.get(4)?,
+            reserved_cents: row.get(5)?,
+            available_cents: row.get(6)?,
+            realized_pnl_cents: row.get(7)?,
+            quote_mint: row.get(8)?,
+            quote_symbol: row.get(9)?,
+        })
+    })?;
+    let mut deployments = Vec::new();
+    for row in rows {
+        deployments.push(row?);
+    }
+    Ok(deployments)
 }
 
 fn sum_deployment_cents(
@@ -1280,5 +1370,41 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn returns_sleeve_snapshots_with_deployment_budgets() {
+        let ledger = ledger("sleeve-snapshot");
+        ledger
+            .sync_deployment(&deployment(
+                "deployment_alpha",
+                "sleeve_alpha",
+                "60.00",
+                "15.00",
+            ))
+            .expect("first deployment to sync");
+        ledger
+            .apply_sleeve_correction("sleeve_alpha", "100.00")
+            .expect("sleeve correction to apply");
+        ledger
+            .sync_deployment(&deployment(
+                "deployment_beta",
+                "sleeve_alpha",
+                "40.00",
+                "10.00",
+            ))
+            .expect("second deployment to sync");
+
+        let snapshot = ledger
+            .sleeve_snapshot("sleeve_alpha")
+            .expect("snapshot to load")
+            .expect("sleeve to exist");
+
+        assert_eq!(snapshot.equity_usd, "100.00");
+        assert_eq!(snapshot.reserved_usd, "25.00");
+        assert_eq!(snapshot.available_usd, "75.00");
+        assert_eq!(snapshot.deployments.len(), 2);
+        assert_eq!(snapshot.deployments[0].deployment_id, "deployment_alpha");
+        assert_eq!(snapshot.deployments[1].deployment_id, "deployment_beta");
     }
 }
