@@ -4,6 +4,9 @@ import { GET, POST } from "../../apps/portal/app/api/runtime/operator/route";
 const ORIGINAL_ENV = {
   NEXT_PUBLIC_EDGE_API_BASE: process.env.NEXT_PUBLIC_EDGE_API_BASE,
   RUNTIME_OPERATOR_ADMIN_TOKEN: process.env.RUNTIME_OPERATOR_ADMIN_TOKEN,
+  RUNTIME_OPERATOR_USER_ALLOWLIST: process.env.RUNTIME_OPERATOR_USER_ALLOWLIST,
+  RUNTIME_OPERATOR_PRIVY_USER_ALLOWLIST:
+    process.env.RUNTIME_OPERATOR_PRIVY_USER_ALLOWLIST,
   ADMIN_TOKEN: process.env.ADMIN_TOKEN,
   NODE_ENV: process.env.NODE_ENV,
 };
@@ -102,6 +105,10 @@ afterEach(() => {
     ORIGINAL_ENV.NEXT_PUBLIC_EDGE_API_BASE;
   process.env.RUNTIME_OPERATOR_ADMIN_TOKEN =
     ORIGINAL_ENV.RUNTIME_OPERATOR_ADMIN_TOKEN;
+  process.env.RUNTIME_OPERATOR_USER_ALLOWLIST =
+    ORIGINAL_ENV.RUNTIME_OPERATOR_USER_ALLOWLIST;
+  process.env.RUNTIME_OPERATOR_PRIVY_USER_ALLOWLIST =
+    ORIGINAL_ENV.RUNTIME_OPERATOR_PRIVY_USER_ALLOWLIST;
   process.env.ADMIN_TOKEN = ORIGINAL_ENV.ADMIN_TOKEN;
   process.env.NODE_ENV = ORIGINAL_ENV.NODE_ENV;
   globalThis.fetch = originalFetch;
@@ -125,6 +132,7 @@ describe("portal runtime operator route", () => {
   test("fails closed when the admin token is missing", async () => {
     process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
     process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
     process.env.ADMIN_TOKEN = "";
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -153,9 +161,42 @@ describe("portal runtime operator route", () => {
     });
   });
 
+  test("requires an operator allowlist match before serving admin data", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_operator";
+    process.env.RUNTIME_OPERATOR_PRIVY_USER_ALLOWLIST = "";
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(JSON.stringify({ ok: true, user: { id: "u_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await GET(
+      new Request("https://www.trader-ralph.com/api/runtime/operator", {
+        headers: {
+          authorization: "Bearer user-token",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: "operator-access-required",
+    });
+  });
+
   test("returns runtime snapshot and selected deployment detail", async () => {
     process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
     process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
 
     const seenAuthHeaders: string[] = [];
     globalThis.fetch = (async (
@@ -296,6 +337,7 @@ describe("portal runtime operator route", () => {
   test("forwards runtime deployment control actions", async () => {
     process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
     process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
 
     let capturedMethod = "";
     let capturedAuthorization = "";

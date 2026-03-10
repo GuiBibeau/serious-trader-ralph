@@ -23,6 +23,15 @@ type RuntimeControls = {
   shadowOnlyReason: string | null;
 };
 
+function parseCsvSet(value: string | undefined): Set<string> {
+  return new Set(
+    String(value ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -54,6 +63,31 @@ function resolveAdminToken(): string {
   return String(
     process.env.RUNTIME_OPERATOR_ADMIN_TOKEN ?? process.env.ADMIN_TOKEN ?? "",
   ).trim();
+}
+
+function isAuthorizedRuntimeOperator(
+  payload: Record<string, unknown>,
+): boolean {
+  const user = isRecord(payload.user) ? payload.user : null;
+  if (!user) return false;
+
+  const allowedUserIds = parseCsvSet(
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST,
+  );
+  const allowedPrivyUserIds = parseCsvSet(
+    process.env.RUNTIME_OPERATOR_PRIVY_USER_ALLOWLIST,
+  );
+  if (allowedUserIds.size === 0 && allowedPrivyUserIds.size === 0) {
+    return false;
+  }
+
+  const userId = readString(user.id);
+  if (userId && allowedUserIds.has(userId)) return true;
+
+  const privyUserId = readString(user.privyUserId);
+  if (privyUserId && allowedPrivyUserIds.has(privyUserId)) return true;
+
+  return false;
 }
 
 async function requestWorkerJson(input: {
@@ -238,6 +272,12 @@ export async function GET(request: Request) {
       status: sessionResult.status,
     });
   }
+  if (!isAuthorizedRuntimeOperator(sessionResult.payload)) {
+    return NextResponse.json(
+      { ok: false, error: "operator-access-required" },
+      { status: 403 },
+    );
+  }
 
   const adminToken = resolveAdminToken();
   if (!adminToken) {
@@ -299,6 +339,12 @@ export async function POST(request: Request) {
     return NextResponse.json(sessionResult.payload, {
       status: sessionResult.status,
     });
+  }
+  if (!isAuthorizedRuntimeOperator(sessionResult.payload)) {
+    return NextResponse.json(
+      { ok: false, error: "operator-access-required" },
+      { status: 403 },
+    );
   }
 
   const adminToken = resolveAdminToken();
