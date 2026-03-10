@@ -67,6 +67,10 @@
 - Phase 5 pack 2 adds `trend_following` and `mean_reversion`, but promotion is
   gated on replay evidence across opposing return regimes and zero
   stale-feature rejects in scorecards.
+- Phase 6 pack 1 adds `breakout`, `macro_rotation`, and `volatility_target`
+  without widening the public contract; promotion stays bounded to the same
+  single-slice safe-lane live bridge, with extended shadow and paper evidence
+  windows.
 - Do not treat phase 5 completion as arbitrary-strategy support; phase 6 still
   covers advanced templates and multi-strategy capital coordination.
 

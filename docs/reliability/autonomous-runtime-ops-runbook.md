@@ -45,6 +45,18 @@ Pack 2 signal-driven templates add more rollout evidence requirements:
 - operators should treat any freshness degradation as an immediate reason to
   pause signal-driven deployments
 
+Pack 3 advanced templates inherit the same bounded live bridge and add tighter
+promotion criteria:
+
+- `breakout`: replay evidence must show confirmation on both clean breakout and
+  failed-breakout windows
+- `macro_rotation`: replay evidence must show positive and negative long-window
+  regime shifts without mixed-regime churn
+- `volatility_target`: replay evidence must show both risk-add and risk-reduce
+  behavior as realized volatility moves across thresholds
+- advanced templates need at least five shadow runs and seven paper runs before
+  bounded live promotion
+
 ## Routine operator actions
 
 ### Inspect health
@@ -181,8 +193,17 @@ Required checks before enabling:
 
 - deployment id is present in `RUNTIME_MANAGED_LIVE_DEPLOYMENT_IDS`
 - deployment lane is `safe`
-- deployment strategy is one of `dca`, `threshold_rebalance`, or `twap`
+- deployment strategy is one managed template with merged replay and scorecard
+  coverage for its pack
 - current plan shape is still single-slice in live mode
+
+For advanced templates, also verify:
+
+- the scorecard shows `shadow-advanced-min-runs` and `paper-advanced-min-runs`
+  as passing before promotion
+- no stale-feature rejects appear in the current promotion window
+- the replay artifact attached to the PR covers the same template and market
+  regime being promoted
 
 Control-plane command:
 
