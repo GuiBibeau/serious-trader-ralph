@@ -381,15 +381,13 @@ fn strategy_trade_decision(
         .long_return_bps
         .as_deref()
         .map(|value| parse_signed_decimal("featureSnapshot.longReturnBps", value))
-        .transpose()?
-        .unwrap_or(short_signal);
+        .transpose()?;
     let realized_volatility_bps = input
         .feature_snapshot
         .realized_volatility_bps
         .as_deref()
         .map(|value| parse_decimal("featureSnapshot.realizedVolatilityBps", value))
-        .transpose()?
-        .unwrap_or(0.0);
+        .transpose()?;
     match input.deployment.strategy_key.as_str() {
         "threshold_rebalance" => threshold_rebalance_decision(input, base_notional_cents),
         "twap" => Ok(twap_decision(input, base_notional_cents)),
@@ -450,9 +448,20 @@ fn mean_reversion_decision(signal: f64, notional_cents: i64) -> StrategyTradeDec
 
 fn breakout_decision(
     short_signal: f64,
-    long_signal: f64,
+    long_signal: Option<f64>,
     notional_cents: i64,
 ) -> StrategyTradeDecision {
+    let Some(long_signal) = long_signal else {
+        return noop_decision(
+            RuntimeExecutionAction::Buy,
+            if short_signal >= 0.0 {
+                SwapDirection::BuyBase
+            } else {
+                SwapDirection::SellBase
+            },
+        );
+    };
+
     if short_signal >= BREAKOUT_SIGNAL_THRESHOLD_BPS
         && long_signal >= BREAKOUT_CONFIRMATION_THRESHOLD_BPS
     {
@@ -485,9 +494,20 @@ fn breakout_decision(
 
 fn macro_rotation_decision(
     short_signal: f64,
-    long_signal: f64,
+    long_signal: Option<f64>,
     notional_cents: i64,
 ) -> StrategyTradeDecision {
+    let Some(long_signal) = long_signal else {
+        return noop_decision(
+            RuntimeExecutionAction::Buy,
+            if short_signal >= 0.0 {
+                SwapDirection::BuyBase
+            } else {
+                SwapDirection::SellBase
+            },
+        );
+    };
+
     if long_signal >= MACRO_ROTATION_REGIME_THRESHOLD_BPS && short_signal >= 0.0 {
         return StrategyTradeDecision {
             action: RuntimeExecutionAction::Buy,
@@ -516,7 +536,7 @@ fn macro_rotation_decision(
 
 fn volatility_target_decision(
     input: &ExecutionPlannerInput,
-    realized_volatility_bps: f64,
+    realized_volatility_bps: Option<f64>,
     notional_cents: i64,
 ) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
     let equity_cents = parse_non_negative_usd_cents(
@@ -524,6 +544,16 @@ fn volatility_target_decision(
         &input.ledger_snapshot.totals.equity_usd,
     )?;
     let base_exposure_cents = current_base_exposure_cents(input, &input.deployment.pair.base_mint)?;
+    let Some(realized_volatility_bps) = realized_volatility_bps else {
+        return Ok(noop_decision(
+            RuntimeExecutionAction::Rebalance,
+            if base_exposure_cents > 0 {
+                SwapDirection::SellBase
+            } else {
+                SwapDirection::BuyBase
+            },
+        ));
+    };
     let target_bps = if realized_volatility_bps <= VOLATILITY_TARGET_LOW_THRESHOLD_BPS {
         VOLATILITY_TARGET_LOW_BPS
     } else if realized_volatility_bps <= VOLATILITY_TARGET_MEDIUM_THRESHOLD_BPS {
@@ -1189,6 +1219,19 @@ mod tests {
         input
     }
 
+    fn input_with_missing_feature_windows(
+        run_id: &str,
+        strategy_key: &str,
+        mode: RuntimeMode,
+        lane: RuntimeLane,
+        short_return_bps: &str,
+    ) -> ExecutionPlannerInput {
+        let mut input = input(run_id, strategy_key, mode, lane, short_return_bps);
+        input.feature_snapshot.long_return_bps = None;
+        input.feature_snapshot.realized_volatility_bps = None;
+        input
+    }
+
     #[test]
     fn builds_shadow_dca_plans_deterministically() {
         let planner = planner("shadow-dca");
@@ -1431,11 +1474,28 @@ mod tests {
     }
 
     #[test]
+    fn breakout_noops_without_long_window_confirmation() {
+        let planner = planner("breakout-no-long-window");
+        let result = planner
+            .plan_and_store(&input_with_missing_feature_windows(
+                "run_12",
+                "breakout",
+                RuntimeMode::Shadow,
+                RuntimeLane::Safe,
+                "24.0",
+            ))
+            .expect("plan to store");
+
+        assert_eq!(result.plan.slices[0].input_amount_atomic, "0");
+        assert_eq!(result.plan.slices[0].notional_usd, "0.00");
+    }
+
+    #[test]
     fn macro_rotation_sells_in_negative_regime() {
         let planner = planner("macro-rotation-sell");
         let result = planner
             .plan_and_store(&input_with_feature_snapshot(
-                "run_12",
+                "run_13",
                 "macro_rotation",
                 RuntimeMode::Paper,
                 RuntimeLane::Safe,
@@ -1457,7 +1517,7 @@ mod tests {
         let planner = planner("volatility-target-sell");
         let result = planner
             .plan_and_store(&input_with_ledger_snapshot(
-                "run_13",
+                "run_14",
                 "volatility_target",
                 RuntimeMode::Live,
                 RuntimeLane::Safe,
@@ -1475,5 +1535,26 @@ mod tests {
             "So11111111111111111111111111111111111111112"
         );
         assert_eq!(result.plan.slices[0].notional_usd, "5.00");
+    }
+
+    #[test]
+    fn volatility_target_noops_without_realized_volatility() {
+        let planner = planner("volatility-target-no-vol");
+        let result = planner
+            .plan_and_store(&input_with_missing_feature_windows(
+                "run_15",
+                "volatility_target",
+                RuntimeMode::Paper,
+                RuntimeLane::Safe,
+                "0.0",
+            ))
+            .expect("plan to store");
+
+        assert_eq!(
+            result.plan.slices[0].action,
+            RuntimeExecutionAction::Rebalance
+        );
+        assert_eq!(result.plan.slices[0].input_amount_atomic, "0");
+        assert_eq!(result.plan.slices[0].notional_usd, "0.00");
     }
 }
