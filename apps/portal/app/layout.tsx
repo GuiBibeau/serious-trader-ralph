@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Instrument_Sans, JetBrains_Mono } from "next/font/google";
+import { EdgeApiRuntimeBridge } from "./edge-api-runtime-bridge";
 import "./globals.css";
 import { Providers } from "./providers";
 import { ThemeProvider } from "./theme-provider";
@@ -33,6 +34,7 @@ export default function RootLayout({
       className={`${display.variable} ${mono.variable}`}
     >
       <body>
+        <EdgeApiRuntimeBridge />
         <ThemeProvider>
           <Providers>{children}</Providers>
         </ThemeProvider>
