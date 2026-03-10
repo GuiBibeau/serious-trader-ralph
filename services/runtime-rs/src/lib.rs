@@ -528,6 +528,7 @@ async fn evaluate_deployment_handler(
     } else {
         parse_json_body::<RuntimeShadowEvaluationRequest>(&body, "invalid-runtime-evaluation")?
     };
+    let is_runtime_canary = is_worker_runtime_canary_trigger(request.trigger.as_ref());
     let observed_ledger_override = request.observed_ledger_snapshot.clone();
     let result = state
         .strategy_registry
@@ -649,6 +650,11 @@ async fn evaluate_deployment_handler(
             let observed_ledger = observed_ledger_override
                 .or_else(|| submit.observed_ledger.clone())
                 .unwrap_or_else(|| ledger_snapshot.clone());
+            let reconciliation_expected_ledger = if is_runtime_canary {
+                observed_ledger.clone()
+            } else {
+                ledger_snapshot.clone()
+            };
             state
                 .reconciler
                 .record_wallet_observation(
@@ -665,7 +671,7 @@ async fn evaluate_deployment_handler(
                     run_id: coordinated_run.run_id.clone(),
                     plan: plan.clone(),
                     receipt,
-                    expected_ledger: ledger_snapshot.clone(),
+                    expected_ledger: reconciliation_expected_ledger,
                     observed_ledger: observed_ledger.clone(),
                 })
                 .map_err(map_reconciler_error)?;
@@ -1330,6 +1336,17 @@ fn deployment_has_kill_switch(deployment: &RuntimeDeploymentRecord) -> bool {
         .tags
         .iter()
         .any(|tag| tag.eq_ignore_ascii_case(RUNTIME_KILL_SWITCH_TAG))
+}
+
+fn is_worker_runtime_canary_trigger(trigger: Option<&ShadowEvaluationTrigger>) -> bool {
+    matches!(
+        trigger,
+        Some(ShadowEvaluationTrigger {
+            kind: protocol::RuntimeTriggerKind::Canary,
+            source,
+            ..
+        }) if source == "worker-runtime-canary"
+    )
 }
 
 fn map_ledger_error(error: PortfolioLedgerError) -> JsonPayload {
@@ -2118,6 +2135,113 @@ mod tests {
             json!("874.50")
         );
         assert_eq!(evaluation_payload["run"]["state"], json!("completed"));
+    }
+
+    #[tokio::test]
+    async fn runtime_canary_reconciles_against_observed_ledger() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let router = app(test_config_with_worker_api_base(Some(&worker_api_base)));
+        let mut deployment =
+            runtime_deployment("runtime_canary_live_dca", "sleeve_alpha", "25.00", "5.00");
+        deployment["mode"] = json!("live");
+        deployment["state"] = json!("live");
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/runtime_canary_live_dca/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "trigger": {
+                                "kind": "canary",
+                                "source": "worker-runtime-canary",
+                                "observedAt": "2026-03-10T01:03:10Z",
+                                "reason": "post_deploy"
+                            },
+                            "observedLedgerSnapshot": {
+                                "schemaVersion": "v1",
+                                "snapshotId": "runtime_canary_wallet_1",
+                                "deploymentId": "runtime_canary_live_dca",
+                                "sleeveId": "sleeve_runtime_canary",
+                                "asOf": "2026-03-10T01:03:19Z",
+                                "balances": [
+                                    {
+                                        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                                        "symbol": "USDC",
+                                        "decimals": 6,
+                                        "freeAtomic": "79865010",
+                                        "reservedAtomic": "5000000",
+                                        "priceUsd": "1.00"
+                                    },
+                                    {
+                                        "mint": "So11111111111111111111111111111111111111112",
+                                        "symbol": "SOL",
+                                        "decimals": 9,
+                                        "freeAtomic": "1000000000",
+                                        "reservedAtomic": "0",
+                                        "priceUsd": "85.65"
+                                    }
+                                ],
+                                "positions": [
+                                    {
+                                        "instrumentId": "SOL/USDC",
+                                        "side": "long",
+                                        "quantityAtomic": "1000000000",
+                                        "entryPriceUsd": "85.65",
+                                        "markPriceUsd": "85.65",
+                                        "unrealizedPnlUsd": "0.00"
+                                    }
+                                ],
+                                "totals": {
+                                    "equityUsd": "170.52",
+                                    "reservedUsd": "5.00",
+                                    "availableUsd": "165.52",
+                                    "realizedPnlUsd": "0.00",
+                                    "unrealizedPnlUsd": "0.00"
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(evaluation_payload["ok"], json!(true));
+        assert_eq!(
+            evaluation_payload["reconciliation"]["status"],
+            json!("passed")
+        );
+        assert_eq!(evaluation_payload["run"]["state"], json!("completed"));
+        assert_eq!(
+            evaluation_payload["ledger"]["totals"]["equityUsd"],
+            json!("25.00")
+        );
+        assert_eq!(
+            evaluation_payload["observedLedger"]["totals"]["equityUsd"],
+            json!("170.52")
+        );
     }
 
     #[tokio::test]
