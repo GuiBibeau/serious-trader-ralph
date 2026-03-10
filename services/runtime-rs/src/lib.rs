@@ -45,6 +45,17 @@ const RUNTIME_KILL_SWITCH_TAG: &str = "runtime:kill-switch";
 type JsonPayload = (StatusCode, Json<Value>);
 type HandlerResult = Result<JsonPayload, JsonPayload>;
 
+fn plan_has_actionable_slices(plan: &protocol::RuntimeExecutionPlan) -> bool {
+    plan.slices.iter().any(|slice| {
+        slice
+            .input_amount_atomic
+            .trim()
+            .parse::<u128>()
+            .ok()
+            .is_some_and(|value| value > 0)
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeAppState {
     config: RuntimeConfig,
@@ -601,108 +612,115 @@ async fn evaluate_deployment_handler(
                 })
                 .map_err(map_execution_planner_error)?;
             let plan = planning.plan;
-            let submit = state
-                .exec_client
-                .submit_plan(&plan)
-                .await
-                .map_err(map_exec_client_error)?;
-            state
-                .reconciler
-                .record_submit_attempt(
-                    &plan,
-                    &submit.submit_request_id,
-                    submit.accepted,
-                    &submit.source,
-                )
-                .map_err(map_reconciler_error)?;
-            coordinated_run = state
-                .strategy_registry
-                .apply_execution_plan(
-                    &coordinated_run.run_id,
-                    &plan.plan_id,
-                    &submit.submit_request_id,
-                )
-                .map_err(map_registry_error)?;
-            let receipt = if let Some(receipt) = submit.receipt.as_ref() {
-                state
-                    .reconciler
-                    .record_receipt_observation(
-                        &plan,
-                        &runtime_receipt_from_exec_response(&plan, &submit, receipt),
-                    )
-                    .map_err(map_reconciler_error)?
+            execution_plan = Some(plan.clone());
+            if !plan_has_actionable_slices(&plan) {
+                coordinated_run = state
+                    .strategy_registry
+                    .apply_noop_execution_plan(&coordinated_run.run_id, &plan.plan_id)
+                    .map_err(map_registry_error)?;
             } else {
+                let submit = state
+                    .exec_client
+                    .submit_plan(&plan)
+                    .await
+                    .map_err(map_exec_client_error)?;
                 state
                     .reconciler
-                    .record_synthetic_receipt(
+                    .record_submit_attempt(
                         &plan,
                         &submit.submit_request_id,
+                        submit.accepted,
                         &submit.source,
-                        "accepted",
-                        &["execution coordination accepted"],
                     )
-                    .map_err(map_reconciler_error)?
-            };
-            coordinated_run = state
-                .strategy_registry
-                .apply_receipt(&coordinated_run.run_id, &receipt.receipt_id)
-                .map_err(map_registry_error)?;
-            let observed_ledger = observed_ledger_override
-                .or_else(|| submit.observed_ledger.clone())
-                .unwrap_or_else(|| ledger_snapshot.clone());
-            let reconciliation_expected_ledger = if is_runtime_canary {
-                observed_ledger.clone()
-            } else {
-                ledger_snapshot.clone()
-            };
-            state
-                .reconciler
-                .record_wallet_observation(
-                    &deployment_id,
-                    &coordinated_run.run_id,
-                    "runtime-rs",
-                    &observed_ledger,
-                )
-                .map_err(map_reconciler_error)?;
-            let reconciliation_outcome = state
-                .reconciler
-                .reconcile_and_store(&reconciler::ReconciliationInput {
-                    deployment_id: deployment_id.clone(),
-                    run_id: coordinated_run.run_id.clone(),
-                    plan: plan.clone(),
-                    receipt,
-                    expected_ledger: reconciliation_expected_ledger,
-                    observed_ledger: observed_ledger.clone(),
-                })
-                .map_err(map_reconciler_error)?;
-            let reconciliation_failure_code = match reconciliation_outcome.result.status {
-                protocol::RuntimeReconciliationStatus::Passed => None,
-                protocol::RuntimeReconciliationStatus::NeedsManualReview => {
-                    Some("reconciliation-needs-manual-review")
-                }
-                protocol::RuntimeReconciliationStatus::Failed => Some("reconciliation-failed"),
-            };
-            let reconciliation_failure_message =
-                reconciliation_outcome.result.notes.last().cloned();
-            coordinated_run = state
-                .strategy_registry
-                .apply_reconciliation_result(
-                    &coordinated_run.run_id,
-                    reconciliation_outcome.result.status.clone(),
-                    reconciliation_failure_code,
-                    reconciliation_failure_message.as_deref(),
-                )
-                .map_err(map_registry_error)?;
-            if reconciliation_outcome.should_apply_correction {
+                    .map_err(map_reconciler_error)?;
+                coordinated_run = state
+                    .strategy_registry
+                    .apply_execution_plan(
+                        &coordinated_run.run_id,
+                        &plan.plan_id,
+                        &submit.submit_request_id,
+                    )
+                    .map_err(map_registry_error)?;
+                let receipt = if let Some(receipt) = submit.receipt.as_ref() {
+                    state
+                        .reconciler
+                        .record_receipt_observation(
+                            &plan,
+                            &runtime_receipt_from_exec_response(&plan, &submit, receipt),
+                        )
+                        .map_err(map_reconciler_error)?
+                } else {
+                    state
+                        .reconciler
+                        .record_synthetic_receipt(
+                            &plan,
+                            &submit.submit_request_id,
+                            &submit.source,
+                            "accepted",
+                            &["execution coordination accepted"],
+                        )
+                        .map_err(map_reconciler_error)?
+                };
+                coordinated_run = state
+                    .strategy_registry
+                    .apply_receipt(&coordinated_run.run_id, &receipt.receipt_id)
+                    .map_err(map_registry_error)?;
+                let observed_ledger = observed_ledger_override
+                    .or_else(|| submit.observed_ledger.clone())
+                    .unwrap_or_else(|| ledger_snapshot.clone());
+                let reconciliation_expected_ledger = if is_runtime_canary {
+                    observed_ledger.clone()
+                } else {
+                    ledger_snapshot.clone()
+                };
                 state
-                    .portfolio_ledger
-                    .apply_observed_snapshot(&deployment_id, &observed_ledger)
-                    .map_err(map_ledger_error)?;
+                    .reconciler
+                    .record_wallet_observation(
+                        &deployment_id,
+                        &coordinated_run.run_id,
+                        "runtime-rs",
+                        &observed_ledger,
+                    )
+                    .map_err(map_reconciler_error)?;
+                let reconciliation_outcome = state
+                    .reconciler
+                    .reconcile_and_store(&reconciler::ReconciliationInput {
+                        deployment_id: deployment_id.clone(),
+                        run_id: coordinated_run.run_id.clone(),
+                        plan: plan.clone(),
+                        receipt,
+                        expected_ledger: reconciliation_expected_ledger,
+                        observed_ledger: observed_ledger.clone(),
+                    })
+                    .map_err(map_reconciler_error)?;
+                let reconciliation_failure_code = match reconciliation_outcome.result.status {
+                    protocol::RuntimeReconciliationStatus::Passed => None,
+                    protocol::RuntimeReconciliationStatus::NeedsManualReview => {
+                        Some("reconciliation-needs-manual-review")
+                    }
+                    protocol::RuntimeReconciliationStatus::Failed => Some("reconciliation-failed"),
+                };
+                let reconciliation_failure_message =
+                    reconciliation_outcome.result.notes.last().cloned();
+                coordinated_run = state
+                    .strategy_registry
+                    .apply_reconciliation_result(
+                        &coordinated_run.run_id,
+                        reconciliation_outcome.result.status.clone(),
+                        reconciliation_failure_code,
+                        reconciliation_failure_message.as_deref(),
+                    )
+                    .map_err(map_registry_error)?;
+                if reconciliation_outcome.should_apply_correction {
+                    state
+                        .portfolio_ledger
+                        .apply_observed_snapshot(&deployment_id, &observed_ledger)
+                        .map_err(map_ledger_error)?;
+                }
+                reconciliation = Some(reconciliation_outcome.result);
+                observed_ledger_snapshot = Some(observed_ledger);
+                coordination = Some(submit);
             }
-            reconciliation = Some(reconciliation_outcome.result);
-            observed_ledger_snapshot = Some(observed_ledger);
-            execution_plan = Some(plan);
-            coordination = Some(submit);
         }
     }
     let (deployment, ledger_snapshot) = if should_pause_runtime(&assessment.verdict) {
@@ -1573,7 +1591,7 @@ mod tests {
     use axum::{
         body::Body,
         extract::State,
-        http::{HeaderMap, Request, StatusCode},
+        http::{HeaderMap, HeaderValue, Request, StatusCode},
         routing::{get, post},
         Json, Router,
     };
@@ -1677,10 +1695,26 @@ mod tests {
         allocated_usd: &str,
         reserved_usd: &str,
     ) -> Value {
+        runtime_deployment_with_strategy(
+            deployment_id,
+            sleeve_id,
+            "dca",
+            allocated_usd,
+            reserved_usd,
+        )
+    }
+
+    fn runtime_deployment_with_strategy(
+        deployment_id: &str,
+        sleeve_id: &str,
+        strategy_key: &str,
+        allocated_usd: &str,
+        reserved_usd: &str,
+    ) -> Value {
         json!({
             "schemaVersion": "v1",
             "deploymentId": deployment_id,
-            "strategyKey": "dca",
+            "strategyKey": strategy_key,
             "sleeveId": sleeve_id,
             "ownerUserId": "user_123",
             "pair": {
@@ -2054,6 +2088,167 @@ mod tests {
             .as_str()
             .expect("markdown")
             .contains("Runtime Promotion Readiness"));
+    }
+
+    #[tokio::test]
+    async fn threshold_rebalance_can_complete_without_coordination_when_inside_tolerance() {
+        let state = RuntimeAppState::new(test_config());
+        let deployment: RuntimeDeploymentRecord =
+            serde_json::from_value(runtime_deployment_with_strategy(
+                "deployment_rebalance_noop",
+                "sleeve_alpha",
+                "threshold_rebalance",
+                "100.00",
+                "5.00",
+            ))
+            .expect("deployment");
+        state
+            .strategy_registry
+            .upsert_deployment(&deployment)
+            .expect("deployment to store");
+        state
+            .portfolio_ledger
+            .sync_deployment(&deployment)
+            .expect("ledger to sync");
+        state
+            .portfolio_ledger
+            .apply_observed_snapshot(
+                "deployment_rebalance_noop",
+                &serde_json::from_value(json!({
+                    "schemaVersion": "v1",
+                    "snapshotId": "wallet_threshold_noop",
+                    "deploymentId": "deployment_rebalance_noop",
+                    "sleeveId": "sleeve_alpha",
+                    "asOf": "2026-03-10T03:15:00Z",
+                    "balances": [
+                        {
+                            "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                            "symbol": "USDC",
+                            "decimals": 6,
+                            "freeAtomic": "45500000",
+                            "reservedAtomic": "5000000",
+                            "priceUsd": "1.00"
+                        },
+                        {
+                            "mint": "So11111111111111111111111111111111111111112",
+                            "symbol": "SOL",
+                            "decimals": 9,
+                            "freeAtomic": "330000000",
+                            "reservedAtomic": "0",
+                            "priceUsd": "150.00"
+                        }
+                    ],
+                    "positions": [
+                        {
+                            "instrumentId": "SOL/USDC",
+                            "side": "long",
+                            "quantityAtomic": "330000000",
+                            "entryPriceUsd": "149.00",
+                            "markPriceUsd": "150.00",
+                            "unrealizedPnlUsd": "0.33"
+                        }
+                    ],
+                    "totals": {
+                        "equityUsd": "100.00",
+                        "reservedUsd": "5.00",
+                        "availableUsd": "95.00",
+                        "realizedPnlUsd": "0.00",
+                        "unrealizedPnlUsd": "0.00"
+                    }
+                }))
+                .expect("observed snapshot"),
+            )
+            .expect("observed snapshot to apply");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer runtime-service-secret"),
+        );
+        let (status, Json(evaluation_payload)) = evaluate_deployment_handler(
+            headers,
+            Path("deployment_rebalance_noop".to_string()),
+            State(state),
+            Bytes::from_static(b"{}"),
+        )
+        .await
+        .expect("response");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(evaluation_payload["run"]["state"], json!("completed"));
+        assert_eq!(evaluation_payload["coordination"], Value::Null);
+        assert_eq!(evaluation_payload["reconciliation"], Value::Null);
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["action"],
+            json!("rebalance")
+        );
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["inputAmountAtomic"],
+            json!("0")
+        );
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["notionalUsd"],
+            json!("0.00")
+        );
+    }
+
+    #[tokio::test]
+    async fn twap_deployments_use_sliced_notional_coordination() {
+        let worker_api_base = spawn_exec_coordination_stub().await;
+        let router = app(test_config_with_worker_api_base(Some(&worker_api_base)));
+        let deployment = runtime_deployment_with_strategy(
+            "deployment_twap",
+            "sleeve_alpha",
+            "twap",
+            "1000.00",
+            "5.00",
+        );
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_twap/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(evaluation_payload["run"]["state"], json!("completed"));
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["action"],
+            json!("buy")
+        );
+        assert_eq!(
+            evaluation_payload["executionPlan"]["slices"][0]["notionalUsd"],
+            json!("2.50")
+        );
+        assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
+        assert_eq!(
+            evaluation_payload["coordination"]["submitRequestId"],
+            json!("submit_runtime_123")
+        );
     }
 
     #[tokio::test]

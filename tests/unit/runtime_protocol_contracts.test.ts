@@ -163,6 +163,8 @@ describe("runtime protocol contracts", () => {
       schemaVersion: "v1",
       planId: "plan_1",
       deploymentId: "dep_1",
+      ownerUserId: "user_1",
+      sleeveId: "sleeve_1",
       runId: "run_1",
       createdAt: "2026-03-07T18:05:02Z",
       mode: "shadow",
@@ -207,6 +209,8 @@ describe("runtime protocol contracts", () => {
     expect(run.state).toBe("planned");
     expect(ledger.totals.availableUsd).toBe("95");
     expect(verdict.verdict).toBe("allow");
+    expect(plan.ownerUserId).toBe("user_1");
+    expect(plan.sleeveId).toBe("sleeve_1");
     expect(plan.slices).toHaveLength(1);
     expect(reconciliation.status).toBe("passed");
   });

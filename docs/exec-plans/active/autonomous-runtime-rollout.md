@@ -61,6 +61,11 @@
 - Expand only after the live canary is stable.
 - Re-check issue scope before marking template-pack issues ready for harness
   execution.
+- Phase 5 pack 1 is intentionally bounded to `dca`, `threshold_rebalance`, and
+  `twap`, with live execution limited to allowlisted single-slice safe-lane
+  deployments.
+- Do not treat phase 5 completion as arbitrary-strategy support; phase 6 still
+  covers advanced templates and multi-strategy capital coordination.
 
 ## Rollback posture
 

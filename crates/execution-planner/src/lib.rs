@@ -58,6 +58,19 @@ pub struct ExecutionPlanningResult {
     pub created: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwapDirection {
+    BuyBase,
+    SellBase,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StrategyTradeDecision {
+    action: RuntimeExecutionAction,
+    direction: SwapDirection,
+    notional_cents: i64,
+}
+
 #[derive(Debug, Error)]
 pub enum ExecutionPlannerError {
     #[error("storage io error: {0}")]
@@ -269,7 +282,7 @@ fn build_plan(
 
     let lane = selected_lane(&input.deployment);
     let (simulate_only, dry_run) = execution_flags(&input.deployment.mode);
-    let notional_cents = desired_notional_cents(&input.deployment)?;
+    let decision = strategy_trade_decision(input)?;
     let mid_price = parse_decimal(
         "featureSnapshot.midPriceUsd",
         &input.feature_snapshot.mid_price_usd,
@@ -284,36 +297,33 @@ fn build_plan(
         &input.deployment.pair.base_mint,
         9,
     );
-    let action = plan_action(input)?;
     let slippage_bps = input.deployment.policy.max_slippage_bps;
-    let notional_usd = format_usd_cents(notional_cents);
-    let input_amount_atomic = match action {
-        RuntimeExecutionAction::Buy | RuntimeExecutionAction::Rebalance => {
-            atomic_from_usd_cents(notional_cents, quote_decimals)
-        }
-        RuntimeExecutionAction::Sell => {
-            let quantity = ((notional_cents as f64) / 100.0) / mid_price;
+    let notional_usd = format_usd_cents(decision.notional_cents);
+    let input_amount_atomic = match decision.direction {
+        SwapDirection::BuyBase => atomic_from_usd_cents(decision.notional_cents, quote_decimals),
+        SwapDirection::SellBase => {
+            let quantity = ((decision.notional_cents as f64) / 100.0) / mid_price;
             atomic_from_token_amount(quantity, base_decimals)
         }
     };
-    let min_output_amount_atomic = Some(match action {
-        RuntimeExecutionAction::Buy | RuntimeExecutionAction::Rebalance => {
-            let quantity = (((notional_cents as f64) / 100.0) / mid_price)
+    let min_output_amount_atomic = Some(match decision.direction {
+        SwapDirection::BuyBase => {
+            let quantity = (((decision.notional_cents as f64) / 100.0) / mid_price)
                 * (1.0 - (f64::from(slippage_bps) / 10_000.0));
             atomic_from_token_amount(quantity, base_decimals)
         }
-        RuntimeExecutionAction::Sell => {
-            let output_usd =
-                ((notional_cents as f64) / 100.0) * (1.0 - (f64::from(slippage_bps) / 10_000.0));
+        SwapDirection::SellBase => {
+            let output_usd = ((decision.notional_cents as f64) / 100.0)
+                * (1.0 - (f64::from(slippage_bps) / 10_000.0));
             atomic_from_token_amount(output_usd, quote_decimals)
         }
     });
-    let (input_mint, output_mint) = match action {
-        RuntimeExecutionAction::Buy | RuntimeExecutionAction::Rebalance => (
+    let (input_mint, output_mint) = match decision.direction {
+        SwapDirection::BuyBase => (
             input.deployment.pair.quote_mint.clone(),
             input.deployment.pair.base_mint.clone(),
         ),
-        RuntimeExecutionAction::Sell => (
+        SwapDirection::SellBase => (
             input.deployment.pair.base_mint.clone(),
             input.deployment.pair.quote_mint.clone(),
         ),
@@ -324,6 +334,8 @@ fn build_plan(
         schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
         plan_id: build_plan_id(&idempotency_key),
         deployment_id: input.deployment.deployment_id.clone(),
+        owner_user_id: Some(input.deployment.owner_user_id.clone()),
+        sleeve_id: Some(input.deployment.sleeve_id.clone()),
         run_id: input.run.run_id.clone(),
         created_at: now_rfc3339(),
         mode: input.deployment.mode.clone(),
@@ -333,7 +345,7 @@ fn build_plan(
         dry_run,
         slices: vec![RuntimeExecutionSlice {
             slice_id: "slice_1".to_string(),
-            action,
+            action: decision.action,
             input_mint,
             output_mint,
             input_amount_atomic,
@@ -344,9 +356,10 @@ fn build_plan(
     })
 }
 
-fn plan_action(
+fn strategy_trade_decision(
     input: &ExecutionPlannerInput,
-) -> Result<RuntimeExecutionAction, ExecutionPlannerError> {
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    let base_notional_cents = desired_notional_cents(&input.deployment)?;
     let signal = input
         .feature_snapshot
         .short_return_bps
@@ -354,24 +367,149 @@ fn plan_action(
         .map(|value| parse_signed_decimal("featureSnapshot.shortReturnBps", value))
         .transpose()?
         .unwrap_or(0.0);
-    Ok(match input.deployment.strategy_key.as_str() {
-        "threshold_rebalance" => RuntimeExecutionAction::Rebalance,
-        "trend_following" => {
-            if signal >= 0.0 {
-                RuntimeExecutionAction::Buy
-            } else {
-                RuntimeExecutionAction::Sell
-            }
+    match input.deployment.strategy_key.as_str() {
+        "threshold_rebalance" => threshold_rebalance_decision(input, base_notional_cents),
+        "twap" => Ok(twap_decision(input, base_notional_cents)),
+        "trend_following" => Ok(signal_following_decision(signal, base_notional_cents)),
+        "mean_reversion" => Ok(mean_reversion_decision(signal, base_notional_cents)),
+        _ => Ok(StrategyTradeDecision {
+            action: RuntimeExecutionAction::Buy,
+            direction: SwapDirection::BuyBase,
+            notional_cents: base_notional_cents,
+        }),
+    }
+}
+
+fn signal_following_decision(signal: f64, notional_cents: i64) -> StrategyTradeDecision {
+    if signal >= 0.0 {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Buy,
+            direction: SwapDirection::BuyBase,
+            notional_cents,
         }
-        "mean_reversion" => {
-            if signal >= 0.0 {
-                RuntimeExecutionAction::Sell
-            } else {
-                RuntimeExecutionAction::Buy
-            }
+    } else {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Sell,
+            direction: SwapDirection::SellBase,
+            notional_cents,
         }
-        _ => RuntimeExecutionAction::Buy,
+    }
+}
+
+fn mean_reversion_decision(signal: f64, notional_cents: i64) -> StrategyTradeDecision {
+    if signal >= 0.0 {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Sell,
+            direction: SwapDirection::SellBase,
+            notional_cents,
+        }
+    } else {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Buy,
+            direction: SwapDirection::BuyBase,
+            notional_cents,
+        }
+    }
+}
+
+fn twap_decision(input: &ExecutionPlannerInput, notional_cents: i64) -> StrategyTradeDecision {
+    let divisor = i64::from(input.deployment.policy.max_concurrent_runs.max(1));
+    let per_run_notional = (notional_cents / divisor).max(1);
+    let base_exposure_cents =
+        current_base_exposure_cents(input, &input.deployment.pair.base_mint).unwrap_or(0);
+
+    if base_exposure_cents > 0 {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Sell,
+            direction: SwapDirection::SellBase,
+            notional_cents: per_run_notional.min(base_exposure_cents),
+        }
+    } else {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Buy,
+            direction: SwapDirection::BuyBase,
+            notional_cents: per_run_notional,
+        }
+    }
+}
+
+fn threshold_rebalance_decision(
+    input: &ExecutionPlannerInput,
+    notional_cents: i64,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    let equity_cents = parse_non_negative_usd_cents(
+        "ledgerSnapshot.totals.equityUsd",
+        &input.ledger_snapshot.totals.equity_usd,
+    )?;
+    let base_exposure_cents = current_base_exposure_cents(input, &input.deployment.pair.base_mint)?;
+    let target_base_cents = equity_cents / 2;
+    let delta_cents = target_base_cents - base_exposure_cents;
+    let tolerance_cents =
+        (equity_cents * i64::from(input.deployment.policy.rebalance_tolerance_bps)) / 10_000;
+    let trade_cents = if delta_cents.abs() <= tolerance_cents {
+        0
+    } else {
+        notional_cents.min(delta_cents.abs())
+    };
+
+    Ok(StrategyTradeDecision {
+        action: RuntimeExecutionAction::Rebalance,
+        direction: if delta_cents >= 0 {
+            SwapDirection::BuyBase
+        } else {
+            SwapDirection::SellBase
+        },
+        notional_cents: trade_cents,
     })
+}
+
+fn current_base_exposure_cents(
+    input: &ExecutionPlannerInput,
+    base_mint: &str,
+) -> Result<i64, ExecutionPlannerError> {
+    if let Some(position) = input
+        .ledger_snapshot
+        .positions
+        .iter()
+        .find(|position| position.instrument_id == input.deployment.pair.symbol)
+    {
+        let quantity = parse_decimal(
+            "ledgerSnapshot.position.quantityAtomic",
+            &position.quantity_atomic,
+        )?;
+        let decimals = balance_decimals(&input.ledger_snapshot.balances, base_mint, 9);
+        let quantity_tokens = quantity / 10_f64.powi(i32::from(decimals));
+        let mark_price = position
+            .mark_price_usd
+            .as_deref()
+            .or(position.entry_price_usd.as_deref())
+            .map(|value| parse_decimal("ledgerSnapshot.position.markPriceUsd", value))
+            .transpose()?
+            .unwrap_or(0.0);
+        return Ok((quantity_tokens * mark_price * 100.0).round() as i64);
+    }
+
+    let maybe_balance = input
+        .ledger_snapshot
+        .balances
+        .iter()
+        .find(|balance| balance.mint == base_mint);
+    let Some(balance) = maybe_balance else {
+        return Ok(0);
+    };
+    let free = parse_decimal("ledgerSnapshot.balance.freeAtomic", &balance.free_atomic)?;
+    let reserved = parse_decimal(
+        "ledgerSnapshot.balance.reservedAtomic",
+        &balance.reserved_atomic,
+    )?;
+    let price = balance
+        .price_usd
+        .as_deref()
+        .map(|value| parse_decimal("ledgerSnapshot.balance.priceUsd", value))
+        .transpose()?
+        .unwrap_or(0.0);
+    let tokens = (free + reserved) / 10_f64.powi(i32::from(balance.decimals));
+    Ok((tokens * price * 100.0).round() as i64)
 }
 
 fn selected_lane(deployment: &RuntimeDeploymentRecord) -> RuntimeLane {
@@ -781,6 +919,46 @@ mod tests {
         }
     }
 
+    fn ledger_snapshot_with_balances(
+        base_free_atomic: &str,
+        usdc_free_atomic: &str,
+        equity_usd: &str,
+    ) -> RuntimeLedgerSnapshot {
+        RuntimeLedgerSnapshot {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            snapshot_id: "ledger_custom".to_string(),
+            deployment_id: "dep_1".to_string(),
+            sleeve_id: "sleeve_1".to_string(),
+            as_of: "2026-03-07T18:05:00Z".to_string(),
+            balances: vec![
+                RuntimeLedgerBalance {
+                    mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    symbol: "USDC".to_string(),
+                    decimals: 6,
+                    free_atomic: usdc_free_atomic.to_string(),
+                    reserved_atomic: "5000000".to_string(),
+                    price_usd: Some("1.00".to_string()),
+                },
+                RuntimeLedgerBalance {
+                    mint: "So11111111111111111111111111111111111111112".to_string(),
+                    symbol: "SOL".to_string(),
+                    decimals: 9,
+                    free_atomic: base_free_atomic.to_string(),
+                    reserved_atomic: "0".to_string(),
+                    price_usd: Some("150.00".to_string()),
+                },
+            ],
+            positions: Vec::new(),
+            totals: RuntimeLedgerTotals {
+                equity_usd: equity_usd.to_string(),
+                reserved_usd: "5".to_string(),
+                available_usd: "95".to_string(),
+                realized_pnl_usd: "0".to_string(),
+                unrealized_pnl_usd: "0".to_string(),
+            },
+        }
+    }
+
     fn allow_verdict() -> RuntimeRiskVerdict {
         RuntimeRiskVerdict {
             schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
@@ -825,6 +1003,19 @@ mod tests {
             ledger_snapshot: ledger_snapshot(),
             risk_verdict: verdict,
         }
+    }
+
+    fn input_with_ledger_snapshot(
+        run_id: &str,
+        strategy_key: &str,
+        mode: RuntimeMode,
+        lane: RuntimeLane,
+        short_return_bps: &str,
+        ledger_snapshot: RuntimeLedgerSnapshot,
+    ) -> ExecutionPlannerInput {
+        let mut input = input(run_id, strategy_key, mode, lane, short_return_bps);
+        input.ledger_snapshot = ledger_snapshot;
+        input
     }
 
     #[test]
@@ -933,5 +1124,98 @@ mod tests {
             error,
             ExecutionPlannerError::RiskNotAllowed { .. }
         ));
+    }
+
+    #[test]
+    fn threshold_rebalance_sells_when_base_exposure_is_overweight() {
+        let planner = planner("threshold-rebalance-sell");
+        let result = planner
+            .plan_and_store(&input_with_ledger_snapshot(
+                "run_6",
+                "threshold_rebalance",
+                RuntimeMode::Paper,
+                RuntimeLane::Safe,
+                "0.0",
+                ledger_snapshot_with_balances("400000000", "35000000", "100"),
+            ))
+            .expect("plan to store");
+
+        assert_eq!(
+            result.plan.slices[0].action,
+            RuntimeExecutionAction::Rebalance
+        );
+        assert_eq!(
+            result.plan.slices[0].input_mint,
+            "So11111111111111111111111111111111111111112"
+        );
+        assert_eq!(result.plan.slices[0].input_amount_atomic, "33333333");
+        assert_eq!(result.plan.slices[0].notional_usd, "5.00");
+    }
+
+    #[test]
+    fn threshold_rebalance_noops_inside_tolerance_band() {
+        let planner = planner("threshold-rebalance-noop");
+        let result = planner
+            .plan_and_store(&input_with_ledger_snapshot(
+                "run_7",
+                "threshold_rebalance",
+                RuntimeMode::Shadow,
+                RuntimeLane::Safe,
+                "0.0",
+                ledger_snapshot_with_balances("330000000", "45500000", "100"),
+            ))
+            .expect("plan to store");
+
+        assert_eq!(
+            result.plan.slices[0].action,
+            RuntimeExecutionAction::Rebalance
+        );
+        assert_eq!(result.plan.slices[0].input_amount_atomic, "0");
+        assert_eq!(
+            result.plan.slices[0].min_output_amount_atomic.as_deref(),
+            Some("0")
+        );
+        assert_eq!(result.plan.slices[0].notional_usd, "0.00");
+    }
+
+    #[test]
+    fn twap_scales_entry_notional_by_max_concurrent_runs() {
+        let planner = planner("twap-buy");
+        let result = planner
+            .plan_and_store(&input_with_ledger_snapshot(
+                "run_8",
+                "twap",
+                RuntimeMode::Paper,
+                RuntimeLane::Protected,
+                "0.0",
+                ledger_snapshot_with_balances("0", "95000000", "95"),
+            ))
+            .expect("plan to store");
+
+        assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Buy);
+        assert_eq!(result.plan.slices[0].input_amount_atomic, "2500000");
+        assert_eq!(result.plan.slices[0].notional_usd, "2.50");
+    }
+
+    #[test]
+    fn twap_exits_with_sell_when_base_exposure_exists() {
+        let planner = planner("twap-sell");
+        let result = planner
+            .plan_and_store(&input_with_ledger_snapshot(
+                "run_9",
+                "twap",
+                RuntimeMode::Live,
+                RuntimeLane::Safe,
+                "0.0",
+                ledger_snapshot_with_balances("100000000", "90000000", "105"),
+            ))
+            .expect("plan to store");
+
+        assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Sell);
+        assert_eq!(
+            result.plan.slices[0].input_mint,
+            "So11111111111111111111111111111111111111112"
+        );
+        assert_eq!(result.plan.slices[0].notional_usd, "2.50");
     }
 }

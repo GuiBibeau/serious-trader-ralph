@@ -329,6 +329,8 @@ pub struct RuntimeExecutionPlan {
     pub schema_version: String,
     pub plan_id: String,
     pub deployment_id: String,
+    pub owner_user_id: Option<String>,
+    pub sleeve_id: Option<String>,
     pub run_id: String,
     pub created_at: String,
     pub mode: RuntimeMode,

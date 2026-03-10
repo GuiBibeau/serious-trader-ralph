@@ -50,6 +50,12 @@ function createRuntimeExecutionEnv() {
   const sqlite = new Database(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON;");
   for (const migrationName of [
+    "0004_users_bots.sql",
+    "0005_user_profile.sql",
+    "0008_billing.sql",
+    "0014_user_onboarding_status.sql",
+    "0021_user_wallet_columns.sql",
+    "0023_user_experience_onboarding.sql",
     "0025_execution_fabric.sql",
     "0027_runtime_canary.sql",
   ]) {
@@ -84,6 +90,34 @@ function createRuntimeExecutionEnv() {
       "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF",
       "2026-03-08T00:00:00.000Z",
     );
+  sqlite
+    .query(
+      `
+      INSERT INTO users (
+        id,
+        privy_user_id,
+        profile,
+        onboarding_status,
+        signer_type,
+        privy_wallet_id,
+        wallet_address,
+        wallet_migrated_at,
+        experience_level,
+        level_source,
+        onboarding_completed_at,
+        onboarding_version,
+        feed_seed_version
+      ) VALUES (?1, ?2, ?3, 'active', 'privy', ?4, ?5, ?6, 'intermediate', 'manual', ?6, 1, 1)
+      `,
+    )
+    .run(
+      "user_runtime_managed",
+      "did:privy:user_runtime_managed",
+      JSON.stringify({ riskProfile: "managed" }),
+      "wallet_runtime_managed",
+      "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF",
+      "2026-03-08T00:00:00.000Z",
+    );
 
   const env = createWorkerLiveEnv({
     overrides: {
@@ -98,6 +132,7 @@ function createRuntimeExecutionEnv() {
       RUNTIME_CANARY_MAX_SLIPPAGE_BPS: "50",
       RUNTIME_CANARY_MIN_SOL_RESERVE_LAMPORTS: "50000000",
       EXEC_LANE_SAFE_ADAPTER: "runtime_canary_test",
+      RUNTIME_MANAGED_LIVE_DEPLOYMENT_IDS: "deployment_live_rebalance",
       RPC_ENDPOINT: "https://rpc.test.local",
       BALANCE_RPC_ENDPOINT: "https://rpc.test.local",
       JUPITER_BASE_URL: "https://jupiter.test.local",
@@ -142,6 +177,8 @@ const VALID_RUNTIME_EXECUTION_PLAN = {
   schemaVersion: "v1",
   planId: "plan_123",
   deploymentId: "deployment_123",
+  ownerUserId: "user_123",
+  sleeveId: "sleeve_alpha",
   runId: "run_123",
   createdAt: "2026-03-07T00:00:00.000Z",
   mode: "shadow",
@@ -423,6 +460,177 @@ describe("worker runtime internal routes", () => {
         observedLedger: {
           deploymentId: "runtime_canary_live_dca",
           sleeveId: "sleeve_runtime_canary",
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      sqlite.close();
+    }
+  });
+
+  test("executes the bounded managed live plan in non-stub mode", async () => {
+    const { env, sqlite } = createRuntimeExecutionEnv();
+    const originalFetch = globalThis.fetch;
+    registerExecutionAdapter("runtime_managed_test", async (input) => ({
+      status: "finalized",
+      signature: "sig_runtime_managed",
+      usedQuote: input.quoteResponse,
+      refreshed: false,
+      lastValidBlockHeight: null,
+      executionMeta: {
+        route: "runtime_managed_test",
+        classification: "finalized",
+      },
+    }));
+    await env.CONFIG_KV.put(
+      "ops:controls:v1",
+      JSON.stringify({
+        schemaVersion: "v1",
+        execution: {
+          enabled: true,
+          disabledReason: null,
+          lanes: {
+            fast: true,
+            protected: true,
+            safe: true,
+          },
+        },
+        canary: {
+          enabled: true,
+          disabledReason: null,
+        },
+        runtime: {
+          enabled: true,
+          disabledReason: null,
+          shadowOnly: false,
+          shadowOnlyReason: null,
+        },
+        metadata: {
+          source: "test",
+          updatedAt: "2026-03-08T00:00:00.000Z",
+          updatedBy: "worker-runtime-internal-test",
+        },
+      }),
+    );
+    env.EXEC_LANE_SAFE_ADAPTER = "runtime_managed_test";
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("https://jupiter.test.local/swap/v1/quote")) {
+        return new Response(
+          JSON.stringify({
+            inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            inAmount: "5000000",
+            outputMint: "So11111111111111111111111111111111111111112",
+            outAmount: "35000000",
+            otherAmountThreshold: "34000000",
+            swapMode: "ExactIn",
+            slippageBps: 50,
+            priceImpactPct: "0.001",
+            routePlan: [],
+          }),
+          {
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url === "https://rpc.test.local") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          method?: string;
+        };
+        if (body.method === "getBalance") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: "1",
+              result: { value: 100_000_000 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        }
+        if (body.method === "getTokenAccountsByOwner") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: "1",
+              result: {
+                value: [
+                  {
+                    account: {
+                      data: {
+                        parsed: {
+                          info: {
+                            tokenAmount: {
+                              amount: "20000000",
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        }
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/internal/runtime/execution-plans", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v1",
+            planId: "plan_live_managed",
+            deploymentId: "deployment_live_rebalance",
+            ownerUserId: "user_runtime_managed",
+            sleeveId: "sleeve_runtime_managed",
+            runId: "run_live_managed",
+            createdAt: "2026-03-08T00:00:00.000Z",
+            mode: "live",
+            lane: "safe",
+            idempotencyKey: "deployment_live_rebalance:run_live_managed",
+            simulateOnly: false,
+            dryRun: false,
+            slices: [
+              {
+                sliceId: "slice_1",
+                action: "rebalance",
+                inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                outputMint: "So11111111111111111111111111111111111111112",
+                inputAmountAtomic: "5000000",
+                minOutputAmountAtomic: "34000000",
+                notionalUsd: "5.00",
+                slippageBps: 50,
+              },
+            ],
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        accepted: true,
+        source: "worker",
+        submitRequestId: expect.any(String),
+        receipt: {
+          status: "landed",
+          signature: "sig_runtime_managed",
+        },
+        observedLedger: {
+          deploymentId: "deployment_live_rebalance",
+          sleeveId: "sleeve_runtime_managed",
+          ownerUserId: "user_runtime_managed",
         },
       });
     } finally {

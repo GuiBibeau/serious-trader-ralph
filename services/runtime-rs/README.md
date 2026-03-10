@@ -9,6 +9,22 @@ In this phase it remains shadow-only and exposes:
 - persisted machine-readable risk verdicts and deployment-safe pause behavior,
 - deterministic shadow trigger evaluation backed by the feature cache.
 
+Pack 1 managed strategy semantics are now wired through the runtime contract:
+
+- `dca`: fixed-notional base accumulation using the deployment reserve budget
+- `threshold_rebalance`: drift-aware buy/sell actions toward a 50/50 sleeve split
+- `twap`: per-run slices derived from `maxConcurrentRuns`, with buy or sell
+  direction chosen from current base exposure
+
+The bounded live bridge remains intentionally narrow in v1:
+
+- live runtime execution is allowlisted with
+  `RUNTIME_MANAGED_LIVE_DEPLOYMENT_IDS`
+- only `lane=safe` plans are eligible
+- only single-slice live plans are accepted
+- `runtime.shadowOnly` must be disabled explicitly through Worker ops controls
+- non-live runtime plans still coordinate synthetically through the Worker bridge
+
 ## Local commands
 
 ```bash
@@ -140,6 +156,14 @@ The default runtime control baseline is:
 - `runtime.enabled=true`
 - `runtime.shadowOnly=true`
 - `runtime.shadowOnlyReason=live-rollout-pending`
+
+To enable the managed live bridge for a specific deployment in v1, operators
+must set all of the following:
+
+- `runtime.shadowOnly=false` through `POST /api/admin/ops/controls`
+- the deployment id in `RUNTIME_MANAGED_LIVE_DEPLOYMENT_IDS`
+- `lane=safe` on the runtime deployment record
+- a strategy that produces exactly one live slice per evaluation
 
 ## Fly foundation
 

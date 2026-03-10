@@ -25,6 +25,19 @@ for later implementation issues.
 - reconciliation mismatch alarm,
 - proof bundle attached to every runtime PR.
 
+Pack 1 live rollout is limited to managed templates:
+
+- `dca`: fixed buy notional
+- `threshold_rebalance`: bounded rebalance toward a 50/50 sleeve target
+- `twap`: sliced entry or exit using `maxConcurrentRuns`
+
+Until later phases land, live runtime execution must stay bounded by:
+
+- explicit allowlisting through `RUNTIME_MANAGED_LIVE_DEPLOYMENT_IDS`
+- `runtime.shadowOnly=false` set by an operator
+- `safe` lane only
+- single-slice live execution plans only
+
 ## Routine operator actions
 
 ### Inspect health
@@ -148,6 +161,35 @@ curl -fsS https://api.trader-ralph.com/api/admin/ops/controls \
     "runtime": {
       "shadowOnly": true,
       "shadowOnlyReason": "incident-review"
+    }
+  }'
+```
+
+### Enable one managed live deployment
+
+Use this only after shadow and paper proof are attached for the target
+deployment.
+
+Required checks before enabling:
+
+- deployment id is present in `RUNTIME_MANAGED_LIVE_DEPLOYMENT_IDS`
+- deployment lane is `safe`
+- deployment strategy is one of `dca`, `threshold_rebalance`, or `twap`
+- current plan shape is still single-slice in live mode
+
+Control-plane command:
+
+```bash
+curl -fsS https://api.trader-ralph.com/api/admin/ops/controls \
+  -X POST \
+  -H "authorization: Bearer ${ADMIN_TOKEN}" \
+  -H "content-type: application/json" \
+  --data '{
+    "updatedBy": "runtime-ops-runbook",
+    "runtime": {
+      "enabled": true,
+      "shadowOnly": false,
+      "shadowOnlyReason": null
     }
   }'
 ```

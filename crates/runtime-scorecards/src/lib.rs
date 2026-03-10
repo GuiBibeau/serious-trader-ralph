@@ -1255,6 +1255,8 @@ mod tests {
             schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
             plan_id: format!("plan_{}", run.run_id),
             deployment_id: deployment.deployment_id.clone(),
+            owner_user_id: Some(deployment.owner_user_id.clone()),
+            sleeve_id: Some(deployment.sleeve_id.clone()),
             run_id: run.run_id.clone(),
             created_at: "2026-03-08T10:00:00Z".to_string(),
             mode: deployment.mode.clone(),

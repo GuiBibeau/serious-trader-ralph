@@ -205,6 +205,8 @@ const RuntimeExecutionSliceSchema = z
 export const RuntimeExecutionPlanSchema = VersionedSchema.extend({
   planId: NON_EMPTY_STRING_SCHEMA,
   deploymentId: NON_EMPTY_STRING_SCHEMA,
+  ownerUserId: NON_EMPTY_STRING_SCHEMA.optional(),
+  sleeveId: NON_EMPTY_STRING_SCHEMA.optional(),
   runId: NON_EMPTY_STRING_SCHEMA,
   createdAt: ISO_DATETIME_SCHEMA,
   mode: RuntimeModeSchema,

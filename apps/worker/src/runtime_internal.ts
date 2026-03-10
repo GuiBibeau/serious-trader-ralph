@@ -806,10 +806,21 @@ export async function handleRuntimeInternalRoute(
         );
       }
       try {
-        const { submitRuntimeCanaryExecutionPlan } = await import(
-          "./runtime_canary"
+        const runtimeCanaryDeploymentId =
+          String(env.RUNTIME_CANARY_DEPLOYMENT_ID ?? "").trim() ||
+          "runtime_canary_live_dca";
+        if (plan.deploymentId === runtimeCanaryDeploymentId) {
+          const { submitRuntimeCanaryExecutionPlan } = await import(
+            "./runtime_canary"
+          );
+          return json(await submitRuntimeCanaryExecutionPlan({ env, plan }), {
+            status: 202,
+          });
+        }
+        const { submitManagedRuntimeExecutionPlan } = await import(
+          "./runtime_managed_execution"
         );
-        return json(await submitRuntimeCanaryExecutionPlan({ env, plan }), {
+        return json(await submitManagedRuntimeExecutionPlan({ env, plan }), {
           status: 202,
         });
       } catch (error) {

@@ -145,6 +145,38 @@ export async function findUserByPrivyUserId(
   );
 }
 
+export async function findUserById(
+  env: Env,
+  userId: string,
+): Promise<UserRow | null> {
+  const existing = (await env.WAITLIST_DB.prepare(
+    `
+    SELECT
+      id,
+      privy_user_id as privyUserId,
+      onboarding_status as onboardingStatus,
+      profile,
+      signer_type as signerType,
+      privy_wallet_id as privyWalletId,
+      wallet_address as walletAddress,
+      wallet_migrated_at as walletMigratedAt,
+      experience_level as experienceLevel,
+      level_source as levelSource,
+      onboarding_completed_at as onboardingCompletedAt,
+      onboarding_version as onboardingVersion,
+      feed_seed_version as feedSeedVersion,
+      degen_acknowledged_at as degenAcknowledgedAt,
+      created_at as createdAt
+    FROM users
+    WHERE id = ?1
+    `,
+  )
+    .bind(userId)
+    .first()) as unknown;
+  if (!existing || typeof existing !== "object") return null;
+  return mapUserRow(existing as Record<string, unknown>);
+}
+
 export async function upsertUser(
   env: Env,
   privyUserId: string,

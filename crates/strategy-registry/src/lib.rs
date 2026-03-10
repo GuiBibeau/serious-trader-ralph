@@ -366,6 +366,37 @@ impl StrategyRegistry {
         Ok(run)
     }
 
+    pub fn apply_noop_execution_plan(
+        &self,
+        run_id: &str,
+        plan_id: &str,
+    ) -> Result<RuntimeRunRecord, StrategyRegistryError> {
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        let mut run =
+            load_run(&transaction, run_id)?.ok_or_else(|| StrategyRegistryError::RunNotFound {
+                run_id: run_id.to_string(),
+            })?;
+
+        if run.execution_plan_id.as_deref() == Some(plan_id)
+            && run.state == RuntimeRunState::Completed
+        {
+            transaction.commit()?;
+            return Ok(run);
+        }
+
+        run.execution_plan_id = Some(plan_id.to_string());
+        run.submit_request_id = None;
+        transition_run_state(&mut run, RuntimeRunState::Completed)?;
+        run.updated_at = now_rfc3339();
+        run.failure_code = None;
+        run.failure_message = None;
+
+        update_run(&transaction, &run)?;
+        transaction.commit()?;
+        Ok(run)
+    }
+
     pub fn apply_receipt(
         &self,
         run_id: &str,
