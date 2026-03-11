@@ -14,6 +14,7 @@ export type ExecuteSwapInput = {
   env: Env;
   venueKey?: string;
   runtimeMode?: RuntimeMode;
+  requireVenueRouting?: boolean;
   execution?: ExecutionConfig;
   policy: NormalizedPolicy;
   rpc: SolanaRpc;

@@ -503,6 +503,7 @@ export async function submitManagedRuntimeExecutionPlan(input: {
       env,
       venueKey: plan.venueKey,
       runtimeMode: plan.mode,
+      requireVenueRouting: true,
       execution: {
         adapter: laneResolution.adapter,
         params: {

@@ -155,4 +155,62 @@ describe("worker execution router", () => {
       }),
     ).rejects.toThrow(/execution-adapter-venue-mismatch/);
   });
+
+  test("fails closed when adapter is not allowlisted for the runtime venue", async () => {
+    registerExecutionAdapter(
+      "jupiter_shadow_probe",
+      async (input) => ({
+        status: "simulated",
+        signature: "sig-jupiter-shadow",
+        usedQuote: input.quoteResponse,
+        refreshed: false,
+        lastValidBlockHeight: 42,
+      }),
+      {
+        venueKey: "jupiter",
+        supportedModes: ["shadow", "paper"],
+      },
+    );
+
+    await expect(
+      executeSwapViaRouter({
+        env: {} as never,
+        venueKey: "jupiter",
+        runtimeMode: "paper",
+        execution: { adapter: "jupiter_shadow_probe" },
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      }),
+    ).rejects.toThrow(/runtime-venue-adapter-not-supported/);
+  });
+
+  test("fails closed when runtime routing metadata is required but missing", async () => {
+    await expect(
+      executeSwapViaRouter({
+        env: {} as never,
+        requireVenueRouting: true,
+        execution: { adapter: "jupiter" },
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      }),
+    ).rejects.toThrow(/runtime-venue-required/);
+  });
 });

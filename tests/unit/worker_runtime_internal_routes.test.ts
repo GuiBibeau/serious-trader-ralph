@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { executeHeliusSenderSwap } from "../../apps/worker/src/execution/helius_sender_executor";
 import { registerExecutionAdapter } from "../../apps/worker/src/execution/router";
 import {
   createExecutionContextStub,
@@ -131,7 +132,7 @@ function createRuntimeExecutionEnv() {
       RUNTIME_CANARY_DAILY_CAP_USD: "25",
       RUNTIME_CANARY_MAX_SLIPPAGE_BPS: "50",
       RUNTIME_CANARY_MIN_SOL_RESERVE_LAMPORTS: "50000000",
-      EXEC_LANE_SAFE_ADAPTER: "runtime_canary_test",
+      EXEC_LANE_SAFE_ADAPTER: "helius_sender",
       RUNTIME_MANAGED_LIVE_DEPLOYMENT_IDS: "deployment_live_rebalance",
       RPC_ENDPOINT: "https://rpc.test.local",
       BALANCE_RPC_ENDPOINT: "https://rpc.test.local",
@@ -443,7 +444,7 @@ describe("worker runtime internal routes", () => {
     const { env, sqlite } = createRuntimeExecutionEnv();
     const originalFetch = globalThis.fetch;
     registerExecutionAdapter(
-      "runtime_canary_test",
+      "helius_sender",
       async (input) => ({
         status: "finalized",
         signature: "sig_runtime_canary",
@@ -451,7 +452,7 @@ describe("worker runtime internal routes", () => {
         refreshed: false,
         lastValidBlockHeight: null,
         executionMeta: {
-          route: "runtime_canary_test",
+          route: "helius_sender",
           classification: "finalized",
         },
       }),
@@ -579,6 +580,10 @@ describe("worker runtime internal routes", () => {
         },
       });
     } finally {
+      registerExecutionAdapter("helius_sender", executeHeliusSenderSwap, {
+        venueKey: "jupiter",
+        supportedModes: ["live"],
+      });
       globalThis.fetch = originalFetch;
       sqlite.close();
     }
@@ -588,7 +593,7 @@ describe("worker runtime internal routes", () => {
     const { env, sqlite } = createRuntimeExecutionEnv();
     const originalFetch = globalThis.fetch;
     registerExecutionAdapter(
-      "runtime_managed_test",
+      "helius_sender",
       async (input) => ({
         status: "finalized",
         signature: "sig_runtime_managed",
@@ -596,7 +601,7 @@ describe("worker runtime internal routes", () => {
         refreshed: false,
         lastValidBlockHeight: null,
         executionMeta: {
-          route: "runtime_managed_test",
+          route: "helius_sender",
           classification: "finalized",
         },
       }),
@@ -635,7 +640,7 @@ describe("worker runtime internal routes", () => {
         },
       }),
     );
-    env.EXEC_LANE_SAFE_ADAPTER = "runtime_managed_test";
+    env.EXEC_LANE_SAFE_ADAPTER = "helius_sender";
 
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
@@ -758,6 +763,10 @@ describe("worker runtime internal routes", () => {
         },
       });
     } finally {
+      registerExecutionAdapter("helius_sender", executeHeliusSenderSwap, {
+        venueKey: "jupiter",
+        supportedModes: ["live"],
+      });
       globalThis.fetch = originalFetch;
       sqlite.close();
     }

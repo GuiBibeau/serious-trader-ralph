@@ -927,6 +927,9 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
 
     const result = await executeSwapViaRouter({
       env,
+      venueKey: plan.venueKey,
+      runtimeMode: plan.mode,
+      requireVenueRouting: true,
       execution: {
         adapter: laneResolution.adapter,
         params: {

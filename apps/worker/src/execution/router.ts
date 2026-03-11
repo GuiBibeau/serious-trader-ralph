@@ -1,5 +1,6 @@
 import {
   requireRuntimeVenueCapability,
+  runtimeVenueSupportsAdapter,
   runtimeVenueSupportsMode,
 } from "../../../../src/runtime/venues/catalog.js";
 import type { RuntimeMode } from "../runtime_contracts";
@@ -100,32 +101,45 @@ export async function executeSwapViaRouter(
 ): Promise<ExecuteSwapResult> {
   const adapterName =
     (input.execution?.adapter ?? "jupiter").trim() || "jupiter";
+  const venueKey = String(input.venueKey ?? "").trim();
+  const runtimeMode = input.runtimeMode;
   const registration = ADAPTERS.get(adapterName);
   if (!registration) {
     throw new Error(`execution-adapter-not-registered:${adapterName}`);
   }
-  if (input.venueKey) {
-    const capability = requireRuntimeVenueCapability(input.venueKey);
-    if (registration.venueKey !== input.venueKey) {
+  if (input.requireVenueRouting && !venueKey) {
+    throw new Error("runtime-venue-required");
+  }
+  if (input.requireVenueRouting && !runtimeMode) {
+    throw new Error("runtime-mode-required");
+  }
+  if (venueKey && !runtimeMode) {
+    throw new Error("runtime-mode-required");
+  }
+  if (runtimeMode && !venueKey) {
+    throw new Error("runtime-venue-required");
+  }
+  if (venueKey) {
+    const capability = requireRuntimeVenueCapability(venueKey);
+    if (registration.venueKey !== venueKey) {
       throw new Error(
-        `execution-adapter-venue-mismatch:${input.venueKey}:${adapterName}`,
+        `execution-adapter-venue-mismatch:${venueKey}:${adapterName}`,
       );
     }
-    if (
-      input.runtimeMode &&
-      !runtimeVenueSupportsMode(capability, input.runtimeMode)
-    ) {
+    if (!runtimeVenueSupportsAdapter(capability, adapterName)) {
       throw new Error(
-        `runtime-venue-mode-not-supported:${input.venueKey}:${input.runtimeMode}`,
+        `runtime-venue-adapter-not-supported:${venueKey}:${adapterName}`,
+      );
+    }
+    if (runtimeMode && !runtimeVenueSupportsMode(capability, runtimeMode)) {
+      throw new Error(
+        `runtime-venue-mode-not-supported:${venueKey}:${runtimeMode}`,
       );
     }
   }
-  if (
-    input.runtimeMode &&
-    !registration.supportedModes.includes(input.runtimeMode)
-  ) {
+  if (runtimeMode && !registration.supportedModes.includes(runtimeMode)) {
     throw new Error(
-      `execution-adapter-mode-unsupported:${adapterName}:${input.runtimeMode}`,
+      `execution-adapter-mode-unsupported:${adapterName}:${runtimeMode}`,
     );
   }
   return await registration.adapter(input);
