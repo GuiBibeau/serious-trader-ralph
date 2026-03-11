@@ -138,7 +138,8 @@ impl ResearchRegistry {
         let source_ids = citation_source_ids(&record.source_citations);
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
-        let existing = persist_record(
+        ensure_sources_exist(&transaction, &record.source_citations)?;
+        let outcome = persist_record(
             &transaction,
             PersistSpec {
                 table: "research_hypotheses",
@@ -159,11 +160,9 @@ impl ResearchRegistry {
             },
         )?;
         transaction.commit()?;
-        let created = existing.is_none();
-        Ok(ResearchWriteResult {
-            record: existing.unwrap_or_else(|| record.clone()),
-            created,
-        })
+        let created = persist_result_created(&outcome);
+        let record = persist_result_record(outcome, record);
+        Ok(ResearchWriteResult { record, created })
     }
 
     pub fn upsert_source(
@@ -173,7 +172,7 @@ impl ResearchRegistry {
         let identity_key = source_identity_key(record)?;
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
-        let existing = persist_record(
+        let outcome = persist_record(
             &transaction,
             PersistSpec {
                 table: "research_sources",
@@ -194,11 +193,9 @@ impl ResearchRegistry {
             },
         )?;
         transaction.commit()?;
-        let created = existing.is_none();
-        Ok(ResearchWriteResult {
-            record: existing.unwrap_or_else(|| record.clone()),
-            created,
-        })
+        let created = persist_result_created(&outcome);
+        let record = persist_result_record(outcome, record);
+        Ok(ResearchWriteResult { record, created })
     }
 
     pub fn upsert_experiment(
@@ -211,7 +208,7 @@ impl ResearchRegistry {
         ensure_sources_exist(&transaction, &record.source_citations)?;
         let identity_key = experiment_identity_key(record)?;
         let source_ids = citation_source_ids(&record.source_citations);
-        let existing = persist_record(
+        let outcome = persist_record(
             &transaction,
             PersistSpec {
                 table: "research_experiments",
@@ -232,11 +229,9 @@ impl ResearchRegistry {
             },
         )?;
         transaction.commit()?;
-        let created = existing.is_none();
-        Ok(ResearchWriteResult {
-            record: existing.unwrap_or_else(|| record.clone()),
-            created,
-        })
+        let created = persist_result_created(&outcome);
+        let record = persist_result_record(outcome, record);
+        Ok(ResearchWriteResult { record, created })
     }
 
     pub fn upsert_evidence_bundle(
@@ -250,7 +245,7 @@ impl ResearchRegistry {
         ensure_sources_exist(&transaction, &record.source_citations)?;
         let identity_key = evidence_bundle_identity_key(record)?;
         let source_ids = citation_source_ids(&record.source_citations);
-        let existing = persist_record(
+        let outcome = persist_record(
             &transaction,
             PersistSpec {
                 table: "research_evidence_bundles",
@@ -271,11 +266,9 @@ impl ResearchRegistry {
             },
         )?;
         transaction.commit()?;
-        let created = existing.is_none();
-        Ok(ResearchWriteResult {
-            record: existing.unwrap_or_else(|| record.clone()),
-            created,
-        })
+        let created = persist_result_created(&outcome);
+        let record = persist_result_record(outcome, record);
+        Ok(ResearchWriteResult { record, created })
     }
 
     pub fn query(
@@ -498,15 +491,20 @@ struct PersistSpec<'a> {
     experiment_id: Option<&'a str>,
 }
 
+enum PersistResult<T> {
+    Created,
+    Updated,
+    Existing(T),
+}
+
 fn persist_record<T>(
     connection: &Connection,
     spec: PersistSpec<'_>,
-) -> Result<Option<T>, ResearchRegistryError>
+) -> Result<PersistResult<T>, ResearchRegistryError>
 where
     T: DeserializeOwned + Clone,
 {
-    if let Some(existing_json) = find_record_json_by_id(connection, &spec)? {
-        let existing: T = deserialize_json(&existing_json)?;
+    if find_record_json_by_id(connection, &spec)?.is_some() {
         let existing_identity = find_identity_key_by_id(connection, &spec)?;
         if existing_identity.as_deref() != Some(spec.identity_key) {
             return Err(ResearchRegistryError::IdentityConflict {
@@ -515,12 +513,13 @@ where
                 existing_record_id: spec.id_value.to_string(),
             });
         }
-        return Ok(Some(existing));
+        update_record(connection, &spec)?;
+        return Ok(PersistResult::Updated);
     }
 
     if let Some(existing_json) = find_record_json_by_identity(connection, &spec)? {
         let existing: T = deserialize_json(&existing_json)?;
-        return Ok(Some(existing));
+        return Ok(PersistResult::Existing(existing));
     }
 
     let mut columns = vec![spec.id_column, "identity_key"];
@@ -591,7 +590,110 @@ where
         )?;
     }
 
-    Ok(None)
+    Ok(PersistResult::Created)
+}
+
+fn update_record(
+    connection: &Connection,
+    spec: &PersistSpec<'_>,
+) -> Result<(), ResearchRegistryError> {
+    let mut assignments = vec![
+        "identity_key = ?1".to_string(),
+        "record_json = ?2".to_string(),
+    ];
+    let mut values = vec![
+        Value::Text(spec.identity_key.to_string()),
+        Value::Text(spec.record_json.clone()),
+    ];
+
+    let mut next_index = values.len() + 1;
+
+    assignments.push(format!("{} = ?{}", spec.order_column, next_index));
+    values.push(Value::Text(spec.order_value.to_string()));
+    next_index += 1;
+
+    if spec.table != "research_sources" {
+        assignments.push(format!("strategy_key = ?{}", next_index));
+        values.push(match spec.strategy_key {
+            Some(strategy_key) => Value::Text(strategy_key.to_string()),
+            None => Value::Null,
+        });
+        next_index += 1;
+    }
+
+    if spec.table == "research_experiments" {
+        assignments.push(format!("completed_at = ?{}", next_index));
+        values.push(match spec.completed_at {
+            Some(completed_at) => Value::Text(completed_at.to_string()),
+            None => Value::Null,
+        });
+        next_index += 1;
+
+        assignments.push(format!("hypothesis_id = ?{}", next_index));
+        values.push(match spec.hypothesis_id {
+            Some(hypothesis_id) => Value::Text(hypothesis_id.to_string()),
+            None => Value::Null,
+        });
+        next_index += 1;
+    }
+
+    if spec.table == "research_evidence_bundles" {
+        assignments.push(format!("experiment_id = ?{}", next_index));
+        values.push(match spec.experiment_id {
+            Some(experiment_id) => Value::Text(experiment_id.to_string()),
+            None => Value::Null,
+        });
+        next_index += 1;
+    }
+
+    values.push(Value::Text(spec.id_value.to_string()));
+    let sql = format!(
+        "UPDATE {} SET {} WHERE {} = ?{}",
+        spec.table,
+        assignments.join(", "),
+        spec.id_column,
+        next_index
+    );
+    connection.execute(&sql, params_from_iter(values.into_iter()))?;
+
+    replace_key_rows(
+        connection,
+        spec.table,
+        spec.id_column,
+        spec.id_value,
+        "venue",
+        spec.venue_keys,
+    )?;
+    replace_key_rows(
+        connection,
+        spec.table,
+        spec.id_column,
+        spec.id_value,
+        "asset",
+        spec.asset_keys,
+    )?;
+    if spec.table != "research_sources" {
+        replace_source_rows(
+            connection,
+            spec.table,
+            spec.id_column,
+            spec.id_value,
+            spec.source_ids,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn persist_result_created<T>(result: &PersistResult<T>) -> bool {
+    matches!(result, PersistResult::Created)
+}
+
+fn persist_result_record<T: Clone>(result: PersistResult<T>, fallback: &T) -> T {
+    match result {
+        PersistResult::Existing(existing) => existing,
+        PersistResult::Created | PersistResult::Updated => fallback.clone(),
+    }
 }
 
 fn replace_key_rows(
@@ -1257,5 +1359,67 @@ mod tests {
             second.record.experiment_id,
             "experiment_signal_trend_shadow"
         );
+    }
+
+    #[test]
+    fn updates_existing_experiment_with_same_id() {
+        let registry = registry("update-existing");
+        registry.upsert_source(&source_record()).expect("source");
+        registry
+            .upsert_hypothesis(&hypothesis_record())
+            .expect("hypothesis");
+
+        let first = registry
+            .upsert_experiment(&experiment_record())
+            .expect("first experiment");
+        let mut updated = experiment_record();
+        updated.status = RuntimeResearchExperimentStatus::Running;
+        updated.updated_at = "2026-03-10T14:25:00Z".to_string();
+        updated.completed_at = None;
+        updated.summary = "Experiment is still running after a replay extension.".to_string();
+        updated.tags = vec!["shadow".to_string(), "extended".to_string()];
+        let second = registry
+            .upsert_experiment(&updated)
+            .expect("updated experiment");
+
+        assert!(first.created);
+        assert!(!second.created);
+        assert_eq!(
+            second.record.status,
+            RuntimeResearchExperimentStatus::Running
+        );
+        assert_eq!(second.record.updated_at, updated.updated_at);
+        assert_eq!(second.record.completed_at, None);
+        assert_eq!(second.record.summary, updated.summary);
+        assert_eq!(second.record.tags, updated.tags);
+
+        let query = registry
+            .query(&ResearchRegistryQuery {
+                strategy_key: Some("trend_following".to_string()),
+                venue_key: Some("jupiter".to_string()),
+                asset_key: Some("SOL".to_string()),
+                source_id: Some("source_paper_microstructure".to_string()),
+            })
+            .expect("query");
+        assert_eq!(query.experiments.len(), 1);
+        assert_eq!(
+            query.experiments[0].status,
+            RuntimeResearchExperimentStatus::Running
+        );
+        assert_eq!(query.experiments[0].completed_at, None);
+    }
+
+    #[test]
+    fn rejects_hypothesis_citations_for_missing_source() {
+        let registry = registry("missing-source");
+        let error = registry
+            .upsert_hypothesis(&hypothesis_record())
+            .expect_err("missing source should be rejected");
+
+        assert!(matches!(
+            error,
+            ResearchRegistryError::SourceNotFound { source_id }
+                if source_id == "source_paper_microstructure"
+        ));
     }
 }
