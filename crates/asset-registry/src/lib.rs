@@ -5,7 +5,8 @@ use std::{
 
 use protocol::{
     RuntimeAssetKind, RuntimeAssetListingState, RuntimeAssetRecord, RuntimeAssetRiskClass,
-    RuntimeAssetVenueMapping, RuntimeDeploymentRecord, RuntimeMode, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeAssetVenueMapping, RuntimeDeploymentRecord, RuntimeMode,
+    RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -83,7 +84,10 @@ pub enum AssetRegistryError {
         mode: RuntimeMode,
     },
     #[error("asset {asset_key} does not support venue {venue_key}")]
-    VenueMappingMissing { asset_key: String, venue_key: String },
+    VenueMappingMissing {
+        asset_key: String,
+        venue_key: String,
+    },
     #[error("asset {asset_key} venue {venue_key} mapping is {listing_state:?} and does not support mode {mode:?}")]
     VenueMappingModeUnsupported {
         asset_key: String,
@@ -92,7 +96,10 @@ pub enum AssetRegistryError {
         mode: RuntimeMode,
     },
     #[error("asset mapping not found for venue {venue_key} native id {native_id}")]
-    VenueNativeIdNotFound { venue_key: String, native_id: String },
+    VenueNativeIdNotFound {
+        venue_key: String,
+        native_id: String,
+    },
 }
 
 impl AssetRegistry {
@@ -149,7 +156,7 @@ impl AssetRegistry {
         let rows = statement.query_map(
             params![
                 query.asset_key.as_deref(),
-                listing_state.as_deref(),
+                listing_state,
                 query.venue_key.as_deref(),
             ],
             |row| row.get::<_, String>(0),
@@ -209,18 +216,24 @@ impl AssetRegistry {
         deployment: &RuntimeDeploymentRecord,
     ) -> Result<SupportedPair, AssetRegistryError> {
         let connection = self.open_connection()?;
-        let base_asset =
-            load_asset_for_venue_native_id(&connection, &deployment.venue_key, &deployment.pair.base_mint)?
-                .ok_or_else(|| AssetRegistryError::VenueNativeIdNotFound {
-                    venue_key: deployment.venue_key.clone(),
-                    native_id: deployment.pair.base_mint.clone(),
-                })?;
-        let quote_asset =
-            load_asset_for_venue_native_id(&connection, &deployment.venue_key, &deployment.pair.quote_mint)?
-                .ok_or_else(|| AssetRegistryError::VenueNativeIdNotFound {
-                    venue_key: deployment.venue_key.clone(),
-                    native_id: deployment.pair.quote_mint.clone(),
-                })?;
+        let base_asset = load_asset_for_venue_native_id(
+            &connection,
+            &deployment.venue_key,
+            &deployment.pair.base_mint,
+        )?
+        .ok_or_else(|| AssetRegistryError::VenueNativeIdNotFound {
+            venue_key: deployment.venue_key.clone(),
+            native_id: deployment.pair.base_mint.clone(),
+        })?;
+        let quote_asset = load_asset_for_venue_native_id(
+            &connection,
+            &deployment.venue_key,
+            &deployment.pair.quote_mint,
+        )?
+        .ok_or_else(|| AssetRegistryError::VenueNativeIdNotFound {
+            venue_key: deployment.venue_key.clone(),
+            native_id: deployment.pair.quote_mint.clone(),
+        })?;
         ensure_asset_mode(&base_asset, &deployment.mode)?;
         ensure_asset_mode(&quote_asset, &deployment.mode)?;
         ensure_mapping_mode(&base_asset, &deployment.venue_key, &deployment.mode)?;
@@ -378,7 +391,11 @@ fn builtin_assets() -> Vec<RuntimeAssetRecord> {
             promoted_at: Some(timestamp.to_string()),
             paused_at: None,
             deprecated_at: None,
-            tags: vec!["core".to_string(), "stablecoin".to_string(), "usd".to_string()],
+            tags: vec![
+                "core".to_string(),
+                "stablecoin".to_string(),
+                "usd".to_string(),
+            ],
             notes: Some("Seeded runtime asset registry record.".to_string()),
         },
     ]
@@ -405,10 +422,7 @@ fn venue_mapping(
     }
 }
 
-fn listing_state_supports_mode(
-    state: &RuntimeAssetListingState,
-    mode: &RuntimeMode,
-) -> bool {
+fn listing_state_supports_mode(state: &RuntimeAssetListingState, mode: &RuntimeMode) -> bool {
     match state {
         RuntimeAssetListingState::Candidate => false,
         RuntimeAssetListingState::Shadow => matches!(mode, RuntimeMode::Shadow),
@@ -426,24 +440,61 @@ fn can_transition_listing_state(
 ) -> bool {
     matches!(
         (from, to),
-        (RuntimeAssetListingState::Candidate, RuntimeAssetListingState::Shadow)
-            | (RuntimeAssetListingState::Candidate, RuntimeAssetListingState::Paper)
-            | (RuntimeAssetListingState::Candidate, RuntimeAssetListingState::Live)
-            | (RuntimeAssetListingState::Candidate, RuntimeAssetListingState::Paused)
-            | (RuntimeAssetListingState::Candidate, RuntimeAssetListingState::Deprecated)
-            | (RuntimeAssetListingState::Shadow, RuntimeAssetListingState::Paper)
-            | (RuntimeAssetListingState::Shadow, RuntimeAssetListingState::Live)
-            | (RuntimeAssetListingState::Shadow, RuntimeAssetListingState::Paused)
-            | (RuntimeAssetListingState::Shadow, RuntimeAssetListingState::Deprecated)
-            | (RuntimeAssetListingState::Paper, RuntimeAssetListingState::Live)
-            | (RuntimeAssetListingState::Paper, RuntimeAssetListingState::Paused)
-            | (RuntimeAssetListingState::Paper, RuntimeAssetListingState::Deprecated)
-            | (RuntimeAssetListingState::Live, RuntimeAssetListingState::Paused)
-            | (RuntimeAssetListingState::Live, RuntimeAssetListingState::Deprecated)
-            | (RuntimeAssetListingState::Paused, RuntimeAssetListingState::Shadow)
-            | (RuntimeAssetListingState::Paused, RuntimeAssetListingState::Paper)
-            | (RuntimeAssetListingState::Paused, RuntimeAssetListingState::Live)
-            | (RuntimeAssetListingState::Paused, RuntimeAssetListingState::Deprecated)
+        (
+            RuntimeAssetListingState::Candidate,
+            RuntimeAssetListingState::Shadow
+        ) | (
+            RuntimeAssetListingState::Candidate,
+            RuntimeAssetListingState::Paper
+        ) | (
+            RuntimeAssetListingState::Candidate,
+            RuntimeAssetListingState::Live
+        ) | (
+            RuntimeAssetListingState::Candidate,
+            RuntimeAssetListingState::Paused
+        ) | (
+            RuntimeAssetListingState::Candidate,
+            RuntimeAssetListingState::Deprecated
+        ) | (
+            RuntimeAssetListingState::Shadow,
+            RuntimeAssetListingState::Paper
+        ) | (
+            RuntimeAssetListingState::Shadow,
+            RuntimeAssetListingState::Live
+        ) | (
+            RuntimeAssetListingState::Shadow,
+            RuntimeAssetListingState::Paused
+        ) | (
+            RuntimeAssetListingState::Shadow,
+            RuntimeAssetListingState::Deprecated
+        ) | (
+            RuntimeAssetListingState::Paper,
+            RuntimeAssetListingState::Live
+        ) | (
+            RuntimeAssetListingState::Paper,
+            RuntimeAssetListingState::Paused
+        ) | (
+            RuntimeAssetListingState::Paper,
+            RuntimeAssetListingState::Deprecated
+        ) | (
+            RuntimeAssetListingState::Live,
+            RuntimeAssetListingState::Paused
+        ) | (
+            RuntimeAssetListingState::Live,
+            RuntimeAssetListingState::Deprecated
+        ) | (
+            RuntimeAssetListingState::Paused,
+            RuntimeAssetListingState::Shadow
+        ) | (
+            RuntimeAssetListingState::Paused,
+            RuntimeAssetListingState::Paper
+        ) | (
+            RuntimeAssetListingState::Paused,
+            RuntimeAssetListingState::Live
+        ) | (
+            RuntimeAssetListingState::Paused,
+            RuntimeAssetListingState::Deprecated
+        )
     )
 }
 
@@ -501,7 +552,10 @@ fn validate_asset_record(record: &RuntimeAssetRecord) -> Result<(), AssetRegistr
     Ok(())
 }
 
-fn persist_asset(connection: &Connection, record: &RuntimeAssetRecord) -> Result<(), AssetRegistryError> {
+fn persist_asset(
+    connection: &Connection,
+    record: &RuntimeAssetRecord,
+) -> Result<(), AssetRegistryError> {
     connection.execute(
         "INSERT INTO asset_records (
             asset_key,
@@ -712,7 +766,9 @@ mod tests {
             tags: vec!["test".to_string()],
         };
 
-        let supported = registry.ensure_pair_supported(&deployment).expect("pair supported");
+        let supported = registry
+            .ensure_pair_supported(&deployment)
+            .expect("pair supported");
         assert_eq!(supported.base_asset.asset_key, "SOL");
         assert_eq!(supported.quote_asset.asset_key, "USDC");
     }
@@ -755,7 +811,9 @@ mod tests {
             tags: vec!["test".to_string()],
         };
 
-        let error = registry.ensure_pair_supported(&deployment).expect_err("blocked");
+        let error = registry
+            .ensure_pair_supported(&deployment)
+            .expect_err("blocked");
         assert!(matches!(
             error,
             AssetRegistryError::VenueMappingModeUnsupported { .. }

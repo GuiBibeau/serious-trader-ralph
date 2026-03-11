@@ -112,8 +112,9 @@ impl RuntimeAppState {
         let research_registry =
             ResearchRegistry::new(ResearchRegistryConfig::new(config.database_url.clone()))
                 .expect("research registry to initialize");
-        let asset_registry = AssetRegistry::new(AssetRegistryConfig::new(config.database_url.clone()))
-            .expect("asset registry to initialize");
+        let asset_registry =
+            AssetRegistry::new(AssetRegistryConfig::new(config.database_url.clone()))
+                .expect("asset registry to initialize");
         let portfolio_ledger =
             PortfolioLedger::new(PortfolioLedgerConfig::new(config.database_url.clone()))
                 .expect("portfolio ledger to initialize");
@@ -1394,9 +1395,11 @@ async fn transition_asset_handler(
     authorize_internal_request(&headers, &state)?;
     let request: RuntimeAssetTransitionRequest =
         parse_json_body(&body, "invalid-runtime-asset-transition")?;
-    let changed_at = request
-        .changed_at
-        .unwrap_or_else(|| OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).expect("timestamp"));
+    let changed_at = request.changed_at.unwrap_or_else(|| {
+        OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("timestamp")
+    });
     let asset = state
         .asset_registry
         .transition_asset(&asset_key, request.listing_state, &changed_at)
@@ -1953,7 +1956,10 @@ fn map_asset_registry_error(error: AssetRegistryError) -> JsonPayload {
                 "mode": mode,
             }),
         ),
-        AssetRegistryError::VenueMappingMissing { asset_key, venue_key } => error_json(
+        AssetRegistryError::VenueMappingMissing {
+            asset_key,
+            venue_key,
+        } => error_json(
             StatusCode::BAD_REQUEST,
             "asset-venue-mapping-missing",
             json!({ "assetKey": asset_key, "venueKey": venue_key }),
@@ -1973,7 +1979,10 @@ fn map_asset_registry_error(error: AssetRegistryError) -> JsonPayload {
                 "mode": mode,
             }),
         ),
-        AssetRegistryError::VenueNativeIdNotFound { venue_key, native_id } => error_json(
+        AssetRegistryError::VenueNativeIdNotFound {
+            venue_key,
+            native_id,
+        } => error_json(
             StatusCode::BAD_REQUEST,
             "asset-venue-native-id-not-found",
             json!({ "venueKey": venue_key, "nativeId": native_id }),
@@ -4072,8 +4081,17 @@ mod tests {
             .expect("response");
         assert_eq!(list_response.status(), StatusCode::OK);
         let list_payload = read_json(list_response).await;
-        assert_eq!(list_payload["registry"]["assets"].as_array().expect("array").len(), 1);
-        assert_eq!(list_payload["registry"]["assets"][0]["assetKey"], json!("BONK"));
+        assert_eq!(
+            list_payload["registry"]["assets"]
+                .as_array()
+                .expect("array")
+                .len(),
+            1
+        );
+        assert_eq!(
+            list_payload["registry"]["assets"][0]["assetKey"],
+            json!("BONK")
+        );
 
         let transition_response = router
             .clone()
@@ -4134,6 +4152,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let payload = read_json(response).await;
         assert_eq!(payload["error"], json!("asset-venue-native-id-not-found"));
-        assert_eq!(payload["details"]["nativeId"], deployment["pair"]["baseMint"]);
+        assert_eq!(
+            payload["details"]["nativeId"],
+            deployment["pair"]["baseMint"]
+        );
     }
 }
