@@ -187,10 +187,7 @@ mod tests {
             "/api/internal/runtime/execution-plans"
         );
         assert_eq!(config.worker_health_path, "/api/internal/runtime/health");
-        assert_eq!(
-            config.database_url,
-            "/tmp/runtime-rs/runtime-state.sqlite3"
-        );
+        assert_eq!(config.database_url, "/tmp/runtime-rs/runtime-state.sqlite3");
         assert_eq!(config.feed_provider, "fixture");
         assert_eq!(config.feed_market_stale_after_ms, 30_000);
         assert_eq!(config.feed_slot_stale_after_ms, 15_000);
