@@ -22,6 +22,8 @@ const FIXTURE_RELATIVE_PATH: &str =
     "services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json";
 const FIXTURE_URI: &str =
     "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json";
+const FIXTURE_BYTES: &[u8] =
+    include_bytes!("../../../services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoricalDataLakeConfig {
@@ -365,26 +367,8 @@ fn fixture_provenance(slice_name: &str) -> RuntimeHistoricalDatasetProvenance {
 }
 
 fn fixture_digest() -> Result<String, HistoricalDataLakeError> {
-    let bytes = fs::read(fixture_path())?;
-    let digest = Sha256::digest(bytes);
+    let digest = Sha256::digest(FIXTURE_BYTES);
     Ok(format!("sha256:{digest:x}"))
-}
-
-fn fixture_path() -> PathBuf {
-    fixture_path_candidates()
-        .into_iter()
-        .find(|candidate| candidate.exists())
-        .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../{FIXTURE_RELATIVE_PATH}"))
-        })
-}
-
-fn fixture_path_candidates() -> Vec<PathBuf> {
-    vec![
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../{FIXTURE_RELATIVE_PATH}")),
-        PathBuf::from(format!("/app/{FIXTURE_RELATIVE_PATH}")),
-        PathBuf::from(format!("./{FIXTURE_RELATIVE_PATH}")),
-    ]
 }
 
 fn validate_dataset_snapshot(
@@ -808,13 +792,5 @@ mod tests {
             result.dataset_snapshots[0].dataset_id,
             "dataset_feed_replay_sol_usdc_market_events"
         );
-    }
-
-    #[test]
-    fn fixture_path_candidates_include_runtime_image_location() {
-        let candidates = fixture_path_candidates();
-        assert!(candidates
-            .iter()
-            .any(|candidate| candidate == &PathBuf::from(format!("/app/{FIXTURE_RELATIVE_PATH}"))));
     }
 }
