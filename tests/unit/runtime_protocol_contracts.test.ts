@@ -14,6 +14,7 @@ import {
   parseRuntimeRiskVerdict,
   parseRuntimeRunRecord,
   parseRuntimeStrategySpec,
+  parseRuntimeVenueCapability,
   RUNTIME_DEPLOYMENT_STATE_TRANSITIONS,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
   RUNTIME_RUN_STATE_TRANSITIONS,
@@ -32,6 +33,7 @@ describe("runtime protocol contracts", () => {
       strategyKey: "dca",
       sleeveId: "sleeve_1",
       ownerUserId: "user_1",
+      venueKey: "jupiter",
       pair: {
         symbol: "SOL/USDC",
         baseMint: SOL_MINT,
@@ -168,6 +170,7 @@ describe("runtime protocol contracts", () => {
       schemaVersion: "v1",
       planId: "plan_1",
       deploymentId: "dep_1",
+      venueKey: "jupiter",
       ownerUserId: "user_1",
       sleeveId: "sleeve_1",
       runId: "run_1",
@@ -367,6 +370,33 @@ describe("runtime protocol contracts", () => {
       },
       tags: ["builtin", "signal"],
     });
+    const venueCapability = parseRuntimeVenueCapability({
+      schemaVersion: "v1",
+      venueKey: "jupiter",
+      displayName: "Jupiter",
+      adapterKeys: ["jupiter", "helius_sender", "jito_bundle"],
+      marketTypes: ["spot"],
+      orderTypes: ["market"],
+      authModel: "privy_solana_wallet",
+      feeModel: "venue_quote_inclusive",
+      precision: {
+        priceDecimals: 6,
+        sizeDecimals: 9,
+        minOrderIncrement: "0.000001",
+        minQuoteNotionalUsd: "0.01",
+      },
+      sizeLimits: {
+        minNotionalUsd: "0.01",
+      },
+      latencyProfile: {
+        expectedQuoteMs: 250,
+        expectedSubmitMs: 750,
+        expectedSettlementMs: 5000,
+      },
+      settlementBehavior: "swap_atomic",
+      supportedModes: ["shadow", "paper", "live"],
+      onboardingState: "broad_live_ready",
+    });
 
     expect(run.state).toBe("planned");
     expect(ledger.totals.availableUsd).toBe("95");
@@ -379,6 +409,7 @@ describe("runtime protocol contracts", () => {
     expect(sourceRecord.sourceKind).toBe("paper");
     expect(experiment.datasetSnapshots).toHaveLength(1);
     expect(evidenceBundle.promotionTarget).toBe("paper");
+    expect(venueCapability.adapterKeys).toContain("jupiter");
     expect(strategySpec.pluginKey).toBe("builtin::trend_following");
   });
 
@@ -387,6 +418,7 @@ describe("runtime protocol contracts", () => {
       schemaVersion: "v1",
       planId: "plan_1",
       deploymentId: "dep_1",
+      venueKey: "jupiter",
       runId: "run_1",
       createdAt: "2026-03-07T18:05:02Z",
       mode: "shadow",

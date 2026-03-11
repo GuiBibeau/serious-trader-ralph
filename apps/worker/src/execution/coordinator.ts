@@ -4,6 +4,7 @@ import {
   type ExecutionDecision,
   type ExecutionIntent,
 } from "./contracts";
+import { isRegisteredExecutionAdapter } from "./router";
 
 const STATE_KEY = "execution:coordinator_state:v1";
 const SCHEMA_VERSION = "v1" as const;
@@ -14,12 +15,6 @@ const MAX_DECISION_LEASE_MS = 300_000;
 const MAX_QUEUE_SIZE = 1_024;
 
 export const EXECUTION_COORDINATOR_NAME = "execution-coordinator-v1";
-
-const ALLOWED_ROUTES = new Set([
-  "jupiter",
-  "jito_bundle",
-  "magicblock_ephemeral_rollup",
-]);
 
 type ExecutionLane = "fast" | "protected" | "safe";
 
@@ -423,7 +418,7 @@ function dispatchFromHead(input: {
 
   const [head] = input.state.queue.splice(0, 1);
   const route = resolveRoute(head.intent.execution.adapter);
-  if (!ALLOWED_ROUTES.has(route)) {
+  if (!isRegisteredExecutionAdapter(route)) {
     input.state.rejectionCount += 1;
     return {
       accepted: false,

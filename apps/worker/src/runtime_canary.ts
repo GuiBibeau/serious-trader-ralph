@@ -361,6 +361,7 @@ function buildRuntimeCanaryDeployment(
     strategyKey: config.strategyKey,
     sleeveId: RUNTIME_CANARY_SLEEVE_ID,
     ownerUserId: RUNTIME_CANARY_OWNER_USER_ID,
+    venueKey: "jupiter",
     pair: {
       symbol: config.pairId,
       baseMint: SOL_MINT,

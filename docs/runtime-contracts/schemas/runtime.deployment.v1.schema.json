@@ -23,6 +23,11 @@
       "type": "string",
       "minLength": 1
     },
+    "venueKey": {
+      "default": "jupiter",
+      "type": "string",
+      "minLength": 1
+    },
     "pair": {
       "type": "object",
       "properties": {
@@ -159,6 +164,7 @@
     "strategyKey",
     "sleeveId",
     "ownerUserId",
+    "venueKey",
     "pair",
     "mode",
     "state",

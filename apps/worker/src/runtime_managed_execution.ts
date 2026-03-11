@@ -501,6 +501,8 @@ export async function submitManagedRuntimeExecutionPlan(input: {
 
     const result = await executeSwapViaRouter({
       env,
+      venueKey: plan.venueKey,
+      runtimeMode: plan.mode,
       execution: {
         adapter: laneResolution.adapter,
         params: {

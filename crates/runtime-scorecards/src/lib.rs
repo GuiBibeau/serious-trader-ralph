@@ -1648,6 +1648,7 @@ mod tests {
             strategy_key: strategy_key.to_string(),
             sleeve_id: "sleeve_alpha".to_string(),
             owner_user_id: "user_123".to_string(),
+            venue_key: "jupiter".to_string(),
             pair: RuntimePair {
                 symbol: "SOL/USDC".to_string(),
                 base_mint: "So11111111111111111111111111111111111111112".to_string(),
@@ -1809,6 +1810,7 @@ mod tests {
             schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
             plan_id: format!("plan_{}", run.run_id),
             deployment_id: deployment.deployment_id.clone(),
+            venue_key: deployment.venue_key.clone(),
             owner_user_id: Some(deployment.owner_user_id.clone()),
             sleeve_id: Some(deployment.sleeve_id.clone()),
             run_id: run.run_id.clone(),

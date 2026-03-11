@@ -168,6 +168,7 @@ function createRuntimeDeploymentFixture(
     strategyKey: "dca",
     sleeveId: "sleeve_alpha",
     ownerUserId: "user_runtime_fixture",
+    venueKey: "jupiter",
     pair: {
       symbol: "SOL/USDC",
       baseMint: FIXTURE_BASE_MINT,

@@ -12,7 +12,7 @@ use protocol::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use strategy_core::{StrategyCatalog, StrategyCatalogError};
+use strategy_core::{StrategyCatalog, StrategyCatalogError, VenueCatalog, VenueCatalogError};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -34,6 +34,7 @@ impl StrategyRegistryConfig {
 pub struct StrategyRegistry {
     database_path: PathBuf,
     strategy_catalog: StrategyCatalog,
+    venue_catalog: VenueCatalog,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,8 +95,15 @@ pub enum StrategyRegistryError {
     DeploymentNotFound { deployment_id: String },
     #[error("unsupported strategy key: {0}")]
     UnsupportedStrategy(String),
+    #[error("strategy {strategy_key} does not support venue {venue_key}")]
+    StrategyVenueUnsupported {
+        strategy_key: String,
+        venue_key: String,
+    },
     #[error(transparent)]
     StrategyCatalog(#[from] StrategyCatalogError),
+    #[error(transparent)]
+    VenueCatalog(#[from] VenueCatalogError),
     #[error("immutable deployment field changed for {deployment_id}: {field}")]
     ImmutableFieldChanged {
         deployment_id: String,
@@ -135,18 +143,30 @@ pub enum StrategyRegistryError {
 
 impl StrategyRegistry {
     pub fn new(config: StrategyRegistryConfig) -> Result<Self, StrategyRegistryError> {
-        Self::with_catalog(config, StrategyCatalog::builtin()?)
+        Self::with_catalogs(config, StrategyCatalog::builtin()?, VenueCatalog::builtin()?)
     }
 
     pub fn with_catalog(
         config: StrategyRegistryConfig,
         strategy_catalog: StrategyCatalog,
     ) -> Result<Self, StrategyRegistryError> {
+        Self::with_catalogs(config, strategy_catalog, VenueCatalog::builtin()?)
+    }
+
+    pub fn with_catalogs(
+        config: StrategyRegistryConfig,
+        strategy_catalog: StrategyCatalog,
+        venue_catalog: VenueCatalog,
+    ) -> Result<Self, StrategyRegistryError> {
         let requested_path = normalize_database_path(&config.database_url);
-        match Self::initialize_at_path(requested_path.clone(), strategy_catalog.clone()) {
+        match Self::initialize_at_path(
+            requested_path.clone(),
+            strategy_catalog.clone(),
+            venue_catalog.clone(),
+        ) {
             Ok(registry) => Ok(registry),
             Err(error) if should_fallback_to_tmp(&requested_path, &error) => {
-                Self::initialize_at_path(fallback_database_path(), strategy_catalog)
+                Self::initialize_at_path(fallback_database_path(), strategy_catalog, venue_catalog)
             }
             Err(error) => Err(error),
         }
@@ -167,6 +187,11 @@ impl StrategyRegistry {
         deployment: &RuntimeDeploymentRecord,
     ) -> Result<DeploymentWriteResult, StrategyRegistryError> {
         ensure_supported_strategy(&self.strategy_catalog, &deployment.strategy_key)?;
+        ensure_supported_venue(
+            &self.strategy_catalog,
+            &self.venue_catalog,
+            deployment,
+        )?;
 
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
@@ -648,6 +673,7 @@ impl StrategyRegistry {
     fn initialize_at_path(
         database_path: PathBuf,
         strategy_catalog: StrategyCatalog,
+        venue_catalog: VenueCatalog,
     ) -> Result<Self, StrategyRegistryError> {
         if database_path != Path::new(":memory:") {
             if let Some(parent) = database_path
@@ -660,6 +686,7 @@ impl StrategyRegistry {
         let registry = Self {
             database_path,
             strategy_catalog,
+            venue_catalog,
         };
         let connection = registry.open_connection()?;
         initialize_schema(&connection)?;
@@ -704,7 +731,9 @@ fn should_fallback_to_tmp(database_path: &Path, error: &StrategyRegistryError) -
         StrategyRegistryError::Serialization(_)
         | StrategyRegistryError::DeploymentNotFound { .. }
         | StrategyRegistryError::UnsupportedStrategy(_)
+        | StrategyRegistryError::StrategyVenueUnsupported { .. }
         | StrategyRegistryError::StrategyCatalog(_)
+        | StrategyRegistryError::VenueCatalog(_)
         | StrategyRegistryError::ImmutableFieldChanged { .. }
         | StrategyRegistryError::InvalidStateTransition { .. }
         | StrategyRegistryError::DeploymentNotShadow { .. }
@@ -754,6 +783,26 @@ fn ensure_supported_strategy(
         .ok_or_else(|| StrategyRegistryError::UnsupportedStrategy(strategy_key.to_string()))
 }
 
+fn ensure_supported_venue(
+    strategy_catalog: &StrategyCatalog,
+    venue_catalog: &VenueCatalog,
+    deployment: &RuntimeDeploymentRecord,
+) -> Result<(), StrategyRegistryError> {
+    let strategy_spec = strategy_catalog.require(&deployment.strategy_key)?;
+    if !strategy_spec
+        .supported_venues
+        .iter()
+        .any(|support| support.venue_key == deployment.venue_key)
+    {
+        return Err(StrategyRegistryError::StrategyVenueUnsupported {
+            strategy_key: deployment.strategy_key.clone(),
+            venue_key: deployment.venue_key.clone(),
+        });
+    }
+    venue_catalog.ensure_mode_supported(&deployment.venue_key, &deployment.mode)?;
+    Ok(())
+}
+
 fn deployment_is_runnable(state: &RuntimeDeploymentState) -> bool {
     matches!(
         state,
@@ -795,6 +844,12 @@ fn ensure_immutable_deployment_fields(
         return Err(StrategyRegistryError::ImmutableFieldChanged {
             deployment_id: incoming.deployment_id.clone(),
             field: "mode",
+        });
+    }
+    if existing.venue_key != incoming.venue_key {
+        return Err(StrategyRegistryError::ImmutableFieldChanged {
+            deployment_id: incoming.deployment_id.clone(),
+            field: "venueKey",
         });
     }
     Ok(())
@@ -1208,6 +1263,7 @@ mod tests {
             strategy_key: "dca".to_string(),
             sleeve_id: "sleeve_alpha".to_string(),
             owner_user_id: "user_123".to_string(),
+            venue_key: "jupiter".to_string(),
             pair: RuntimePair {
                 symbol: "SOL/USDC".to_string(),
                 base_mint: "So11111111111111111111111111111111111111112".to_string(),

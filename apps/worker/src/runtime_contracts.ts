@@ -16,6 +16,7 @@ export type {
   RuntimeRunRecord,
   RuntimeRunState,
   RuntimeStrategySpec,
+  RuntimeVenueCapability,
 } from "../../../src/runtime/contracts/index.js";
 export {
   canTransitionRuntimeDeploymentState,
@@ -31,6 +32,7 @@ export {
   parseRuntimeRiskVerdict,
   parseRuntimeRunRecord,
   parseRuntimeStrategySpec,
+  parseRuntimeVenueCapability,
   RUNTIME_DEPLOYMENT_STATE_TRANSITIONS,
   RUNTIME_PROTOCOL_SCHEMA_FAMILY,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
@@ -47,4 +49,5 @@ export {
   safeParseRuntimeRiskVerdict,
   safeParseRuntimeRunRecord,
   safeParseRuntimeStrategySpec,
+  safeParseRuntimeVenueCapability,
 } from "../../../src/runtime/contracts/index.js";

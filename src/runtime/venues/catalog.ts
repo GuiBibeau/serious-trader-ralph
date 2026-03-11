@@ -1,0 +1,144 @@
+import type {
+  RuntimeMode,
+  RuntimeVenueCapability,
+} from "../contracts/index.js";
+
+const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
+  {
+    schemaVersion: "v1",
+    venueKey: "jupiter",
+    displayName: "Jupiter",
+    adapterKeys: ["jupiter", "helius_sender", "jito_bundle"],
+    marketTypes: ["spot"],
+    orderTypes: ["market"],
+    authModel: "privy_solana_wallet",
+    feeModel: "venue_quote_inclusive",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 250,
+      expectedSubmitMs: 750,
+      expectedSettlementMs: 5000,
+    },
+    settlementBehavior: "swap_atomic",
+    supportedModes: ["shadow", "paper", "live"],
+    onboardingState: "broad_live_ready",
+    notes:
+      "Primary bounded live venue for managed runtime execution and canaries.",
+  },
+  {
+    schemaVersion: "v1",
+    venueKey: "magicblock",
+    displayName: "MagicBlock",
+    adapterKeys: ["magicblock_ephemeral_rollup"],
+    marketTypes: ["spot"],
+    orderTypes: ["market"],
+    authModel: "privy_solana_wallet",
+    feeModel: "fixed_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 200,
+      expectedSubmitMs: 400,
+      expectedSettlementMs: 3000,
+    },
+    settlementBehavior: "swap_atomic",
+    supportedModes: ["shadow", "paper"],
+    onboardingState: "paper_ready",
+    notes:
+      "Experimental venue path kept bounded to shadow and paper until later rollout issues land.",
+  },
+  {
+    schemaVersion: "v1",
+    venueKey: "phoenix",
+    displayName: "Phoenix",
+    adapterKeys: ["phoenix_orderbook"],
+    marketTypes: ["spot"],
+    orderTypes: ["market", "limit"],
+    authModel: "privy_solana_wallet",
+    feeModel: "maker_taker_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 150,
+      expectedSubmitMs: 350,
+      expectedSettlementMs: 4000,
+    },
+    settlementBehavior: "orderbook_atomic",
+    supportedModes: ["shadow", "paper"],
+    onboardingState: "candidate",
+    notes:
+      "Stubbed non-current venue proving the runtime can add a new venue through the shared capability and adapter abstractions.",
+  },
+] as const satisfies readonly RuntimeVenueCapability[];
+
+const CAPABILITY_INDEX = new Map<string, RuntimeVenueCapability>(
+  BUILTIN_RUNTIME_VENUE_CAPABILITIES.map((capability) => [
+    capability.venueKey,
+    capability,
+  ]),
+);
+
+export function listRuntimeVenueCapabilities(): RuntimeVenueCapability[] {
+  return BUILTIN_RUNTIME_VENUE_CAPABILITIES.map((capability) => ({
+    ...capability,
+    adapterKeys: [...capability.adapterKeys],
+    marketTypes: [...capability.marketTypes],
+    orderTypes: [...capability.orderTypes],
+    supportedModes: [...capability.supportedModes],
+    precision: { ...capability.precision },
+    sizeLimits: { ...capability.sizeLimits },
+    latencyProfile: { ...capability.latencyProfile },
+  }));
+}
+
+export function getRuntimeVenueCapability(
+  venueKey: string,
+): RuntimeVenueCapability | null {
+  return CAPABILITY_INDEX.get(venueKey) ?? null;
+}
+
+export function requireRuntimeVenueCapability(
+  venueKey: string,
+): RuntimeVenueCapability {
+  const capability = getRuntimeVenueCapability(venueKey);
+  if (!capability) {
+    throw new Error(`runtime-venue-not-supported:${venueKey}`);
+  }
+  return capability;
+}
+
+export function runtimeVenueSupportsMode(
+  capability: RuntimeVenueCapability,
+  mode: RuntimeMode,
+): boolean {
+  return capability.supportedModes.includes(mode);
+}
+
+export function runtimeVenueSupportsAdapter(
+  capability: RuntimeVenueCapability,
+  adapterKey: string,
+): boolean {
+  return capability.adapterKeys.includes(adapterKey);
+}

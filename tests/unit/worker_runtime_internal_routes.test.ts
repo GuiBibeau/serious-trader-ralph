@@ -148,6 +148,7 @@ const VALID_RUNTIME_DEPLOYMENT = {
   strategyKey: "dca",
   sleeveId: "sleeve_alpha",
   ownerUserId: "user_123",
+  venueKey: "jupiter",
   pair: {
     symbol: "SOL/USDC",
     baseMint: "So11111111111111111111111111111111111111112",
@@ -177,6 +178,7 @@ const VALID_RUNTIME_EXECUTION_PLAN = {
   schemaVersion: "v1",
   planId: "plan_123",
   deploymentId: "deployment_123",
+  venueKey: "jupiter",
   ownerUserId: "user_123",
   sleeveId: "sleeve_alpha",
   runId: "run_123",
@@ -440,17 +442,24 @@ describe("worker runtime internal routes", () => {
   test("executes the bounded runtime canary plan in non-stub mode", async () => {
     const { env, sqlite } = createRuntimeExecutionEnv();
     const originalFetch = globalThis.fetch;
-    registerExecutionAdapter("runtime_canary_test", async (input) => ({
-      status: "finalized",
-      signature: "sig_runtime_canary",
-      usedQuote: input.quoteResponse,
-      refreshed: false,
-      lastValidBlockHeight: null,
-      executionMeta: {
-        route: "runtime_canary_test",
-        classification: "finalized",
+    registerExecutionAdapter(
+      "runtime_canary_test",
+      async (input) => ({
+        status: "finalized",
+        signature: "sig_runtime_canary",
+        usedQuote: input.quoteResponse,
+        refreshed: false,
+        lastValidBlockHeight: null,
+        executionMeta: {
+          route: "runtime_canary_test",
+          classification: "finalized",
+        },
+      }),
+      {
+        venueKey: "jupiter",
+        supportedModes: ["live"],
       },
-    }));
+    );
 
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
@@ -528,6 +537,7 @@ describe("worker runtime internal routes", () => {
             schemaVersion: "v1",
             planId: "plan_live_canary",
             deploymentId: "runtime_canary_live_dca",
+            venueKey: "jupiter",
             runId: "run_live_canary",
             createdAt: "2026-03-08T00:00:00.000Z",
             mode: "live",
@@ -577,17 +587,24 @@ describe("worker runtime internal routes", () => {
   test("executes the bounded managed live plan in non-stub mode", async () => {
     const { env, sqlite } = createRuntimeExecutionEnv();
     const originalFetch = globalThis.fetch;
-    registerExecutionAdapter("runtime_managed_test", async (input) => ({
-      status: "finalized",
-      signature: "sig_runtime_managed",
-      usedQuote: input.quoteResponse,
-      refreshed: false,
-      lastValidBlockHeight: null,
-      executionMeta: {
-        route: "runtime_managed_test",
-        classification: "finalized",
+    registerExecutionAdapter(
+      "runtime_managed_test",
+      async (input) => ({
+        status: "finalized",
+        signature: "sig_runtime_managed",
+        usedQuote: input.quoteResponse,
+        refreshed: false,
+        lastValidBlockHeight: null,
+        executionMeta: {
+          route: "runtime_managed_test",
+          classification: "finalized",
+        },
+      }),
+      {
+        venueKey: "jupiter",
+        supportedModes: ["live"],
       },
-    }));
+    );
     await env.CONFIG_KV.put(
       "ops:controls:v1",
       JSON.stringify({
@@ -696,6 +713,7 @@ describe("worker runtime internal routes", () => {
             schemaVersion: "v1",
             planId: "plan_live_managed",
             deploymentId: "deployment_live_rebalance",
+            venueKey: "jupiter",
             ownerUserId: "user_runtime_managed",
             sleeveId: "sleeve_runtime_managed",
             runId: "run_live_managed",

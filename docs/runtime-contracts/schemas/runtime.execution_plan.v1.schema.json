@@ -15,6 +15,11 @@
       "type": "string",
       "minLength": 1
     },
+    "venueKey": {
+      "default": "jupiter",
+      "type": "string",
+      "minLength": 1
+    },
     "ownerUserId": {
       "type": "string",
       "minLength": 1
@@ -109,6 +114,7 @@
     "schemaVersion",
     "planId",
     "deploymentId",
+    "venueKey",
     "runId",
     "createdAt",
     "mode",

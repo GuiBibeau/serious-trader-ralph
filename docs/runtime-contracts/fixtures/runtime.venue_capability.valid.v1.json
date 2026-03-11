@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "v1",
+  "venueKey": "jupiter",
+  "displayName": "Jupiter",
+  "adapterKeys": ["jupiter", "helius_sender", "jito_bundle"],
+  "marketTypes": ["spot"],
+  "orderTypes": ["market"],
+  "authModel": "privy_solana_wallet",
+  "feeModel": "venue_quote_inclusive",
+  "precision": {
+    "priceDecimals": 6,
+    "sizeDecimals": 9,
+    "minOrderIncrement": "0.000001",
+    "minQuoteNotionalUsd": "0.01"
+  },
+  "sizeLimits": {
+    "minNotionalUsd": "0.01"
+  },
+  "latencyProfile": {
+    "expectedQuoteMs": 250,
+    "expectedSubmitMs": 750,
+    "expectedSettlementMs": 5000
+  },
+  "settlementBehavior": "swap_atomic",
+  "supportedModes": ["shadow", "paper", "live"],
+  "onboardingState": "broad_live_ready",
+  "notes": "Primary bounded live venue for managed runtime execution and canaries."
+}

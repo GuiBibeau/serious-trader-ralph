@@ -4,7 +4,10 @@ use protocol::{
     RuntimeLane, RuntimeMode, RuntimeOnboardingState, RuntimeStrategyAssetConstraint,
     RuntimeStrategyAssetRole, RuntimeStrategyCategory, RuntimeStrategyFeatureRequirement,
     RuntimeStrategyParameterKind, RuntimeStrategyParameterSpec, RuntimeStrategyPromotionPolicy,
-    RuntimeStrategySpec, RuntimeStrategyVenueSupport, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeStrategySpec, RuntimeStrategyVenueSupport, RuntimeVenueAuthModel,
+    RuntimeVenueCapability, RuntimeVenueFeeModel, RuntimeVenueLatencyProfile,
+    RuntimeVenueMarketType, RuntimeVenueOrderType, RuntimeVenuePrecision,
+    RuntimeVenueSettlementBehavior, RuntimeVenueSizeLimits, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use thiserror::Error;
 
@@ -292,6 +295,147 @@ impl StrategyKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VenueKind {
+    Jupiter,
+    MagicBlock,
+    Phoenix,
+}
+
+impl VenueKind {
+    #[must_use]
+    pub fn as_key(&self) -> &'static str {
+        match self {
+            Self::Jupiter => "jupiter",
+            Self::MagicBlock => "magicblock",
+            Self::Phoenix => "phoenix",
+        }
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            Self::Jupiter => "Jupiter",
+            Self::MagicBlock => "MagicBlock",
+            Self::Phoenix => "Phoenix",
+        }
+    }
+
+    fn adapter_keys(&self) -> Vec<String> {
+        match self {
+            Self::Jupiter => vec![
+                "jupiter".to_string(),
+                "helius_sender".to_string(),
+                "jito_bundle".to_string(),
+            ],
+            Self::MagicBlock => vec!["magicblock_ephemeral_rollup".to_string()],
+            Self::Phoenix => vec!["phoenix_orderbook".to_string()],
+        }
+    }
+
+    fn market_types(&self) -> Vec<RuntimeVenueMarketType> {
+        vec![RuntimeVenueMarketType::Spot]
+    }
+
+    fn order_types(&self) -> Vec<RuntimeVenueOrderType> {
+        match self {
+            Self::Phoenix => vec![
+                RuntimeVenueOrderType::Market,
+                RuntimeVenueOrderType::Limit,
+            ],
+            Self::Jupiter | Self::MagicBlock => vec![RuntimeVenueOrderType::Market],
+        }
+    }
+
+    fn supported_modes(&self) -> Vec<RuntimeMode> {
+        match self {
+            Self::Jupiter => vec![RuntimeMode::Shadow, RuntimeMode::Paper, RuntimeMode::Live],
+            Self::MagicBlock | Self::Phoenix => vec![RuntimeMode::Shadow, RuntimeMode::Paper],
+        }
+    }
+
+    fn onboarding_state(&self) -> RuntimeOnboardingState {
+        match self {
+            Self::Jupiter => RuntimeOnboardingState::BroadLiveReady,
+            Self::MagicBlock => RuntimeOnboardingState::PaperReady,
+            Self::Phoenix => RuntimeOnboardingState::Candidate,
+        }
+    }
+
+    fn fee_model(&self) -> RuntimeVenueFeeModel {
+        match self {
+            Self::Jupiter => RuntimeVenueFeeModel::VenueQuoteInclusive,
+            Self::MagicBlock => RuntimeVenueFeeModel::FixedBps,
+            Self::Phoenix => RuntimeVenueFeeModel::MakerTakerBps,
+        }
+    }
+
+    fn settlement_behavior(&self) -> RuntimeVenueSettlementBehavior {
+        match self {
+            Self::Phoenix => RuntimeVenueSettlementBehavior::OrderbookAtomic,
+            Self::Jupiter | Self::MagicBlock => RuntimeVenueSettlementBehavior::SwapAtomic,
+        }
+    }
+
+    fn notes(&self) -> &'static str {
+        match self {
+            Self::Jupiter => {
+                "Primary bounded live venue for managed runtime execution and canaries."
+            }
+            Self::MagicBlock => {
+                "Experimental venue path kept bounded to shadow and paper until later rollout issues land."
+            }
+            Self::Phoenix => {
+                "Stubbed non-current venue proving the runtime can add a new venue through the shared capability and adapter abstractions."
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn capability(&self) -> RuntimeVenueCapability {
+        RuntimeVenueCapability {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            venue_key: self.as_key().to_string(),
+            display_name: self.display_name().to_string(),
+            adapter_keys: self.adapter_keys(),
+            market_types: self.market_types(),
+            order_types: self.order_types(),
+            auth_model: RuntimeVenueAuthModel::PrivySolanaWallet,
+            fee_model: self.fee_model(),
+            precision: RuntimeVenuePrecision {
+                price_decimals: 6,
+                size_decimals: 9,
+                min_order_increment: Some("0.000001".to_string()),
+                min_quote_notional_usd: Some("0.01".to_string()),
+            },
+            size_limits: RuntimeVenueSizeLimits {
+                min_notional_usd: "0.01".to_string(),
+                max_notional_usd: None,
+            },
+            latency_profile: RuntimeVenueLatencyProfile {
+                expected_quote_ms: match self {
+                    Self::Phoenix => 150,
+                    Self::MagicBlock => 200,
+                    Self::Jupiter => 250,
+                },
+                expected_submit_ms: match self {
+                    Self::Phoenix => 350,
+                    Self::MagicBlock => 400,
+                    Self::Jupiter => 750,
+                },
+                expected_settlement_ms: match self {
+                    Self::MagicBlock => 3_000,
+                    Self::Phoenix => 4_000,
+                    Self::Jupiter => 5_000,
+                },
+            },
+            settlement_behavior: self.settlement_behavior(),
+            supported_modes: self.supported_modes(),
+            onboarding_state: self.onboarding_state(),
+            notes: Some(self.notes().to_string()),
+        }
+    }
+}
+
 pub const SUPPORTED_STRATEGIES: [StrategyKind; 8] = [
     StrategyKind::Dca,
     StrategyKind::ThresholdRebalance,
@@ -302,6 +446,9 @@ pub const SUPPORTED_STRATEGIES: [StrategyKind; 8] = [
     StrategyKind::MacroRotation,
     StrategyKind::VolatilityTarget,
 ];
+
+pub const SUPPORTED_VENUES: [VenueKind; 3] =
+    [VenueKind::Jupiter, VenueKind::MagicBlock, VenueKind::Phoenix];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StrategyDeploymentDescriptor {
@@ -322,6 +469,11 @@ pub struct StrategyCatalog {
     specs: BTreeMap<String, RuntimeStrategySpec>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VenueCatalog {
+    capabilities: BTreeMap<String, RuntimeVenueCapability>,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum StrategyCatalogError {
     #[error("strategy {0} is already registered")]
@@ -330,6 +482,26 @@ pub enum StrategyCatalogError {
     InvalidSpec {
         strategy_key: String,
         reason: String,
+    },
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum VenueCatalogError {
+    #[error("venue {0} is already registered")]
+    DuplicateVenue(String),
+    #[error("invalid venue capability for {venue_key}: {reason}")]
+    InvalidCapability { venue_key: String, reason: String },
+    #[error("unsupported venue key: {0}")]
+    UnsupportedVenue(String),
+    #[error("venue {venue_key} does not support mode {mode:?}")]
+    UnsupportedMode {
+        venue_key: String,
+        mode: RuntimeMode,
+    },
+    #[error("venue {venue_key} does not support adapter {adapter_key}")]
+    UnsupportedAdapter {
+        venue_key: String,
+        adapter_key: String,
     },
 }
 
@@ -375,6 +547,74 @@ impl StrategyCatalog {
     #[must_use]
     pub fn specs(&self) -> Vec<RuntimeStrategySpec> {
         self.specs.values().cloned().collect()
+    }
+}
+
+impl VenueCatalog {
+    pub fn builtin() -> Result<Self, VenueCatalogError> {
+        let mut catalog = Self::default();
+        for venue in SUPPORTED_VENUES {
+            catalog.register_capability(venue.capability())?;
+        }
+        Ok(catalog)
+    }
+
+    pub fn register_capability(
+        &mut self,
+        capability: RuntimeVenueCapability,
+    ) -> Result<(), VenueCatalogError> {
+        validate_capability(&capability)?;
+        if self.capabilities.contains_key(&capability.venue_key) {
+            return Err(VenueCatalogError::DuplicateVenue(capability.venue_key));
+        }
+        self.capabilities
+            .insert(capability.venue_key.clone(), capability);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn get(&self, venue_key: &str) -> Option<&RuntimeVenueCapability> {
+        self.capabilities.get(venue_key)
+    }
+
+    pub fn require(&self, venue_key: &str) -> Result<&RuntimeVenueCapability, VenueCatalogError> {
+        self.get(venue_key)
+            .ok_or_else(|| VenueCatalogError::UnsupportedVenue(venue_key.to_string()))
+    }
+
+    pub fn ensure_mode_supported(
+        &self,
+        venue_key: &str,
+        mode: &RuntimeMode,
+    ) -> Result<&RuntimeVenueCapability, VenueCatalogError> {
+        let capability = self.require(venue_key)?;
+        if !capability.supported_modes.contains(mode) {
+            return Err(VenueCatalogError::UnsupportedMode {
+                venue_key: venue_key.to_string(),
+                mode: mode.clone(),
+            });
+        }
+        Ok(capability)
+    }
+
+    pub fn ensure_adapter_supported(
+        &self,
+        venue_key: &str,
+        adapter_key: &str,
+    ) -> Result<&RuntimeVenueCapability, VenueCatalogError> {
+        let capability = self.require(venue_key)?;
+        if !capability.adapter_keys.iter().any(|value| value == adapter_key) {
+            return Err(VenueCatalogError::UnsupportedAdapter {
+                venue_key: venue_key.to_string(),
+                adapter_key: adapter_key.to_string(),
+            });
+        }
+        Ok(capability)
+    }
+
+    #[must_use]
+    pub fn capabilities(&self) -> Vec<RuntimeVenueCapability> {
+        self.capabilities.values().cloned().collect()
     }
 }
 
@@ -427,9 +667,56 @@ fn validate_spec(spec: &RuntimeStrategySpec) -> Result<(), StrategyCatalogError>
     Ok(())
 }
 
+fn validate_capability(capability: &RuntimeVenueCapability) -> Result<(), VenueCatalogError> {
+    if capability.venue_key.trim().is_empty() {
+        return Err(invalid_capability(capability, "venueKey must not be empty"));
+    }
+    if capability.display_name.trim().is_empty() {
+        return Err(invalid_capability(
+            capability,
+            "displayName must not be empty",
+        ));
+    }
+    if capability.adapter_keys.is_empty() {
+        return Err(invalid_capability(
+            capability,
+            "adapterKeys must not be empty",
+        ));
+    }
+    if capability.market_types.is_empty() {
+        return Err(invalid_capability(
+            capability,
+            "marketTypes must not be empty",
+        ));
+    }
+    if capability.order_types.is_empty() {
+        return Err(invalid_capability(
+            capability,
+            "orderTypes must not be empty",
+        ));
+    }
+    if capability.supported_modes.is_empty() {
+        return Err(invalid_capability(
+            capability,
+            "supportedModes must not be empty",
+        ));
+    }
+    Ok(())
+}
+
 fn invalid_spec(spec: &RuntimeStrategySpec, reason: &str) -> StrategyCatalogError {
     StrategyCatalogError::InvalidSpec {
         strategy_key: spec.strategy_key.clone(),
+        reason: reason.to_string(),
+    }
+}
+
+fn invalid_capability(
+    capability: &RuntimeVenueCapability,
+    reason: &str,
+) -> VenueCatalogError {
+    VenueCatalogError::InvalidCapability {
+        venue_key: capability.venue_key.clone(),
         reason: reason.to_string(),
     }
 }

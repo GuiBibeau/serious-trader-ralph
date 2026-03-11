@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   parseRuntimeDeploymentRecord,
   parseRuntimeStrategySpec,
+  parseRuntimeVenueCapability,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
 } from "../../apps/worker/src/runtime_contracts.js";
 
@@ -25,6 +26,7 @@ describe("worker runtime contract bridge", () => {
       "researchSource",
       "researchExperiment",
       "researchEvidenceBundle",
+      "venueCapability",
       "strategySpec",
     ]);
   });
@@ -49,5 +51,16 @@ describe("worker runtime contract bridge", () => {
 
     expect(strategySpec.strategyKey).toBe("trend_following");
     expect(strategySpec.pluginKey).toBe("builtin::trend_following");
+  });
+
+  test("worker can parse the canonical venue capability fixture", () => {
+    const venueCapability = parseRuntimeVenueCapability(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.venue_capability.valid.v1.json",
+      ),
+    );
+
+    expect(venueCapability.venueKey).toBe("jupiter");
+    expect(venueCapability.adapterKeys).toContain("jupiter");
   });
 });

@@ -89,17 +89,26 @@ describe("worker execution router", () => {
   });
 
   test("custom execution adapters can be registered for new venues", async () => {
-    registerExecutionAdapter("venue_x", async (input) => ({
-      status: "simulated",
-      signature: "sig-venue-x",
-      usedQuote: input.quoteResponse,
-      refreshed: false,
-      lastValidBlockHeight: 42,
-    }));
+    registerExecutionAdapter(
+      "phoenix_orderbook",
+      async (input) => ({
+        status: "simulated",
+        signature: "sig-phoenix",
+        usedQuote: input.quoteResponse,
+        refreshed: false,
+        lastValidBlockHeight: 42,
+      }),
+      {
+        venueKey: "phoenix",
+        supportedModes: ["shadow", "paper"],
+      },
+    );
 
     const result = await executeSwapViaRouter({
       env: {} as never,
-      execution: { adapter: "venue_x" },
+      venueKey: "phoenix",
+      runtimeMode: "paper",
+      execution: { adapter: "phoenix_orderbook" },
       policy: normalizePolicy({}),
       rpc: {} as never,
       jupiter: {} as never,
@@ -114,6 +123,36 @@ describe("worker execution router", () => {
     });
 
     expect(result.status).toBe("simulated");
-    expect(result.signature).toBe("sig-venue-x");
+    expect(result.signature).toBe("sig-phoenix");
+  });
+
+  test("fails closed when a venue adapter does not match the runtime venue", async () => {
+    registerExecutionAdapter("venue_x", async (input) => ({
+      status: "simulated",
+      signature: "sig-venue-x",
+      usedQuote: input.quoteResponse,
+      refreshed: false,
+      lastValidBlockHeight: 42,
+    }));
+
+    await expect(
+      executeSwapViaRouter({
+        env: {} as never,
+        venueKey: "jupiter",
+        runtimeMode: "paper",
+        execution: { adapter: "venue_x" },
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      }),
+    ).rejects.toThrow(/execution-adapter-venue-mismatch/);
   });
 });

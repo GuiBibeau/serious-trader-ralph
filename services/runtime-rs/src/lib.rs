@@ -1460,9 +1460,22 @@ fn map_registry_error(error: StrategyRegistryError) -> JsonPayload {
             "unsupported-strategy",
             json!({ "strategyKey": strategy_key }),
         ),
+        StrategyRegistryError::StrategyVenueUnsupported {
+            strategy_key,
+            venue_key,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "strategy-venue-unsupported",
+            json!({ "strategyKey": strategy_key, "venueKey": venue_key }),
+        ),
         StrategyRegistryError::StrategyCatalog(error) => error_json(
             StatusCode::BAD_REQUEST,
             "invalid-strategy-spec",
+            json!({ "reason": error.to_string() }),
+        ),
+        StrategyRegistryError::VenueCatalog(error) => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-venue-capability",
             json!({ "reason": error.to_string() }),
         ),
         StrategyRegistryError::ImmutableFieldChanged {
@@ -1616,9 +1629,19 @@ fn map_execution_planner_error(error: ExecutionPlannerError) -> JsonPayload {
             "unsupported-strategy",
             json!({ "strategyKey": strategy_key }),
         ),
+        ExecutionPlannerError::UnsupportedVenueCapability { venue_key, reason } => error_json(
+            StatusCode::BAD_REQUEST,
+            "unsupported-venue-capability",
+            json!({ "venueKey": venue_key, "reason": reason }),
+        ),
         ExecutionPlannerError::StrategyCatalog(error) => error_json(
             StatusCode::BAD_REQUEST,
             "invalid-strategy-spec",
+            json!({ "reason": error.to_string() }),
+        ),
+        ExecutionPlannerError::VenueCatalog(error) => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-venue-capability",
             json!({ "reason": error.to_string() }),
         ),
         ExecutionPlannerError::Io(error) => error_json(

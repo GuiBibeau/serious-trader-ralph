@@ -2,6 +2,7 @@
   "schemaVersion": "v1",
   "planId": "plan_180502",
   "deploymentId": "dep_runtime_sol_usdc_shadow",
+  "venueKey": "jupiter",
   "runId": "run_shadow_20260307T180500Z",
   "createdAt": "2026-03-07T18:05:02Z",
   "mode": "shadow",

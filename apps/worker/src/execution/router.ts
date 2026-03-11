@@ -1,3 +1,8 @@
+import {
+  requireRuntimeVenueCapability,
+  runtimeVenueSupportsMode,
+} from "../../../../src/runtime/venues/catalog.js";
+import type { RuntimeMode } from "../runtime_contracts";
 import { executeHeliusSenderSwap } from "./helius_sender_executor";
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
 import { executeJupiterSwap } from "./jupiter_executor";
@@ -8,22 +13,86 @@ export type ExecutionAdapterFn = (
   input: ExecuteSwapInput,
 ) => Promise<ExecuteSwapResult>;
 
-const ADAPTERS = new Map<string, ExecutionAdapterFn>([
-  ["jupiter", executeJupiterSwap],
-  ["helius_sender", executeHeliusSenderSwap],
-  ["jito_bundle", executeJitoBundleSwap],
-  ["magicblock_ephemeral_rollup", executeMagicBlockEphemeralRollupSwap],
+export type ExecutionAdapterRegistration = {
+  adapterKey: string;
+  venueKey: string;
+  supportedModes: RuntimeMode[];
+  adapter: ExecutionAdapterFn;
+};
+
+type RegisterExecutionAdapterOptions = {
+  venueKey?: string;
+  supportedModes?: RuntimeMode[];
+};
+
+const DEFAULT_SUPPORTED_MODES: RuntimeMode[] = ["shadow", "paper", "live"];
+
+const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
+  [
+    "jupiter",
+    {
+      adapterKey: "jupiter",
+      venueKey: "jupiter",
+      supportedModes: ["shadow", "paper", "live"],
+      adapter: executeJupiterSwap,
+    },
+  ],
+  [
+    "helius_sender",
+    {
+      adapterKey: "helius_sender",
+      venueKey: "jupiter",
+      supportedModes: ["live"],
+      adapter: executeHeliusSenderSwap,
+    },
+  ],
+  [
+    "jito_bundle",
+    {
+      adapterKey: "jito_bundle",
+      venueKey: "jupiter",
+      supportedModes: ["live"],
+      adapter: executeJitoBundleSwap,
+    },
+  ],
+  [
+    "magicblock_ephemeral_rollup",
+    {
+      adapterKey: "magicblock_ephemeral_rollup",
+      venueKey: "magicblock",
+      supportedModes: ["shadow", "paper"],
+      adapter: executeMagicBlockEphemeralRollupSwap,
+    },
+  ],
 ]);
 
 export function registerExecutionAdapter(
   name: string,
   adapter: ExecutionAdapterFn,
+  options?: RegisterExecutionAdapterOptions,
 ): void {
   const key = String(name || "").trim();
   if (!key) {
     throw new Error("invalid-execution-adapter-name");
   }
-  ADAPTERS.set(key, adapter);
+  ADAPTERS.set(key, {
+    adapterKey: key,
+    venueKey: String(options?.venueKey ?? key).trim() || key,
+    supportedModes: options?.supportedModes
+      ? [...options.supportedModes]
+      : [...DEFAULT_SUPPORTED_MODES],
+    adapter,
+  });
+}
+
+export function isRegisteredExecutionAdapter(name: string): boolean {
+  return ADAPTERS.has(String(name ?? "").trim());
+}
+
+export function resolveExecutionAdapterRegistration(
+  name: string,
+): ExecutionAdapterRegistration | null {
+  return ADAPTERS.get(String(name ?? "").trim()) ?? null;
 }
 
 export async function executeSwapViaRouter(
@@ -31,9 +100,33 @@ export async function executeSwapViaRouter(
 ): Promise<ExecuteSwapResult> {
   const adapterName =
     (input.execution?.adapter ?? "jupiter").trim() || "jupiter";
-  const adapter = ADAPTERS.get(adapterName);
-  if (!adapter) {
+  const registration = ADAPTERS.get(adapterName);
+  if (!registration) {
     throw new Error(`execution-adapter-not-registered:${adapterName}`);
   }
-  return await adapter(input);
+  if (input.venueKey) {
+    const capability = requireRuntimeVenueCapability(input.venueKey);
+    if (registration.venueKey !== input.venueKey) {
+      throw new Error(
+        `execution-adapter-venue-mismatch:${input.venueKey}:${adapterName}`,
+      );
+    }
+    if (
+      input.runtimeMode &&
+      !runtimeVenueSupportsMode(capability, input.runtimeMode)
+    ) {
+      throw new Error(
+        `runtime-venue-mode-not-supported:${input.venueKey}:${input.runtimeMode}`,
+      );
+    }
+  }
+  if (
+    input.runtimeMode &&
+    !registration.supportedModes.includes(input.runtimeMode)
+  ) {
+    throw new Error(
+      `execution-adapter-mode-unsupported:${adapterName}:${input.runtimeMode}`,
+    );
+  }
+  return await registration.adapter(input);
 }

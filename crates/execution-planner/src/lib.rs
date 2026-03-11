@@ -9,12 +9,16 @@ use feature_cache::DerivedMarketFeatureSnapshot;
 use protocol::{
     RuntimeDeploymentRecord, RuntimeExecutionAction, RuntimeExecutionPlan, RuntimeExecutionSlice,
     RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerSnapshot, RuntimeMode, RuntimeRiskDecision,
-    RuntimeRiskVerdict, RuntimeRunRecord, RuntimeStrategySpec, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeRiskVerdict, RuntimeRunRecord, RuntimeStrategySpec, RuntimeVenueMarketType,
+    RuntimeVenueOrderType, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use strategy_core::{StrategyCatalog, StrategyCatalogError, StrategyKind, SUPPORTED_STRATEGIES};
+use strategy_core::{
+    StrategyCatalog, StrategyCatalogError, StrategyKind, VenueCatalog, VenueCatalogError,
+    SUPPORTED_STRATEGIES,
+};
 use thiserror::Error;
 use time::OffsetDateTime;
 
@@ -36,6 +40,7 @@ impl ExecutionPlannerConfig {
 pub struct ExecutionPlanner {
     database_path: PathBuf,
     strategy_plugins: Arc<StrategyPluginRegistry>,
+    venue_catalog: VenueCatalog,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,24 +198,44 @@ pub enum ExecutionPlannerError {
     PlanNotFound { plan_id: String },
     #[error("unsupported strategy key: {0}")]
     UnsupportedStrategy(String),
+    #[error("unsupported venue capability for {venue_key}: {reason}")]
+    UnsupportedVenueCapability { venue_key: String, reason: String },
     #[error(transparent)]
     StrategyCatalog(#[from] StrategyCatalogError),
+    #[error(transparent)]
+    VenueCatalog(#[from] VenueCatalogError),
 }
 
 impl ExecutionPlanner {
     pub fn new(config: ExecutionPlannerConfig) -> Result<Self, ExecutionPlannerError> {
-        Self::with_plugins(config, StrategyPluginRegistry::builtin()?)
+        Self::with_plugins_and_venues(
+            config,
+            StrategyPluginRegistry::builtin()?,
+            VenueCatalog::builtin()?,
+        )
     }
 
     pub fn with_plugins(
         config: ExecutionPlannerConfig,
         strategy_plugins: StrategyPluginRegistry,
     ) -> Result<Self, ExecutionPlannerError> {
+        Self::with_plugins_and_venues(config, strategy_plugins, VenueCatalog::builtin()?)
+    }
+
+    pub fn with_plugins_and_venues(
+        config: ExecutionPlannerConfig,
+        strategy_plugins: StrategyPluginRegistry,
+        venue_catalog: VenueCatalog,
+    ) -> Result<Self, ExecutionPlannerError> {
         let requested_path = normalize_database_path(&config.database_url);
-        match Self::initialize_at_path(requested_path.clone(), strategy_plugins.clone()) {
+        match Self::initialize_at_path(
+            requested_path.clone(),
+            strategy_plugins.clone(),
+            venue_catalog.clone(),
+        ) {
             Ok(planner) => Ok(planner),
             Err(error) if should_fallback_to_tmp(&requested_path, &error) => {
-                Self::initialize_at_path(fallback_database_path(), strategy_plugins)
+                Self::initialize_at_path(fallback_database_path(), strategy_plugins, venue_catalog)
             }
             Err(error) => Err(error),
         }
@@ -241,7 +266,7 @@ impl ExecutionPlanner {
             });
         }
 
-        let plan = build_plan(&self.strategy_plugins, input)?;
+        let plan = build_plan(&self.strategy_plugins, &self.venue_catalog, input)?;
         persist_plan(&transaction, &plan)?;
         transaction.commit()?;
 
@@ -325,6 +350,7 @@ impl ExecutionPlanner {
     fn initialize_at_path(
         database_path: PathBuf,
         strategy_plugins: StrategyPluginRegistry,
+        venue_catalog: VenueCatalog,
     ) -> Result<Self, ExecutionPlannerError> {
         if database_path != Path::new(":memory:") {
             if let Some(parent) = database_path
@@ -337,6 +363,7 @@ impl ExecutionPlanner {
         let planner = Self {
             database_path,
             strategy_plugins: Arc::new(strategy_plugins),
+            venue_catalog,
         };
         let connection = planner.open_connection()?;
         initialize_schema(&connection)?;
@@ -400,12 +427,15 @@ fn should_fallback_to_tmp(database_path: &Path, error: &ExecutionPlannerError) -
         | ExecutionPlannerError::RiskNotAllowed { .. }
         | ExecutionPlannerError::PlanNotFound { .. }
         | ExecutionPlannerError::UnsupportedStrategy(_)
-        | ExecutionPlannerError::StrategyCatalog(_) => false,
+        | ExecutionPlannerError::UnsupportedVenueCapability { .. }
+        | ExecutionPlannerError::StrategyCatalog(_)
+        | ExecutionPlannerError::VenueCatalog(_) => false,
     }
 }
 
 fn build_plan(
     strategy_plugins: &StrategyPluginRegistry,
+    venue_catalog: &VenueCatalog,
     input: &ExecutionPlannerInput,
 ) -> Result<RuntimeExecutionPlan, ExecutionPlannerError> {
     if input.risk_verdict.verdict != RuntimeRiskDecision::Allow {
@@ -413,6 +443,8 @@ fn build_plan(
             verdict_id: input.risk_verdict.verdict_id.clone(),
         });
     }
+
+    ensure_deployment_venue_support(venue_catalog, &input.deployment)?;
 
     let lane = selected_lane(&input.deployment);
     let (simulate_only, dry_run) = execution_flags(&input.deployment.mode);
@@ -468,6 +500,7 @@ fn build_plan(
         schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
         plan_id: build_plan_id(&idempotency_key),
         deployment_id: input.deployment.deployment_id.clone(),
+        venue_key: input.deployment.venue_key.clone(),
         owner_user_id: Some(input.deployment.owner_user_id.clone()),
         sleeve_id: Some(input.deployment.sleeve_id.clone()),
         run_id: input.run.run_id.clone(),
@@ -500,6 +533,32 @@ fn strategy_trade_decision(
             ExecutionPlannerError::UnsupportedStrategy(input.deployment.strategy_key.clone())
         })?;
     plugin.trade_decision(input)
+}
+
+fn ensure_deployment_venue_support(
+    venue_catalog: &VenueCatalog,
+    deployment: &RuntimeDeploymentRecord,
+) -> Result<(), ExecutionPlannerError> {
+    let capability = venue_catalog.ensure_mode_supported(&deployment.venue_key, &deployment.mode)?;
+    if !capability
+        .market_types
+        .contains(&RuntimeVenueMarketType::Spot)
+    {
+        return Err(ExecutionPlannerError::UnsupportedVenueCapability {
+            venue_key: deployment.venue_key.clone(),
+            reason: "spot-market-not-supported".to_string(),
+        });
+    }
+    if !capability
+        .order_types
+        .contains(&RuntimeVenueOrderType::Market)
+    {
+        return Err(ExecutionPlannerError::UnsupportedVenueCapability {
+            venue_key: deployment.venue_key.clone(),
+            reason: "market-orders-not-supported".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn dca_trade_decision(
@@ -1148,8 +1207,11 @@ mod tests {
         RuntimeCapital, RuntimeDeploymentState, RuntimeLedgerTotals, RuntimePair, RuntimePolicy,
         RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason, RuntimeRiskSeverity,
         RuntimeRunState, RuntimeStrategySpec, RuntimeTrigger, RuntimeTriggerKind,
+        RuntimeVenueAuthModel, RuntimeVenueCapability, RuntimeVenueFeeModel,
+        RuntimeVenueLatencyProfile, RuntimeVenueMarketType, RuntimeVenueOrderType,
+        RuntimeVenuePrecision, RuntimeVenueSettlementBehavior, RuntimeVenueSizeLimits,
     };
-    use strategy_core::StrategyKind;
+    use strategy_core::{StrategyKind, VenueCatalog};
 
     use super::*;
 
@@ -1205,6 +1267,25 @@ mod tests {
         .expect("planner to initialize")
     }
 
+    fn planner_with_plugin_and_venues(
+        test_name: &str,
+        strategy_key: &str,
+        venue_catalog: VenueCatalog,
+    ) -> ExecutionPlanner {
+        let mut plugins = StrategyPluginRegistry::default();
+        plugins
+            .register_plugin(TestStrategyPlugin {
+                spec: custom_strategy_spec(strategy_key),
+            })
+            .expect("custom strategy plugin");
+        ExecutionPlanner::with_plugins_and_venues(
+            ExecutionPlannerConfig::new(temp_database_url(test_name)),
+            plugins,
+            venue_catalog,
+        )
+        .expect("planner to initialize")
+    }
+
     fn custom_strategy_spec(strategy_key: &str) -> RuntimeStrategySpec {
         let mut spec = StrategyKind::Dca.spec();
         spec.strategy_key = strategy_key.to_string();
@@ -1224,6 +1305,7 @@ mod tests {
             strategy_key: strategy_key.to_string(),
             sleeve_id: "sleeve_1".to_string(),
             owner_user_id: "user_1".to_string(),
+            venue_key: "jupiter".to_string(),
             pair: RuntimePair {
                 symbol: "SOL/USDC".to_string(),
                 base_mint: "So11111111111111111111111111111111111111112".to_string(),
@@ -1509,6 +1591,64 @@ mod tests {
             planner.supported_strategy_keys(),
             vec!["custom_signal".to_string()]
         );
+    }
+
+    #[test]
+    fn fails_closed_when_venue_capability_cannot_support_market_orders() {
+        let mut venue_catalog = VenueCatalog::default();
+        venue_catalog
+            .register_capability(RuntimeVenueCapability {
+                schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                venue_key: "limit_only".to_string(),
+                display_name: "Limit Only Venue".to_string(),
+                adapter_keys: vec!["limit_only_adapter".to_string()],
+                market_types: vec![RuntimeVenueMarketType::Spot],
+                order_types: vec![RuntimeVenueOrderType::Limit],
+                auth_model: RuntimeVenueAuthModel::PrivySolanaWallet,
+                fee_model: RuntimeVenueFeeModel::MakerTakerBps,
+                precision: RuntimeVenuePrecision {
+                    price_decimals: 6,
+                    size_decimals: 9,
+                    min_order_increment: Some("0.000001".to_string()),
+                    min_quote_notional_usd: Some("0.01".to_string()),
+                },
+                size_limits: RuntimeVenueSizeLimits {
+                    min_notional_usd: "0.01".to_string(),
+                    max_notional_usd: None,
+                },
+                latency_profile: RuntimeVenueLatencyProfile {
+                    expected_quote_ms: 100,
+                    expected_submit_ms: 250,
+                    expected_settlement_ms: 1_000,
+                },
+                settlement_behavior: RuntimeVenueSettlementBehavior::OrderbookAtomic,
+                supported_modes: vec![RuntimeMode::Shadow, RuntimeMode::Paper],
+                onboarding_state: protocol::RuntimeOnboardingState::PaperReady,
+                notes: None,
+            })
+            .expect("custom venue capability");
+        let planner = planner_with_plugin_and_venues(
+            "limit-only-venue",
+            "custom_signal",
+            venue_catalog,
+        );
+        let mut input = input(
+            "run_limit_only",
+            "custom_signal",
+            RuntimeMode::Shadow,
+            RuntimeLane::Safe,
+            "10.0",
+        );
+        input.deployment.venue_key = "limit_only".to_string();
+
+        let error = planner
+            .plan_and_store(&input)
+            .expect_err("unsupported venue capability should fail");
+
+        assert!(matches!(
+            error,
+            ExecutionPlannerError::UnsupportedVenueCapability { .. }
+        ));
     }
 
     #[test]

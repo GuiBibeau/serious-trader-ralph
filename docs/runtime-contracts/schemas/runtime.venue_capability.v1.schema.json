@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/venue_capability",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "venueKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "adapterKeys": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "marketTypes": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["spot", "perp", "options"]
+      }
+    },
+    "orderTypes": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["market", "limit", "auction", "twap"]
+      }
+    },
+    "authModel": {
+      "type": "string",
+      "enum": ["privy_solana_wallet", "server_signer"]
+    },
+    "feeModel": {
+      "type": "string",
+      "enum": ["venue_quote_inclusive", "maker_taker_bps", "fixed_bps"]
+    },
+    "precision": {
+      "type": "object",
+      "properties": {
+        "priceDecimals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sizeDecimals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "minOrderIncrement": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "minQuoteNotionalUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        }
+      },
+      "required": ["priceDecimals", "sizeDecimals"],
+      "additionalProperties": false
+    },
+    "sizeLimits": {
+      "type": "object",
+      "properties": {
+        "minNotionalUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "maxNotionalUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        }
+      },
+      "required": ["minNotionalUsd"],
+      "additionalProperties": false
+    },
+    "latencyProfile": {
+      "type": "object",
+      "properties": {
+        "expectedQuoteMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expectedSubmitMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expectedSettlementMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "expectedQuoteMs",
+        "expectedSubmitMs",
+        "expectedSettlementMs"
+      ],
+      "additionalProperties": false
+    },
+    "settlementBehavior": {
+      "type": "string",
+      "enum": ["swap_atomic", "orderbook_atomic", "orderbook_partial"]
+    },
+    "supportedModes": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["shadow", "paper", "live"]
+      }
+    },
+    "onboardingState": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "integrated",
+        "shadow_ready",
+        "paper_ready",
+        "limited_live_ready",
+        "broad_live_ready",
+        "paused",
+        "deprecated"
+      ]
+    },
+    "notes": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "venueKey",
+    "displayName",
+    "adapterKeys",
+    "marketTypes",
+    "orderTypes",
+    "authModel",
+    "feeModel",
+    "precision",
+    "sizeLimits",
+    "latencyProfile",
+    "settlementBehavior",
+    "supportedModes",
+    "onboardingState"
+  ],
+  "additionalProperties": false
+}

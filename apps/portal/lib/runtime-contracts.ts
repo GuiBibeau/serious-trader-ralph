@@ -4,6 +4,7 @@ export type RuntimeDeploymentRecord = {
   strategyKey: string;
   sleeveId: string;
   ownerUserId: string;
+  venueKey: string;
   pair: {
     symbol: string;
     baseMint: string;
@@ -135,6 +136,7 @@ export function safeParseRuntimeDeploymentRecord(
   const strategyKey = readString(value.strategyKey);
   const sleeveId = readString(value.sleeveId);
   const ownerUserId = readString(value.ownerUserId);
+  const venueKey = readString(value.venueKey) ?? "jupiter";
   const symbol = readString(pair.symbol);
   const baseMint = readString(pair.baseMint);
   const quoteMint = readString(pair.quoteMint);
@@ -156,6 +158,7 @@ export function safeParseRuntimeDeploymentRecord(
     !strategyKey ||
     !sleeveId ||
     !ownerUserId ||
+    !venueKey ||
     !symbol ||
     !baseMint ||
     !quoteMint ||
@@ -184,6 +187,7 @@ export function safeParseRuntimeDeploymentRecord(
       strategyKey,
       sleeveId,
       ownerUserId,
+      venueKey,
       pair: {
         symbol,
         baseMint,

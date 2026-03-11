@@ -788,6 +788,7 @@ mod tests {
             strategy_key: "dca".to_string(),
             sleeve_id: "sleeve_1".to_string(),
             owner_user_id: "user_1".to_string(),
+            venue_key: "jupiter".to_string(),
             pair: RuntimePair {
                 symbol: "SOL/USDC".to_string(),
                 base_mint: "So11111111111111111111111111111111111111112".to_string(),

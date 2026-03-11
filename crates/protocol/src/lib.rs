@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 pub const RUNTIME_PROTOCOL_SCHEMA_VERSION: &str = "v1";
 
+fn default_runtime_venue_key() -> String {
+    "jupiter".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeMode {
@@ -182,6 +186,8 @@ pub struct RuntimeDeploymentRecord {
     pub strategy_key: String,
     pub sleeve_id: String,
     pub owner_user_id: String,
+    #[serde(default = "default_runtime_venue_key")]
+    pub venue_key: String,
     pub pair: RuntimePair,
     pub mode: RuntimeMode,
     pub state: RuntimeDeploymentState,
@@ -329,6 +335,8 @@ pub struct RuntimeExecutionPlan {
     pub schema_version: String,
     pub plan_id: String,
     pub deployment_id: String,
+    #[serde(default = "default_runtime_venue_key")]
+    pub venue_key: String,
     pub owner_user_id: Option<String>,
     pub sleeve_id: Option<String>,
     pub run_id: String,
@@ -754,6 +762,90 @@ pub enum RuntimeOnboardingState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVenueMarketType {
+    Spot,
+    Perp,
+    Options,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVenueOrderType {
+    Market,
+    Limit,
+    Auction,
+    Twap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVenueAuthModel {
+    PrivySolanaWallet,
+    ServerSigner,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVenueFeeModel {
+    VenueQuoteInclusive,
+    MakerTakerBps,
+    FixedBps,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVenueSettlementBehavior {
+    SwapAtomic,
+    OrderbookAtomic,
+    OrderbookPartial,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVenuePrecision {
+    pub price_decimals: u32,
+    pub size_decimals: u32,
+    pub min_order_increment: Option<String>,
+    pub min_quote_notional_usd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVenueSizeLimits {
+    pub min_notional_usd: String,
+    pub max_notional_usd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVenueLatencyProfile {
+    pub expected_quote_ms: u64,
+    pub expected_submit_ms: u64,
+    pub expected_settlement_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVenueCapability {
+    pub schema_version: String,
+    pub venue_key: String,
+    pub display_name: String,
+    pub adapter_keys: Vec<String>,
+    pub market_types: Vec<RuntimeVenueMarketType>,
+    pub order_types: Vec<RuntimeVenueOrderType>,
+    pub auth_model: RuntimeVenueAuthModel,
+    pub fee_model: RuntimeVenueFeeModel,
+    pub precision: RuntimeVenuePrecision,
+    pub size_limits: RuntimeVenueSizeLimits,
+    pub latency_profile: RuntimeVenueLatencyProfile,
+    pub settlement_behavior: RuntimeVenueSettlementBehavior,
+    pub supported_modes: Vec<RuntimeMode>,
+    pub onboarding_state: RuntimeOnboardingState,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeStrategyVenueSupport {
     pub venue_key: String,
@@ -874,6 +966,9 @@ mod tests {
             "runtime.research_evidence_bundle.valid.v1.json",
         ))
         .expect("research evidence bundle fixture to deserialize");
+        let venue_capability: RuntimeVenueCapability =
+            serde_json::from_str(&read_fixture("runtime.venue_capability.valid.v1.json"))
+                .expect("venue capability fixture to deserialize");
         let strategy_spec: RuntimeStrategySpec =
             serde_json::from_str(&read_fixture("runtime.strategy_spec.valid.v1.json"))
                 .expect("strategy spec fixture to deserialize");
@@ -892,12 +987,17 @@ mod tests {
         assert_eq!(experiment.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(evidence.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(
+            venue_capability.schema_version,
+            RUNTIME_PROTOCOL_SCHEMA_VERSION
+        );
+        assert_eq!(
             strategy_spec.schema_version,
             RUNTIME_PROTOCOL_SCHEMA_VERSION
         );
         assert_eq!(plan.slices.len(), 1);
         assert_eq!(experiment.dataset_snapshots.len(), 1);
         assert_eq!(evidence.artifacts.len(), 2);
+        assert_eq!(venue_capability.venue_key, "jupiter");
         assert_eq!(strategy_spec.strategy_key, "trend_following");
     }
 

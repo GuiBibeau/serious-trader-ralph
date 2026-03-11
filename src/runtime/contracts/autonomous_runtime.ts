@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const RUNTIME_PROTOCOL_SCHEMA_FAMILY = "runtime" as const;
 export const RUNTIME_PROTOCOL_SCHEMA_VERSION = "v1" as const;
+export const DEFAULT_RUNTIME_VENUE_KEY = "jupiter" as const;
 
 const ISO_DATETIME_SCHEMA = z.string().datetime({ offset: true });
 const NON_EMPTY_STRING_SCHEMA = z.string().min(1);
@@ -76,6 +77,7 @@ export const RuntimeDeploymentRecordSchema = VersionedSchema.extend({
   strategyKey: NON_EMPTY_STRING_SCHEMA,
   sleeveId: NON_EMPTY_STRING_SCHEMA,
   ownerUserId: NON_EMPTY_STRING_SCHEMA,
+  venueKey: NON_EMPTY_STRING_SCHEMA.default(DEFAULT_RUNTIME_VENUE_KEY),
   pair: PairSchema,
   mode: RuntimeModeSchema,
   state: RuntimeDeploymentStateSchema,
@@ -205,6 +207,7 @@ const RuntimeExecutionSliceSchema = z
 export const RuntimeExecutionPlanSchema = VersionedSchema.extend({
   planId: NON_EMPTY_STRING_SCHEMA,
   deploymentId: NON_EMPTY_STRING_SCHEMA,
+  venueKey: NON_EMPTY_STRING_SCHEMA.default(DEFAULT_RUNTIME_VENUE_KEY),
   ownerUserId: NON_EMPTY_STRING_SCHEMA.optional(),
   sleeveId: NON_EMPTY_STRING_SCHEMA.optional(),
   runId: NON_EMPTY_STRING_SCHEMA,
@@ -429,6 +432,73 @@ export const RuntimeOnboardingStateSchema = z.enum([
   "deprecated",
 ]);
 
+export const RuntimeVenueMarketTypeSchema = z.enum(["spot", "perp", "options"]);
+
+export const RuntimeVenueOrderTypeSchema = z.enum([
+  "market",
+  "limit",
+  "auction",
+  "twap",
+]);
+
+export const RuntimeVenueAuthModelSchema = z.enum([
+  "privy_solana_wallet",
+  "server_signer",
+]);
+
+export const RuntimeVenueFeeModelSchema = z.enum([
+  "venue_quote_inclusive",
+  "maker_taker_bps",
+  "fixed_bps",
+]);
+
+export const RuntimeVenueSettlementBehaviorSchema = z.enum([
+  "swap_atomic",
+  "orderbook_atomic",
+  "orderbook_partial",
+]);
+
+const RuntimeVenuePrecisionSchema = z
+  .object({
+    priceDecimals: z.number().int().nonnegative(),
+    sizeDecimals: z.number().int().nonnegative(),
+    minOrderIncrement: DECIMAL_STRING_SCHEMA.optional(),
+    minQuoteNotionalUsd: DECIMAL_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeVenueSizeLimitsSchema = z
+  .object({
+    minNotionalUsd: DECIMAL_STRING_SCHEMA,
+    maxNotionalUsd: DECIMAL_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeVenueLatencyProfileSchema = z
+  .object({
+    expectedQuoteMs: z.number().int().positive(),
+    expectedSubmitMs: z.number().int().positive(),
+    expectedSettlementMs: z.number().int().positive(),
+  })
+  .strict();
+
+export const RuntimeVenueCapabilitySchema = VersionedSchema.extend({
+  venueKey: NON_EMPTY_STRING_SCHEMA,
+  displayName: NON_EMPTY_STRING_SCHEMA,
+  adapterKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  marketTypes: z.array(RuntimeVenueMarketTypeSchema).min(1),
+  orderTypes: z.array(RuntimeVenueOrderTypeSchema).min(1),
+  authModel: RuntimeVenueAuthModelSchema,
+  feeModel: RuntimeVenueFeeModelSchema,
+  precision: RuntimeVenuePrecisionSchema,
+  sizeLimits: RuntimeVenueSizeLimitsSchema,
+  latencyProfile: RuntimeVenueLatencyProfileSchema,
+  settlementBehavior: RuntimeVenueSettlementBehaviorSchema,
+  supportedModes: z.array(RuntimeModeSchema).min(1),
+  onboardingState: RuntimeOnboardingStateSchema,
+  notes: NON_EMPTY_STRING_SCHEMA.optional(),
+}).strict();
+
 const RuntimeStrategyVenueSupportSchema = z
   .object({
     venueKey: NON_EMPTY_STRING_SCHEMA,
@@ -535,6 +605,21 @@ export type RuntimeResearchExperimentRecord = z.infer<
 export type RuntimeResearchEvidenceBundleRecord = z.infer<
   typeof RuntimeResearchEvidenceBundleRecordSchema
 >;
+export type RuntimeOnboardingState = z.infer<
+  typeof RuntimeOnboardingStateSchema
+>;
+export type RuntimeVenueMarketType = z.infer<
+  typeof RuntimeVenueMarketTypeSchema
+>;
+export type RuntimeVenueOrderType = z.infer<typeof RuntimeVenueOrderTypeSchema>;
+export type RuntimeVenueAuthModel = z.infer<typeof RuntimeVenueAuthModelSchema>;
+export type RuntimeVenueFeeModel = z.infer<typeof RuntimeVenueFeeModelSchema>;
+export type RuntimeVenueSettlementBehavior = z.infer<
+  typeof RuntimeVenueSettlementBehaviorSchema
+>;
+export type RuntimeVenueCapability = z.infer<
+  typeof RuntimeVenueCapabilitySchema
+>;
 export type RuntimeStrategySpec = z.infer<typeof RuntimeStrategySpecSchema>;
 
 export const RUNTIME_DEPLOYMENT_STATE_TRANSITIONS = {
@@ -616,6 +701,11 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
     schemaId:
       "https://trader-ralph.com/schemas/runtime/v1/research_evidence_bundle",
     outputFile: "runtime.research_evidence_bundle.v1.schema.json",
+  },
+  venueCapability: {
+    schema: RuntimeVenueCapabilitySchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/venue_capability",
+    outputFile: "runtime.venue_capability.v1.schema.json",
   },
   strategySpec: {
     schema: RuntimeStrategySpecSchema,
@@ -700,6 +790,12 @@ export function parseRuntimeResearchEvidenceBundleRecord(
   return RuntimeResearchEvidenceBundleRecordSchema.parse(input);
 }
 
+export function parseRuntimeVenueCapability(
+  input: unknown,
+): RuntimeVenueCapability {
+  return RuntimeVenueCapabilitySchema.parse(input);
+}
+
 export function parseRuntimeStrategySpec(input: unknown): RuntimeStrategySpec {
   return RuntimeStrategySpecSchema.parse(input);
 }
@@ -742,6 +838,10 @@ export function safeParseRuntimeResearchExperimentRecord(input: unknown) {
 
 export function safeParseRuntimeResearchEvidenceBundleRecord(input: unknown) {
   return RuntimeResearchEvidenceBundleRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeVenueCapability(input: unknown) {
+  return RuntimeVenueCapabilitySchema.safeParse(input);
 }
 
 export function safeParseRuntimeStrategySpec(input: unknown) {

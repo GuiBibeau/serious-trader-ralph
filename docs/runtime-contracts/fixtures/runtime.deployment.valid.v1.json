@@ -4,6 +4,7 @@
   "strategyKey": "dca",
   "sleeveId": "sleeve_sol_usdc_core",
   "ownerUserId": "user_ralph_operator",
+  "venueKey": "jupiter",
   "pair": {
     "symbol": "SOL/USDC",
     "baseMint": "So11111111111111111111111111111111111111112",
