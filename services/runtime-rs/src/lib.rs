@@ -669,6 +669,21 @@ async fn evaluate_deployment_handler(
     };
     let is_runtime_canary = is_worker_runtime_canary_trigger(request.trigger.as_ref());
     let observed_ledger_override = request.observed_ledger_snapshot.clone();
+    let deployment = state
+        .strategy_registry
+        .get_deployment(&deployment_id)
+        .map_err(map_registry_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "deployment-not-found",
+                json!({ "deploymentId": deployment_id }),
+            )
+        })?;
+    state
+        .asset_registry
+        .ensure_pair_supported(&deployment)
+        .map_err(map_asset_registry_error)?;
     let result = state
         .strategy_registry
         .evaluate_deployment_trigger(
@@ -677,10 +692,6 @@ async fn evaluate_deployment_handler(
             request.trigger,
         )
         .map_err(map_registry_error)?;
-    state
-        .asset_registry
-        .ensure_pair_supported(&result.deployment)
-        .map_err(map_asset_registry_error)?;
     let ledger_snapshot = state
         .portfolio_ledger
         .snapshot_for_deployment(&deployment_id)
@@ -4120,6 +4131,48 @@ mod tests {
             transition_payload["asset"]["updatedAt"],
             json!("2026-03-10T14:30:00.000Z")
         );
+    }
+
+    #[tokio::test]
+    async fn unsupported_asset_evaluation_does_not_persist_runs() {
+        let state = RuntimeAppState::new(test_config());
+        let mut deployment: RuntimeDeploymentRecord = serde_json::from_value(runtime_deployment(
+            "deployment_unknown_asset_eval",
+            "sleeve_alpha",
+            "1000.00",
+            "125.00",
+        ))
+        .expect("deployment");
+        deployment.pair = protocol::RuntimePair {
+            symbol: "BONK/USDC".to_string(),
+            base_mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263".to_string(),
+            quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+        };
+        state
+            .strategy_registry
+            .upsert_deployment(&deployment)
+            .expect("deployment to store");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer runtime-service-secret"),
+        );
+        let error = evaluate_deployment_handler(
+            headers,
+            Path("deployment_unknown_asset_eval".to_string()),
+            State(state.clone()),
+            Bytes::from("{}"),
+        )
+        .await
+        .expect_err("unsupported pair to fail before run creation");
+
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        let runs = state
+            .strategy_registry
+            .list_runs("deployment_unknown_asset_eval")
+            .expect("runs to list");
+        assert!(runs.is_empty());
     }
 
     #[tokio::test]
