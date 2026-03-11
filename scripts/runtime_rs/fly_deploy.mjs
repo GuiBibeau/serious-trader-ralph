@@ -2,6 +2,7 @@
 
 import {
   findStandbyFor,
+  isDestroyedMachine,
   readRuntimeFlyConfig,
   runFly,
   runFlyJson,
@@ -83,10 +84,24 @@ function destroyMismatchedStandbys(config, machines, primaryMachineId) {
     (machine) =>
       machine?.region === config.standbyRegion &&
       findStandbyFor(machine) !== primaryMachineId &&
-      machine?.state !== "destroyed",
+      !isDestroyedMachine(machine),
   );
 
   for (const machine of mismatched) {
+    runFly(
+      ["machine", "destroy", machine.id, "--app", config.appName, "--force"],
+      { stdio: "inherit" },
+    );
+  }
+}
+
+function destroyStandbyRegionMachines(config, machines) {
+  const standbyMachines = machines.filter(
+    (machine) =>
+      machine?.region === config.standbyRegion && !isDestroyedMachine(machine),
+  );
+
+  for (const machine of standbyMachines) {
     runFly(
       ["machine", "destroy", machine.id, "--app", config.appName, "--force"],
       { stdio: "inherit" },
@@ -207,6 +222,7 @@ async function main() {
 
   ensureApp(config);
   stageSecrets(config);
+  destroyStandbyRegionMachines(config, listMachines(config.appName));
   deployRuntime(config);
 
   let machines = listMachines(config.appName);
