@@ -925,6 +925,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "research-registry"
+version = "0.1.0"
+dependencies = [
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -987,6 +999,7 @@ dependencies = [
  "portfolio-ledger",
  "protocol",
  "reconciler",
+ "research-registry",
  "risk-engine",
  "runtime-allocator",
  "runtime-ops",

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "v1",
+  "sourceId": "source_paper_microstructure",
+  "sourceKind": "paper",
+  "title": "Microstructure signals for crypto execution",
+  "url": "https://example.com/papers/microstructure",
+  "authors": ["Ada Researcher"],
+  "publishedAt": "2026-02-01T00:00:00Z",
+  "retrievedAt": "2026-03-10T14:00:00Z",
+  "contentDigest": "sha256:paper",
+  "venueKeys": ["jupiter"],
+  "assetKeys": ["SOL", "USDC"],
+  "tags": ["signal"]
+}

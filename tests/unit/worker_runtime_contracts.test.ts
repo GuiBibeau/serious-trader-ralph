@@ -20,6 +20,10 @@ describe("worker runtime contract bridge", () => {
       "riskVerdict",
       "executionPlan",
       "reconciliationResult",
+      "researchHypothesis",
+      "researchSource",
+      "researchExperiment",
+      "researchEvidenceBundle",
     ]);
   });
 

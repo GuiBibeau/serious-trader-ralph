@@ -19,8 +19,16 @@ use market_adapters::{FeedGateway, FeedGatewayConfig, FeedGatewaySnapshot, FeedR
 use portfolio_ledger::{
     PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
 };
-use protocol::{RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeRunRecord};
+use protocol::{
+    RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeResearchEvidenceBundleRecord,
+    RuntimeResearchExperimentRecord, RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord,
+    RuntimeRunRecord,
+};
 use reconciler::{Reconciler, ReconcilerConfig, ReconcilerError, ReconcilerSnapshot};
+use research_registry::{
+    ResearchRegistry, ResearchRegistryConfig, ResearchRegistryError, ResearchRegistryQuery,
+    ResearchRegistrySnapshot,
+};
 use risk_engine::{
     should_pause_runtime, RiskAssessmentInput, RiskEngine, RiskEngineConfig, RiskEngineError,
     RiskEngineSnapshot,
@@ -68,6 +76,7 @@ pub struct RuntimeAppState {
     feed_gateway: Arc<RwLock<FeedGateway>>,
     feature_cache: Arc<RwLock<FeatureCache>>,
     strategy_registry: StrategyRegistry,
+    research_registry: ResearchRegistry,
     portfolio_ledger: PortfolioLedger,
     runtime_allocator: RuntimeAllocator,
     risk_engine: RiskEngine,
@@ -90,6 +99,9 @@ impl RuntimeAppState {
         let strategy_registry =
             StrategyRegistry::new(StrategyRegistryConfig::new(config.database_url.clone()))
                 .expect("strategy registry to initialize");
+        let research_registry =
+            ResearchRegistry::new(ResearchRegistryConfig::new(config.database_url.clone()))
+                .expect("research registry to initialize");
         let portfolio_ledger =
             PortfolioLedger::new(PortfolioLedgerConfig::new(config.database_url.clone()))
                 .expect("portfolio ledger to initialize");
@@ -120,6 +132,7 @@ impl RuntimeAppState {
             feed_gateway,
             feature_cache,
             strategy_registry,
+            research_registry,
             portfolio_ledger,
             runtime_allocator,
             risk_engine,
@@ -144,6 +157,10 @@ impl RuntimeAppState {
 
     fn strategy_registry_snapshot(&self) -> StrategyRegistrySnapshot {
         self.strategy_registry.snapshot_now()
+    }
+
+    fn research_registry_snapshot(&self) -> ResearchRegistrySnapshot {
+        self.research_registry.snapshot_now()
     }
 
     fn portfolio_ledger_snapshot(&self) -> PortfolioLedgerSnapshot {
@@ -184,6 +201,7 @@ pub struct RuntimeHealthResponse {
     pub feed_gateway: FeedGatewaySnapshot,
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
+    pub research_registry: ResearchRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
@@ -203,6 +221,7 @@ pub struct RuntimeMetricsResponse {
     pub feed_gateway: FeedGatewaySnapshot,
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
+    pub research_registry: ResearchRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
@@ -229,6 +248,15 @@ struct RuntimeDeploymentQuery {
 struct RuntimeAllocatorQuery {
     pub deployment_id: Option<String>,
     pub sleeve_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeResearchQueryParams {
+    pub strategy_key: Option<String>,
+    pub venue_key: Option<String>,
+    pub asset_key: Option<String>,
+    pub source_id: Option<String>,
 }
 
 pub fn app(config: RuntimeConfig) -> Router {
@@ -284,6 +312,26 @@ pub fn app(config: RuntimeConfig) -> Router {
             get(allocator_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/research"),
+            get(research_query_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/research/hypotheses"),
+            post(create_research_hypothesis_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/research/sources"),
+            post(create_research_source_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/research/experiments"),
+            post(create_research_experiment_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/research/evidence-bundles"),
+            post(create_research_evidence_bundle_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/risk"),
             get(risk_handler),
         )
@@ -300,6 +348,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let feed_gateway = state.feed_gateway_snapshot();
     let feature_cache = state.feature_cache_snapshot();
     let strategy_registry = state.strategy_registry_snapshot();
+    let research_registry = state.research_registry_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
     let allocator = state.runtime_allocator_snapshot();
     let risk_engine = state.risk_engine_snapshot();
@@ -308,6 +357,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let status = if feed_gateway.status == "healthy"
         && feature_cache.status == "healthy"
         && strategy_registry.status == "healthy"
+        && research_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
         && allocator.status == "healthy"
         && risk_engine.status == "healthy"
@@ -333,6 +383,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         feed_gateway,
         feature_cache,
         strategy_registry,
+        research_registry,
         portfolio_ledger,
         allocator,
         risk_engine,
@@ -355,6 +406,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         feed_gateway: state.feed_gateway_snapshot(),
         feature_cache: state.feature_cache_snapshot(),
         strategy_registry: state.strategy_registry_snapshot(),
+        research_registry: state.research_registry_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
         allocator: state.runtime_allocator_snapshot(),
         risk_engine: state.risk_engine_snapshot(),
@@ -1089,6 +1141,146 @@ async fn allocator_handler(
     ))
 }
 
+async fn research_query_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeResearchQueryParams>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let filters = query.clone();
+    let result = state
+        .research_registry
+        .query(&ResearchRegistryQuery {
+            strategy_key: query.strategy_key.filter(|value| !value.trim().is_empty()),
+            venue_key: query.venue_key.filter(|value| !value.trim().is_empty()),
+            asset_key: query.asset_key.filter(|value| !value.trim().is_empty()),
+            source_id: query.source_id.filter(|value| !value.trim().is_empty()),
+        })
+        .map_err(map_research_registry_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "filters": filters,
+            "registry": {
+                "hypotheses": result.hypotheses,
+                "sources": result.sources,
+                "experiments": result.experiments,
+                "evidenceBundles": result.evidence_bundles,
+            },
+        }),
+    ))
+}
+
+async fn create_research_hypothesis_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeResearchHypothesisRecord =
+        parse_json_body(&body, "invalid-runtime-research-hypothesis")?;
+    let result = state
+        .research_registry
+        .upsert_hypothesis(&record)
+        .map_err(map_research_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "hypothesis": result.record,
+        }),
+    ))
+}
+
+async fn create_research_source_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeResearchSourceRecord =
+        parse_json_body(&body, "invalid-runtime-research-source")?;
+    let result = state
+        .research_registry
+        .upsert_source(&record)
+        .map_err(map_research_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "sourceRecord": result.record,
+        }),
+    ))
+}
+
+async fn create_research_experiment_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeResearchExperimentRecord =
+        parse_json_body(&body, "invalid-runtime-research-experiment")?;
+    let result = state
+        .research_registry
+        .upsert_experiment(&record)
+        .map_err(map_research_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "experiment": result.record,
+        }),
+    ))
+}
+
+async fn create_research_evidence_bundle_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeResearchEvidenceBundleRecord =
+        parse_json_body(&body, "invalid-runtime-research-evidence-bundle")?;
+    let result = state
+        .research_registry
+        .upsert_evidence_bundle(&record)
+        .map_err(map_research_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "evidenceBundle": result.record,
+        }),
+    ))
+}
+
 struct ShadowEvaluationResponse {
     created: bool,
     deployment: RuntimeDeploymentRecord,
@@ -1507,6 +1699,54 @@ fn map_allocator_error(error: RuntimeAllocatorError) -> JsonPayload {
         RuntimeAllocatorError::Serialization(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-allocator-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn map_research_registry_error(error: ResearchRegistryError) -> JsonPayload {
+    match error {
+        ResearchRegistryError::SourceNotFound { source_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "research-source-not-found",
+            json!({ "sourceId": source_id }),
+        ),
+        ResearchRegistryError::HypothesisNotFound { hypothesis_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "research-hypothesis-not-found",
+            json!({ "hypothesisId": hypothesis_id }),
+        ),
+        ResearchRegistryError::ExperimentNotFound { experiment_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "research-experiment-not-found",
+            json!({ "experimentId": experiment_id }),
+        ),
+        ResearchRegistryError::IdentityConflict {
+            record_type,
+            record_id,
+            existing_record_id,
+        } => error_json(
+            StatusCode::CONFLICT,
+            "research-identity-conflict",
+            json!({
+                "recordType": record_type,
+                "recordId": record_id,
+                "existingRecordId": existing_record_id,
+            }),
+        ),
+        ResearchRegistryError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-research-registry-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        ResearchRegistryError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-research-registry-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        ResearchRegistryError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-research-registry-error",
             json!({ "reason": error.to_string() }),
         ),
     }
@@ -2020,6 +2260,8 @@ mod tests {
         assert_eq!(payload.feed_gateway.status, "healthy");
         assert_eq!(payload.strategy_registry.status, "healthy");
         assert_eq!(payload.strategy_registry.deployment_count, 0);
+        assert_eq!(payload.research_registry.status, "healthy");
+        assert_eq!(payload.research_registry.hypothesis_count, 0);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.portfolio_ledger.deployment_count, 0);
         assert_eq!(payload.allocator.status, "healthy");
@@ -2058,6 +2300,7 @@ mod tests {
         assert_eq!(payload.feature_cache.feature_streams.len(), 1);
         assert_eq!(payload.feature_cache.total_market_samples, 1);
         assert_eq!(payload.strategy_registry.status, "healthy");
+        assert_eq!(payload.research_registry.status, "healthy");
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.allocator.status, "healthy");
         assert_eq!(payload.risk_engine.status, "healthy");
@@ -2358,6 +2601,207 @@ mod tests {
             json!("deployment_123")
         );
         assert_eq!(allocator_payload["sleeve"]["availableUsd"], json!("875.00"));
+    }
+
+    #[tokio::test]
+    async fn stores_and_queries_research_registry_records() {
+        let router = app(test_config());
+
+        let source_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/sources")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "sourceId": "source_paper_microstructure",
+                            "sourceKind": "paper",
+                            "title": "Microstructure signals for crypto execution",
+                            "url": "https://example.com/papers/microstructure",
+                            "authors": ["Ada Researcher"],
+                            "retrievedAt": "2026-03-10T14:00:00.000Z",
+                            "contentDigest": "sha256:paper",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "tags": ["signal"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(source_response.status(), StatusCode::CREATED);
+
+        let hypothesis_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/hypotheses")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "hypothesisId": "hypothesis_signal_trend",
+                            "strategyKey": "trend_following",
+                            "title": "Trend continuation after liquidity shocks",
+                            "thesis": "High-quality liquidity shocks should resolve into short continuation bursts.",
+                            "status": "candidate",
+                            "createdAt": "2026-03-10T14:05:00.000Z",
+                            "updatedAt": "2026-03-10T14:05:00.000Z",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "sourceCitations": [
+                                {
+                                    "sourceId": "source_paper_microstructure"
+                                }
+                            ],
+                            "tags": ["candidate"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(hypothesis_response.status(), StatusCode::CREATED);
+
+        let experiment_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/experiments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "experimentId": "experiment_signal_trend_shadow",
+                            "hypothesisId": "hypothesis_signal_trend",
+                            "strategyKey": "trend_following",
+                            "status": "completed",
+                            "createdAt": "2026-03-10T14:10:00.000Z",
+                            "updatedAt": "2026-03-10T14:20:00.000Z",
+                            "completedAt": "2026-03-10T14:20:00.000Z",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "sourceCitations": [
+                                {
+                                    "sourceId": "source_paper_microstructure"
+                                }
+                            ],
+                            "codeRevision": {
+                                "vcs": "git",
+                                "repository": "github.com/GuiBibeau/serious-trader-ralph",
+                                "revision": "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+                                "treeDirty": false
+                            },
+                            "datasetSnapshots": [
+                                {
+                                    "datasetId": "dataset_features_sol_usdc",
+                                    "snapshotId": "snapshot_2026_03_10",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z"
+                                }
+                            ],
+                            "artifacts": [],
+                            "summary": "Shadow replay passed the initial trigger-quality gate.",
+                            "tags": ["shadow"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(experiment_response.status(), StatusCode::CREATED);
+
+        let evidence_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/evidence-bundles")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "evidenceBundleId": "evidence_signal_trend_shadow",
+                            "experimentId": "experiment_signal_trend_shadow",
+                            "strategyKey": "trend_following",
+                            "status": "ready_for_review",
+                            "promotionTarget": "paper",
+                            "createdAt": "2026-03-10T14:21:00.000Z",
+                            "updatedAt": "2026-03-10T14:21:00.000Z",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "sourceCitations": [
+                                {
+                                    "sourceId": "source_paper_microstructure"
+                                }
+                            ],
+                            "codeRevision": {
+                                "vcs": "git",
+                                "repository": "github.com/GuiBibeau/serious-trader-ralph",
+                                "revision": "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+                                "treeDirty": false
+                            },
+                            "datasetSnapshots": [
+                                {
+                                    "datasetId": "dataset_features_sol_usdc",
+                                    "snapshotId": "snapshot_2026_03_10",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z"
+                                }
+                            ],
+                            "artifacts": [
+                                {
+                                    "artifactId": "proof-markdown",
+                                    "kind": "proof-bundle",
+                                    "uri": "r2://artifacts/proof-markdown.md"
+                                }
+                            ],
+                            "summary": "Evidence bundle for shadow-to-paper review.",
+                            "tags": ["promotion"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(evidence_response.status(), StatusCode::CREATED);
+
+        let query_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/research?strategyKey=trend_following&venueKey=jupiter&assetKey=SOL&sourceId=source_paper_microstructure")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(query_response.status(), StatusCode::OK);
+        let query_payload = read_json(query_response).await;
+        assert_eq!(
+            query_payload["registry"]["hypotheses"][0]["hypothesisId"],
+            json!("hypothesis_signal_trend")
+        );
+        assert_eq!(
+            query_payload["registry"]["experiments"][0]["experimentId"],
+            json!("experiment_signal_trend_shadow")
+        );
+        assert_eq!(
+            query_payload["registry"]["evidenceBundles"][0]["evidenceBundleId"],
+            json!("evidence_signal_trend_shadow")
+        );
     }
 
     #[tokio::test]

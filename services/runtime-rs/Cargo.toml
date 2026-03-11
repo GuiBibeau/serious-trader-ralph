@@ -12,6 +12,7 @@ feature-cache = { path = "../../crates/feature-cache" }
 market-adapters = { path = "../../crates/market-adapters" }
 portfolio-ledger = { path = "../../crates/portfolio-ledger" }
 protocol = { path = "../../crates/protocol" }
+research-registry = { path = "../../crates/research-registry" }
 reconciler = { path = "../../crates/reconciler" }
 risk-engine = { path = "../../crates/risk-engine" }
 runtime-allocator = { path = "../../crates/runtime-allocator" }

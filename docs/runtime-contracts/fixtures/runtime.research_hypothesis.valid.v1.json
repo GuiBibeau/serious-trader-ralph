@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "v1",
+  "hypothesisId": "hypothesis_signal_trend",
+  "strategyKey": "trend_following",
+  "title": "Trend continuation after liquidity shocks",
+  "thesis": "High-quality liquidity shocks should resolve into short continuation bursts.",
+  "status": "candidate",
+  "createdAt": "2026-03-10T14:05:00Z",
+  "updatedAt": "2026-03-10T14:05:00Z",
+  "venueKeys": ["jupiter"],
+  "assetKeys": ["SOL", "USDC"],
+  "sourceCitations": [
+    {
+      "sourceId": "source_paper_microstructure",
+      "locator": "sec-2",
+      "materialDigest": "sha256:citation",
+      "notes": "primary evidence"
+    }
+  ],
+  "tags": ["candidate"]
+}

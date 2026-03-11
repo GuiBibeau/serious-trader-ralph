@@ -535,6 +535,164 @@ pub struct RuntimePromotionReadinessReport {
     pub proof_artifact_markdown: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResearchHypothesisStatus {
+    Candidate,
+    Testing,
+    Promoted,
+    Rejected,
+    Archived,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResearchSourceKind {
+    Paper,
+    Article,
+    Repository,
+    Dataset,
+    Notebook,
+    InternalNote,
+    MarketReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResearchExperimentStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Archived,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResearchEvidenceStatus {
+    Draft,
+    ReadyForReview,
+    Approved,
+    Rejected,
+    Superseded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResearchCitation {
+    pub source_id: String,
+    pub locator: Option<String>,
+    pub material_digest: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCodeRevisionRef {
+    pub vcs: String,
+    pub repository: String,
+    pub revision: String,
+    pub compared_to: Option<String>,
+    pub tree_dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDatasetSnapshotRef {
+    pub dataset_id: String,
+    pub snapshot_id: String,
+    pub captured_at: String,
+    pub uri: Option<String>,
+    pub content_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeArtifactRef {
+    pub artifact_id: String,
+    pub kind: String,
+    pub uri: String,
+    pub content_digest: Option<String>,
+    pub created_at: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResearchHypothesisRecord {
+    pub schema_version: String,
+    pub hypothesis_id: String,
+    pub strategy_key: String,
+    pub title: String,
+    pub thesis: String,
+    pub status: RuntimeResearchHypothesisStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub source_citations: Vec<RuntimeResearchCitation>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResearchSourceRecord {
+    pub schema_version: String,
+    pub source_id: String,
+    pub source_kind: RuntimeResearchSourceKind,
+    pub title: String,
+    pub url: String,
+    pub authors: Vec<String>,
+    pub published_at: Option<String>,
+    pub retrieved_at: String,
+    pub content_digest: String,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResearchExperimentRecord {
+    pub schema_version: String,
+    pub experiment_id: String,
+    pub hypothesis_id: String,
+    pub strategy_key: String,
+    pub status: RuntimeResearchExperimentStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub source_citations: Vec<RuntimeResearchCitation>,
+    pub code_revision: RuntimeCodeRevisionRef,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub artifacts: Vec<RuntimeArtifactRef>,
+    pub summary: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResearchEvidenceBundleRecord {
+    pub schema_version: String,
+    pub evidence_bundle_id: String,
+    pub experiment_id: String,
+    pub strategy_key: String,
+    pub status: RuntimeResearchEvidenceStatus,
+    pub promotion_target: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub source_citations: Vec<RuntimeResearchCitation>,
+    pub code_revision: RuntimeCodeRevisionRef,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub artifacts: Vec<RuntimeArtifactRef>,
+    pub summary: String,
+    pub tags: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
@@ -571,6 +729,19 @@ mod tests {
         let reconciliation: RuntimeReconciliationResult =
             serde_json::from_str(&read_fixture("runtime.reconciliation_result.valid.v1.json"))
                 .expect("reconciliation fixture to deserialize");
+        let hypothesis: RuntimeResearchHypothesisRecord =
+            serde_json::from_str(&read_fixture("runtime.research_hypothesis.valid.v1.json"))
+                .expect("research hypothesis fixture to deserialize");
+        let source: RuntimeResearchSourceRecord =
+            serde_json::from_str(&read_fixture("runtime.research_source.valid.v1.json"))
+                .expect("research source fixture to deserialize");
+        let experiment: RuntimeResearchExperimentRecord =
+            serde_json::from_str(&read_fixture("runtime.research_experiment.valid.v1.json"))
+                .expect("research experiment fixture to deserialize");
+        let evidence: RuntimeResearchEvidenceBundleRecord = serde_json::from_str(&read_fixture(
+            "runtime.research_evidence_bundle.valid.v1.json",
+        ))
+        .expect("research evidence bundle fixture to deserialize");
 
         assert_eq!(deployment.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(run.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
@@ -581,7 +752,13 @@ mod tests {
             reconciliation.schema_version,
             RUNTIME_PROTOCOL_SCHEMA_VERSION
         );
+        assert_eq!(hypothesis.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
+        assert_eq!(source.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
+        assert_eq!(experiment.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
+        assert_eq!(evidence.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(plan.slices.len(), 1);
+        assert_eq!(experiment.dataset_snapshots.len(), 1);
+        assert_eq!(evidence.artifacts.len(), 2);
     }
 
     #[test]

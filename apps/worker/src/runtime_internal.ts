@@ -7,11 +7,19 @@ import {
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionPlan,
   parseRuntimeLedgerSnapshot,
+  parseRuntimeResearchEvidenceBundleRecord,
+  parseRuntimeResearchExperimentRecord,
+  parseRuntimeResearchHypothesisRecord,
+  parseRuntimeResearchSourceRecord,
   parseRuntimeRunRecord,
   RUNTIME_PROTOCOL_SCHEMA_VERSION,
   type RuntimeDeploymentRecord,
   type RuntimeExecutionPlan,
   type RuntimeLedgerSnapshot,
+  type RuntimeResearchEvidenceBundleRecord,
+  type RuntimeResearchExperimentRecord,
+  type RuntimeResearchHypothesisRecord,
+  type RuntimeResearchSourceRecord,
   type RuntimeRunRecord,
 } from "./runtime_contracts";
 import type { Env } from "./types";
@@ -25,6 +33,11 @@ const INTERNAL_RUNTIME_RUNS_PREFIX = `${INTERNAL_RUNTIME_PREFIX}/runs/`;
 const INTERNAL_RUNTIME_EXECUTION_PLANS_PATH = `${INTERNAL_RUNTIME_PREFIX}/execution-plans`;
 const INTERNAL_RUNTIME_SCORECARDS_PATH = `${INTERNAL_RUNTIME_PREFIX}/scorecards`;
 const INTERNAL_RUNTIME_ALLOCATOR_PATH = `${INTERNAL_RUNTIME_PREFIX}/allocator`;
+const INTERNAL_RUNTIME_RESEARCH_PATH = `${INTERNAL_RUNTIME_PREFIX}/research`;
+const INTERNAL_RUNTIME_RESEARCH_HYPOTHESES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/hypotheses`;
+const INTERNAL_RUNTIME_RESEARCH_SOURCES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/sources`;
+const INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/experiments`;
+const INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/evidence-bundles`;
 const FIXTURE_TIMESTAMP = "2026-03-07T00:00:00.000Z";
 const FIXTURE_BASE_MINT = "So11111111111111111111111111111111111111112";
 const FIXTURE_QUOTE_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -447,6 +460,15 @@ function createRuntimeHealthFixture() {
       runCount: 0,
       lastError: null,
     },
+    researchRegistry: {
+      status: "healthy",
+      hypothesisCount: 1,
+      sourceCount: 1,
+      experimentCount: 1,
+      evidenceBundleCount: 1,
+      latestExperimentCompletedAt: FIXTURE_TIMESTAMP,
+      lastError: null,
+    },
     allocator: {
       status: "healthy",
       decisionCount: 1,
@@ -454,6 +476,162 @@ function createRuntimeHealthFixture() {
       latestDecisionAt: FIXTURE_TIMESTAMP,
       lastError: null,
     },
+  };
+}
+
+function createRuntimeResearchHypothesisFixture(): RuntimeResearchHypothesisRecord {
+  return parseRuntimeResearchHypothesisRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    hypothesisId: "hypothesis_signal_trend",
+    strategyKey: "trend_following",
+    title: "Trend continuation after liquidity shocks",
+    thesis:
+      "High-quality liquidity shocks should resolve into short continuation bursts.",
+    status: "candidate",
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+    venueKeys: ["jupiter"],
+    assetKeys: ["SOL", "USDC"],
+    sourceCitations: [
+      {
+        sourceId: "source_paper_microstructure",
+        locator: "sec-2",
+        materialDigest: "sha256:citation",
+        notes: "primary evidence",
+      },
+    ],
+    tags: ["candidate"],
+  });
+}
+
+function createRuntimeResearchSourceFixture(): RuntimeResearchSourceRecord {
+  return parseRuntimeResearchSourceRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    sourceId: "source_paper_microstructure",
+    sourceKind: "paper",
+    title: "Microstructure signals for crypto execution",
+    url: "https://example.com/papers/microstructure",
+    authors: ["Ada Researcher"],
+    publishedAt: "2026-02-01T00:00:00.000Z",
+    retrievedAt: FIXTURE_TIMESTAMP,
+    contentDigest: "sha256:paper",
+    venueKeys: ["jupiter"],
+    assetKeys: ["SOL", "USDC"],
+    tags: ["signal"],
+  });
+}
+
+function createRuntimeResearchExperimentFixture(): RuntimeResearchExperimentRecord {
+  return parseRuntimeResearchExperimentRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    experimentId: "experiment_signal_trend_shadow",
+    hypothesisId: "hypothesis_signal_trend",
+    strategyKey: "trend_following",
+    status: "completed",
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+    completedAt: FIXTURE_TIMESTAMP,
+    venueKeys: ["jupiter"],
+    assetKeys: ["SOL", "USDC"],
+    sourceCitations: [
+      {
+        sourceId: "source_paper_microstructure",
+        locator: "sec-2",
+        materialDigest: "sha256:citation",
+      },
+    ],
+    codeRevision: {
+      vcs: "git",
+      repository: "github.com/GuiBibeau/serious-trader-ralph",
+      revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+      comparedTo: "main~1",
+      treeDirty: false,
+    },
+    datasetSnapshots: [
+      {
+        datasetId: "dataset_features_sol_usdc",
+        snapshotId: "snapshot_2026_03_10",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "r2://datasets/features/2026-03-10.parquet",
+        contentDigest: "sha256:dataset",
+      },
+    ],
+    artifacts: [
+      {
+        artifactId: "replay-1",
+        kind: "replay-report",
+        uri: "r2://artifacts/replay-1.json",
+        contentDigest: "sha256:replay-1",
+        createdAt: FIXTURE_TIMESTAMP,
+      },
+    ],
+    summary: "Shadow replay passed the initial trigger-quality gate.",
+    tags: ["shadow"],
+  });
+}
+
+function createRuntimeResearchEvidenceBundleFixture(): RuntimeResearchEvidenceBundleRecord {
+  return parseRuntimeResearchEvidenceBundleRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    evidenceBundleId: "evidence_signal_trend_shadow",
+    experimentId: "experiment_signal_trend_shadow",
+    strategyKey: "trend_following",
+    status: "ready_for_review",
+    promotionTarget: "paper",
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+    venueKeys: ["jupiter"],
+    assetKeys: ["SOL", "USDC"],
+    sourceCitations: [
+      {
+        sourceId: "source_paper_microstructure",
+        locator: "sec-2",
+        materialDigest: "sha256:citation",
+      },
+    ],
+    codeRevision: {
+      vcs: "git",
+      repository: "github.com/GuiBibeau/serious-trader-ralph",
+      revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+      comparedTo: "main~1",
+      treeDirty: false,
+    },
+    datasetSnapshots: [
+      {
+        datasetId: "dataset_features_sol_usdc",
+        snapshotId: "snapshot_2026_03_10",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "r2://datasets/features/2026-03-10.parquet",
+        contentDigest: "sha256:dataset",
+      },
+    ],
+    artifacts: [
+      {
+        artifactId: "proof-markdown",
+        kind: "proof-bundle",
+        uri: "r2://artifacts/proof-markdown.md",
+        contentDigest: "sha256:proof-markdown",
+        createdAt: FIXTURE_TIMESTAMP,
+      },
+      {
+        artifactId: "shadow-scorecard",
+        kind: "scorecard",
+        uri: "r2://artifacts/shadow-scorecard.json",
+        contentDigest: "sha256:shadow-scorecard",
+        createdAt: FIXTURE_TIMESTAMP,
+      },
+    ],
+    summary: "Evidence bundle for shadow-to-paper review.",
+    tags: ["promotion"],
+  });
+}
+
+function createRuntimeResearchRegistryFixture() {
+  return {
+    hypotheses: [createRuntimeResearchHypothesisFixture()],
+    sources: [createRuntimeResearchSourceFixture()],
+    experiments: [createRuntimeResearchExperimentFixture()],
+    evidenceBundles: [createRuntimeResearchEvidenceBundleFixture()],
   };
 }
 
@@ -494,6 +672,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       pnl: `${INTERNAL_RUNTIME_PREFIX}/pnl`,
       scorecards: INTERNAL_RUNTIME_SCORECARDS_PATH,
       allocator: INTERNAL_RUNTIME_ALLOCATOR_PATH,
+      research: INTERNAL_RUNTIME_RESEARCH_PATH,
       executionPlans: INTERNAL_RUNTIME_EXECUTION_PLANS_PATH,
       health: `${INTERNAL_RUNTIME_PREFIX}/health`,
     },
@@ -809,6 +988,75 @@ export async function readRuntimeAllocatorSummary(
   });
 }
 
+export async function readRuntimeResearchRegistry(input: {
+  env: Env;
+  strategyKey?: string;
+  venueKey?: string;
+  assetKey?: string;
+  sourceId?: string;
+}): Promise<RuntimeInternalJsonResult> {
+  const search = new URLSearchParams();
+  if (input.strategyKey) search.set("strategyKey", input.strategyKey);
+  if (input.venueKey) search.set("venueKey", input.venueKey);
+  if (input.assetKey) search.set("assetKey", input.assetKey);
+  if (input.sourceId) search.set("sourceId", input.sourceId);
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "GET",
+    pathname: search.size
+      ? `${INTERNAL_RUNTIME_RESEARCH_PATH}?${search.toString()}`
+      : INTERNAL_RUNTIME_RESEARCH_PATH,
+  });
+}
+
+export async function writeRuntimeResearchHypothesis(input: {
+  env: Env;
+  hypothesis: RuntimeResearchHypothesisRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_RESEARCH_HYPOTHESES_PATH,
+    body: input.hypothesis,
+  });
+}
+
+export async function writeRuntimeResearchSource(input: {
+  env: Env;
+  sourceRecord: RuntimeResearchSourceRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_RESEARCH_SOURCES_PATH,
+    body: input.sourceRecord,
+  });
+}
+
+export async function writeRuntimeResearchExperiment(input: {
+  env: Env;
+  experiment: RuntimeResearchExperimentRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH,
+    body: input.experiment,
+  });
+}
+
+export async function writeRuntimeResearchEvidenceBundle(input: {
+  env: Env;
+  evidenceBundle: RuntimeResearchEvidenceBundleRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH,
+    body: input.evidenceBundle,
+  });
+}
+
 export async function readRuntimePositionSnapshot(
   env: Env,
   deploymentId: string,
@@ -861,6 +1109,11 @@ export async function handleRuntimeInternalRoute(
     url.pathname === `${INTERNAL_RUNTIME_PREFIX}/pnl` ||
     url.pathname === INTERNAL_RUNTIME_SCORECARDS_PATH ||
     url.pathname === INTERNAL_RUNTIME_ALLOCATOR_PATH ||
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_PATH ||
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_HYPOTHESES_PATH ||
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_SOURCES_PATH ||
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH ||
     url.pathname === INTERNAL_RUNTIME_EXECUTION_PLANS_PATH ||
     url.pathname.startsWith(INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX) ||
     url.pathname.startsWith(INTERNAL_RUNTIME_RUNS_PREFIX);
@@ -937,6 +1190,23 @@ export async function handleRuntimeInternalRoute(
       }
     }
     return runtimeInternalUnavailable(env);
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_PATH
+  ) {
+    return json({
+      ok: true,
+      source: "stub",
+      filters: {
+        strategyKey: url.searchParams.get("strategyKey"),
+        venueKey: url.searchParams.get("venueKey"),
+        assetKey: url.searchParams.get("assetKey"),
+        sourceId: url.searchParams.get("sourceId"),
+      },
+      registry: createRuntimeResearchRegistryFixture(),
+    });
   }
 
   if (
@@ -1091,6 +1361,130 @@ export async function handleRuntimeInternalRoute(
     const deploymentId =
       url.searchParams.get("deploymentId") ?? "deployment_fixture";
     return json(createRuntimeAllocatorFixture(deploymentId));
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_HYPOTHESES_PATH
+  ) {
+    let hypothesis: RuntimeResearchHypothesisRecord;
+    try {
+      const payload = await readJsonBody(request);
+      hypothesis = parseRuntimeResearchHypothesisRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-research-hypothesis",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        hypothesis,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_SOURCES_PATH
+  ) {
+    let sourceRecord: RuntimeResearchSourceRecord;
+    try {
+      const payload = await readJsonBody(request);
+      sourceRecord = parseRuntimeResearchSourceRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-research-source",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        sourceRecord,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH
+  ) {
+    let experiment: RuntimeResearchExperimentRecord;
+    try {
+      const payload = await readJsonBody(request);
+      experiment = parseRuntimeResearchExperimentRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-research-experiment",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        experiment,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH
+  ) {
+    let evidenceBundle: RuntimeResearchEvidenceBundleRecord;
+    try {
+      const payload = await readJsonBody(request);
+      evidenceBundle = parseRuntimeResearchEvidenceBundleRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-research-evidence-bundle",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        evidenceBundle,
+      },
+      { status: 201 },
+    );
   }
 
   if (

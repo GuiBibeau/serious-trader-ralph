@@ -1,7 +1,7 @@
 # Runtime Contract Surface
 
 This directory holds the canonical internal contract artifacts for the
-autonomous runtime program.
+autonomous runtime and strategy-lab research program.
 
 ## Source of truth
 

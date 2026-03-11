@@ -200,6 +200,102 @@ const VALID_RUNTIME_EXECUTION_PLAN = {
   ],
 };
 
+const VALID_RUNTIME_RESEARCH_SOURCE = {
+  schemaVersion: "v1",
+  sourceId: "source_paper_microstructure",
+  sourceKind: "paper",
+  title: "Microstructure signals for crypto execution",
+  url: "https://example.com/papers/microstructure",
+  authors: ["Ada Researcher"],
+  retrievedAt: "2026-03-10T14:00:00.000Z",
+  contentDigest: "sha256:paper",
+  venueKeys: ["jupiter"],
+  assetKeys: ["SOL", "USDC"],
+  tags: ["signal"],
+};
+
+const VALID_RUNTIME_RESEARCH_HYPOTHESIS = {
+  schemaVersion: "v1",
+  hypothesisId: "hypothesis_signal_trend",
+  strategyKey: "trend_following",
+  title: "Trend continuation after liquidity shocks",
+  thesis:
+    "High-quality liquidity shocks should resolve into short continuation bursts.",
+  status: "candidate",
+  createdAt: "2026-03-10T14:05:00.000Z",
+  updatedAt: "2026-03-10T14:05:00.000Z",
+  venueKeys: ["jupiter"],
+  assetKeys: ["SOL", "USDC"],
+  sourceCitations: [{ sourceId: "source_paper_microstructure" }],
+  tags: ["candidate"],
+};
+
+const VALID_RUNTIME_RESEARCH_EXPERIMENT = {
+  schemaVersion: "v1",
+  experimentId: "experiment_signal_trend_shadow",
+  hypothesisId: "hypothesis_signal_trend",
+  strategyKey: "trend_following",
+  status: "completed",
+  createdAt: "2026-03-10T14:10:00.000Z",
+  updatedAt: "2026-03-10T14:20:00.000Z",
+  completedAt: "2026-03-10T14:20:00.000Z",
+  venueKeys: ["jupiter"],
+  assetKeys: ["SOL", "USDC"],
+  sourceCitations: [{ sourceId: "source_paper_microstructure" }],
+  codeRevision: {
+    vcs: "git",
+    repository: "github.com/GuiBibeau/serious-trader-ralph",
+    revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+    treeDirty: false,
+  },
+  datasetSnapshots: [
+    {
+      datasetId: "dataset_features_sol_usdc",
+      snapshotId: "snapshot_2026_03_10",
+      capturedAt: "2026-03-10T14:00:00.000Z",
+    },
+  ],
+  artifacts: [],
+  summary: "Shadow replay passed the initial trigger-quality gate.",
+  tags: ["shadow"],
+};
+
+const VALID_RUNTIME_RESEARCH_EVIDENCE_BUNDLE = {
+  schemaVersion: "v1",
+  evidenceBundleId: "evidence_signal_trend_shadow",
+  experimentId: "experiment_signal_trend_shadow",
+  strategyKey: "trend_following",
+  status: "ready_for_review",
+  promotionTarget: "paper",
+  createdAt: "2026-03-10T14:21:00.000Z",
+  updatedAt: "2026-03-10T14:21:00.000Z",
+  venueKeys: ["jupiter"],
+  assetKeys: ["SOL", "USDC"],
+  sourceCitations: [{ sourceId: "source_paper_microstructure" }],
+  codeRevision: {
+    vcs: "git",
+    repository: "github.com/GuiBibeau/serious-trader-ralph",
+    revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+    treeDirty: false,
+  },
+  datasetSnapshots: [
+    {
+      datasetId: "dataset_features_sol_usdc",
+      snapshotId: "snapshot_2026_03_10",
+      capturedAt: "2026-03-10T14:00:00.000Z",
+    },
+  ],
+  artifacts: [
+    {
+      artifactId: "proof-markdown",
+      kind: "proof-bundle",
+      uri: "r2://artifacts/proof-markdown.md",
+    },
+  ],
+  summary: "Evidence bundle for shadow-to-paper review.",
+  tags: ["promotion"],
+};
+
 describe("worker runtime internal routes", () => {
   test("requires runtime service auth", async () => {
     const env = createWorkerLiveEnv();
@@ -707,6 +803,128 @@ describe("worker runtime internal routes", () => {
       sleeve: {
         sleeveId: "sleeve_alpha",
         availableUsd: "875.00",
+      },
+    });
+  });
+
+  test("returns stubbed runtime research registry", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/research?strategyKey=trend_following&venueKey=jupiter&assetKey=SOL&sourceId=source_paper_microstructure",
+        {
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+          },
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "stub",
+      filters: {
+        strategyKey: "trend_following",
+        venueKey: "jupiter",
+        assetKey: "SOL",
+        sourceId: "source_paper_microstructure",
+      },
+      registry: {
+        hypotheses: [
+          {
+            hypothesisId: "hypothesis_signal_trend",
+          },
+        ],
+        experiments: [
+          {
+            experimentId: "experiment_signal_trend_shadow",
+          },
+        ],
+        evidenceBundles: [
+          {
+            evidenceBundleId: "evidence_signal_trend_shadow",
+          },
+        ],
+      },
+    });
+  });
+
+  test("accepts stubbed runtime research writes", async () => {
+    const env = createWorkerLiveEnv();
+
+    const sourceResponse = await worker.fetch(
+      new Request("http://localhost/api/internal/runtime/research/sources", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer runtime-service-secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(VALID_RUNTIME_RESEARCH_SOURCE),
+      }),
+      env,
+      createExecutionContextStub(),
+    );
+    expect(sourceResponse.status).toBe(201);
+
+    const hypothesisResponse = await worker.fetch(
+      new Request("http://localhost/api/internal/runtime/research/hypotheses", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer runtime-service-secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(VALID_RUNTIME_RESEARCH_HYPOTHESIS),
+      }),
+      env,
+      createExecutionContextStub(),
+    );
+    expect(hypothesisResponse.status).toBe(201);
+
+    const experimentResponse = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/research/experiments",
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(VALID_RUNTIME_RESEARCH_EXPERIMENT),
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+    expect(experimentResponse.status).toBe(201);
+
+    const evidenceResponse = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/research/evidence-bundles",
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(VALID_RUNTIME_RESEARCH_EVIDENCE_BUNDLE),
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(evidenceResponse.status).toBe(201);
+    expect(await evidenceResponse.json()).toMatchObject({
+      ok: true,
+      source: "stub",
+      created: true,
+      evidenceBundle: {
+        evidenceBundleId: "evidence_signal_trend_shadow",
       },
     });
   });

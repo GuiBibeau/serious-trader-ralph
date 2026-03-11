@@ -7,6 +7,10 @@ import {
   parseRuntimeExecutionPlan,
   parseRuntimeLedgerSnapshot,
   parseRuntimeReconciliationResult,
+  parseRuntimeResearchEvidenceBundleRecord,
+  parseRuntimeResearchExperimentRecord,
+  parseRuntimeResearchHypothesisRecord,
+  parseRuntimeResearchSourceRecord,
   parseRuntimeRiskVerdict,
   parseRuntimeRunRecord,
   RUNTIME_DEPLOYMENT_STATE_TRANSITIONS,
@@ -90,7 +94,7 @@ describe("runtime protocol contracts", () => {
     expect(result.success).toBe(false);
   });
 
-  test("parses valid run, ledger, risk, plan, and reconciliation payloads", () => {
+  test("parses valid run, ledger, risk, plan, reconciliation, and research payloads", () => {
     const run = parseRuntimeRunRecord({
       schemaVersion: "v1",
       runId: "run_1",
@@ -205,6 +209,98 @@ describe("runtime protocol contracts", () => {
       notes: ["matched"],
       correctionApplied: false,
     });
+    const hypothesis = parseRuntimeResearchHypothesisRecord({
+      schemaVersion: "v1",
+      hypothesisId: "hypothesis_signal_trend",
+      strategyKey: "trend_following",
+      title: "Trend continuation after liquidity shocks",
+      thesis:
+        "High-quality liquidity shocks should resolve into short continuation bursts.",
+      status: "candidate",
+      createdAt: "2026-03-10T14:05:00Z",
+      updatedAt: "2026-03-10T14:05:00Z",
+      venueKeys: ["jupiter"],
+      assetKeys: ["SOL", "USDC"],
+      sourceCitations: [{ sourceId: "source_paper_microstructure" }],
+      tags: ["candidate"],
+    });
+    const sourceRecord = parseRuntimeResearchSourceRecord({
+      schemaVersion: "v1",
+      sourceId: "source_paper_microstructure",
+      sourceKind: "paper",
+      title: "Microstructure signals for crypto execution",
+      url: "https://example.com/papers/microstructure",
+      authors: ["Ada Researcher"],
+      retrievedAt: "2026-03-10T14:00:00Z",
+      contentDigest: "sha256:paper",
+      venueKeys: ["jupiter"],
+      assetKeys: ["SOL", "USDC"],
+      tags: ["signal"],
+    });
+    const experiment = parseRuntimeResearchExperimentRecord({
+      schemaVersion: "v1",
+      experimentId: "experiment_signal_trend_shadow",
+      hypothesisId: "hypothesis_signal_trend",
+      strategyKey: "trend_following",
+      status: "completed",
+      createdAt: "2026-03-10T14:10:00Z",
+      updatedAt: "2026-03-10T14:20:00Z",
+      completedAt: "2026-03-10T14:20:00Z",
+      venueKeys: ["jupiter"],
+      assetKeys: ["SOL", "USDC"],
+      sourceCitations: [{ sourceId: "source_paper_microstructure" }],
+      codeRevision: {
+        vcs: "git",
+        repository: "github.com/GuiBibeau/serious-trader-ralph",
+        revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+        treeDirty: false,
+      },
+      datasetSnapshots: [
+        {
+          datasetId: "dataset_features_sol_usdc",
+          snapshotId: "snapshot_2026_03_10",
+          capturedAt: "2026-03-10T14:00:00Z",
+        },
+      ],
+      artifacts: [],
+      summary: "Shadow replay passed the initial trigger-quality gate.",
+      tags: ["shadow"],
+    });
+    const evidenceBundle = parseRuntimeResearchEvidenceBundleRecord({
+      schemaVersion: "v1",
+      evidenceBundleId: "evidence_signal_trend_shadow",
+      experimentId: "experiment_signal_trend_shadow",
+      strategyKey: "trend_following",
+      status: "ready_for_review",
+      promotionTarget: "paper",
+      createdAt: "2026-03-10T14:21:00Z",
+      updatedAt: "2026-03-10T14:21:00Z",
+      venueKeys: ["jupiter"],
+      assetKeys: ["SOL", "USDC"],
+      sourceCitations: [{ sourceId: "source_paper_microstructure" }],
+      codeRevision: {
+        vcs: "git",
+        repository: "github.com/GuiBibeau/serious-trader-ralph",
+        revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+        treeDirty: false,
+      },
+      datasetSnapshots: [
+        {
+          datasetId: "dataset_features_sol_usdc",
+          snapshotId: "snapshot_2026_03_10",
+          capturedAt: "2026-03-10T14:00:00Z",
+        },
+      ],
+      artifacts: [
+        {
+          artifactId: "proof-markdown",
+          kind: "proof-bundle",
+          uri: "r2://artifacts/proof-markdown.md",
+        },
+      ],
+      summary: "Evidence bundle for shadow-to-paper review.",
+      tags: ["promotion"],
+    });
 
     expect(run.state).toBe("planned");
     expect(ledger.totals.availableUsd).toBe("95");
@@ -213,6 +309,10 @@ describe("runtime protocol contracts", () => {
     expect(plan.sleeveId).toBe("sleeve_1");
     expect(plan.slices).toHaveLength(1);
     expect(reconciliation.status).toBe("passed");
+    expect(hypothesis.status).toBe("candidate");
+    expect(sourceRecord.sourceKind).toBe("paper");
+    expect(experiment.datasetSnapshots).toHaveLength(1);
+    expect(evidenceBundle.promotionTarget).toBe("paper");
   });
 
   test("rejects an execution plan without slices", () => {

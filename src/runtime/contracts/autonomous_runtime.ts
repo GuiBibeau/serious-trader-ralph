@@ -239,6 +239,146 @@ export const RuntimeReconciliationResultSchema = VersionedSchema.extend({
   correctionApplied: z.boolean(),
 }).strict();
 
+export const RuntimeResearchHypothesisStatusSchema = z.enum([
+  "candidate",
+  "testing",
+  "promoted",
+  "rejected",
+  "archived",
+]);
+
+export const RuntimeResearchSourceKindSchema = z.enum([
+  "paper",
+  "article",
+  "repository",
+  "dataset",
+  "notebook",
+  "internal_note",
+  "market_report",
+]);
+
+export const RuntimeResearchExperimentStatusSchema = z.enum([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "archived",
+]);
+
+export const RuntimeResearchEvidenceStatusSchema = z.enum([
+  "draft",
+  "ready_for_review",
+  "approved",
+  "rejected",
+  "superseded",
+]);
+
+const RuntimeResearchCitationSchema = z
+  .object({
+    sourceId: NON_EMPTY_STRING_SCHEMA,
+    locator: NON_EMPTY_STRING_SCHEMA.optional(),
+    materialDigest: NON_EMPTY_STRING_SCHEMA.optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeCodeRevisionRefSchema = z
+  .object({
+    vcs: NON_EMPTY_STRING_SCHEMA,
+    repository: NON_EMPTY_STRING_SCHEMA,
+    revision: NON_EMPTY_STRING_SCHEMA,
+    comparedTo: NON_EMPTY_STRING_SCHEMA.optional(),
+    treeDirty: z.boolean(),
+  })
+  .strict();
+
+const RuntimeDatasetSnapshotRefSchema = z
+  .object({
+    datasetId: NON_EMPTY_STRING_SCHEMA,
+    snapshotId: NON_EMPTY_STRING_SCHEMA,
+    capturedAt: ISO_DATETIME_SCHEMA,
+    uri: NON_EMPTY_STRING_SCHEMA.optional(),
+    contentDigest: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeArtifactRefSchema = z
+  .object({
+    artifactId: NON_EMPTY_STRING_SCHEMA,
+    kind: NON_EMPTY_STRING_SCHEMA,
+    uri: NON_EMPTY_STRING_SCHEMA,
+    contentDigest: NON_EMPTY_STRING_SCHEMA.optional(),
+    createdAt: ISO_DATETIME_SCHEMA.optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+export const RuntimeResearchHypothesisRecordSchema = VersionedSchema.extend({
+  hypothesisId: NON_EMPTY_STRING_SCHEMA,
+  strategyKey: NON_EMPTY_STRING_SCHEMA,
+  title: NON_EMPTY_STRING_SCHEMA,
+  thesis: NON_EMPTY_STRING_SCHEMA,
+  status: RuntimeResearchHypothesisStatusSchema,
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  venueKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  assetKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  sourceCitations: z.array(RuntimeResearchCitationSchema),
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+}).strict();
+
+export const RuntimeResearchSourceRecordSchema = VersionedSchema.extend({
+  sourceId: NON_EMPTY_STRING_SCHEMA,
+  sourceKind: RuntimeResearchSourceKindSchema,
+  title: NON_EMPTY_STRING_SCHEMA,
+  url: NON_EMPTY_STRING_SCHEMA,
+  authors: z.array(NON_EMPTY_STRING_SCHEMA),
+  publishedAt: ISO_DATETIME_SCHEMA.optional(),
+  retrievedAt: ISO_DATETIME_SCHEMA,
+  contentDigest: NON_EMPTY_STRING_SCHEMA,
+  venueKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  assetKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+}).strict();
+
+export const RuntimeResearchExperimentRecordSchema = VersionedSchema.extend({
+  experimentId: NON_EMPTY_STRING_SCHEMA,
+  hypothesisId: NON_EMPTY_STRING_SCHEMA,
+  strategyKey: NON_EMPTY_STRING_SCHEMA,
+  status: RuntimeResearchExperimentStatusSchema,
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  completedAt: ISO_DATETIME_SCHEMA.optional(),
+  venueKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  assetKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  sourceCitations: z.array(RuntimeResearchCitationSchema),
+  codeRevision: RuntimeCodeRevisionRefSchema,
+  datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
+  artifacts: z.array(RuntimeArtifactRefSchema),
+  summary: NON_EMPTY_STRING_SCHEMA,
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+}).strict();
+
+export const RuntimeResearchEvidenceBundleRecordSchema = VersionedSchema.extend(
+  {
+    evidenceBundleId: NON_EMPTY_STRING_SCHEMA,
+    experimentId: NON_EMPTY_STRING_SCHEMA,
+    strategyKey: NON_EMPTY_STRING_SCHEMA,
+    status: RuntimeResearchEvidenceStatusSchema,
+    promotionTarget: NON_EMPTY_STRING_SCHEMA,
+    createdAt: ISO_DATETIME_SCHEMA,
+    updatedAt: ISO_DATETIME_SCHEMA,
+    venueKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+    assetKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+    sourceCitations: z.array(RuntimeResearchCitationSchema),
+    codeRevision: RuntimeCodeRevisionRefSchema,
+    datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
+    artifacts: z.array(RuntimeArtifactRefSchema).min(1),
+    summary: NON_EMPTY_STRING_SCHEMA,
+    tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+  },
+).strict();
+
 export type RuntimeMode = z.infer<typeof RuntimeModeSchema>;
 export type RuntimeLane = z.infer<typeof RuntimeLaneSchema>;
 export type RuntimeDeploymentState = z.infer<
@@ -254,6 +394,18 @@ export type RuntimeRiskVerdict = z.infer<typeof RuntimeRiskVerdictSchema>;
 export type RuntimeExecutionPlan = z.infer<typeof RuntimeExecutionPlanSchema>;
 export type RuntimeReconciliationResult = z.infer<
   typeof RuntimeReconciliationResultSchema
+>;
+export type RuntimeResearchHypothesisRecord = z.infer<
+  typeof RuntimeResearchHypothesisRecordSchema
+>;
+export type RuntimeResearchSourceRecord = z.infer<
+  typeof RuntimeResearchSourceRecordSchema
+>;
+export type RuntimeResearchExperimentRecord = z.infer<
+  typeof RuntimeResearchExperimentRecordSchema
+>;
+export type RuntimeResearchEvidenceBundleRecord = z.infer<
+  typeof RuntimeResearchEvidenceBundleRecordSchema
 >;
 
 export const RUNTIME_DEPLOYMENT_STATE_TRANSITIONS = {
@@ -315,6 +467,27 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
       "https://trader-ralph.com/schemas/runtime/v1/reconciliation_result",
     outputFile: "runtime.reconciliation_result.v1.schema.json",
   },
+  researchHypothesis: {
+    schema: RuntimeResearchHypothesisRecordSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/research_hypothesis",
+    outputFile: "runtime.research_hypothesis.v1.schema.json",
+  },
+  researchSource: {
+    schema: RuntimeResearchSourceRecordSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/research_source",
+    outputFile: "runtime.research_source.v1.schema.json",
+  },
+  researchExperiment: {
+    schema: RuntimeResearchExperimentRecordSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/research_experiment",
+    outputFile: "runtime.research_experiment.v1.schema.json",
+  },
+  researchEvidenceBundle: {
+    schema: RuntimeResearchEvidenceBundleRecordSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/research_evidence_bundle",
+    outputFile: "runtime.research_evidence_bundle.v1.schema.json",
+  },
 } as const;
 
 export function canTransitionRuntimeDeploymentState(
@@ -369,6 +542,30 @@ export function parseRuntimeReconciliationResult(
   return RuntimeReconciliationResultSchema.parse(input);
 }
 
+export function parseRuntimeResearchHypothesisRecord(
+  input: unknown,
+): RuntimeResearchHypothesisRecord {
+  return RuntimeResearchHypothesisRecordSchema.parse(input);
+}
+
+export function parseRuntimeResearchSourceRecord(
+  input: unknown,
+): RuntimeResearchSourceRecord {
+  return RuntimeResearchSourceRecordSchema.parse(input);
+}
+
+export function parseRuntimeResearchExperimentRecord(
+  input: unknown,
+): RuntimeResearchExperimentRecord {
+  return RuntimeResearchExperimentRecordSchema.parse(input);
+}
+
+export function parseRuntimeResearchEvidenceBundleRecord(
+  input: unknown,
+): RuntimeResearchEvidenceBundleRecord {
+  return RuntimeResearchEvidenceBundleRecordSchema.parse(input);
+}
+
 export function safeParseRuntimeDeploymentRecord(input: unknown) {
   return RuntimeDeploymentRecordSchema.safeParse(input);
 }
@@ -391,4 +588,20 @@ export function safeParseRuntimeExecutionPlan(input: unknown) {
 
 export function safeParseRuntimeReconciliationResult(input: unknown) {
   return RuntimeReconciliationResultSchema.safeParse(input);
+}
+
+export function safeParseRuntimeResearchHypothesisRecord(input: unknown) {
+  return RuntimeResearchHypothesisRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeResearchSourceRecord(input: unknown) {
+  return RuntimeResearchSourceRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeResearchExperimentRecord(input: unknown) {
+  return RuntimeResearchExperimentRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeResearchEvidenceBundleRecord(input: unknown) {
+  return RuntimeResearchEvidenceBundleRecordSchema.safeParse(input);
 }

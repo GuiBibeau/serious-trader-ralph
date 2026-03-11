@@ -6,6 +6,7 @@ members = [
   "crates/market-adapters",
   "crates/portfolio-ledger",
   "crates/protocol",
+  "crates/research-registry",
   "crates/reconciler",
   "crates/runtime-allocator",
   "crates/risk-engine",

@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "v1",
+  "evidenceBundleId": "evidence_signal_trend_shadow",
+  "experimentId": "experiment_signal_trend_shadow",
+  "strategyKey": "trend_following",
+  "status": "ready_for_review",
+  "promotionTarget": "paper",
+  "createdAt": "2026-03-10T14:21:00Z",
+  "updatedAt": "2026-03-10T14:21:00Z",
+  "venueKeys": ["jupiter"],
+  "assetKeys": ["SOL", "USDC"],
+  "sourceCitations": [
+    {
+      "sourceId": "source_paper_microstructure",
+      "locator": "sec-2",
+      "materialDigest": "sha256:citation"
+    }
+  ],
+  "codeRevision": {
+    "vcs": "git",
+    "repository": "github.com/GuiBibeau/serious-trader-ralph",
+    "revision": "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+    "comparedTo": "main~1",
+    "treeDirty": false
+  },
+  "datasetSnapshots": [
+    {
+      "datasetId": "dataset_features_sol_usdc",
+      "snapshotId": "snapshot_2026_03_10",
+      "capturedAt": "2026-03-10T14:00:00Z",
+      "uri": "r2://datasets/features/2026-03-10.parquet",
+      "contentDigest": "sha256:dataset"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "proof-markdown",
+      "kind": "proof-bundle",
+      "uri": "r2://artifacts/proof-markdown.md",
+      "contentDigest": "sha256:proof-markdown",
+      "createdAt": "2026-03-10T14:21:00Z"
+    },
+    {
+      "artifactId": "shadow-scorecard",
+      "kind": "scorecard",
+      "uri": "r2://artifacts/shadow-scorecard.json",
+      "contentDigest": "sha256:shadow-scorecard",
+      "createdAt": "2026-03-10T14:21:00Z"
+    }
+  ],
+  "summary": "Evidence bundle for shadow-to-paper review.",
+  "tags": ["promotion"]
+}

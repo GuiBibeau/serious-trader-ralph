@@ -31,6 +31,26 @@
       "name": "reconciliationResult",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/reconciliation_result",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.reconciliation_result.v1.schema.json"
+    },
+    {
+      "name": "researchHypothesis",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/research_hypothesis",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.research_hypothesis.v1.schema.json"
+    },
+    {
+      "name": "researchSource",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/research_source",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.research_source.v1.schema.json"
+    },
+    {
+      "name": "researchExperiment",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/research_experiment",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.research_experiment.v1.schema.json"
+    },
+    {
+      "name": "researchEvidenceBundle",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/research_evidence_bundle",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json"
     }
   ],
   "rustCodegenHook": {
