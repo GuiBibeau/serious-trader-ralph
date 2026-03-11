@@ -95,7 +95,7 @@ impl RuntimeConfig {
             database_url: lookup("RUNTIME_DATABASE_URL")
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| ".tmp/runtime-rs/strategy-registry.sqlite3".to_string()),
+                .unwrap_or_else(|| "/tmp/runtime-rs/runtime-state.sqlite3".to_string()),
             feed_provider: lookup("RUNTIME_FEED_PROVIDER").unwrap_or_else(|| "fixture".to_string()),
             feed_websocket_url: lookup("RUNTIME_FEED_WS_URL")
                 .unwrap_or_else(|| "wss://price-feed.example/runtime".to_string()),
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(config.worker_health_path, "/api/internal/runtime/health");
         assert_eq!(
             config.database_url,
-            ".tmp/runtime-rs/strategy-registry.sqlite3"
+            "/tmp/runtime-rs/runtime-state.sqlite3"
         );
         assert_eq!(config.feed_provider, "fixture");
         assert_eq!(config.feed_market_stale_after_ms, 30_000);
@@ -215,7 +215,7 @@ mod tests {
                 Some("/api/internal/runtime/execution-plans".to_string())
             }
             "RUNTIME_WORKER_HEALTH_PATH" => Some("/api/internal/runtime/health".to_string()),
-            "RUNTIME_DATABASE_URL" => Some("/tmp/runtime-state.sqlite3".to_string()),
+            "RUNTIME_DATABASE_URL" => Some("/tmp/runtime-rs/runtime-state.sqlite3".to_string()),
             "RUNTIME_FEED_PROVIDER" => Some("jupiter".to_string()),
             "RUNTIME_FEED_WS_URL" => Some("wss://feeds.jupiter.example/runtime".to_string()),
             "RUNTIME_FEED_HTTP_URL" => Some("https://rpc.jupiter.example/runtime".to_string()),
@@ -245,7 +245,7 @@ mod tests {
             "/api/internal/runtime/execution-plans"
         );
         assert_eq!(config.worker_health_path, "/api/internal/runtime/health");
-        assert_eq!(config.database_url, "/tmp/runtime-state.sqlite3");
+        assert_eq!(config.database_url, "/tmp/runtime-rs/runtime-state.sqlite3");
         assert_eq!(config.feed_provider, "jupiter");
         assert_eq!(
             config.feed_websocket_url,

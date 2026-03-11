@@ -18,6 +18,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=builder /app/target/release/runtime-rs /usr/local/bin/runtime-rs
+COPY --from=builder /app/services/runtime-rs/fixtures /app/services/runtime-rs/fixtures
 
 USER runtime
 

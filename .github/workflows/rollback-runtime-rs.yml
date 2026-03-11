@@ -63,11 +63,12 @@ jobs:
       - name: Check runtime rollback credentials
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          RUNTIME_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
           RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
         run: |
           set -euo pipefail
 
-          for secret_name in FLY_API_TOKEN RUNTIME_INTERNAL_SERVICE_TOKEN; do
+          for secret_name in FLY_API_TOKEN RUNTIME_DATABASE_URL RUNTIME_INTERNAL_SERVICE_TOKEN; do
             if [ -z "${!secret_name:-}" ]; then
               echo "::error::Missing required secret ${secret_name} for runtime-rs rollback."
               exit 1

@@ -32,11 +32,12 @@ jobs:
         env:
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          RUNTIME_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
           RUNTIME_INTERNAL_SERVICE_TOKEN: ${{ secrets.RUNTIME_INTERNAL_SERVICE_TOKEN }}
         run: |
           set -euo pipefail
 
-          for secret_name in ADMIN_TOKEN FLY_API_TOKEN RUNTIME_INTERNAL_SERVICE_TOKEN; do
+          for secret_name in ADMIN_TOKEN FLY_API_TOKEN RUNTIME_DATABASE_URL RUNTIME_INTERNAL_SERVICE_TOKEN; do
             if [ -z "${!secret_name:-}" ]; then
               echo "::error::Missing required secret ${secret_name} for runtime-rs deploy."
               exit 1
