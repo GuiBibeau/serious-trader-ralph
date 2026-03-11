@@ -58,6 +58,11 @@
       "schemaFile": "docs/runtime-contracts/schemas/runtime.venue_capability.v1.schema.json"
     },
     {
+      "name": "assetRecord",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/asset_record",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.asset_record.v1.schema.json"
+    },
+    {
       "name": "strategySpec",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_spec",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_spec.v1.schema.json"

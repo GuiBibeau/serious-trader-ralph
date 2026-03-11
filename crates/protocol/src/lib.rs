@@ -763,6 +763,37 @@ pub enum RuntimeOnboardingState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum RuntimeAssetListingState {
+    Candidate,
+    Shadow,
+    Paper,
+    Live,
+    Paused,
+    Deprecated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeAssetKind {
+    Native,
+    Token,
+    Stablecoin,
+    Wrapped,
+    Synthetic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeAssetRiskClass {
+    Core,
+    Standard,
+    Volatile,
+    Experimental,
+    Restricted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeVenueMarketType {
     Spot,
     Perp,
@@ -842,6 +873,46 @@ pub struct RuntimeVenueCapability {
     pub settlement_behavior: RuntimeVenueSettlementBehavior,
     pub supported_modes: Vec<RuntimeMode>,
     pub onboarding_state: RuntimeOnboardingState,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAssetVenueMapping {
+    pub venue_key: String,
+    pub native_id: String,
+    pub venue_symbol: String,
+    pub decimals: u32,
+    pub listing_state: RuntimeAssetListingState,
+    pub quote_asset_keys: Vec<String>,
+    pub price_decimals: Option<u32>,
+    pub size_decimals: Option<u32>,
+    pub min_notional_usd: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAssetRecord {
+    pub schema_version: String,
+    pub asset_key: String,
+    pub display_name: String,
+    pub symbol: String,
+    pub chain_key: String,
+    pub canonical_id: String,
+    pub asset_kind: RuntimeAssetKind,
+    pub risk_class: RuntimeAssetRiskClass,
+    pub listing_state: RuntimeAssetListingState,
+    pub decimals: u32,
+    pub aliases: Vec<String>,
+    pub quote_asset_keys: Vec<String>,
+    pub venue_mappings: Vec<RuntimeAssetVenueMapping>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub promoted_at: Option<String>,
+    pub paused_at: Option<String>,
+    pub deprecated_at: Option<String>,
+    pub tags: Vec<String>,
     pub notes: Option<String>,
 }
 
@@ -969,6 +1040,9 @@ mod tests {
         let venue_capability: RuntimeVenueCapability =
             serde_json::from_str(&read_fixture("runtime.venue_capability.valid.v1.json"))
                 .expect("venue capability fixture to deserialize");
+        let asset_record: RuntimeAssetRecord =
+            serde_json::from_str(&read_fixture("runtime.asset_record.valid.v1.json"))
+                .expect("asset record fixture to deserialize");
         let strategy_spec: RuntimeStrategySpec =
             serde_json::from_str(&read_fixture("runtime.strategy_spec.valid.v1.json"))
                 .expect("strategy spec fixture to deserialize");
@@ -990,6 +1064,7 @@ mod tests {
             venue_capability.schema_version,
             RUNTIME_PROTOCOL_SCHEMA_VERSION
         );
+        assert_eq!(asset_record.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(
             strategy_spec.schema_version,
             RUNTIME_PROTOCOL_SCHEMA_VERSION
@@ -998,6 +1073,7 @@ mod tests {
         assert_eq!(experiment.dataset_snapshots.len(), 1);
         assert_eq!(evidence.artifacts.len(), 2);
         assert_eq!(venue_capability.venue_key, "jupiter");
+        assert_eq!(asset_record.asset_key, "SOL");
         assert_eq!(strategy_spec.strategy_key, "trend_following");
     }
 

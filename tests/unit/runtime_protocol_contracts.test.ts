@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   canTransitionRuntimeDeploymentState,
   canTransitionRuntimeRunState,
+  parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionPlan,
   parseRuntimeLedgerSnapshot,
@@ -397,6 +398,37 @@ describe("runtime protocol contracts", () => {
       supportedModes: ["shadow", "paper", "live"],
       onboardingState: "broad_live_ready",
     });
+    const assetRecord = parseRuntimeAssetRecord({
+      schemaVersion: "v1",
+      assetKey: "SOL",
+      displayName: "Solana",
+      symbol: "SOL",
+      chainKey: "solana-mainnet",
+      canonicalId: SOL_MINT,
+      assetKind: "native",
+      riskClass: "core",
+      listingState: "live",
+      decimals: 9,
+      aliases: ["WSOL"],
+      quoteAssetKeys: ["USDC"],
+      venueMappings: [
+        {
+          venueKey: "jupiter",
+          nativeId: SOL_MINT,
+          venueSymbol: "SOL",
+          decimals: 9,
+          listingState: "live",
+          quoteAssetKeys: ["USDC"],
+          priceDecimals: 6,
+          sizeDecimals: 9,
+          minNotionalUsd: "0.01",
+        },
+      ],
+      createdAt: "2026-03-10T14:00:00Z",
+      updatedAt: "2026-03-10T14:00:00Z",
+      promotedAt: "2026-03-10T14:00:00Z",
+      tags: ["core"],
+    });
 
     expect(run.state).toBe("planned");
     expect(ledger.totals.availableUsd).toBe("95");
@@ -410,6 +442,7 @@ describe("runtime protocol contracts", () => {
     expect(experiment.datasetSnapshots).toHaveLength(1);
     expect(evidenceBundle.promotionTarget).toBe("paper");
     expect(venueCapability.adapterKeys).toContain("jupiter");
+    expect(assetRecord.venueMappings[0]?.venueKey).toBe("jupiter");
     expect(strategySpec.pluginKey).toBe("builtin::trend_following");
   });
 

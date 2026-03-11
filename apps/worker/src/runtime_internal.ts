@@ -4,6 +4,7 @@ import {
 } from "./execution/error_taxonomy";
 import { json } from "./response";
 import {
+  parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionPlan,
   parseRuntimeLedgerSnapshot,
@@ -13,6 +14,8 @@ import {
   parseRuntimeResearchSourceRecord,
   parseRuntimeRunRecord,
   RUNTIME_PROTOCOL_SCHEMA_VERSION,
+  type RuntimeAssetListingState,
+  type RuntimeAssetRecord,
   type RuntimeDeploymentRecord,
   type RuntimeExecutionPlan,
   type RuntimeLedgerSnapshot,
@@ -38,6 +41,8 @@ const INTERNAL_RUNTIME_RESEARCH_HYPOTHESES_PATH = `${INTERNAL_RUNTIME_RESEARCH_P
 const INTERNAL_RUNTIME_RESEARCH_SOURCES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/sources`;
 const INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/experiments`;
 const INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/evidence-bundles`;
+const INTERNAL_RUNTIME_ASSETS_PATH = `${INTERNAL_RUNTIME_PREFIX}/assets`;
+const INTERNAL_RUNTIME_ASSETS_PREFIX = `${INTERNAL_RUNTIME_ASSETS_PATH}/`;
 const FIXTURE_TIMESTAMP = "2026-03-07T00:00:00.000Z";
 const FIXTURE_BASE_MINT = "So11111111111111111111111111111111111111112";
 const FIXTURE_QUOTE_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -470,6 +475,12 @@ function createRuntimeHealthFixture() {
       latestExperimentCompletedAt: FIXTURE_TIMESTAMP,
       lastError: null,
     },
+    assetRegistry: {
+      status: "healthy",
+      assetCount: 2,
+      liveAssetCount: 2,
+      lastError: null,
+    },
     allocator: {
       status: "healthy",
       decisionCount: 1,
@@ -645,6 +656,74 @@ function createRuntimeResearchRegistryFixture() {
   };
 }
 
+function createRuntimeAssetFixture(
+  assetKey = "SOL",
+  listingState: RuntimeAssetListingState = "live",
+): RuntimeAssetRecord {
+  const isSol = assetKey === "SOL";
+  const nativeId = isSol
+    ? "So11111111111111111111111111111111111111112"
+    : "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  return parseRuntimeAssetRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    assetKey,
+    displayName: isSol ? "Solana" : "USD Coin",
+    symbol: assetKey,
+    chainKey: "solana-mainnet",
+    canonicalId: nativeId,
+    assetKind: isSol ? "native" : "stablecoin",
+    riskClass: "core",
+    listingState,
+    decimals: isSol ? 9 : 6,
+    aliases: isSol ? ["WSOL"] : ["USD Coin"],
+    quoteAssetKeys: ["USDC"],
+    venueMappings: [
+      {
+        venueKey: "jupiter",
+        nativeId,
+        venueSymbol: assetKey,
+        decimals: isSol ? 9 : 6,
+        listingState: "live",
+        quoteAssetKeys: ["USDC"],
+        priceDecimals: 6,
+        sizeDecimals: isSol ? 9 : 6,
+        minNotionalUsd: "0.01",
+        notes: "Primary live mapping.",
+      },
+      {
+        venueKey: "magicblock",
+        nativeId,
+        venueSymbol: assetKey,
+        decimals: isSol ? 9 : 6,
+        listingState: "paper",
+        quoteAssetKeys: ["USDC"],
+        priceDecimals: 6,
+        sizeDecimals: isSol ? 9 : 6,
+        minNotionalUsd: "0.01",
+        notes: "Paper-only mapping.",
+      },
+    ],
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+    ...(listingState === "live" ? { promotedAt: FIXTURE_TIMESTAMP } : {}),
+    ...(listingState === "paused" ? { pausedAt: FIXTURE_TIMESTAMP } : {}),
+    ...(listingState === "deprecated"
+      ? { deprecatedAt: FIXTURE_TIMESTAMP }
+      : {}),
+    tags: ["asset-registry", "fixture"],
+    notes: "Stubbed asset registry fixture.",
+  });
+}
+
+function createRuntimeAssetRegistryFixture() {
+  return {
+    assets: [
+      createRuntimeAssetFixture("SOL", "live"),
+      createRuntimeAssetFixture("USDC", "live"),
+    ],
+  };
+}
+
 async function readJsonBody(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -683,6 +762,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       scorecards: INTERNAL_RUNTIME_SCORECARDS_PATH,
       allocator: INTERNAL_RUNTIME_ALLOCATOR_PATH,
       research: INTERNAL_RUNTIME_RESEARCH_PATH,
+      assets: INTERNAL_RUNTIME_ASSETS_PATH,
       executionPlans: INTERNAL_RUNTIME_EXECUTION_PLANS_PATH,
       health: `${INTERNAL_RUNTIME_PREFIX}/health`,
     },
@@ -723,6 +803,19 @@ function runtimeEvaluateDeploymentIdFromPath(pathname: string): string | null {
   }
   const deploymentId = suffix.slice(0, -evaluateSuffix.length);
   return deploymentId && !deploymentId.includes("/") ? deploymentId : null;
+}
+
+function runtimeAssetTransitionKeyFromPath(pathname: string): string | null {
+  if (!pathname.startsWith(INTERNAL_RUNTIME_ASSETS_PREFIX)) {
+    return null;
+  }
+  const suffix = pathname.slice(INTERNAL_RUNTIME_ASSETS_PREFIX.length);
+  const transitionSuffix = "/transition";
+  if (!suffix.endsWith(transitionSuffix)) {
+    return null;
+  }
+  const assetKey = suffix.slice(0, -transitionSuffix.length);
+  return assetKey && !assetKey.includes("/") ? assetKey : null;
 }
 
 async function dispatchRuntimeInternalJson(input: {
@@ -1067,6 +1160,56 @@ export async function writeRuntimeResearchEvidenceBundle(input: {
   });
 }
 
+export async function readRuntimeAssetRegistry(input: {
+  env: Env;
+  assetKey?: string;
+  venueKey?: string;
+  listingState?: RuntimeAssetListingState;
+}): Promise<RuntimeInternalJsonResult> {
+  const search = new URLSearchParams();
+  if (input.assetKey) search.set("assetKey", input.assetKey);
+  if (input.venueKey) search.set("venueKey", input.venueKey);
+  if (input.listingState) search.set("listingState", input.listingState);
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "GET",
+    pathname: search.size
+      ? `${INTERNAL_RUNTIME_ASSETS_PATH}?${search.toString()}`
+      : INTERNAL_RUNTIME_ASSETS_PATH,
+  });
+}
+
+export async function writeRuntimeAsset(input: {
+  env: Env;
+  asset: RuntimeAssetRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_ASSETS_PATH,
+    body: input.asset,
+  });
+}
+
+export async function transitionRuntimeAssetListingState(input: {
+  env: Env;
+  assetKey: string;
+  listingState: RuntimeAssetListingState;
+  changedAt?: string;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: `${INTERNAL_RUNTIME_ASSETS_PATH}/${encodeURIComponent(
+      input.assetKey,
+    )}/transition`,
+    body: {
+      listingState: input.listingState,
+      ...(input.changedAt ? { changedAt: input.changedAt } : {}),
+    },
+  });
+}
+
 export async function readRuntimePositionSnapshot(
   env: Env,
   deploymentId: string,
@@ -1124,8 +1267,10 @@ export async function handleRuntimeInternalRoute(
     url.pathname === INTERNAL_RUNTIME_RESEARCH_SOURCES_PATH ||
     url.pathname === INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH ||
     url.pathname === INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH ||
+    url.pathname === INTERNAL_RUNTIME_ASSETS_PATH ||
     url.pathname === INTERNAL_RUNTIME_EXECUTION_PLANS_PATH ||
     url.pathname.startsWith(INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX) ||
+    url.pathname.startsWith(INTERNAL_RUNTIME_ASSETS_PREFIX) ||
     url.pathname.startsWith(INTERNAL_RUNTIME_RUNS_PREFIX);
   if (!isRuntimeRoute) return null;
 
@@ -1216,6 +1361,22 @@ export async function handleRuntimeInternalRoute(
         sourceId: url.searchParams.get("sourceId"),
       },
       registry: createRuntimeResearchRegistryFixture(),
+    });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_ASSETS_PATH
+  ) {
+    return json({
+      ok: true,
+      source: "stub",
+      filters: {
+        assetKey: url.searchParams.get("assetKey"),
+        venueKey: url.searchParams.get("venueKey"),
+        listingState: url.searchParams.get("listingState"),
+      },
+      registry: createRuntimeAssetRegistryFixture(),
     });
   }
 
@@ -1495,6 +1656,70 @@ export async function handleRuntimeInternalRoute(
       },
       { status: 201 },
     );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_ASSETS_PATH
+  ) {
+    let asset: RuntimeAssetRecord;
+    try {
+      const payload = await readJsonBody(request);
+      asset = parseRuntimeAssetRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-asset",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        asset,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (request.method === "POST") {
+    const transitionAssetKey = runtimeAssetTransitionKeyFromPath(url.pathname);
+    if (transitionAssetKey) {
+      let payload: Record<string, unknown>;
+      try {
+        const body = await readJsonBody(request);
+        payload =
+          body && typeof body === "object" && !Array.isArray(body)
+            ? (body as Record<string, unknown>)
+            : {};
+      } catch {
+        payload = {};
+      }
+      const listingState =
+        typeof payload.listingState === "string" &&
+        [
+          "candidate",
+          "shadow",
+          "paper",
+          "live",
+          "paused",
+          "deprecated",
+        ].includes(payload.listingState)
+          ? (payload.listingState as RuntimeAssetListingState)
+          : "live";
+      return json({
+        ok: true,
+        source: "stub",
+        asset: createRuntimeAssetFixture(transitionAssetKey, listingState),
+      });
+    }
   }
 
   if (

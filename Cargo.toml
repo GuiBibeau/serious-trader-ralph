@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/asset-registry",
   "crates/execution-planner",
   "crates/exec-client",
   "crates/feature-cache",

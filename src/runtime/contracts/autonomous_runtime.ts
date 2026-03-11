@@ -432,6 +432,31 @@ export const RuntimeOnboardingStateSchema = z.enum([
   "deprecated",
 ]);
 
+export const RuntimeAssetListingStateSchema = z.enum([
+  "candidate",
+  "shadow",
+  "paper",
+  "live",
+  "paused",
+  "deprecated",
+]);
+
+export const RuntimeAssetKindSchema = z.enum([
+  "native",
+  "token",
+  "stablecoin",
+  "wrapped",
+  "synthetic",
+]);
+
+export const RuntimeAssetRiskClassSchema = z.enum([
+  "core",
+  "standard",
+  "volatile",
+  "experimental",
+  "restricted",
+]);
+
 export const RuntimeVenueMarketTypeSchema = z.enum(["spot", "perp", "options"]);
 
 export const RuntimeVenueOrderTypeSchema = z.enum([
@@ -496,6 +521,43 @@ export const RuntimeVenueCapabilitySchema = VersionedSchema.extend({
   settlementBehavior: RuntimeVenueSettlementBehaviorSchema,
   supportedModes: z.array(RuntimeModeSchema).min(1),
   onboardingState: RuntimeOnboardingStateSchema,
+  notes: NON_EMPTY_STRING_SCHEMA.optional(),
+}).strict();
+
+const RuntimeAssetVenueMappingSchema = z
+  .object({
+    venueKey: NON_EMPTY_STRING_SCHEMA,
+    nativeId: NON_EMPTY_STRING_SCHEMA,
+    venueSymbol: NON_EMPTY_STRING_SCHEMA,
+    decimals: z.number().int().nonnegative(),
+    listingState: RuntimeAssetListingStateSchema,
+    quoteAssetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+    priceDecimals: z.number().int().nonnegative().optional(),
+    sizeDecimals: z.number().int().nonnegative().optional(),
+    minNotionalUsd: DECIMAL_STRING_SCHEMA.optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+export const RuntimeAssetRecordSchema = VersionedSchema.extend({
+  assetKey: NON_EMPTY_STRING_SCHEMA,
+  displayName: NON_EMPTY_STRING_SCHEMA,
+  symbol: NON_EMPTY_STRING_SCHEMA,
+  chainKey: NON_EMPTY_STRING_SCHEMA,
+  canonicalId: NON_EMPTY_STRING_SCHEMA,
+  assetKind: RuntimeAssetKindSchema,
+  riskClass: RuntimeAssetRiskClassSchema,
+  listingState: RuntimeAssetListingStateSchema,
+  decimals: z.number().int().nonnegative(),
+  aliases: z.array(NON_EMPTY_STRING_SCHEMA),
+  quoteAssetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  venueMappings: z.array(RuntimeAssetVenueMappingSchema).min(1),
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  promotedAt: ISO_DATETIME_SCHEMA.optional(),
+  pausedAt: ISO_DATETIME_SCHEMA.optional(),
+  deprecatedAt: ISO_DATETIME_SCHEMA.optional(),
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
   notes: NON_EMPTY_STRING_SCHEMA.optional(),
 }).strict();
 
@@ -608,6 +670,11 @@ export type RuntimeResearchEvidenceBundleRecord = z.infer<
 export type RuntimeOnboardingState = z.infer<
   typeof RuntimeOnboardingStateSchema
 >;
+export type RuntimeAssetListingState = z.infer<
+  typeof RuntimeAssetListingStateSchema
+>;
+export type RuntimeAssetKind = z.infer<typeof RuntimeAssetKindSchema>;
+export type RuntimeAssetRiskClass = z.infer<typeof RuntimeAssetRiskClassSchema>;
 export type RuntimeVenueMarketType = z.infer<
   typeof RuntimeVenueMarketTypeSchema
 >;
@@ -620,6 +687,7 @@ export type RuntimeVenueSettlementBehavior = z.infer<
 export type RuntimeVenueCapability = z.infer<
   typeof RuntimeVenueCapabilitySchema
 >;
+export type RuntimeAssetRecord = z.infer<typeof RuntimeAssetRecordSchema>;
 export type RuntimeStrategySpec = z.infer<typeof RuntimeStrategySpecSchema>;
 
 export const RUNTIME_DEPLOYMENT_STATE_TRANSITIONS = {
@@ -706,6 +774,11 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
     schema: RuntimeVenueCapabilitySchema,
     schemaId: "https://trader-ralph.com/schemas/runtime/v1/venue_capability",
     outputFile: "runtime.venue_capability.v1.schema.json",
+  },
+  assetRecord: {
+    schema: RuntimeAssetRecordSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/asset_record",
+    outputFile: "runtime.asset_record.v1.schema.json",
   },
   strategySpec: {
     schema: RuntimeStrategySpecSchema,
@@ -796,6 +869,10 @@ export function parseRuntimeVenueCapability(
   return RuntimeVenueCapabilitySchema.parse(input);
 }
 
+export function parseRuntimeAssetRecord(input: unknown): RuntimeAssetRecord {
+  return RuntimeAssetRecordSchema.parse(input);
+}
+
 export function parseRuntimeStrategySpec(input: unknown): RuntimeStrategySpec {
   return RuntimeStrategySpecSchema.parse(input);
 }
@@ -842,6 +919,10 @@ export function safeParseRuntimeResearchEvidenceBundleRecord(input: unknown) {
 
 export function safeParseRuntimeVenueCapability(input: unknown) {
   return RuntimeVenueCapabilitySchema.safeParse(input);
+}
+
+export function safeParseRuntimeAssetRecord(input: unknown) {
+  return RuntimeAssetRecordSchema.safeParse(input);
 }
 
 export function safeParseRuntimeStrategySpec(input: unknown) {

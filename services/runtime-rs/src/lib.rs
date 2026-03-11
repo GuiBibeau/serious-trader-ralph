@@ -1,5 +1,9 @@
 use std::sync::{Arc, RwLock};
 
+use asset_registry::{
+    AssetRegistry, AssetRegistryConfig, AssetRegistryError, AssetRegistryQuery,
+    AssetRegistrySnapshot,
+};
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
@@ -20,9 +24,9 @@ use portfolio_ledger::{
     PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
 };
 use protocol::{
-    RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeResearchEvidenceBundleRecord,
-    RuntimeResearchExperimentRecord, RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord,
-    RuntimeRunRecord,
+    RuntimeAssetListingState, RuntimeAssetRecord, RuntimeDeploymentRecord, RuntimeDeploymentState,
+    RuntimeResearchEvidenceBundleRecord, RuntimeResearchExperimentRecord,
+    RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord, RuntimeRunRecord,
 };
 use reconciler::{Reconciler, ReconcilerConfig, ReconcilerError, ReconcilerSnapshot};
 use research_registry::{
@@ -77,6 +81,7 @@ pub struct RuntimeAppState {
     feature_cache: Arc<RwLock<FeatureCache>>,
     strategy_registry: StrategyRegistry,
     research_registry: ResearchRegistry,
+    asset_registry: AssetRegistry,
     portfolio_ledger: PortfolioLedger,
     runtime_allocator: RuntimeAllocator,
     risk_engine: RiskEngine,
@@ -107,6 +112,9 @@ impl RuntimeAppState {
         let research_registry =
             ResearchRegistry::new(ResearchRegistryConfig::new(config.database_url.clone()))
                 .expect("research registry to initialize");
+        let asset_registry =
+            AssetRegistry::new(AssetRegistryConfig::new(config.database_url.clone()))
+                .expect("asset registry to initialize");
         let portfolio_ledger =
             PortfolioLedger::new(PortfolioLedgerConfig::new(config.database_url.clone()))
                 .expect("portfolio ledger to initialize");
@@ -140,6 +148,7 @@ impl RuntimeAppState {
             feature_cache,
             strategy_registry,
             research_registry,
+            asset_registry,
             portfolio_ledger,
             runtime_allocator,
             risk_engine,
@@ -168,6 +177,10 @@ impl RuntimeAppState {
 
     fn research_registry_snapshot(&self) -> ResearchRegistrySnapshot {
         self.research_registry.snapshot_now()
+    }
+
+    fn asset_registry_snapshot(&self) -> AssetRegistrySnapshot {
+        self.asset_registry.snapshot_now()
     }
 
     fn portfolio_ledger_snapshot(&self) -> PortfolioLedgerSnapshot {
@@ -209,6 +222,7 @@ pub struct RuntimeHealthResponse {
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
     pub research_registry: ResearchRegistrySnapshot,
+    pub asset_registry: AssetRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
@@ -229,6 +243,7 @@ pub struct RuntimeMetricsResponse {
     pub feature_cache: FeatureCacheSnapshot,
     pub strategy_registry: StrategyRegistrySnapshot,
     pub research_registry: ResearchRegistrySnapshot,
+    pub asset_registry: AssetRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
@@ -264,6 +279,21 @@ struct RuntimeResearchQueryParams {
     pub venue_key: Option<String>,
     pub asset_key: Option<String>,
     pub source_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeAssetQueryParams {
+    pub asset_key: Option<String>,
+    pub venue_key: Option<String>,
+    pub listing_state: Option<RuntimeAssetListingState>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeAssetTransitionRequest {
+    pub listing_state: RuntimeAssetListingState,
+    pub changed_at: Option<String>,
 }
 
 pub fn app(config: RuntimeConfig) -> Router {
@@ -339,6 +369,14 @@ pub fn app(config: RuntimeConfig) -> Router {
             post(create_research_evidence_bundle_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/assets"),
+            get(asset_query_handler).post(create_asset_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/assets/{{asset_key}}/transition"),
+            post(transition_asset_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/risk"),
             get(risk_handler),
         )
@@ -356,6 +394,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let feature_cache = state.feature_cache_snapshot();
     let strategy_registry = state.strategy_registry_snapshot();
     let research_registry = state.research_registry_snapshot();
+    let asset_registry = state.asset_registry_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
     let allocator = state.runtime_allocator_snapshot();
     let risk_engine = state.risk_engine_snapshot();
@@ -365,6 +404,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         && feature_cache.status == "healthy"
         && strategy_registry.status == "healthy"
         && research_registry.status == "healthy"
+        && asset_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
         && allocator.status == "healthy"
         && risk_engine.status == "healthy"
@@ -391,6 +431,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         feature_cache,
         strategy_registry,
         research_registry,
+        asset_registry,
         portfolio_ledger,
         allocator,
         risk_engine,
@@ -411,6 +452,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         feature_cache: state.feature_cache_snapshot(),
         strategy_registry: state.strategy_registry_snapshot(),
         research_registry: state.research_registry_snapshot(),
+        asset_registry: state.asset_registry_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
         allocator: state.runtime_allocator_snapshot(),
         risk_engine: state.risk_engine_snapshot(),
@@ -450,6 +492,10 @@ async fn create_deployment_handler(
 ) -> HandlerResult {
     authorize_internal_request(&headers, &state)?;
     let deployment: RuntimeDeploymentRecord = parse_json_body(&body, "invalid-runtime-deployment")?;
+    state
+        .asset_registry
+        .ensure_pair_supported(&deployment)
+        .map_err(map_asset_registry_error)?;
     let previous = state
         .strategy_registry
         .get_deployment(&deployment.deployment_id)
@@ -623,6 +669,21 @@ async fn evaluate_deployment_handler(
     };
     let is_runtime_canary = is_worker_runtime_canary_trigger(request.trigger.as_ref());
     let observed_ledger_override = request.observed_ledger_snapshot.clone();
+    let deployment = state
+        .strategy_registry
+        .get_deployment(&deployment_id)
+        .map_err(map_registry_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "deployment-not-found",
+                json!({ "deploymentId": deployment_id }),
+            )
+        })?;
+    state
+        .asset_registry
+        .ensure_pair_supported(&deployment)
+        .map_err(map_asset_registry_error)?;
     let result = state
         .strategy_registry
         .evaluate_deployment_trigger(
@@ -1282,6 +1343,88 @@ async fn create_research_evidence_bundle_handler(
     ))
 }
 
+async fn asset_query_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeAssetQueryParams>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let filters = query.clone();
+    let assets = state
+        .asset_registry
+        .list_assets(&AssetRegistryQuery {
+            asset_key: query.asset_key.filter(|value| !value.trim().is_empty()),
+            venue_key: query.venue_key.filter(|value| !value.trim().is_empty()),
+            listing_state: query.listing_state,
+        })
+        .map_err(map_asset_registry_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "filters": filters,
+            "registry": {
+                "assets": assets,
+            },
+        }),
+    ))
+}
+
+async fn create_asset_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeAssetRecord = parse_json_body(&body, "invalid-runtime-asset")?;
+    let result = state
+        .asset_registry
+        .upsert_asset(&record)
+        .map_err(map_asset_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "asset": result.record,
+        }),
+    ))
+}
+
+async fn transition_asset_handler(
+    headers: HeaderMap,
+    Path(asset_key): Path<String>,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let request: RuntimeAssetTransitionRequest =
+        parse_json_body(&body, "invalid-runtime-asset-transition")?;
+    let changed_at = request.changed_at.unwrap_or_else(|| {
+        OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("timestamp")
+    });
+    let asset = state
+        .asset_registry
+        .transition_asset(&asset_key, request.listing_state, &changed_at)
+        .map_err(map_asset_registry_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "asset": asset,
+        }),
+    ))
+}
+
 struct ShadowEvaluationResponse {
     created: bool,
     deployment: RuntimeDeploymentRecord,
@@ -1786,6 +1929,117 @@ fn map_research_registry_error(error: ResearchRegistryError) -> JsonPayload {
         ResearchRegistryError::Serialization(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-research-registry-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn map_asset_registry_error(error: AssetRegistryError) -> JsonPayload {
+    match error {
+        AssetRegistryError::AssetNotFound { asset_key } => error_json(
+            StatusCode::NOT_FOUND,
+            "asset-not-found",
+            json!({ "assetKey": asset_key }),
+        ),
+        AssetRegistryError::InvalidStateTransition {
+            asset_key,
+            from_state,
+            to_state,
+        } => error_json(
+            StatusCode::CONFLICT,
+            "invalid-asset-state-transition",
+            json!({
+                "assetKey": asset_key,
+                "fromState": from_state,
+                "toState": to_state,
+            }),
+        ),
+        AssetRegistryError::AssetModeUnsupported {
+            asset_key,
+            listing_state,
+            mode,
+        } => error_json(
+            StatusCode::CONFLICT,
+            "asset-mode-not-supported",
+            json!({
+                "assetKey": asset_key,
+                "listingState": listing_state,
+                "mode": mode,
+            }),
+        ),
+        AssetRegistryError::VenueMappingMissing {
+            asset_key,
+            venue_key,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "asset-venue-mapping-missing",
+            json!({ "assetKey": asset_key, "venueKey": venue_key }),
+        ),
+        AssetRegistryError::QuoteAssetUnsupported {
+            base_asset_key,
+            quote_asset_key,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "asset-quote-not-supported",
+            json!({
+                "baseAssetKey": base_asset_key,
+                "quoteAssetKey": quote_asset_key,
+            }),
+        ),
+        AssetRegistryError::VenueMappingModeUnsupported {
+            asset_key,
+            venue_key,
+            listing_state,
+            mode,
+        } => error_json(
+            StatusCode::CONFLICT,
+            "asset-venue-mode-not-supported",
+            json!({
+                "assetKey": asset_key,
+                "venueKey": venue_key,
+                "listingState": listing_state,
+                "mode": mode,
+            }),
+        ),
+        AssetRegistryError::VenueMappingQuoteUnsupported {
+            base_asset_key,
+            quote_asset_key,
+            venue_key,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "asset-venue-quote-not-supported",
+            json!({
+                "baseAssetKey": base_asset_key,
+                "quoteAssetKey": quote_asset_key,
+                "venueKey": venue_key,
+            }),
+        ),
+        AssetRegistryError::VenueNativeIdNotFound {
+            venue_key,
+            native_id,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "asset-venue-native-id-not-found",
+            json!({ "venueKey": venue_key, "nativeId": native_id }),
+        ),
+        AssetRegistryError::InvalidRecord { asset_key, reason } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-runtime-asset",
+            json!({ "assetKey": asset_key, "reason": reason }),
+        ),
+        AssetRegistryError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-asset-registry-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        AssetRegistryError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-asset-registry-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        AssetRegistryError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-asset-registry-error",
             json!({ "reason": error.to_string() }),
         ),
     }
@@ -2301,6 +2555,9 @@ mod tests {
         assert_eq!(payload.strategy_registry.deployment_count, 0);
         assert_eq!(payload.research_registry.status, "healthy");
         assert_eq!(payload.research_registry.hypothesis_count, 0);
+        assert_eq!(payload.asset_registry.status, "healthy");
+        assert_eq!(payload.asset_registry.asset_count, 2);
+        assert_eq!(payload.asset_registry.live_asset_count, 2);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.portfolio_ledger.deployment_count, 0);
         assert_eq!(payload.allocator.status, "healthy");
@@ -2340,6 +2597,8 @@ mod tests {
         assert_eq!(payload.feature_cache.total_market_samples, 1);
         assert_eq!(payload.strategy_registry.status, "healthy");
         assert_eq!(payload.research_registry.status, "healthy");
+        assert_eq!(payload.asset_registry.status, "healthy");
+        assert_eq!(payload.asset_registry.asset_count, 2);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.allocator.status, "healthy");
         assert_eq!(payload.risk_engine.status, "healthy");
@@ -3790,5 +4049,189 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn serves_asset_registry_and_transitions_assets() {
+        let router = app(test_config());
+        let asset = json!({
+            "schemaVersion": "v1",
+            "assetKey": "BONK",
+            "displayName": "Bonk",
+            "symbol": "BONK",
+            "chainKey": "solana-mainnet",
+            "canonicalId": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+            "assetKind": "token",
+            "riskClass": "volatile",
+            "listingState": "candidate",
+            "decimals": 5,
+            "aliases": ["Bonk Inu"],
+            "quoteAssetKeys": ["USDC"],
+            "venueMappings": [
+                {
+                    "venueKey": "jupiter",
+                    "nativeId": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+                    "venueSymbol": "BONK",
+                    "decimals": 5,
+                    "listingState": "candidate",
+                    "quoteAssetKeys": ["USDC"],
+                    "priceDecimals": 8,
+                    "sizeDecimals": 5,
+                    "minNotionalUsd": "0.10"
+                }
+            ],
+            "createdAt": "2026-03-10T14:25:00.000Z",
+            "updatedAt": "2026-03-10T14:25:00.000Z",
+            "tags": ["candidate", "meme"]
+        });
+
+        let write_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/assets")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(asset.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(write_response.status(), StatusCode::CREATED);
+        let write_payload = read_json(write_response).await;
+        assert_eq!(write_payload["asset"]["assetKey"], json!("BONK"));
+        assert_eq!(write_payload["asset"]["listingState"], json!("candidate"));
+
+        let list_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/assets?assetKey=BONK&venueKey=jupiter")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_payload = read_json(list_response).await;
+        assert_eq!(
+            list_payload["registry"]["assets"]
+                .as_array()
+                .expect("array")
+                .len(),
+            1
+        );
+        assert_eq!(
+            list_payload["registry"]["assets"][0]["assetKey"],
+            json!("BONK")
+        );
+
+        let transition_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/assets/BONK/transition")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "listingState": "paper",
+                            "changedAt": "2026-03-10T14:30:00.000Z"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(transition_response.status(), StatusCode::OK);
+        let transition_payload = read_json(transition_response).await;
+        assert_eq!(transition_payload["asset"]["assetKey"], json!("BONK"));
+        assert_eq!(transition_payload["asset"]["listingState"], json!("paper"));
+        assert_eq!(
+            transition_payload["asset"]["updatedAt"],
+            json!("2026-03-10T14:30:00.000Z")
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_asset_evaluation_does_not_persist_runs() {
+        let state = RuntimeAppState::new(test_config());
+        let mut deployment: RuntimeDeploymentRecord = serde_json::from_value(runtime_deployment(
+            "deployment_unknown_asset_eval",
+            "sleeve_alpha",
+            "1000.00",
+            "125.00",
+        ))
+        .expect("deployment");
+        deployment.pair = protocol::RuntimePair {
+            symbol: "BONK/USDC".to_string(),
+            base_mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263".to_string(),
+            quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+        };
+        state
+            .strategy_registry
+            .upsert_deployment(&deployment)
+            .expect("deployment to store");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer runtime-service-secret"),
+        );
+        let error = evaluate_deployment_handler(
+            headers,
+            Path("deployment_unknown_asset_eval".to_string()),
+            State(state.clone()),
+            Bytes::from("{}"),
+        )
+        .await
+        .expect_err("unsupported pair to fail before run creation");
+
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        let runs = state
+            .strategy_registry
+            .list_runs("deployment_unknown_asset_eval")
+            .expect("runs to list");
+        assert!(runs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejects_deployments_for_unlisted_assets() {
+        let router = app(test_config());
+        let mut deployment = runtime_deployment(
+            "deployment_unknown_asset",
+            "sleeve_alpha",
+            "1000.00",
+            "125.00",
+        );
+        deployment["pair"] = json!({
+            "symbol": "BONK/USDC",
+            "baseMint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+            "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        });
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload = read_json(response).await;
+        assert_eq!(payload["error"], json!("asset-venue-native-id-not-found"));
+        assert_eq!(
+            payload["details"]["nativeId"],
+            deployment["pair"]["baseMint"]
+        );
     }
 }
