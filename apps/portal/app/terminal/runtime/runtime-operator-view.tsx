@@ -110,6 +110,77 @@ function renderCanarySummary(snapshot: RuntimeOperatorSnapshot | null) {
   );
 }
 
+function renderLeaderboard(snapshot: RuntimeOperatorSnapshot | null) {
+  const leaderboard = isRecord(snapshot?.leaderboard)
+    ? snapshot?.leaderboard
+    : {};
+  const entries = Array.isArray(leaderboard.entries) ? leaderboard.entries : [];
+  if (entries.length === 0) {
+    return (
+      <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
+        Candidate leaderboard not available yet.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {entries.slice(0, 5).map((entry, index) => {
+        const candidate = isRecord(entry) ? entry : {};
+        const strategyKey = readString(candidate.strategyKey) ?? "unknown";
+        const pairSymbol = readString(candidate.pairSymbol) ?? "n/a";
+        const significance =
+          readString(candidate.significanceConfidenceBps) ??
+          String(candidate.significanceConfidenceBps ?? "0");
+        const gateStatus =
+          readString(candidate.promotionGateStatus) ?? "candidate";
+        const candidateId =
+          readString(candidate.candidateId) ??
+          readString(candidate.reportId) ??
+          `${strategyKey}:${pairSymbol}`;
+        return (
+          <article
+            key={candidateId}
+            className="rounded border border-border bg-surface/80 p-4"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  Candidate rank #{index + 1}
+                </p>
+                <h3 className="mt-2 text-sm font-medium text-ink">
+                  {strategyKey} · {pairSymbol}
+                </h3>
+              </div>
+              <span
+                className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] ${statusClasses(
+                  gateStatus,
+                )}`}
+              >
+                {gateStatus.replaceAll("_", " ")}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              {summaryItem(
+                "Net return",
+                `${readString(candidate.netReturnBps) ?? "0.0000"} bps`,
+              )}
+              {summaryItem("Significance", `${significance} bps`)}
+              {summaryItem(
+                "Flat-cash excess",
+                `${readString(candidate.flatCashExcessReturnBps) ?? "n/a"} bps`,
+              )}
+            </div>
+            <p className="mt-3 text-sm text-muted">
+              {readString(candidate.summary) ??
+                "No candidate summary available."}
+            </p>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function renderRuns(detail: RuntimeOperatorDetail | null) {
   if (!detail || detail.runs.length === 0) {
     return (
@@ -235,10 +306,11 @@ function renderPositions(detail: RuntimeOperatorDetail | null) {
 
 function renderPromotion(detail: RuntimeOperatorDetail | null) {
   const report = isRecord(detail?.scorecard) ? detail?.scorecard : {};
+  const research = isRecord(report.research) ? report.research : null;
   const promotionGates = Array.isArray(report.promotionGates)
     ? report.promotionGates
     : [];
-  if (promotionGates.length === 0) {
+  if (!research && promotionGates.length === 0) {
     return (
       <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
         Promotion evidence not available yet.
@@ -247,6 +319,50 @@ function renderPromotion(detail: RuntimeOperatorDetail | null) {
   }
   return (
     <div className="space-y-3">
+      {research ? (
+        <article className="rounded border border-border bg-surface/80 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                Research scorecard
+              </p>
+              <h3 className="mt-2 text-sm font-medium text-ink">
+                backtest {readString(research.backtestReportId) ?? "missing"}
+              </h3>
+            </div>
+            <span
+              className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] ${statusClasses(
+                readBoolean(research.promotionEligible, false)
+                  ? "pass"
+                  : "blocked",
+              )}`}
+            >
+              {readBoolean(research.promotionEligible, false)
+                ? "eligible"
+                : "blocked"}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {summaryItem(
+              "Net return",
+              `${readString(research.netReturnBps) ?? "0.0000"} bps`,
+            )}
+            {summaryItem(
+              "Significance",
+              `${readString(research.significanceConfidenceBps) ?? String(research.significanceConfidenceBps ?? "0")} bps`,
+            )}
+            {summaryItem(
+              "Flat-cash excess",
+              `${readString(research.flatCashExcessReturnBps) ?? "n/a"} bps`,
+            )}
+            {summaryItem(
+              "Weak regimes",
+              readString(research.weakRegimeCount) ??
+                String(research.weakRegimeCount ?? "0"),
+            )}
+          </div>
+        </article>
+      ) : null}
       {promotionGates.map((gate) => {
         const gateRecord = isRecord(gate) ? gate : {};
         const gateId = readString(gateRecord.gateId) ?? "promotion-gate";
@@ -567,6 +683,17 @@ export function RuntimeOperatorView({
         <div className="space-y-6">
           <section className="card p-4">{renderHealthSummary(runtime)}</section>
           <section className="card p-4">{renderCanarySummary(runtime)}</section>
+          <section className="card p-5">
+            <div className="mb-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                Candidate leaderboard
+              </p>
+              <h2 className="mt-2 text-lg font-semibold text-ink">
+                Ranked research candidates and promotion readiness
+              </h2>
+            </div>
+            {renderLeaderboard(runtime)}
+          </section>
 
           <section className="card p-5">
             <div className="flex flex-wrap items-start justify-between gap-4">

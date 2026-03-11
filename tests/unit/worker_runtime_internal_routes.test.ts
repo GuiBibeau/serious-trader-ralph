@@ -621,6 +621,7 @@ describe("worker runtime internal routes", () => {
         executionPlans: "/api/internal/runtime/execution-plans",
         health: "/api/internal/runtime/health",
         scorecards: "/api/internal/runtime/scorecards",
+        leaderboards: "/api/internal/runtime/leaderboards",
         allocator: "/api/internal/runtime/allocator",
         backtests: "/api/internal/runtime/backtests",
         costModels: "/api/internal/runtime/cost-models",
@@ -1057,6 +1058,36 @@ describe("worker runtime internal routes", () => {
       sourceMode: "shadow",
       targetMode: "paper",
       status: "pass",
+    });
+  });
+
+  test("returns stubbed strategy leaderboards", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request("http://localhost/api/internal/runtime/leaderboards", {
+        headers: {
+          authorization: "Bearer runtime-service-secret",
+        },
+      }),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      source: "stub",
+      leaderboard: {
+        entryCount: 1,
+        entries: [
+          {
+            strategyKey: "trend_following",
+            pairSymbol: "SOL/USDC",
+            promotionEligible: true,
+          },
+        ],
+      },
     });
   });
 

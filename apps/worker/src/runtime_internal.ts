@@ -49,6 +49,7 @@ const INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX = `${INTERNAL_RUNTIME_PREFIX}/deployme
 const INTERNAL_RUNTIME_RUNS_PREFIX = `${INTERNAL_RUNTIME_PREFIX}/runs/`;
 const INTERNAL_RUNTIME_EXECUTION_PLANS_PATH = `${INTERNAL_RUNTIME_PREFIX}/execution-plans`;
 const INTERNAL_RUNTIME_SCORECARDS_PATH = `${INTERNAL_RUNTIME_PREFIX}/scorecards`;
+const INTERNAL_RUNTIME_LEADERBOARDS_PATH = `${INTERNAL_RUNTIME_PREFIX}/leaderboards`;
 const INTERNAL_RUNTIME_ALLOCATOR_PATH = `${INTERNAL_RUNTIME_PREFIX}/allocator`;
 const INTERNAL_RUNTIME_RESEARCH_PATH = `${INTERNAL_RUNTIME_PREFIX}/research`;
 const INTERNAL_RUNTIME_RESEARCH_HYPOTHESES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/hypotheses`;
@@ -89,6 +90,7 @@ export type RuntimeAdminSnapshot = {
   };
   health: Record<string, unknown> | null;
   deployments: RuntimeDeploymentRecord[];
+  leaderboard: Record<string, unknown> | null;
   error: string | null;
 };
 
@@ -384,6 +386,48 @@ function createRuntimeScorecardFixture(deploymentId: string) {
         zeroGrantCount: 0,
         fullGrantRateBps: 10000,
       },
+      research: {
+        backtestReportId: "backtest_trend_following_candidate",
+        backtestStatus: "completed",
+        promotionEligible: true,
+        foldCount: 3,
+        positiveFoldCount: 3,
+        positiveFoldRateBps: 10000,
+        baselineComparisonCount: 2,
+        baselinePassCount: 2,
+        baselineOutperformanceRateBps: 10000,
+        significanceConfidenceBps: 9200,
+        netReturnBps: "11.1667",
+        maxDrawdownBps: "4.5000",
+        flatCashExcessReturnBps: "11.1667",
+        buyAndHoldExcessReturnBps: "3.6667",
+        regimeCount: 2,
+        weakRegimeCount: 0,
+        regimeStabilityBps: 10000,
+        aggregateBaselineComparisons: [
+          {
+            baseline: "flat_cash",
+            baselineReturnBps: "0.0000",
+            excessReturnBps: "11.1667",
+          },
+          {
+            baseline: "buy_and_hold",
+            baselineReturnBps: "7.5000",
+            excessReturnBps: "3.6667",
+          },
+        ],
+        aggregateRegimeMetrics: [
+          {
+            regimeKey: "short_trend",
+            regimeValue: "positive",
+            observationCount: 12,
+            tradeCount: 4,
+            netReturnBps: "8.5000",
+            winRateBps: 7500,
+          },
+        ],
+        blockingReasons: [],
+      },
     },
     promotionGates: [
       {
@@ -421,6 +465,40 @@ function createRuntimeScorecardFixture(deploymentId: string) {
       },
     ],
     proofArtifactMarkdown: "## Runtime Promotion Readiness",
+  };
+}
+
+function createRuntimeLeaderboardFixture() {
+  return {
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    generatedAt: FIXTURE_TIMESTAMP,
+    entryCount: 1,
+    entries: [
+      {
+        candidateId: "trend_following::jupiter::SOL/USDC::spot",
+        strategyKey: "trend_following",
+        venueKey: "jupiter",
+        pairSymbol: "SOL/USDC",
+        marketType: "spot",
+        reportId: "backtest_trend_following_candidate",
+        generatedAt: FIXTURE_TIMESTAMP,
+        deploymentId: "deployment_shadow_fixture",
+        deploymentMode: "shadow",
+        deploymentState: "shadow",
+        promotionEligible: true,
+        leaderboardScore: 17610,
+        positiveFoldRateBps: 10000,
+        significanceConfidenceBps: 9200,
+        weakRegimeCount: 0,
+        netReturnBps: "11.1667",
+        flatCashExcessReturnBps: "11.1667",
+        buyAndHoldExcessReturnBps: "3.6667",
+        promotionGateStatus: "pass",
+        blockingReasons: [],
+        summary:
+          "Trend following candidate cleared significance and robustness gates.",
+      },
+    ],
   };
 }
 
@@ -1339,6 +1417,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       positions: `${INTERNAL_RUNTIME_PREFIX}/positions`,
       pnl: `${INTERNAL_RUNTIME_PREFIX}/pnl`,
       scorecards: INTERNAL_RUNTIME_SCORECARDS_PATH,
+      leaderboards: INTERNAL_RUNTIME_LEADERBOARDS_PATH,
       allocator: INTERNAL_RUNTIME_ALLOCATOR_PATH,
       research: INTERNAL_RUNTIME_RESEARCH_PATH,
       assets: INTERNAL_RUNTIME_ASSETS_PATH,
@@ -1537,11 +1616,18 @@ export async function readRuntimeAdminSnapshot(
   env: Env,
 ): Promise<RuntimeAdminSnapshot> {
   const integration = buildRuntimeIntegration(env);
-  const healthResult = await dispatchRuntimeInternalJson({
-    env,
-    method: "GET",
-    pathname: INTERNAL_RUNTIME_HEALTH_PATH,
-  });
+  const [healthResult, leaderboardResult] = await Promise.all([
+    dispatchRuntimeInternalJson({
+      env,
+      method: "GET",
+      pathname: INTERNAL_RUNTIME_HEALTH_PATH,
+    }),
+    dispatchRuntimeInternalJson({
+      env,
+      method: "GET",
+      pathname: INTERNAL_RUNTIME_LEADERBOARDS_PATH,
+    }),
+  ]);
   if (!healthResult.ok) {
     return {
       ok: false,
@@ -1549,6 +1635,7 @@ export async function readRuntimeAdminSnapshot(
       integration,
       health: null,
       deployments: [],
+      leaderboard: null,
       error: runtimeErrorFromPayload(
         healthResult.payload,
         "runtime-health-unavailable",
@@ -1577,6 +1664,11 @@ export async function readRuntimeAdminSnapshot(
       integration,
       health,
       deployments: [],
+      leaderboard: isRecord(leaderboardResult.payload.leaderboard)
+        ? leaderboardResult.payload.leaderboard
+        : integration.stubModeEnabled
+          ? createRuntimeLeaderboardFixture()
+          : null,
       error: runtimeErrorFromPayload(
         deploymentsResult.payload,
         "runtime-deployments-unavailable",
@@ -1592,6 +1684,11 @@ export async function readRuntimeAdminSnapshot(
     deployments: parseRuntimeDeploymentList(
       deploymentsResult.payload.deployments,
     ),
+    leaderboard: isRecord(leaderboardResult.payload.leaderboard)
+      ? leaderboardResult.payload.leaderboard
+      : integration.stubModeEnabled
+        ? createRuntimeLeaderboardFixture()
+        : null,
     error: null,
   };
 }
@@ -1659,6 +1756,16 @@ export async function readRuntimeScorecard(
     pathname: `${INTERNAL_RUNTIME_SCORECARDS_PATH}?deploymentId=${encodeURIComponent(
       deploymentId,
     )}`,
+  });
+}
+
+export async function readRuntimeStrategyLeaderboard(
+  env: Env,
+): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env,
+    method: "GET",
+    pathname: INTERNAL_RUNTIME_LEADERBOARDS_PATH,
   });
 }
 
@@ -2072,6 +2179,7 @@ export async function handleRuntimeInternalRoute(
     url.pathname === `${INTERNAL_RUNTIME_PREFIX}/positions` ||
     url.pathname === `${INTERNAL_RUNTIME_PREFIX}/pnl` ||
     url.pathname === INTERNAL_RUNTIME_SCORECARDS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_LEADERBOARDS_PATH ||
     url.pathname === INTERNAL_RUNTIME_ALLOCATOR_PATH ||
     url.pathname === INTERNAL_RUNTIME_RESEARCH_PATH ||
     url.pathname === INTERNAL_RUNTIME_RESEARCH_HYPOTHESES_PATH ||
@@ -2442,6 +2550,17 @@ export async function handleRuntimeInternalRoute(
       source: "stub",
       deploymentId,
       report: createRuntimeScorecardFixture(deploymentId),
+    });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_LEADERBOARDS_PATH
+  ) {
+    return json({
+      ok: true,
+      source: "stub",
+      leaderboard: createRuntimeLeaderboardFixture(),
     });
   }
 

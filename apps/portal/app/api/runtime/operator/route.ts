@@ -199,6 +199,7 @@ function normalizeRuntimeSnapshot(payload: Record<string, unknown>) {
     deployments: parseDeployments(runtime.deployments),
     controls: normalizeControls(runtime.controls),
     canary: isRecord(runtime.canary) ? runtime.canary : null,
+    leaderboard: isRecord(runtime.leaderboard) ? runtime.leaderboard : null,
     error: readString(runtime.error),
   };
 }

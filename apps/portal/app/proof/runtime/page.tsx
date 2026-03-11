@@ -125,6 +125,23 @@ function buildPayload(selectedDeploymentId: string): RuntimeOperatorApiPayload {
           },
         ],
       },
+      leaderboard: {
+        generatedAt: FIXTURE_TIME,
+        entryCount: 1,
+        entries: [
+          {
+            candidateId: "trend_following::jupiter::SOL/USDC::spot",
+            strategyKey: "trend_following",
+            pairSymbol: "SOL/USDC",
+            netReturnBps: "11.1667",
+            flatCashExcessReturnBps: "11.1667",
+            significanceConfidenceBps: 9200,
+            promotionGateStatus: "pass",
+            summary:
+              "Trend following candidate cleared significance and robustness gates.",
+          },
+        ],
+      },
       error: null,
     },
     selectedDeploymentId: deployment.deploymentId,

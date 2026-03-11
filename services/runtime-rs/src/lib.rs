@@ -1,6 +1,9 @@
 mod paper_execution;
 
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, RwLock},
+};
 
 use asset_registry::{
     AssetRegistry, AssetRegistryConfig, AssetRegistryError, AssetRegistryQuery,
@@ -43,15 +46,17 @@ use portfolio_ledger::{
     PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
 };
 use protocol::{
-    RuntimeAssetListingState, RuntimeAssetRecord, RuntimeBacktestBaseline,
+    RuntimeAssetListingState, RuntimeAssetRecord, RuntimeBacktestBaseline, RuntimeBacktestReport,
     RuntimeBacktestWindowMode, RuntimeDeploymentRecord, RuntimeDeploymentState,
     RuntimeExecutionCostModelRecord, RuntimeExecutionCostModelStatus,
     RuntimeExecutionCostObservationRecord, RuntimeFeatureCatalogStatus,
     RuntimeFeatureDefinitionRecord, RuntimeHistoricalDatasetKind,
-    RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode, RuntimeRegimeTagRecord,
-    RuntimeReplayCorpusRecord, RuntimeResearchEvidenceBundleRecord,
-    RuntimeResearchExperimentRecord, RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord,
-    RuntimeRunRecord, RuntimeVenueMarketType,
+    RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode, RuntimePromotionGateStatus,
+    RuntimePromotionReadinessReport, RuntimeRegimeTagRecord, RuntimeReplayCorpusRecord,
+    RuntimeResearchEvidenceBundleRecord, RuntimeResearchExperimentRecord,
+    RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord, RuntimeRunRecord,
+    RuntimeStrategyLeaderboard, RuntimeStrategyLeaderboardEntry, RuntimeVenueMarketType,
+    RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use reconciler::{Reconciler, ReconcilerConfig, ReconcilerError, ReconcilerSnapshot};
 use research_registry::{
@@ -67,8 +72,9 @@ use runtime_allocator::{
 };
 use runtime_ops::{health_snapshot, RuntimeConfig};
 use runtime_scorecards::{
-    build_cost_observation, build_readiness_report, RuntimeCostObservationInput,
-    RuntimeScorecardConfig, RuntimeScorecardError, RuntimeScorecardInput,
+    build_cost_observation, build_readiness_report, build_research_scorecard_from_backtest,
+    RuntimeCostObservationInput, RuntimeScorecardConfig, RuntimeScorecardError,
+    RuntimeScorecardInput,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -380,6 +386,15 @@ struct RuntimeBacktestQueryParams {
     pub promotion_eligible: Option<bool>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeStrategyLeaderboardQueryParams {
+    pub strategy_key: Option<String>,
+    pub venue_key: Option<String>,
+    pub market_type: Option<RuntimeVenueMarketType>,
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeBacktestRunRequestPayload {
@@ -490,6 +505,10 @@ pub fn app(config: RuntimeConfig) -> Router {
         .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/scorecards"),
             get(scorecards_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/leaderboards"),
+            get(strategy_leaderboards_handler),
         )
         .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/allocator"),
@@ -1251,24 +1270,11 @@ async fn reconciliations_handler(
     ))
 }
 
-async fn scorecards_handler(
-    headers: HeaderMap,
-    Query(query): Query<RuntimeDeploymentQuery>,
-    State(state): State<RuntimeAppState>,
-) -> HandlerResult {
-    authorize_internal_request(&headers, &state)?;
-    let deployment_id = require_deployment_id(query)?;
-    let deployment = state
-        .strategy_registry
-        .get_deployment(&deployment_id)
-        .map_err(map_registry_error)?
-        .ok_or_else(|| {
-            error_json(
-                StatusCode::NOT_FOUND,
-                "deployment-not-found",
-                json!({ "deploymentId": deployment_id }),
-            )
-        })?;
+fn build_runtime_scorecard_report(
+    state: &RuntimeAppState,
+    deployment: RuntimeDeploymentRecord,
+) -> Result<RuntimePromotionReadinessReport, JsonPayload> {
+    let deployment_id = deployment.deployment_id.clone();
     let runs = state
         .strategy_registry
         .list_runs(&deployment_id)
@@ -1320,11 +1326,21 @@ async fn scorecards_handler(
             ..CostObservationQuery::default()
         })
         .map_err(map_cost_model_registry_error)?;
-    let report = build_readiness_report(
+    let backtest_report = latest_relevant_backtest_report(
+        state,
+        &deployment.strategy_key,
+        &deployment.venue_key,
+        &deployment.pair.symbol,
+        &deployment.pair.market_type,
+    )
+    .map_err(map_backtesting_engine_error)?;
+
+    build_readiness_report(
         &RuntimeScorecardConfig::default(),
         &RuntimeScorecardInput {
             deployment,
             strategy_spec,
+            backtest_report,
             runs,
             verdicts,
             plans,
@@ -1344,7 +1360,46 @@ async fn scorecards_handler(
             latest_ledger_snapshot: Some(latest_ledger_snapshot),
         },
     )
-    .map_err(map_scorecard_error)?;
+    .map_err(map_scorecard_error)
+}
+
+fn latest_relevant_backtest_report(
+    state: &RuntimeAppState,
+    strategy_key: &str,
+    venue_key: &str,
+    pair_symbol: &str,
+    market_type: &RuntimeVenueMarketType,
+) -> Result<Option<RuntimeBacktestReport>, BacktestingEngineError> {
+    let reports = state.backtesting_engine.query(&BacktestingQuery {
+        strategy_key: Some(strategy_key.to_string()),
+        ..BacktestingQuery::default()
+    })?;
+    Ok(reports.into_iter().find(|report| {
+        report.config.venue_key == venue_key
+            && report.config.pair_symbol == pair_symbol
+            && report.config.market_type == *market_type
+    }))
+}
+
+async fn scorecards_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeDeploymentQuery>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let deployment_id = require_deployment_id(query)?;
+    let deployment = state
+        .strategy_registry
+        .get_deployment(&deployment_id)
+        .map_err(map_registry_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "deployment-not-found",
+                json!({ "deploymentId": deployment_id }),
+            )
+        })?;
+    let report = build_runtime_scorecard_report(&state, deployment)?;
     Ok(OkJson::with_status(
         StatusCode::OK,
         json!({
@@ -1354,6 +1409,223 @@ async fn scorecards_handler(
             "report": report,
         }),
     ))
+}
+
+async fn strategy_leaderboards_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeStrategyLeaderboardQueryParams>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let reports = state
+        .backtesting_engine
+        .query(&BacktestingQuery {
+            strategy_key: query
+                .strategy_key
+                .clone()
+                .filter(|value| !value.trim().is_empty()),
+            ..BacktestingQuery::default()
+        })
+        .map_err(map_backtesting_engine_error)?;
+    let mut deployments = state
+        .strategy_registry
+        .list_deployments()
+        .map_err(map_registry_error)?;
+    deployments.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+    let mut latest_reports = BTreeMap::<String, RuntimeBacktestReport>::new();
+    for report in reports {
+        if query
+            .venue_key
+            .as_ref()
+            .is_some_and(|venue_key| report.config.venue_key != *venue_key)
+        {
+            continue;
+        }
+        if query
+            .market_type
+            .as_ref()
+            .is_some_and(|market_type| report.config.market_type != *market_type)
+        {
+            continue;
+        }
+        latest_reports
+            .entry(candidate_key(
+                &report.strategy_key,
+                &report.config.venue_key,
+                &report.config.pair_symbol,
+                &report.config.market_type,
+            ))
+            .or_insert(report);
+    }
+
+    let deployment_by_candidate = deployments
+        .into_iter()
+        .filter(|deployment| {
+            query
+                .venue_key
+                .as_ref()
+                .is_none_or(|venue_key| deployment.venue_key == *venue_key)
+                && query
+                    .market_type
+                    .as_ref()
+                    .is_none_or(|market_type| deployment.pair.market_type == *market_type)
+                && query
+                    .strategy_key
+                    .as_ref()
+                    .is_none_or(|strategy_key| deployment.strategy_key == *strategy_key)
+        })
+        .fold(
+            BTreeMap::<String, RuntimeDeploymentRecord>::new(),
+            |mut map, deployment| {
+                map.entry(candidate_key(
+                    &deployment.strategy_key,
+                    &deployment.venue_key,
+                    &deployment.pair.symbol,
+                    &deployment.pair.market_type,
+                ))
+                .or_insert(deployment);
+                map
+            },
+        );
+
+    let mut entries = latest_reports
+        .into_iter()
+        .map(|(candidate_id, report)| {
+            let deployment = deployment_by_candidate.get(&candidate_id).cloned();
+            build_strategy_leaderboard_entry(&state, candidate_id, report, deployment)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by(|left, right| {
+        right
+            .leaderboard_score
+            .cmp(&left.leaderboard_score)
+            .then(
+                right
+                    .significance_confidence_bps
+                    .cmp(&left.significance_confidence_bps),
+            )
+            .then(right.generated_at.cmp(&left.generated_at))
+    });
+    if let Some(limit) = query.limit {
+        entries.truncate(limit);
+    }
+    let leaderboard = RuntimeStrategyLeaderboard {
+        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+        generated_at: OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("leaderboard timestamp"),
+        entry_count: entries.len() as u32,
+        entries,
+    };
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "filters": query,
+            "leaderboard": leaderboard,
+        }),
+    ))
+}
+
+fn build_strategy_leaderboard_entry(
+    state: &RuntimeAppState,
+    candidate_id: String,
+    report: RuntimeBacktestReport,
+    deployment: Option<RuntimeDeploymentRecord>,
+) -> Result<RuntimeStrategyLeaderboardEntry, JsonPayload> {
+    let research =
+        build_research_scorecard_from_backtest(Some(&report)).map_err(map_scorecard_error)?;
+    let readiness = deployment
+        .clone()
+        .map(|deployment_record| build_runtime_scorecard_report(state, deployment_record))
+        .transpose()?;
+    let promotion_gate_status = readiness.as_ref().and_then(|readiness_report| {
+        readiness_report
+            .promotion_gates
+            .iter()
+            .find(|gate| gate.status != RuntimePromotionGateStatus::NotApplicable)
+            .map(|gate| gate.status.clone())
+    });
+    let leaderboard_score = compute_leaderboard_score(&research)?;
+    Ok(RuntimeStrategyLeaderboardEntry {
+        candidate_id,
+        strategy_key: report.strategy_key.clone(),
+        venue_key: report.config.venue_key.clone(),
+        pair_symbol: report.config.pair_symbol.clone(),
+        market_type: report.config.market_type.clone(),
+        report_id: report.report_id.clone(),
+        generated_at: report.generated_at.clone(),
+        deployment_id: deployment
+            .as_ref()
+            .map(|record| record.deployment_id.clone()),
+        deployment_mode: deployment.as_ref().map(|record| record.mode.clone()),
+        deployment_state: deployment.as_ref().map(|record| record.state.clone()),
+        promotion_eligible: research.promotion_eligible,
+        leaderboard_score,
+        positive_fold_rate_bps: research.positive_fold_rate_bps,
+        significance_confidence_bps: research.significance_confidence_bps,
+        weak_regime_count: research.weak_regime_count,
+        net_return_bps: research.net_return_bps.clone(),
+        flat_cash_excess_return_bps: research.flat_cash_excess_return_bps.clone(),
+        buy_and_hold_excess_return_bps: research.buy_and_hold_excess_return_bps.clone(),
+        promotion_gate_status,
+        blocking_reasons: research.blocking_reasons.clone(),
+        summary: report.summary.clone(),
+    })
+}
+
+fn candidate_key(
+    strategy_key: &str,
+    venue_key: &str,
+    pair_symbol: &str,
+    market_type: &RuntimeVenueMarketType,
+) -> String {
+    format!(
+        "{}::{}::{}::{}",
+        strategy_key,
+        venue_key,
+        pair_symbol,
+        market_type_key(market_type)
+    )
+}
+
+fn market_type_key(market_type: &RuntimeVenueMarketType) -> &'static str {
+    match market_type {
+        RuntimeVenueMarketType::Spot => "spot",
+        RuntimeVenueMarketType::Perp => "perp",
+        RuntimeVenueMarketType::Options => "options",
+    }
+}
+
+fn compute_leaderboard_score(
+    research: &protocol::RuntimeResearchScorecard,
+) -> Result<i64, JsonPayload> {
+    let net_return_bps = parse_numeric_metric("research.netReturnBps", &research.net_return_bps)?;
+    let flat_cash_excess_bps = research
+        .flat_cash_excess_return_bps
+        .as_deref()
+        .map(|value| parse_numeric_metric("research.flatCashExcessReturnBps", value))
+        .transpose()?
+        .unwrap_or_default();
+    let drawdown_penalty_bps =
+        parse_numeric_metric("research.maxDrawdownBps", &research.max_drawdown_bps)?.max(0.0);
+    Ok((net_return_bps.round() as i64)
+        + (flat_cash_excess_bps.round() as i64)
+        + i64::from(research.significance_confidence_bps)
+        - (drawdown_penalty_bps.round() as i64)
+        - i64::from(research.weak_regime_count) * 100)
+}
+
+fn parse_numeric_metric(field: &'static str, value: &str) -> Result<f64, JsonPayload> {
+    value.trim().parse::<f64>().map_err(|_| {
+        error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-scorecard-error",
+            json!({ "field": field, "value": value }),
+        )
+    })
 }
 
 async fn positions_handler(
@@ -2610,6 +2882,11 @@ fn map_reconciler_error(error: ReconcilerError) -> JsonPayload {
 fn map_scorecard_error(error: RuntimeScorecardError) -> JsonPayload {
     match error {
         RuntimeScorecardError::InvalidUsdAmount { field, value } => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-scorecard-error",
+            json!({ "field": field, "value": value }),
+        ),
+        RuntimeScorecardError::InvalidNumericValue { field, value } => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-scorecard-error",
             json!({ "field": field, "value": value }),
@@ -3997,6 +4274,10 @@ mod tests {
             json!(1)
         );
         assert_eq!(
+            scorecards_payload["report"]["scorecard"]["research"]["foldCount"],
+            json!(0)
+        );
+        assert_eq!(
             scorecards_payload["report"]["promotionGates"][0]["targetMode"],
             json!("paper")
         );
@@ -4004,6 +4285,21 @@ mod tests {
             .as_str()
             .expect("markdown")
             .contains("Runtime Promotion Readiness"));
+
+        let leaderboards_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/leaderboards")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(leaderboards_response.status(), StatusCode::OK);
+        let leaderboards_payload = read_json(leaderboards_response).await;
+        assert_eq!(leaderboards_payload["leaderboard"]["entryCount"], json!(0));
 
         let allocator_response = router
             .clone()

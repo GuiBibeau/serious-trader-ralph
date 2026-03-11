@@ -544,6 +544,31 @@ pub struct RuntimeAllocatorScorecard {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeResearchScorecard {
+    pub backtest_report_id: Option<String>,
+    pub backtest_status: Option<RuntimeBacktestStatus>,
+    pub promotion_eligible: bool,
+    pub fold_count: u32,
+    pub positive_fold_count: u32,
+    pub positive_fold_rate_bps: u16,
+    pub baseline_comparison_count: u32,
+    pub baseline_pass_count: u32,
+    pub baseline_outperformance_rate_bps: u16,
+    pub significance_confidence_bps: u16,
+    pub net_return_bps: String,
+    pub max_drawdown_bps: String,
+    pub flat_cash_excess_return_bps: Option<String>,
+    pub buy_and_hold_excess_return_bps: Option<String>,
+    pub regime_count: u32,
+    pub weak_regime_count: u32,
+    pub regime_stability_bps: u16,
+    pub aggregate_baseline_comparisons: Vec<RuntimeBacktestBaselineComparison>,
+    pub aggregate_regime_metrics: Vec<RuntimeBacktestRegimeMetrics>,
+    pub blocking_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeScorecard {
     pub trigger_quality: RuntimeTriggerQualityScorecard,
     pub plan_quality: RuntimePlanQualityScorecard,
@@ -553,6 +578,7 @@ pub struct RuntimeScorecard {
     pub cost: RuntimeCostScorecard,
     pub feature_catalog: RuntimeFeatureCatalogScorecard,
     pub allocator: RuntimeAllocatorScorecard,
+    pub research: RuntimeResearchScorecard,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -587,6 +613,41 @@ pub struct RuntimePromotionReadinessReport {
     pub scorecard: RuntimeScorecard,
     pub promotion_gates: Vec<RuntimePromotionGateDecision>,
     pub proof_artifact_markdown: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStrategyLeaderboardEntry {
+    pub candidate_id: String,
+    pub strategy_key: String,
+    pub venue_key: String,
+    pub pair_symbol: String,
+    pub market_type: RuntimeVenueMarketType,
+    pub report_id: String,
+    pub generated_at: String,
+    pub deployment_id: Option<String>,
+    pub deployment_mode: Option<RuntimeMode>,
+    pub deployment_state: Option<RuntimeDeploymentState>,
+    pub promotion_eligible: bool,
+    pub leaderboard_score: i64,
+    pub positive_fold_rate_bps: u16,
+    pub significance_confidence_bps: u16,
+    pub weak_regime_count: u32,
+    pub net_return_bps: String,
+    pub flat_cash_excess_return_bps: Option<String>,
+    pub buy_and_hold_excess_return_bps: Option<String>,
+    pub promotion_gate_status: Option<RuntimePromotionGateStatus>,
+    pub blocking_reasons: Vec<String>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStrategyLeaderboard {
+    pub schema_version: String,
+    pub generated_at: String,
+    pub entry_count: u32,
+    pub entries: Vec<RuntimeStrategyLeaderboardEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

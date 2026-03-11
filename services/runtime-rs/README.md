@@ -170,7 +170,14 @@ Route surface:
 - `GET /api/internal/runtime/positions?deploymentId=:deploymentId`
 - `GET /api/internal/runtime/pnl?deploymentId=:deploymentId`
 - `GET /api/internal/runtime/scorecards?deploymentId=:deploymentId`
+- `GET /api/internal/runtime/leaderboards`
 - `GET /api/internal/runtime/allocator?deploymentId=:deploymentId`
+
+Scorecards now include the latest linked backtest evidence, significance and
+regime-stability metrics, and optional research-backed promotion gate checks.
+The leaderboard route ranks candidate strategies from the same research
+scorecard signals plus deployment readiness when a candidate already has a
+runtime deployment.
 
 Example shadow evaluation flow:
 

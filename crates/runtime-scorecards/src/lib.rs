@@ -1,17 +1,18 @@
 use std::collections::{BTreeSet, HashMap};
 
 use protocol::{
-    RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard, RuntimeCostScorecard,
-    RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeExecutionCostModelRecord,
-    RuntimeExecutionCostModelStatus, RuntimeExecutionCostObservationRecord, RuntimeExecutionPlan,
-    RuntimeExpectedObservedScorecard, RuntimeFeatureCatalogScorecard,
-    RuntimeFeatureDefinitionRecord, RuntimeLedgerSnapshot, RuntimeMode,
-    RuntimePlanQualityScorecard, RuntimePnlScorecard, RuntimePromotionGateCheck,
+    RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard, RuntimeBacktestBaseline,
+    RuntimeBacktestBaselineComparison, RuntimeBacktestReport, RuntimeBacktestStatus,
+    RuntimeCostScorecard, RuntimeDeploymentRecord, RuntimeDeploymentState,
+    RuntimeExecutionCostModelRecord, RuntimeExecutionCostModelStatus,
+    RuntimeExecutionCostObservationRecord, RuntimeExecutionPlan, RuntimeExpectedObservedScorecard,
+    RuntimeFeatureCatalogScorecard, RuntimeFeatureDefinitionRecord, RuntimeLedgerSnapshot,
+    RuntimeMode, RuntimePlanQualityScorecard, RuntimePnlScorecard, RuntimePromotionGateCheck,
     RuntimePromotionGateDecision, RuntimePromotionGateStatus, RuntimePromotionReadinessReport,
     RuntimeReconciliationResult, RuntimeReconciliationStatus, RuntimeRegimeTagRecord,
-    RuntimeRiskDecision, RuntimeRiskScorecard, RuntimeRiskVerdict, RuntimeRunRecord,
-    RuntimeRunState, RuntimeScorecard, RuntimeStrategySpec, RuntimeTriggerQualityScorecard,
-    RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeResearchScorecard, RuntimeRiskDecision, RuntimeRiskScorecard, RuntimeRiskVerdict,
+    RuntimeRunRecord, RuntimeRunState, RuntimeScorecard, RuntimeStrategySpec,
+    RuntimeTriggerQualityScorecard, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -38,6 +39,12 @@ pub struct RuntimeScorecardConfig {
     pub paper_max_cost_drift_bps: u16,
     pub shadow_max_latency_drift_ms: u64,
     pub paper_max_latency_drift_ms: u64,
+    pub shadow_min_significance_confidence_bps: u16,
+    pub paper_min_significance_confidence_bps: u16,
+    pub shadow_max_backtest_drawdown_bps: i64,
+    pub paper_max_backtest_drawdown_bps: i64,
+    pub shadow_max_weak_regime_count: u32,
+    pub paper_max_weak_regime_count: u32,
 }
 
 impl Default for RuntimeScorecardConfig {
@@ -63,6 +70,12 @@ impl Default for RuntimeScorecardConfig {
             paper_max_cost_drift_bps: 75,
             shadow_max_latency_drift_ms: 15_000,
             paper_max_latency_drift_ms: 10_000,
+            shadow_min_significance_confidence_bps: 6_600,
+            paper_min_significance_confidence_bps: 7_500,
+            shadow_max_backtest_drawdown_bps: 750,
+            paper_max_backtest_drawdown_bps: 500,
+            shadow_max_weak_regime_count: 1,
+            paper_max_weak_regime_count: 0,
         }
     }
 }
@@ -71,6 +84,7 @@ impl Default for RuntimeScorecardConfig {
 pub struct RuntimeScorecardInput {
     pub deployment: RuntimeDeploymentRecord,
     pub strategy_spec: RuntimeStrategySpec,
+    pub backtest_report: Option<RuntimeBacktestReport>,
     pub runs: Vec<RuntimeRunRecord>,
     pub verdicts: Vec<RuntimeRiskVerdict>,
     pub plans: Vec<RuntimeExecutionPlan>,
@@ -90,6 +104,8 @@ pub struct RuntimeScorecardInput {
 pub enum RuntimeScorecardError {
     #[error("invalid usd amount for {field}: {value}")]
     InvalidUsdAmount { field: &'static str, value: String },
+    #[error("invalid numeric value for {field}: {value}")]
+    InvalidNumericValue { field: &'static str, value: String },
     #[error("invalid timestamp for {field}: {value}")]
     InvalidTimestamp { field: &'static str, value: String },
 }
@@ -322,6 +338,7 @@ fn build_scorecard(
     let max_drawdown_usd = format_usd_cents(max_drawdown_cents(input)?);
     let cost = build_cost_scorecard(input)?;
     let feature_catalog = build_feature_catalog_scorecard(input);
+    let research = build_research_scorecard(input)?;
 
     Ok(RuntimeScorecard {
         trigger_quality: RuntimeTriggerQualityScorecard {
@@ -386,6 +403,7 @@ fn build_scorecard(
             zero_grant_count: allocator_zero_grant_count,
             full_grant_rate_bps: ratio_bps(allocator_full_grant_count, allocator_decision_count),
         },
+        research,
     })
 }
 
@@ -623,13 +641,143 @@ fn build_feature_catalog_scorecard(
     }
 }
 
+fn build_research_scorecard(
+    input: &RuntimeScorecardInput,
+) -> Result<RuntimeResearchScorecard, RuntimeScorecardError> {
+    build_research_scorecard_from_backtest(input.backtest_report.as_ref())
+}
+
+pub fn build_research_scorecard_from_backtest(
+    report: Option<&RuntimeBacktestReport>,
+) -> Result<RuntimeResearchScorecard, RuntimeScorecardError> {
+    let Some(report) = report else {
+        return Ok(RuntimeResearchScorecard {
+            backtest_report_id: None,
+            backtest_status: None,
+            promotion_eligible: false,
+            fold_count: 0,
+            positive_fold_count: 0,
+            positive_fold_rate_bps: 0,
+            baseline_comparison_count: 0,
+            baseline_pass_count: 0,
+            baseline_outperformance_rate_bps: 0,
+            significance_confidence_bps: 0,
+            net_return_bps: "0.0000".to_string(),
+            max_drawdown_bps: "0.0000".to_string(),
+            flat_cash_excess_return_bps: None,
+            buy_and_hold_excess_return_bps: None,
+            regime_count: 0,
+            weak_regime_count: 0,
+            regime_stability_bps: 0,
+            aggregate_baseline_comparisons: Vec::new(),
+            aggregate_regime_metrics: Vec::new(),
+            blocking_reasons: Vec::new(),
+        });
+    };
+
+    let fold_count = report.fold_reports.len() as u32;
+    let positive_fold_count = report.fold_reports.iter().try_fold(0_u32, |count, fold| {
+        let net_return_bps =
+            parse_numeric_value("fold.metrics.netReturnBps", &fold.metrics.net_return_bps)?;
+        Ok::<u32, RuntimeScorecardError>(count + u32::from(net_return_bps > 0.0))
+    })?;
+    let positive_fold_rate_bps = ratio_bps(u64::from(positive_fold_count), u64::from(fold_count));
+    let baseline_pass_count =
+        report
+            .aggregate_baseline_comparisons
+            .iter()
+            .try_fold(0_u32, |count, comparison| {
+                let excess_return_bps = parse_numeric_value(
+                    "aggregateBaselineComparisons.excessReturnBps",
+                    &comparison.excess_return_bps,
+                )?;
+                Ok::<u32, RuntimeScorecardError>(count + u32::from(excess_return_bps > 0.0))
+            })?;
+    let baseline_comparison_count = report.aggregate_baseline_comparisons.len() as u32;
+    let baseline_outperformance_rate_bps = full_ratio_bps(
+        u64::from(baseline_pass_count),
+        u64::from(baseline_comparison_count),
+    );
+    let flat_cash_excess_return_bps = baseline_excess_return(
+        &report.aggregate_baseline_comparisons,
+        RuntimeBacktestBaseline::FlatCash,
+    );
+    let buy_and_hold_excess_return_bps = baseline_excess_return(
+        &report.aggregate_baseline_comparisons,
+        RuntimeBacktestBaseline::BuyAndHold,
+    );
+    let regime_count = report.aggregate_regime_metrics.len() as u32;
+    let weak_regime_count =
+        report
+            .aggregate_regime_metrics
+            .iter()
+            .try_fold(0_u32, |count, metric| {
+                let net_return_bps = parse_numeric_value(
+                    "aggregateRegimeMetrics.netReturnBps",
+                    &metric.net_return_bps,
+                )?;
+                Ok::<u32, RuntimeScorecardError>(count + u32::from(net_return_bps < 0.0))
+            })?;
+    let regime_stability_bps = full_ratio_bps(
+        u64::from(regime_count.saturating_sub(weak_regime_count)),
+        u64::from(regime_count),
+    );
+    let baseline_signal_bps = if flat_cash_excess_return_bps
+        .as_deref()
+        .and_then(|value| parse_numeric_value("flatCashExcessReturnBps", value).ok())
+        .is_some_and(|value| value > 0.0)
+    {
+        10_000
+    } else {
+        baseline_outperformance_rate_bps
+    };
+    let significance_confidence_bps = average_bps(&[
+        positive_fold_rate_bps,
+        baseline_signal_bps,
+        regime_stability_bps,
+    ]);
+
+    Ok(RuntimeResearchScorecard {
+        backtest_report_id: Some(report.report_id.clone()),
+        backtest_status: Some(report.status.clone()),
+        promotion_eligible: report.promotion_eligible,
+        fold_count,
+        positive_fold_count,
+        positive_fold_rate_bps,
+        baseline_comparison_count,
+        baseline_pass_count,
+        baseline_outperformance_rate_bps,
+        significance_confidence_bps,
+        net_return_bps: report.aggregate_metrics.net_return_bps.clone(),
+        max_drawdown_bps: report.aggregate_metrics.max_drawdown_bps.clone(),
+        flat_cash_excess_return_bps,
+        buy_and_hold_excess_return_bps,
+        regime_count,
+        weak_regime_count,
+        regime_stability_bps,
+        aggregate_baseline_comparisons: report.aggregate_baseline_comparisons.clone(),
+        aggregate_regime_metrics: report.aggregate_regime_metrics.clone(),
+        blocking_reasons: report.blocking_reasons.clone(),
+    })
+}
+
+fn baseline_excess_return(
+    comparisons: &[RuntimeBacktestBaselineComparison],
+    baseline: RuntimeBacktestBaseline,
+) -> Option<String> {
+    comparisons
+        .iter()
+        .find(|comparison| comparison.baseline == baseline)
+        .map(|comparison| comparison.excess_return_bps.clone())
+}
+
 fn build_promotion_gates(
     config: &RuntimeScorecardConfig,
     input: &RuntimeScorecardInput,
     scorecard: &RuntimeScorecard,
 ) -> Result<Vec<RuntimePromotionGateDecision>, RuntimeScorecardError> {
     Ok(vec![
-        shadow_to_paper_gate(config, input, scorecard),
+        shadow_to_paper_gate(config, input, scorecard)?,
         paper_to_live_gate(config, input, scorecard)?,
     ])
 }
@@ -638,16 +786,16 @@ fn shadow_to_paper_gate(
     config: &RuntimeScorecardConfig,
     input: &RuntimeScorecardInput,
     scorecard: &RuntimeScorecard,
-) -> RuntimePromotionGateDecision {
+) -> Result<RuntimePromotionGateDecision, RuntimeScorecardError> {
     if input.deployment.mode != RuntimeMode::Shadow {
-        return not_applicable_gate(
+        return Ok(not_applicable_gate(
             RuntimeMode::Shadow,
             RuntimeMode::Paper,
             "deployment-mode",
             input.deployment.mode.as_ref(),
             "shadow",
             "Shadow-to-paper promotion only applies to shadow deployments.",
-        );
+        ));
     }
 
     let mut checks = vec![
@@ -756,14 +904,19 @@ fn shadow_to_paper_gate(
             "Allocator zero-grant outcomes block promotion until sleeve coordination is stable.",
         ));
     }
+    checks.extend(optional_research_gate_checks(
+        config,
+        &scorecard.research,
+        RuntimeMode::Shadow,
+    )?);
 
-    gate_from_checks(
+    Ok(gate_from_checks(
         RuntimeMode::Shadow,
         RuntimeMode::Paper,
         true,
         checks,
         "Shadow promotion gate evaluation complete.",
-    )
+    ))
 }
 
 fn paper_to_live_gate(
@@ -920,6 +1073,11 @@ fn paper_to_live_gate(
             "Allocator zero-grant paper runs block bounded live promotion.",
         ));
     }
+    checks.extend(optional_research_gate_checks(
+        config,
+        &scorecard.research,
+        RuntimeMode::Paper,
+    )?);
 
     Ok(gate_from_checks(
         RuntimeMode::Paper,
@@ -973,6 +1131,87 @@ fn allocator_coordination_required(deployment: &RuntimeDeploymentRecord) -> bool
         deployment.state,
         RuntimeDeploymentState::Killed | RuntimeDeploymentState::Archived
     )
+}
+
+fn optional_research_gate_checks(
+    config: &RuntimeScorecardConfig,
+    research: &RuntimeResearchScorecard,
+    source_mode: RuntimeMode,
+) -> Result<Vec<RuntimePromotionGateCheck>, RuntimeScorecardError> {
+    let Some(status) = research.backtest_status.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let min_significance_confidence_bps = match source_mode {
+        RuntimeMode::Shadow => config.shadow_min_significance_confidence_bps,
+        RuntimeMode::Paper | RuntimeMode::Live => config.paper_min_significance_confidence_bps,
+    };
+    let max_backtest_drawdown_bps = match source_mode {
+        RuntimeMode::Shadow => config.shadow_max_backtest_drawdown_bps,
+        RuntimeMode::Paper | RuntimeMode::Live => config.paper_max_backtest_drawdown_bps,
+    };
+    let max_weak_regime_count = match source_mode {
+        RuntimeMode::Shadow => config.shadow_max_weak_regime_count,
+        RuntimeMode::Paper | RuntimeMode::Live => config.paper_max_weak_regime_count,
+    };
+    let max_drawdown_bps =
+        parse_numeric_value("research.maxDrawdownBps", &research.max_drawdown_bps)?
+            .round()
+            .max(0.0) as i64;
+    let flat_cash_excess_positive = research
+        .flat_cash_excess_return_bps
+        .as_deref()
+        .map(|value| {
+            parse_numeric_value("research.flatCashExcessReturnBps", value)
+                .map(|parsed| parsed > 0.0)
+        })
+        .transpose()?
+        .unwrap_or(false);
+
+    let mode_prefix = source_mode.as_ref();
+    Ok(vec![
+        exact_match_check(
+            &format!("{mode_prefix}-research-backtest-status"),
+            *status == RuntimeBacktestStatus::Completed,
+            backtest_status_value(status),
+            "completed",
+            "Candidate backtest evidence must be completed before promotion.",
+        ),
+        exact_match_check(
+            &format!("{mode_prefix}-research-backtest-eligible"),
+            research.promotion_eligible,
+            if research.promotion_eligible { "true" } else { "false" },
+            "true",
+            "Candidate backtest evidence must clear the backtest promotion gates.",
+        ),
+        minimum_bps_check(
+            &format!("{mode_prefix}-research-significance-confidence"),
+            research.significance_confidence_bps,
+            min_significance_confidence_bps,
+            "Research significance confidence must remain above the configured promotion threshold.",
+        ),
+        exact_match_check(
+            &format!("{mode_prefix}-research-flat-cash-excess"),
+            flat_cash_excess_positive,
+            research
+                .flat_cash_excess_return_bps
+                .as_deref()
+                .unwrap_or("missing"),
+            "> 0.0000",
+            "Candidate backtests must outperform the flat-cash baseline before promotion.",
+        ),
+        maximum_check(
+            &format!("{mode_prefix}-research-max-drawdown-bps"),
+            u64::try_from(max_drawdown_bps).unwrap_or(u64::MAX),
+            u64::try_from(max_backtest_drawdown_bps).unwrap_or(u64::MAX),
+            "Candidate backtest drawdown must remain inside the configured risk budget.",
+        ),
+        maximum_check(
+            &format!("{mode_prefix}-research-weak-regimes"),
+            u64::from(research.weak_regime_count),
+            u64::from(max_weak_regime_count),
+            "Negative regime buckets must remain below the configured robustness threshold.",
+        ),
+    ])
 }
 
 fn gate_from_checks(
@@ -1230,6 +1469,26 @@ fn build_proof_artifact_markdown(
             .map(|value| format!(", slo {}ms", value))
             .unwrap_or_default(),
     ));
+    markdown.push_str(&format!(
+        "- Research: report `{}`, significance {}, positive folds {} / {} ({}), flat-cash excess {}, weak regimes {} / {} ({})\n",
+        scorecard
+            .research
+            .backtest_report_id
+            .as_deref()
+            .unwrap_or("missing"),
+        format_bps(scorecard.research.significance_confidence_bps),
+        scorecard.research.positive_fold_count,
+        scorecard.research.fold_count,
+        format_bps(scorecard.research.positive_fold_rate_bps),
+        scorecard
+            .research
+            .flat_cash_excess_return_bps
+            .as_deref()
+            .unwrap_or("missing"),
+        scorecard.research.weak_regime_count,
+        scorecard.research.regime_count,
+        format_bps(scorecard.research.regime_stability_bps),
+    ));
     markdown.push_str("\n### Promotion Gates\n");
     for gate in promotion_gates {
         markdown.push_str(&format!(
@@ -1473,6 +1732,22 @@ fn parse_usd_cents(field: &'static str, value: &str) -> Result<i64, RuntimeScore
     Ok(if negative { -cents } else { cents })
 }
 
+fn parse_numeric_value(field: &'static str, value: &str) -> Result<f64, RuntimeScorecardError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(RuntimeScorecardError::InvalidNumericValue {
+            field,
+            value: value.to_string(),
+        });
+    }
+    trimmed
+        .parse::<f64>()
+        .map_err(|_| RuntimeScorecardError::InvalidNumericValue {
+            field,
+            value: value.to_string(),
+        })
+}
+
 fn format_usd_cents(cents: i64) -> String {
     let sign = if cents < 0 { "-" } else { "" };
     let absolute = cents.unsigned_abs();
@@ -1481,6 +1756,22 @@ fn format_usd_cents(cents: i64) -> String {
 
 fn format_bps(value: u16) -> String {
     format!("{value}bps")
+}
+
+fn average_bps(values: &[u16]) -> u16 {
+    if values.is_empty() {
+        return 0;
+    }
+    let total = values.iter().map(|value| u64::from(*value)).sum::<u64>();
+    (total / values.len() as u64) as u16
+}
+
+fn backtest_status_value(status: &RuntimeBacktestStatus) -> &'static str {
+    match status {
+        RuntimeBacktestStatus::Completed => "completed",
+        RuntimeBacktestStatus::Blocked => "blocked",
+        RuntimeBacktestStatus::Failed => "failed",
+    }
 }
 
 fn now_rfc3339() -> String {
@@ -1612,6 +1903,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -1709,6 +2001,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -1776,6 +2069,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs,
                 verdicts,
                 plans,
@@ -1875,6 +2169,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -1966,6 +2261,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2054,6 +2350,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2136,6 +2433,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2224,6 +2522,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2306,6 +2605,7 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, true)),
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2334,6 +2634,80 @@ mod tests {
             .iter()
             .any(|check| check.gate_id == "paper-allocator-constrained-runs"
                 && check.status == RuntimePromotionGateStatus::Blocked));
+    }
+
+    #[test]
+    fn blocks_research_backed_live_promotion_when_backtest_confidence_is_weak() {
+        let deployment = deployment(
+            "deployment_research_weak_paper",
+            RuntimeMode::Paper,
+            RuntimeDeploymentState::Paper,
+        );
+        let runs = (1..=5)
+            .map(|index| {
+                run(
+                    &format!("run_research_weak_{index}"),
+                    RuntimeRunState::Completed,
+                    trigger("operator"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let verdicts = runs
+            .iter()
+            .map(|run| allow_verdict(&deployment, run))
+            .collect::<Vec<_>>();
+        let plans = runs
+            .iter()
+            .map(|run| plan(&deployment, run, true, false))
+            .collect::<Vec<_>>();
+        let reconciliations = runs
+            .iter()
+            .map(|run| reconciliation(&deployment, run, RuntimeReconciliationStatus::Passed, false))
+            .collect::<Vec<_>>();
+        let snapshots = vec![ledger_snapshot(
+            &deployment,
+            "1000.00",
+            "5.00",
+            "995.00",
+            "1.00",
+            "0.00",
+            "2026-03-08T10:00:00Z",
+        )];
+
+        let report = build_readiness_report(
+            &RuntimeScorecardConfig::default(),
+            &RuntimeScorecardInput {
+                deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
+                backtest_report: Some(backtest_report(&deployment, false)),
+                runs: runs.clone(),
+                verdicts,
+                plans: plans.clone(),
+                cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
+                allocator_decisions: vec![],
+                submit_attempt_count: 5,
+                receipt_count: 5,
+                reconciliations,
+                observed_ledger_snapshots: snapshots.clone(),
+                latest_ledger_snapshot: snapshots.last().cloned(),
+            },
+        )
+        .expect("report to build");
+
+        assert_eq!(
+            report.promotion_gates[1].status,
+            RuntimePromotionGateStatus::Blocked
+        );
+        assert!(report.promotion_gates[1]
+            .checks
+            .iter()
+            .any(|check| check.gate_id == "paper-research-backtest-eligible"
+                && check.status == RuntimePromotionGateStatus::Blocked));
+        assert!(report.scorecard.research.significance_confidence_bps < 7_500);
+        assert_eq!(report.scorecard.research.weak_regime_count, 1);
     }
 
     fn deployment(
@@ -2625,6 +2999,180 @@ mod tests {
                 .expect("cost observation to build")
             })
             .collect()
+    }
+
+    fn backtest_report(
+        deployment: &RuntimeDeploymentRecord,
+        promotion_eligible: bool,
+    ) -> protocol::RuntimeBacktestReport {
+        protocol::RuntimeBacktestReport {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            report_id: format!("backtest_{}", deployment.deployment_id),
+            experiment_id: format!("experiment_{}", deployment.strategy_key),
+            strategy_key: deployment.strategy_key.clone(),
+            status: if promotion_eligible {
+                protocol::RuntimeBacktestStatus::Completed
+            } else {
+                protocol::RuntimeBacktestStatus::Blocked
+            },
+            generated_at: "2026-03-10T00:00:00.000Z".to_string(),
+            venue_keys: vec![deployment.venue_key.clone()],
+            asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+            code_revision: protocol::RuntimeCodeRevisionRef {
+                vcs: "git".to_string(),
+                repository: "github.com/GuiBibeau/serious-trader-ralph".to_string(),
+                revision: "f8168f48f0f484917f866c88b9ce4f89a055fa31".to_string(),
+                compared_to: None,
+                tree_dirty: false,
+            },
+            dataset_snapshots: vec![protocol::RuntimeDatasetSnapshotRef {
+                dataset_id: "dataset_feed_replay_sol_usdc_market_events".to_string(),
+                snapshot_id: "snapshot_2026_03_07_seed".to_string(),
+                captured_at: "2026-03-10T00:00:00.000Z".to_string(),
+                uri: Some(
+                    "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents"
+                        .to_string(),
+                ),
+                content_digest: Some("sha256:fixture".to_string()),
+            }],
+            strategy_spec_digest: format!("digest_{}", deployment.strategy_key),
+            config: protocol::RuntimeBacktestConfig {
+                replay_corpus_id: "replay_corpus_sol_usdc_feed_gateway_seed".to_string(),
+                venue_key: deployment.venue_key.clone(),
+                pair_symbol: deployment.pair.symbol.clone(),
+                market_type: RuntimeVenueMarketType::Spot,
+                window_mode: protocol::RuntimeBacktestWindowMode::Rolling,
+                training_window_observations: 24,
+                testing_window_observations: 8,
+                step_observations: 4,
+                purge_observations: 2,
+                baseline_strategies: vec![
+                    protocol::RuntimeBacktestBaseline::FlatCash,
+                    protocol::RuntimeBacktestBaseline::BuyAndHold,
+                ],
+            },
+            fold_reports: vec![
+                fold_report("fold_0", 0, "12.5000", "4.0000", 8_000),
+                fold_report("fold_1", 1, "11.7500", "4.5000", 7_500),
+                fold_report("fold_2", 2, "9.2500", "5.0000", 7_000),
+            ],
+            aggregate_metrics: protocol::RuntimeBacktestMetrics {
+                observation_count: 24,
+                trade_count: 7,
+                gross_return_bps: "15.7500".to_string(),
+                net_return_bps: if promotion_eligible {
+                    "11.1667".to_string()
+                } else {
+                    "-2.2500".to_string()
+                },
+                total_cost_bps: "4.5833".to_string(),
+                win_rate_bps: 7_500,
+                max_drawdown_bps: if promotion_eligible {
+                    "4.5000".to_string()
+                } else {
+                    "12.0000".to_string()
+                },
+            },
+            aggregate_baseline_comparisons: vec![
+                protocol::RuntimeBacktestBaselineComparison {
+                    baseline: protocol::RuntimeBacktestBaseline::FlatCash,
+                    baseline_return_bps: "0.0000".to_string(),
+                    excess_return_bps: if promotion_eligible {
+                        "11.1667".to_string()
+                    } else {
+                        "-2.2500".to_string()
+                    },
+                },
+                protocol::RuntimeBacktestBaselineComparison {
+                    baseline: protocol::RuntimeBacktestBaseline::BuyAndHold,
+                    baseline_return_bps: "7.5000".to_string(),
+                    excess_return_bps: if promotion_eligible {
+                        "3.6667".to_string()
+                    } else {
+                        "-9.7500".to_string()
+                    },
+                },
+            ],
+            aggregate_regime_metrics: vec![
+                protocol::RuntimeBacktestRegimeMetrics {
+                    regime_key: "short_trend".to_string(),
+                    regime_value: "positive".to_string(),
+                    observation_count: 12,
+                    trade_count: 4,
+                    net_return_bps: "8.5000".to_string(),
+                    win_rate_bps: 7_500,
+                },
+                protocol::RuntimeBacktestRegimeMetrics {
+                    regime_key: "volatility_band".to_string(),
+                    regime_value: "medium".to_string(),
+                    observation_count: 12,
+                    trade_count: 3,
+                    net_return_bps: if promotion_eligible {
+                        "2.6667".to_string()
+                    } else {
+                        "-4.2500".to_string()
+                    },
+                    win_rate_bps: if promotion_eligible { 6_666 } else { 4_000 },
+                },
+            ],
+            promotion_eligible,
+            blocking_reasons: if promotion_eligible {
+                Vec::new()
+            } else {
+                vec![
+                    "aggregate out-of-sample net return must be positive".to_string(),
+                    "aggregate return must exceed flat-cash baseline".to_string(),
+                ]
+            },
+            summary: if promotion_eligible {
+                "Backtest cleared the shadow candidate threshold.".to_string()
+            } else {
+                "Backtest blocked on negative out-of-sample returns.".to_string()
+            },
+            tags: vec!["backtest".to_string(), "candidate".to_string()],
+        }
+    }
+
+    fn fold_report(
+        fold_id: &str,
+        fold_index: u32,
+        net_return_bps: &str,
+        max_drawdown_bps: &str,
+        win_rate_bps: u16,
+    ) -> protocol::RuntimeBacktestFoldReport {
+        protocol::RuntimeBacktestFoldReport {
+            fold_id: fold_id.to_string(),
+            fold_index,
+            training_start_at: "2026-03-01T00:00:00.000Z".to_string(),
+            training_end_at: "2026-03-05T00:00:00.000Z".to_string(),
+            test_start_at: "2026-03-05T00:00:00.000Z".to_string(),
+            test_end_at: "2026-03-06T00:00:00.000Z".to_string(),
+            train_observation_count: 24,
+            purged_observation_count: 2,
+            test_observation_count: 8,
+            metrics: protocol::RuntimeBacktestMetrics {
+                observation_count: 8,
+                trade_count: 2,
+                gross_return_bps: net_return_bps.to_string(),
+                net_return_bps: net_return_bps.to_string(),
+                total_cost_bps: "1.5000".to_string(),
+                win_rate_bps,
+                max_drawdown_bps: max_drawdown_bps.to_string(),
+            },
+            baseline_comparisons: vec![protocol::RuntimeBacktestBaselineComparison {
+                baseline: protocol::RuntimeBacktestBaseline::FlatCash,
+                baseline_return_bps: "0.0000".to_string(),
+                excess_return_bps: net_return_bps.to_string(),
+            }],
+            regime_metrics: vec![protocol::RuntimeBacktestRegimeMetrics {
+                regime_key: "short_trend".to_string(),
+                regime_value: "positive".to_string(),
+                observation_count: 8,
+                trade_count: 2,
+                net_return_bps: net_return_bps.to_string(),
+                win_rate_bps,
+            }],
+        }
     }
 
     fn strategy_spec(deployment: &RuntimeDeploymentRecord) -> RuntimeStrategySpec {
