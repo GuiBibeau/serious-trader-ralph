@@ -70,6 +70,40 @@ When a run starts, add `agent-running`. When the PR is ready for review, remove
   gate.
 - Do not push directly to `dev` or `main`.
 
+## Strategy Lab Lifecycle
+
+The strategy-lab program adds explicit promotion states for strategies and
+separate onboarding states for venues and assets.
+
+Strategy promotion states:
+
+- `candidate`
+- `draft`
+- `shadow`
+- `paper`
+- `limited_live`
+- `broad_live`
+- `paused`
+- `deprecated`
+
+Venue and asset onboarding states stay separate from strategy promotion so the
+repo can distinguish a weak strategy from an unready venue or asset:
+
+- `candidate`
+- `integrated`
+- `shadow_ready`
+- `paper_ready`
+- `limited_live_ready`
+- `broad_live_ready`
+- `paused`
+- `deprecated`
+
+See:
+
+- `docs/product-specs/strategy-lab-prd.md`
+- `docs/exec-plans/active/strategy-lab-rollout.md`
+- `docs/reliability/strategy-lab-ops-runbook.md`
+
 ## Validation Requirements
 
 Always run the smallest relevant validation set and report the exact commands in
@@ -93,6 +127,15 @@ focused test suite is clearly sufficient. Examples:
 - deployment or environment changes: include the relevant smoke checks and any
   branch-specific verification notes
 
+For strategy-lab work, add the evaluation commands that match the promotion
+target. Examples:
+
+- candidate or draft docs-only: `bun run lint`
+- shadow readiness: relevant replay, backtest, or contract suites
+- paper readiness: paper simulation and scorecard checks
+- limited-live or broad-live promotion: canary or live-readiness checks and
+  explicit rollout notes
+
 ## Proof Bundle Requirements
 
 Every PR must include a proof bundle in its summary comment or description. The
@@ -107,6 +150,17 @@ bundle must include:
 
 If a proof item is not applicable, say so explicitly instead of omitting it.
 
+Strategy-lab proof bundles must also include the evidence bundle relevant to
+the target state transition:
+
+- source provenance and publication dates for `candidate` or `draft`
+- StrategySpec, replay, and backtest evidence for `shadow`
+- paper scorecards, cost assumptions, and reproducibility manifests for
+  `paper`
+- canary plans, risk budgets, venue and asset readiness, and named human
+  approval for `limited_live`
+- soak summaries and drift review for `broad_live`
+
 ## Approval Posture
 
 - This repo is operated in a high-trust mode for engineering execution.
@@ -115,6 +169,16 @@ If a proof item is not applicable, say so explicitly instead of omitting it.
   later issue.
 - Prefer reversible changes and call out any deployment or rollout risk in the
   PR summary.
+
+Money-state approval boundaries:
+
+- Merging a PR does not authorize real-money promotion by itself.
+- `shadow` may begin only after human-reviewed code merge.
+- `paper` requires explicit operator approval.
+- `limited_live` requires explicit human approval, allowlist changes, kill
+  controls, and bounded canary notes.
+- `broad_live` requires successful limited-live evidence and explicit human
+  approval.
 
 ## Secret Boundaries
 

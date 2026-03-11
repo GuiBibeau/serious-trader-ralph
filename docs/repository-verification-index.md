@@ -11,7 +11,8 @@ how to verify or roll back the main operating paths.
 | Portal | Next.js marketing, login, and terminal UI | `apps/portal` |
 | Worker | Cloudflare Worker API boundary for x402, execution, discovery, and auth-adjacent routes | `apps/worker` |
 | Runtime control plane | Bun CLI, agent runtime, tools, policies, and journals | `src` |
-| Autonomous runtime (planned) | Rust hot path for always-on automation, reconciliation, and portfolio state | `docs/product-specs/autonomous-runtime-prd.md`, `docs/design-docs/autonomous-runtime-architecture.md` |
+| Autonomous runtime | Rust hot path for always-on automation, reconciliation, and portfolio state | `services/runtime-rs`, `docs/product-specs/autonomous-runtime-prd.md`, `docs/design-docs/autonomous-runtime-architecture.md` |
+| Strategy lab | Research-to-production workflow for new strategies, venues, and assets | `docs/product-specs/strategy-lab-prd.md`, `docs/exec-plans/active/strategy-lab-rollout.md` |
 | Tests | Unit, integration, and terminal execution suites | `tests` |
 | Public contracts | Execution docs, schemas, fixtures, and runbooks | `docs/execution` |
 | Agent registry | Lane metadata and operator runbook | `docs/agent-registry` |
@@ -62,10 +63,12 @@ Autonomous runtime planning surfaces:
 - ADRs: `docs/design-docs/adrs/`
 - Ops runbook: `docs/reliability/autonomous-runtime-ops-runbook.md`
 - Rollout plan: `docs/exec-plans/active/autonomous-runtime-rollout.md`
+- Strategy-lab product spec: `docs/product-specs/strategy-lab-prd.md`
+- Strategy-lab rollout plan: `docs/exec-plans/active/strategy-lab-rollout.md`
+- Strategy-lab ops runbook: `docs/reliability/strategy-lab-ops-runbook.md`
 
-The runtime service is not deployed yet. Until `#258` to `#261` land, runtime
-verification is documentation-only and the live stack remains portal plus
-Worker.
+The runtime service is deployed on Fly and verified independently from the
+portal and Worker lanes.
 
 Current workflow files:
 
@@ -79,6 +82,8 @@ Current workflow files:
 - Ops:
   - `.github/workflows/ops-dashboard.yml`
   - `.github/workflows/rollback-production.yml`
+  - `.github/workflows/deploy-runtime-rs.yml`
+  - `.github/workflows/rollback-runtime-rs.yml`
 
 Current required secret names:
 
@@ -202,6 +207,23 @@ Expected behavior:
 - one warm standby machine exists in `iad`,
 - `https://ralph-runtime-rs.fly.dev/health` returns `serviceName=runtime-rs`
   and `environment=production`.
+
+### 3d. Strategy-lab planning verification
+
+For docs-only strategy-lab work:
+
+```bash
+bun run lint
+```
+
+Verify:
+
+- strategy promotion states and venue or asset onboarding states are explicit,
+- approval boundaries between merge, shadow, paper, and real money are
+  documented,
+- evidence bundles are defined for every promotion transition,
+- rollback and kill posture exist for every production-facing state,
+- no docs introduce secrets or private operational tokens.
 
 ### 4. x402 and discovery verification
 
