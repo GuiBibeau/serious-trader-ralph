@@ -2638,9 +2638,18 @@ mod tests {
                             "sourceKind": "paper",
                             "title": "Microstructure signals for crypto execution",
                             "url": "https://example.com/papers/microstructure",
+                            "canonicalUrl": "https://example.com/papers/microstructure",
                             "authors": ["Ada Researcher"],
                             "retrievedAt": "2026-03-10T14:00:00.000Z",
                             "contentDigest": "sha256:paper",
+                            "provenance": {
+                                "acquisitionKind": "paper_feed",
+                                "collectedFrom": "https://example.com/feed/crypto.xml",
+                                "hostname": "example.com",
+                                "publisher": "Example Research",
+                                "firstSeenAt": "2026-03-10T14:00:00.000Z",
+                                "lastSeenAt": "2026-03-10T14:00:00.000Z"
+                            },
                             "venueKeys": ["jupiter"],
                             "assetKeys": ["SOL", "USDC"],
                             "tags": ["signal"]

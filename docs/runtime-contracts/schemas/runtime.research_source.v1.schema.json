@@ -31,6 +31,10 @@
       "type": "string",
       "minLength": 1
     },
+    "canonicalUrl": {
+      "type": "string",
+      "minLength": 1
+    },
     "authors": {
       "type": "array",
       "items": {
@@ -51,6 +55,44 @@
     "contentDigest": {
       "type": "string",
       "minLength": 1
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "acquisitionKind": {
+          "type": "string",
+          "enum": ["manual_url", "paper_feed", "venue_docs"]
+        },
+        "collectedFrom": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publisher": {
+          "type": "string",
+          "minLength": 1
+        },
+        "firstSeenAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        }
+      },
+      "required": [
+        "acquisitionKind",
+        "collectedFrom",
+        "hostname",
+        "lastSeenAt"
+      ],
+      "additionalProperties": false
     },
     "venueKeys": {
       "type": "array",
@@ -81,9 +123,11 @@
     "sourceKind",
     "title",
     "url",
+    "canonicalUrl",
     "authors",
     "retrievedAt",
     "contentDigest",
+    "provenance",
     "venueKeys",
     "assetKeys",
     "tags"

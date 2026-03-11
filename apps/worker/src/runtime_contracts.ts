@@ -9,6 +9,8 @@ export type {
   RuntimeResearchEvidenceBundleRecord,
   RuntimeResearchExperimentRecord,
   RuntimeResearchHypothesisRecord,
+  RuntimeResearchSourceAcquisitionKind,
+  RuntimeResearchSourceProvenance,
   RuntimeResearchSourceRecord,
   RuntimeRiskVerdict,
   RuntimeRunRecord,

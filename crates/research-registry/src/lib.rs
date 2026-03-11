@@ -998,9 +998,7 @@ fn hypothesis_identity_key(
 
 fn source_identity_key(record: &RuntimeResearchSourceRecord) -> Result<String, serde_json::Error> {
     identity_key(&serde_json::json!({
-        "sourceKind": record.source_kind,
-        "url": record.url,
-        "contentDigest": record.content_digest,
+        "sourceId": record.source_id,
     }))
 }
 
@@ -1206,10 +1204,19 @@ mod tests {
             source_kind: RuntimeResearchSourceKind::Paper,
             title: "Microstructure signals for crypto execution".to_string(),
             url: "https://example.com/papers/microstructure".to_string(),
+            canonical_url: "https://example.com/papers/microstructure".to_string(),
             authors: vec!["Ada Researcher".to_string()],
             published_at: Some("2026-02-01T00:00:00Z".to_string()),
             retrieved_at: "2026-03-10T14:00:00Z".to_string(),
             content_digest: "sha256:paper".to_string(),
+            provenance: protocol::RuntimeResearchSourceProvenance {
+                acquisition_kind: protocol::RuntimeResearchSourceAcquisitionKind::PaperFeed,
+                collected_from: "https://example.com/feed/crypto.xml".to_string(),
+                hostname: "example.com".to_string(),
+                publisher: Some("Example Research".to_string()),
+                first_seen_at: Some("2026-03-10T14:00:00Z".to_string()),
+                last_seen_at: "2026-03-10T14:00:00Z".to_string(),
+            },
             venue_keys: vec!["jupiter".to_string()],
             asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
             tags: vec!["signal".to_string()],
@@ -1407,6 +1414,38 @@ mod tests {
             RuntimeResearchExperimentStatus::Running
         );
         assert_eq!(query.experiments[0].completed_at, None);
+    }
+
+    #[test]
+    fn refreshes_existing_source_when_content_digest_changes() {
+        let registry = registry("refresh-source");
+        let first = registry
+            .upsert_source(&source_record())
+            .expect("first source write");
+        let mut refreshed = source_record();
+        refreshed.retrieved_at = "2026-03-12T14:00:00Z".to_string();
+        refreshed.content_digest = "sha256:paper-refreshed".to_string();
+        refreshed.provenance.last_seen_at = refreshed.retrieved_at.clone();
+        let second = registry
+            .upsert_source(&refreshed)
+            .expect("refreshed source write");
+
+        assert!(first.created);
+        assert!(!second.created);
+        assert_eq!(second.record.source_id, first.record.source_id);
+        assert_eq!(second.record.content_digest, "sha256:paper-refreshed");
+        assert_eq!(second.record.retrieved_at, "2026-03-12T14:00:00Z");
+
+        let query = registry
+            .query(&ResearchRegistryQuery {
+                strategy_key: None,
+                venue_key: Some("jupiter".to_string()),
+                asset_key: Some("SOL".to_string()),
+                source_id: Some("source_paper_microstructure".to_string()),
+            })
+            .expect("query");
+        assert_eq!(query.sources.len(), 1);
+        assert_eq!(query.sources[0].content_digest, "sha256:paper-refreshed");
     }
 
     #[test]

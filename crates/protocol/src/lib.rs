@@ -559,6 +559,14 @@ pub enum RuntimeResearchSourceKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum RuntimeResearchSourceAcquisitionKind {
+    ManualUrl,
+    PaperFeed,
+    VenueDocs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeResearchExperimentStatus {
     Queued,
     Running,
@@ -619,6 +627,17 @@ pub struct RuntimeArtifactRef {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeResearchSourceProvenance {
+    pub acquisition_kind: RuntimeResearchSourceAcquisitionKind,
+    pub collected_from: String,
+    pub hostname: String,
+    pub publisher: Option<String>,
+    pub first_seen_at: Option<String>,
+    pub last_seen_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeResearchHypothesisRecord {
     pub schema_version: String,
     pub hypothesis_id: String,
@@ -642,10 +661,12 @@ pub struct RuntimeResearchSourceRecord {
     pub source_kind: RuntimeResearchSourceKind,
     pub title: String,
     pub url: String,
+    pub canonical_url: String,
     pub authors: Vec<String>,
     pub published_at: Option<String>,
     pub retrieved_at: String,
     pub content_digest: String,
+    pub provenance: RuntimeResearchSourceProvenance,
     pub venue_keys: Vec<String>,
     pub asset_keys: Vec<String>,
     pub tags: Vec<String>,

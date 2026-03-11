@@ -228,6 +228,28 @@ Verify:
 - rollback and kill posture exist for every production-facing state,
 - no docs introduce secrets or private operational tokens.
 
+### 3e. Strategy-lab source acquisition verification
+
+For research-source ingestion and normalization work:
+
+```bash
+bun run contracts:runtime:schemas
+bun test tests/unit/runtime_research_source_acquisition.test.ts tests/unit/worker_runtime_research_sources.test.ts tests/unit/runtime_protocol_contracts.test.ts tests/unit/runtime_protocol_schema_fixtures.test.ts tests/unit/worker_runtime_internal_routes.test.ts
+cargo test -p protocol --lib
+cargo test -p research-registry --lib
+cargo test -p runtime-rs --lib
+```
+
+Verify:
+
+- acquired source records carry `canonicalUrl`, `publishedAt`, and provenance,
+- paper-feed, venue-doc, and manual-URL acquisition paths all normalize into
+  the shared runtime source contract,
+- refreshed source writes preserve stable identity while updating
+  `retrievedAt`, `contentDigest`, and provenance `lastSeenAt`,
+- later phases can retrieve latest source material with citations and dates from
+  the research registry without widening the public Worker boundary.
+
 ### 4. x402 and discovery verification
 
 Portal-side discovery:

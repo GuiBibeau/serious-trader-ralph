@@ -257,6 +257,12 @@ export const RuntimeResearchSourceKindSchema = z.enum([
   "market_report",
 ]);
 
+export const RuntimeResearchSourceAcquisitionKindSchema = z.enum([
+  "manual_url",
+  "paper_feed",
+  "venue_docs",
+]);
+
 export const RuntimeResearchExperimentStatusSchema = z.enum([
   "queued",
   "running",
@@ -313,6 +319,17 @@ const RuntimeArtifactRefSchema = z
   })
   .strict();
 
+const RuntimeResearchSourceProvenanceSchema = z
+  .object({
+    acquisitionKind: RuntimeResearchSourceAcquisitionKindSchema,
+    collectedFrom: NON_EMPTY_STRING_SCHEMA,
+    hostname: NON_EMPTY_STRING_SCHEMA,
+    publisher: NON_EMPTY_STRING_SCHEMA.optional(),
+    firstSeenAt: ISO_DATETIME_SCHEMA.optional(),
+    lastSeenAt: ISO_DATETIME_SCHEMA,
+  })
+  .strict();
+
 export const RuntimeResearchHypothesisRecordSchema = VersionedSchema.extend({
   hypothesisId: NON_EMPTY_STRING_SCHEMA,
   strategyKey: NON_EMPTY_STRING_SCHEMA,
@@ -332,10 +349,12 @@ export const RuntimeResearchSourceRecordSchema = VersionedSchema.extend({
   sourceKind: RuntimeResearchSourceKindSchema,
   title: NON_EMPTY_STRING_SCHEMA,
   url: NON_EMPTY_STRING_SCHEMA,
+  canonicalUrl: NON_EMPTY_STRING_SCHEMA,
   authors: z.array(NON_EMPTY_STRING_SCHEMA),
   publishedAt: ISO_DATETIME_SCHEMA.optional(),
   retrievedAt: ISO_DATETIME_SCHEMA,
   contentDigest: NON_EMPTY_STRING_SCHEMA,
+  provenance: RuntimeResearchSourceProvenanceSchema,
   venueKeys: z.array(NON_EMPTY_STRING_SCHEMA),
   assetKeys: z.array(NON_EMPTY_STRING_SCHEMA),
   tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
@@ -497,6 +516,15 @@ export type RuntimeReconciliationResult = z.infer<
 >;
 export type RuntimeResearchHypothesisRecord = z.infer<
   typeof RuntimeResearchHypothesisRecordSchema
+>;
+export type RuntimeResearchSourceKind = z.infer<
+  typeof RuntimeResearchSourceKindSchema
+>;
+export type RuntimeResearchSourceAcquisitionKind = z.infer<
+  typeof RuntimeResearchSourceAcquisitionKindSchema
+>;
+export type RuntimeResearchSourceProvenance = z.infer<
+  typeof RuntimeResearchSourceProvenanceSchema
 >;
 export type RuntimeResearchSourceRecord = z.infer<
   typeof RuntimeResearchSourceRecordSchema
