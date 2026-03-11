@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
   parseRuntimeStrategySpec,
   parseRuntimeVenueCapability,
@@ -27,6 +28,7 @@ describe("worker runtime contract bridge", () => {
       "researchExperiment",
       "researchEvidenceBundle",
       "venueCapability",
+      "assetRecord",
       "strategySpec",
     ]);
   });
@@ -62,5 +64,16 @@ describe("worker runtime contract bridge", () => {
 
     expect(venueCapability.venueKey).toBe("jupiter");
     expect(venueCapability.adapterKeys).toContain("jupiter");
+  });
+
+  test("worker can parse the canonical asset record fixture", () => {
+    const assetRecord = parseRuntimeAssetRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.asset_record.valid.v1.json",
+      ),
+    );
+
+    expect(assetRecord.assetKey).toBe("SOL");
+    expect(assetRecord.venueMappings[0]?.venueKey).toBe("jupiter");
   });
 });

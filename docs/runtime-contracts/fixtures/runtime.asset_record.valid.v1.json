@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "v1",
+  "assetKey": "SOL",
+  "displayName": "Solana",
+  "symbol": "SOL",
+  "chainKey": "solana-mainnet",
+  "canonicalId": "So11111111111111111111111111111111111111112",
+  "assetKind": "native",
+  "riskClass": "core",
+  "listingState": "live",
+  "decimals": 9,
+  "aliases": ["WSOL"],
+  "quoteAssetKeys": ["USDC"],
+  "venueMappings": [
+    {
+      "venueKey": "jupiter",
+      "nativeId": "So11111111111111111111111111111111111111112",
+      "venueSymbol": "SOL",
+      "decimals": 9,
+      "listingState": "live",
+      "quoteAssetKeys": ["USDC"],
+      "priceDecimals": 6,
+      "sizeDecimals": 9,
+      "minNotionalUsd": "0.01",
+      "notes": "Primary live asset mapping."
+    },
+    {
+      "venueKey": "magicblock",
+      "nativeId": "So11111111111111111111111111111111111111112",
+      "venueSymbol": "SOL",
+      "decimals": 9,
+      "listingState": "paper",
+      "quoteAssetKeys": ["USDC"],
+      "priceDecimals": 6,
+      "sizeDecimals": 9,
+      "minNotionalUsd": "0.01",
+      "notes": "Bounded to paper until venue onboarding advances."
+    },
+    {
+      "venueKey": "phoenix",
+      "nativeId": "So11111111111111111111111111111111111111112",
+      "venueSymbol": "SOL",
+      "decimals": 9,
+      "listingState": "candidate",
+      "quoteAssetKeys": ["USDC"],
+      "priceDecimals": 6,
+      "sizeDecimals": 9,
+      "minNotionalUsd": "0.01",
+      "notes": "Candidate mapping for venue onboarding."
+    }
+  ],
+  "createdAt": "2026-03-10T00:00:00.000Z",
+  "updatedAt": "2026-03-10T00:00:00.000Z",
+  "promotedAt": "2026-03-10T00:00:00.000Z",
+  "tags": ["core", "solana", "spot"],
+  "notes": "Canonical base asset fixture used by the runtime asset registry."
+}

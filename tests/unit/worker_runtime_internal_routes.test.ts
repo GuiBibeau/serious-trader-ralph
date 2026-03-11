@@ -308,6 +308,37 @@ const VALID_RUNTIME_RESEARCH_EVIDENCE_BUNDLE = {
   tags: ["promotion"],
 };
 
+const VALID_RUNTIME_ASSET = {
+  schemaVersion: "v1",
+  assetKey: "BONK",
+  displayName: "Bonk",
+  symbol: "BONK",
+  chainKey: "solana-mainnet",
+  canonicalId: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  assetKind: "token",
+  riskClass: "volatile",
+  listingState: "candidate",
+  decimals: 5,
+  aliases: ["Bonk Inu"],
+  quoteAssetKeys: ["USDC"],
+  venueMappings: [
+    {
+      venueKey: "jupiter",
+      nativeId: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+      venueSymbol: "BONK",
+      decimals: 5,
+      listingState: "candidate",
+      quoteAssetKeys: ["USDC"],
+      priceDecimals: 8,
+      sizeDecimals: 5,
+      minNotionalUsd: "0.10",
+    },
+  ],
+  createdAt: "2026-03-10T14:25:00.000Z",
+  updatedAt: "2026-03-10T14:25:00.000Z",
+  tags: ["candidate", "meme"],
+};
+
 describe("worker runtime internal routes", () => {
   test("requires runtime service auth", async () => {
     const env = createWorkerLiveEnv();
@@ -961,6 +992,101 @@ describe("worker runtime internal routes", () => {
       created: true,
       evidenceBundle: {
         evidenceBundleId: "evidence_signal_trend_shadow",
+      },
+    });
+  });
+
+  test("returns stubbed runtime asset registry", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/assets?assetKey=SOL&venueKey=jupiter&listingState=live",
+        {
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+          },
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "stub",
+      filters: {
+        assetKey: "SOL",
+        venueKey: "jupiter",
+        listingState: "live",
+      },
+    });
+    expect(payload.registry.assets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          assetKey: "SOL",
+          venueMappings: expect.arrayContaining([
+            expect.objectContaining({ venueKey: "jupiter" }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  test("accepts stubbed runtime asset writes and transitions", async () => {
+    const env = createWorkerLiveEnv();
+
+    const writeResponse = await worker.fetch(
+      new Request("http://localhost/api/internal/runtime/assets", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer runtime-service-secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(VALID_RUNTIME_ASSET),
+      }),
+      env,
+      createExecutionContextStub(),
+    );
+    expect(writeResponse.status).toBe(201);
+    expect(await writeResponse.json()).toMatchObject({
+      ok: true,
+      source: "stub",
+      created: true,
+      asset: {
+        assetKey: "BONK",
+        listingState: "candidate",
+      },
+    });
+
+    const transitionResponse = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/assets/BONK/transition",
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            listingState: "paper",
+            changedAt: "2026-03-10T14:30:00.000Z",
+          }),
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(transitionResponse.status).toBe(200);
+    expect(await transitionResponse.json()).toMatchObject({
+      ok: true,
+      source: "stub",
+      asset: {
+        assetKey: "BONK",
+        listingState: "paper",
       },
     });
   });

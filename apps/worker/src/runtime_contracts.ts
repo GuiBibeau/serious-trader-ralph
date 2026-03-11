@@ -1,4 +1,6 @@
 export type {
+  RuntimeAssetListingState,
+  RuntimeAssetRecord,
   RuntimeDeploymentRecord,
   RuntimeDeploymentState,
   RuntimeExecutionPlan,
@@ -21,6 +23,7 @@ export type {
 export {
   canTransitionRuntimeDeploymentState,
   canTransitionRuntimeRunState,
+  parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionPlan,
   parseRuntimeLedgerSnapshot,
@@ -38,6 +41,7 @@ export {
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
   RUNTIME_PROTOCOL_SCHEMA_VERSION,
   RUNTIME_RUN_STATE_TRANSITIONS,
+  safeParseRuntimeAssetRecord,
   safeParseRuntimeDeploymentRecord,
   safeParseRuntimeExecutionPlan,
   safeParseRuntimeLedgerSnapshot,
