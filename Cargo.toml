@@ -5,6 +5,7 @@ members = [
   "crates/execution-planner",
   "crates/exec-client",
   "crates/feature-cache",
+  "crates/feature-catalog-registry",
   "crates/historical-data-lake",
   "crates/market-adapters",
   "crates/portfolio-ledger",

@@ -1,14 +1,15 @@
 [package]
-name = "runtime-scorecards"
+name = "feature-catalog-registry"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 protocol = { path = "../protocol" }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
-time = { version = "=0.3.44", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 strategy-core = { path = "../strategy-core" }

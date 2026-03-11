@@ -5,7 +5,9 @@ import {
   parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
+  parseRuntimeFeatureDefinitionRecord,
   parseRuntimeHistoricalDatasetSnapshotRecord,
+  parseRuntimeRegimeTagRecord,
   parseRuntimeReplayCorpusRecord,
   parseRuntimeStrategySpec,
   parseRuntimeVenueCapability,
@@ -32,6 +34,8 @@ describe("worker runtime contract bridge", () => {
       "researchEvidenceBundle",
       "historicalDatasetSnapshot",
       "replayCorpus",
+      "featureDefinition",
+      "regimeTag",
       "executionCostModel",
       "venueCapability",
       "assetRecord",
@@ -107,6 +111,28 @@ describe("worker runtime contract bridge", () => {
       "replay_corpus_sol_usdc_feed_gateway_seed",
     );
     expect(replayCorpus.datasetSnapshots).toHaveLength(2);
+  });
+
+  test("worker can parse the canonical feature definition fixture", () => {
+    const featureDefinition = parseRuntimeFeatureDefinitionRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.feature_definition.valid.v1.json",
+      ),
+    );
+
+    expect(featureDefinition.featureKey).toBe("short_return_bps");
+    expect(featureDefinition.marketType).toBe("spot");
+  });
+
+  test("worker can parse the canonical regime tag fixture", () => {
+    const regimeTag = parseRuntimeRegimeTagRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.regime_tag.valid.v1.json",
+      ),
+    );
+
+    expect(regimeTag.regimeKey).toBe("long_trend");
+    expect(regimeTag.dimension).toBe("trend");
   });
 
   test("worker can parse the canonical execution cost model fixture", () => {

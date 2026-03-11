@@ -611,6 +611,88 @@ const RuntimeVenueLatencyProfileSchema = z
   })
   .strict();
 
+export const RuntimeFeatureCatalogStatusSchema = z.enum([
+  "draft",
+  "active",
+  "deprecated",
+]);
+
+export const RuntimeRegimeDimensionSchema = z.enum([
+  "trend",
+  "volatility",
+  "spread",
+  "liquidity",
+  "funding",
+  "carry",
+]);
+
+const RuntimeCatalogProvenanceSchema = z
+  .object({
+    generatedBy: NON_EMPTY_STRING_SCHEMA,
+    generatedRevision: NON_EMPTY_STRING_SCHEMA.optional(),
+    generatedAt: ISO_DATETIME_SCHEMA,
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeFeatureInputRequirementSchema = z
+  .object({
+    inputKey: NON_EMPTY_STRING_SCHEMA,
+    required: z.boolean(),
+    freshnessMs: z.number().int().positive().optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+export const RuntimeFeatureDefinitionRecordSchema = VersionedSchema.extend({
+  featureId: NON_EMPTY_STRING_SCHEMA,
+  featureKey: NON_EMPTY_STRING_SCHEMA,
+  version: NON_EMPTY_STRING_SCHEMA,
+  title: NON_EMPTY_STRING_SCHEMA,
+  summary: NON_EMPTY_STRING_SCHEMA,
+  status: RuntimeFeatureCatalogStatusSchema,
+  marketType: RuntimeVenueMarketTypeSchema,
+  venueKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  pairSymbols: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  inputRequirements: z.array(RuntimeFeatureInputRequirementSchema).min(1),
+  derivedFromFeatureKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  freshnessSloMs: z.number().int().positive(),
+  maxAllowedDriftBps: BPS_SCHEMA,
+  minCoverageBps: BPS_SCHEMA,
+  provenance: RuntimeCatalogProvenanceSchema,
+  datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+  notes: NON_EMPTY_STRING_SCHEMA.optional(),
+}).strict();
+
+export const RuntimeRegimeTagRecordSchema = VersionedSchema.extend({
+  regimeTagId: NON_EMPTY_STRING_SCHEMA,
+  regimeKey: NON_EMPTY_STRING_SCHEMA,
+  version: NON_EMPTY_STRING_SCHEMA,
+  title: NON_EMPTY_STRING_SCHEMA,
+  summary: NON_EMPTY_STRING_SCHEMA,
+  status: RuntimeFeatureCatalogStatusSchema,
+  dimension: RuntimeRegimeDimensionSchema,
+  value: NON_EMPTY_STRING_SCHEMA,
+  marketType: RuntimeVenueMarketTypeSchema,
+  venueKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+  assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  pairSymbols: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  sourceFeatureKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  freshnessSloMs: z.number().int().positive(),
+  maxAllowedDriftBps: BPS_SCHEMA,
+  minConfidenceBps: BPS_SCHEMA,
+  provenance: RuntimeCatalogProvenanceSchema,
+  datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+  notes: NON_EMPTY_STRING_SCHEMA.optional(),
+}).strict();
+
 export const RuntimeVenueCapabilitySchema = VersionedSchema.extend({
   venueKey: NON_EMPTY_STRING_SCHEMA,
   displayName: NON_EMPTY_STRING_SCHEMA,
@@ -729,6 +811,7 @@ export const RuntimeStrategySpecSchema = VersionedSchema.extend({
   supportedVenues: z.array(RuntimeStrategyVenueSupportSchema).min(1),
   assetConstraints: z.array(RuntimeStrategyAssetConstraintSchema).min(1),
   featureRequirements: z.array(RuntimeStrategyFeatureRequirementSchema),
+  regimeRequirements: z.array(NON_EMPTY_STRING_SCHEMA),
   parameterSpecs: z.array(RuntimeStrategyParameterSpecSchema),
   promotionPolicy: RuntimeStrategyPromotionPolicySchema,
   tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
@@ -820,6 +903,18 @@ export type RuntimeReplayCorpusKind = z.infer<
 >;
 export type RuntimeReplayCorpusRecord = z.infer<
   typeof RuntimeReplayCorpusRecordSchema
+>;
+export type RuntimeFeatureCatalogStatus = z.infer<
+  typeof RuntimeFeatureCatalogStatusSchema
+>;
+export type RuntimeRegimeDimension = z.infer<
+  typeof RuntimeRegimeDimensionSchema
+>;
+export type RuntimeFeatureDefinitionRecord = z.infer<
+  typeof RuntimeFeatureDefinitionRecordSchema
+>;
+export type RuntimeRegimeTagRecord = z.infer<
+  typeof RuntimeRegimeTagRecordSchema
 >;
 export type RuntimeExecutionCostModelStatus = z.infer<
   typeof RuntimeExecutionCostModelStatusSchema
@@ -950,6 +1045,16 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
     schemaId: "https://trader-ralph.com/schemas/runtime/v1/replay_corpus",
     outputFile: "runtime.replay_corpus.v1.schema.json",
   },
+  featureDefinition: {
+    schema: RuntimeFeatureDefinitionRecordSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/feature_definition",
+    outputFile: "runtime.feature_definition.v1.schema.json",
+  },
+  regimeTag: {
+    schema: RuntimeRegimeTagRecordSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/regime_tag",
+    outputFile: "runtime.regime_tag.v1.schema.json",
+  },
   executionCostModel: {
     schema: RuntimeExecutionCostModelRecordSchema,
     schemaId:
@@ -1049,6 +1154,18 @@ export function parseRuntimeReplayCorpusRecord(
   return RuntimeReplayCorpusRecordSchema.parse(input);
 }
 
+export function parseRuntimeFeatureDefinitionRecord(
+  input: unknown,
+): RuntimeFeatureDefinitionRecord {
+  return RuntimeFeatureDefinitionRecordSchema.parse(input);
+}
+
+export function parseRuntimeRegimeTagRecord(
+  input: unknown,
+): RuntimeRegimeTagRecord {
+  return RuntimeRegimeTagRecordSchema.parse(input);
+}
+
 export function parseRuntimeExecutionCostModelRecord(
   input: unknown,
 ): RuntimeExecutionCostModelRecord {
@@ -1121,6 +1238,14 @@ export function safeParseRuntimeHistoricalDatasetSnapshotRecord(
 
 export function safeParseRuntimeReplayCorpusRecord(input: unknown) {
   return RuntimeReplayCorpusRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeFeatureDefinitionRecord(input: unknown) {
+  return RuntimeFeatureDefinitionRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeRegimeTagRecord(input: unknown) {
+  return RuntimeRegimeTagRecordSchema.safeParse(input);
 }
 
 export function safeParseRuntimeExecutionCostModelRecord(input: unknown) {

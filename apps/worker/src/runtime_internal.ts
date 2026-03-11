@@ -8,8 +8,10 @@ import {
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
   parseRuntimeExecutionPlan,
+  parseRuntimeFeatureDefinitionRecord,
   parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeLedgerSnapshot,
+  parseRuntimeRegimeTagRecord,
   parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchEvidenceBundleRecord,
   parseRuntimeResearchExperimentRecord,
@@ -22,8 +24,10 @@ import {
   type RuntimeDeploymentRecord,
   type RuntimeExecutionCostModelRecord,
   type RuntimeExecutionPlan,
+  type RuntimeFeatureDefinitionRecord,
   type RuntimeHistoricalDatasetSnapshotRecord,
   type RuntimeLedgerSnapshot,
+  type RuntimeRegimeTagRecord,
   type RuntimeReplayCorpusRecord,
   type RuntimeResearchEvidenceBundleRecord,
   type RuntimeResearchExperimentRecord,
@@ -52,6 +56,9 @@ const INTERNAL_RUNTIME_ASSETS_PREFIX = `${INTERNAL_RUNTIME_ASSETS_PATH}/`;
 const INTERNAL_RUNTIME_DATASETS_PATH = `${INTERNAL_RUNTIME_PREFIX}/datasets`;
 const INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH = `${INTERNAL_RUNTIME_DATASETS_PATH}/snapshots`;
 const INTERNAL_RUNTIME_REPLAY_CORPORA_PATH = `${INTERNAL_RUNTIME_DATASETS_PATH}/replay-corpora`;
+const INTERNAL_RUNTIME_FEATURES_PATH = `${INTERNAL_RUNTIME_PREFIX}/features`;
+const INTERNAL_RUNTIME_FEATURE_DEFINITIONS_PATH = `${INTERNAL_RUNTIME_FEATURES_PATH}/definitions`;
+const INTERNAL_RUNTIME_REGIME_TAGS_PATH = `${INTERNAL_RUNTIME_FEATURES_PATH}/regime-tags`;
 const INTERNAL_RUNTIME_COST_MODELS_PATH = `${INTERNAL_RUNTIME_PREFIX}/cost-models`;
 const FIXTURE_TIMESTAMP = "2026-03-07T00:00:00.000Z";
 const FIXTURE_BASE_MINT = "So11111111111111111111111111111111111111112";
@@ -351,6 +358,19 @@ function createRuntimeScorecardFixture(deploymentId: string) {
         latencyDriftMs: 950,
         reconciliationDriftCount: 0,
       },
+      featureCatalog: {
+        requiredFeatureCount: 1,
+        definedFeatureCount: 1,
+        featureDefinitionCoverageBps: 10000,
+        requiredRegimeTagCount: 0,
+        definedRegimeTagCount: 0,
+        regimeTagCoverageBps: 10000,
+        maxObservedFeatureAgeMs: 500,
+        freshnessSloMs: 20000,
+        maxAllowedFeatureDriftBps: 50,
+        missingFeatureKeys: [],
+        missingRegimeKeys: [],
+      },
       allocator: {
         decisionCount: 3,
         fullGrantCount: 3,
@@ -511,6 +531,15 @@ function createRuntimeHealthFixture() {
       datasetSnapshotCount: 2,
       replayCorpusCount: 1,
       latestSnapshotCapturedAt: FIXTURE_TIMESTAMP,
+      lastError: null,
+    },
+    featureCatalogRegistry: {
+      status: "healthy",
+      featureDefinitionCount: 4,
+      activeFeatureDefinitionCount: 4,
+      regimeTagCount: 4,
+      activeRegimeTagCount: 4,
+      latestUpdatedAt: FIXTURE_TIMESTAMP,
       lastError: null,
     },
     costModelRegistry: {
@@ -829,6 +858,168 @@ function createRuntimeCostModelRegistryFixture() {
   };
 }
 
+function createRuntimeFeatureDefinitionFixture(
+  featureKey = "short_return_bps",
+): RuntimeFeatureDefinitionRecord {
+  const titleByFeatureKey: Record<string, string> = {
+    short_return_bps: "Short-window return",
+    long_return_bps: "Long-window return",
+    realized_volatility_bps: "Realized volatility",
+    spread_bps: "Spread",
+  };
+  const inputRequirementsByFeatureKey: Record<
+    string,
+    Array<{ inputKey: string; freshnessMs: number }>
+  > = {
+    short_return_bps: [{ inputKey: "mid_price_usd", freshnessMs: 20000 }],
+    long_return_bps: [{ inputKey: "mid_price_usd", freshnessMs: 20000 }],
+    realized_volatility_bps: [
+      { inputKey: "mid_price_usd", freshnessMs: 20000 },
+    ],
+    spread_bps: [
+      { inputKey: "best_bid_usd", freshnessMs: 20000 },
+      { inputKey: "best_ask_usd", freshnessMs: 20000 },
+    ],
+  };
+  return parseRuntimeFeatureDefinitionRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    featureId: `feature_${featureKey}_v1`,
+    featureKey,
+    version: "1.0.0",
+    title: titleByFeatureKey[featureKey] ?? featureKey,
+    summary: "Stubbed runtime feature catalog definition.",
+    status: "active",
+    marketType: "spot",
+    venueKeys: ["jupiter", "magicblock", "phoenix"],
+    assetKeys: ["SOL", "USDC"],
+    pairSymbols: ["SOL/USDC"],
+    inputRequirements: (
+      inputRequirementsByFeatureKey[featureKey] ?? [
+        { inputKey: "mid_price_usd", freshnessMs: 20000 },
+      ]
+    ).map((requirement) => ({
+      inputKey: requirement.inputKey,
+      required: true,
+      freshnessMs: requirement.freshnessMs,
+      notes: "Required by the seeded feature definition.",
+    })),
+    derivedFromFeatureKeys: [],
+    freshnessSloMs: 20000,
+    maxAllowedDriftBps: featureKey === "realized_volatility_bps" ? 75 : 50,
+    minCoverageBps: 10000,
+    provenance: {
+      generatedBy: "strategy-lab::feature-catalog",
+      generatedRevision: "seed",
+      generatedAt: FIXTURE_TIMESTAMP,
+      notes: "Stubbed runtime feature catalog provenance.",
+    },
+    datasetSnapshots: [
+      {
+        datasetId: "dataset_feed_replay_sol_usdc_market_events",
+        snapshotId: "snapshot_2026_03_07_seed",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+        contentDigest: "sha256:fixture",
+      },
+      {
+        datasetId: "dataset_feed_replay_sol_usdc_slot_events",
+        snapshotId: "snapshot_2026_03_07_seed",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+        contentDigest: "sha256:fixture",
+      },
+    ],
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+    tags: ["seed", "feature-catalog"],
+    notes: "Stubbed feature definition fixture.",
+  });
+}
+
+function createRuntimeRegimeTagFixture(
+  regimeKey = "volatility_band",
+): RuntimeRegimeTagRecord {
+  const dimensionByRegimeKey: Record<
+    string,
+    RuntimeRegimeTagRecord["dimension"]
+  > = {
+    short_trend: "trend",
+    long_trend: "trend",
+    volatility_band: "volatility",
+    liquidity_state: "liquidity",
+  };
+  const sourceFeaturesByRegimeKey: Record<string, string[]> = {
+    short_trend: ["short_return_bps"],
+    long_trend: ["long_return_bps"],
+    volatility_band: ["realized_volatility_bps"],
+    liquidity_state: ["spread_bps"],
+  };
+  return parseRuntimeRegimeTagRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    regimeTagId: `regime_${regimeKey}_v1`,
+    regimeKey,
+    version: "1.0.0",
+    title: regimeKey.replaceAll("_", " "),
+    summary: "Stubbed runtime regime tag definition.",
+    status: "active",
+    dimension: dimensionByRegimeKey[regimeKey] ?? "trend",
+    value: "classified",
+    marketType: "spot",
+    venueKeys: ["jupiter", "magicblock", "phoenix"],
+    assetKeys: ["SOL", "USDC"],
+    pairSymbols: ["SOL/USDC"],
+    sourceFeatureKeys: sourceFeaturesByRegimeKey[regimeKey] ?? [
+      "short_return_bps",
+    ],
+    freshnessSloMs: 20000,
+    maxAllowedDriftBps: regimeKey === "volatility_band" ? 75 : 50,
+    minConfidenceBps: 8000,
+    provenance: {
+      generatedBy: "strategy-lab::regime-catalog",
+      generatedRevision: "seed",
+      generatedAt: FIXTURE_TIMESTAMP,
+      notes: "Stubbed runtime regime tag provenance.",
+    },
+    datasetSnapshots: [
+      {
+        datasetId: "dataset_feed_replay_sol_usdc_market_events",
+        snapshotId: "snapshot_2026_03_07_seed",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+        contentDigest: "sha256:fixture",
+      },
+      {
+        datasetId: "dataset_feed_replay_sol_usdc_slot_events",
+        snapshotId: "snapshot_2026_03_07_seed",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+        contentDigest: "sha256:fixture",
+      },
+    ],
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+    tags: ["seed", "feature-catalog"],
+    notes: "Stubbed regime tag fixture.",
+  });
+}
+
+function createRuntimeFeatureCatalogRegistryFixture() {
+  return {
+    featureDefinitions: [
+      createRuntimeFeatureDefinitionFixture("short_return_bps"),
+      createRuntimeFeatureDefinitionFixture("long_return_bps"),
+      createRuntimeFeatureDefinitionFixture("realized_volatility_bps"),
+      createRuntimeFeatureDefinitionFixture("spread_bps"),
+    ],
+    regimeTags: [
+      createRuntimeRegimeTagFixture("short_trend"),
+      createRuntimeRegimeTagFixture("long_trend"),
+      createRuntimeRegimeTagFixture("volatility_band"),
+      createRuntimeRegimeTagFixture("liquidity_state"),
+    ],
+  };
+}
+
 function createRuntimeHistoricalDatasetSnapshotFixture(
   datasetId = "dataset_feed_replay_sol_usdc_market_events",
 ): RuntimeHistoricalDatasetSnapshotRecord {
@@ -963,6 +1154,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       research: INTERNAL_RUNTIME_RESEARCH_PATH,
       assets: INTERNAL_RUNTIME_ASSETS_PATH,
       datasets: INTERNAL_RUNTIME_DATASETS_PATH,
+      features: INTERNAL_RUNTIME_FEATURES_PATH,
       costModels: INTERNAL_RUNTIME_COST_MODELS_PATH,
       executionPlans: INTERNAL_RUNTIME_EXECUTION_PLANS_PATH,
       health: `${INTERNAL_RUNTIME_PREFIX}/health`,
@@ -1460,6 +1652,61 @@ export async function writeRuntimeReplayCorpus(input: {
   });
 }
 
+export async function readRuntimeFeatureCatalogRegistry(input: {
+  env: Env;
+  featureId?: string;
+  featureKey?: string;
+  regimeTagId?: string;
+  regimeKey?: string;
+  venueKey?: string;
+  assetKey?: string;
+  pairSymbol?: string;
+  marketType?: string;
+  status?: string;
+}): Promise<RuntimeInternalJsonResult> {
+  const search = new URLSearchParams();
+  if (input.featureId) search.set("featureId", input.featureId);
+  if (input.featureKey) search.set("featureKey", input.featureKey);
+  if (input.regimeTagId) search.set("regimeTagId", input.regimeTagId);
+  if (input.regimeKey) search.set("regimeKey", input.regimeKey);
+  if (input.venueKey) search.set("venueKey", input.venueKey);
+  if (input.assetKey) search.set("assetKey", input.assetKey);
+  if (input.pairSymbol) search.set("pairSymbol", input.pairSymbol);
+  if (input.marketType) search.set("marketType", input.marketType);
+  if (input.status) search.set("status", input.status);
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "GET",
+    pathname: search.size
+      ? `${INTERNAL_RUNTIME_FEATURES_PATH}?${search.toString()}`
+      : INTERNAL_RUNTIME_FEATURES_PATH,
+  });
+}
+
+export async function writeRuntimeFeatureDefinition(input: {
+  env: Env;
+  featureDefinition: RuntimeFeatureDefinitionRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_FEATURE_DEFINITIONS_PATH,
+    body: input.featureDefinition,
+  });
+}
+
+export async function writeRuntimeRegimeTag(input: {
+  env: Env;
+  regimeTag: RuntimeRegimeTagRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_REGIME_TAGS_PATH,
+    body: input.regimeTag,
+  });
+}
+
 export async function readRuntimeCostModelRegistry(input: {
   env: Env;
   modelId?: string;
@@ -1687,6 +1934,28 @@ export async function handleRuntimeInternalRoute(
         datasetKind: url.searchParams.get("datasetKind"),
       },
       registry: createRuntimeHistoricalDataLakeFixture(),
+    });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_FEATURES_PATH
+  ) {
+    return json({
+      ok: true,
+      source: "stub",
+      filters: {
+        featureId: url.searchParams.get("featureId"),
+        featureKey: url.searchParams.get("featureKey"),
+        regimeTagId: url.searchParams.get("regimeTagId"),
+        regimeKey: url.searchParams.get("regimeKey"),
+        venueKey: url.searchParams.get("venueKey"),
+        assetKey: url.searchParams.get("assetKey"),
+        pairSymbol: url.searchParams.get("pairSymbol"),
+        marketType: url.searchParams.get("marketType"),
+        status: url.searchParams.get("status"),
+      },
+      registry: createRuntimeFeatureCatalogRegistryFixture(),
     });
   }
 
@@ -2106,6 +2375,68 @@ export async function handleRuntimeInternalRoute(
         source: "stub",
         created: true,
         costModel,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_FEATURE_DEFINITIONS_PATH
+  ) {
+    let featureDefinition: RuntimeFeatureDefinitionRecord;
+    try {
+      const payload = await readJsonBody(request);
+      featureDefinition = parseRuntimeFeatureDefinitionRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-feature-definition",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        featureDefinition,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_REGIME_TAGS_PATH
+  ) {
+    let regimeTag: RuntimeRegimeTagRecord;
+    try {
+      const payload = await readJsonBody(request);
+      regimeTag = parseRuntimeRegimeTagRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-regime-tag",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        regimeTag,
       },
       { status: 201 },
     );

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "v1",
+  "regimeTagId": "regime_long_trend_v1",
+  "regimeKey": "long_trend",
+  "version": "1.0.0",
+  "title": "Long trend regime",
+  "summary": "Classifies long-window directional bias for confirmation and macro rotation.",
+  "status": "active",
+  "dimension": "trend",
+  "value": "confirmed",
+  "marketType": "spot",
+  "venueKeys": ["jupiter", "magicblock", "phoenix"],
+  "assetKeys": ["SOL", "USDC"],
+  "pairSymbols": ["SOL/USDC"],
+  "sourceFeatureKeys": ["long_return_bps"],
+  "freshnessSloMs": 20000,
+  "maxAllowedDriftBps": 50,
+  "minConfidenceBps": 8500,
+  "provenance": {
+    "generatedBy": "strategy-lab::regime-catalog",
+    "generatedRevision": "seed",
+    "generatedAt": "2026-03-10T00:00:00.000Z",
+    "notes": "Generated from checked-in runtime fixtures and catalog defaults."
+  },
+  "datasetSnapshots": [
+    {
+      "datasetId": "dataset_feed_replay_sol_usdc_market_events",
+      "snapshotId": "snapshot_2026_03_07_seed",
+      "capturedAt": "2026-03-10T00:00:00.000Z",
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+      "contentDigest": "sha256:fixture"
+    },
+    {
+      "datasetId": "dataset_feed_replay_sol_usdc_slot_events",
+      "snapshotId": "snapshot_2026_03_07_seed",
+      "capturedAt": "2026-03-10T00:00:00.000Z",
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+      "contentDigest": "sha256:fixture"
+    }
+  ],
+  "createdAt": "2026-03-10T00:00:00.000Z",
+  "updatedAt": "2026-03-10T00:00:00.000Z",
+  "tags": ["signal", "seed"],
+  "notes": "Seed regime tag definition for the runtime feature catalog."
+}

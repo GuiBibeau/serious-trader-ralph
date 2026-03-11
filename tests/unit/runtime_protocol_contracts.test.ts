@@ -7,9 +7,11 @@ import {
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
   parseRuntimeExecutionPlan,
+  parseRuntimeFeatureDefinitionRecord,
   parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeLedgerSnapshot,
   parseRuntimeReconciliationResult,
+  parseRuntimeRegimeTagRecord,
   parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchEvidenceBundleRecord,
   parseRuntimeResearchExperimentRecord,
@@ -346,6 +348,85 @@ describe("runtime protocol contracts", () => {
       updatedAt: "2026-03-10T00:00:00.000Z",
       tags: ["seed", "spot"],
     });
+    const featureDefinition = parseRuntimeFeatureDefinitionRecord({
+      schemaVersion: "v1",
+      featureId: "feature_short_return_bps_v1",
+      featureKey: "short_return_bps",
+      version: "1.0.0",
+      title: "Short-window return",
+      summary:
+        "Short-window signed return used by directional signal templates.",
+      status: "active",
+      marketType: "spot",
+      venueKeys: ["jupiter", "magicblock", "phoenix"],
+      assetKeys: ["SOL", "USDC"],
+      pairSymbols: ["SOL/USDC"],
+      inputRequirements: [
+        {
+          inputKey: "mid_price_usd",
+          required: true,
+          freshnessMs: 20000,
+        },
+      ],
+      derivedFromFeatureKeys: [],
+      freshnessSloMs: 20000,
+      maxAllowedDriftBps: 50,
+      minCoverageBps: 10000,
+      provenance: {
+        generatedBy: "strategy-lab::feature-catalog",
+        generatedRevision: "seed",
+        generatedAt: "2026-03-10T00:00:00.000Z",
+      },
+      datasetSnapshots: [
+        {
+          datasetId: datasetSnapshot.datasetId,
+          snapshotId: datasetSnapshot.snapshotId,
+          capturedAt: datasetSnapshot.capturedAt,
+          uri: datasetSnapshot.uri,
+          contentDigest: datasetSnapshot.contentDigest,
+        },
+      ],
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:00.000Z",
+      tags: ["signal", "seed"],
+    });
+    const regimeTag = parseRuntimeRegimeTagRecord({
+      schemaVersion: "v1",
+      regimeTagId: "regime_long_trend_v1",
+      regimeKey: "long_trend",
+      version: "1.0.0",
+      title: "Long trend regime",
+      summary:
+        "Classifies long-window directional bias for confirmation and macro rotation.",
+      status: "active",
+      dimension: "trend",
+      value: "confirmed",
+      marketType: "spot",
+      venueKeys: ["jupiter", "magicblock", "phoenix"],
+      assetKeys: ["SOL", "USDC"],
+      pairSymbols: ["SOL/USDC"],
+      sourceFeatureKeys: ["long_return_bps"],
+      freshnessSloMs: 20000,
+      maxAllowedDriftBps: 50,
+      minConfidenceBps: 8500,
+      provenance: {
+        generatedBy: "strategy-lab::regime-catalog",
+        generatedRevision: "seed",
+        generatedAt: "2026-03-10T00:00:00.000Z",
+      },
+      datasetSnapshots: [
+        {
+          datasetId: datasetSnapshot.datasetId,
+          snapshotId: datasetSnapshot.snapshotId,
+          capturedAt: datasetSnapshot.capturedAt,
+          uri: datasetSnapshot.uri,
+          contentDigest: datasetSnapshot.contentDigest,
+        },
+      ],
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:00.000Z",
+      tags: ["signal", "seed"],
+    });
     const experiment = parseRuntimeResearchExperimentRecord({
       schemaVersion: "v1",
       experimentId: "experiment_signal_trend_shadow",
@@ -446,6 +527,7 @@ describe("runtime protocol contracts", () => {
           freshnessMs: 20000,
         },
       ],
+      regimeRequirements: ["short_trend"],
       parameterSpecs: [
         {
           key: "policy.max_notional_usd",
@@ -537,6 +619,8 @@ describe("runtime protocol contracts", () => {
     expect(datasetSnapshot.datasetKind).toBe("market_events");
     expect(replayCorpus.replayKind).toBe("feed_gateway_v1");
     expect(costModel.marketType).toBe("spot");
+    expect(featureDefinition.featureKey).toBe("short_return_bps");
+    expect(regimeTag.regimeKey).toBe("long_trend");
     expect(experiment.datasetSnapshots).toHaveLength(1);
     expect(evidenceBundle.promotionTarget).toBe("paper");
     expect(venueCapability.adapterKeys).toContain("jupiter");

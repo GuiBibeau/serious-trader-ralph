@@ -23,6 +23,10 @@ use execution_planner::{
     ExecutionPlannerSnapshot, StrategyPluginRegistry,
 };
 use feature_cache::{FeatureCache, FeatureCacheConfig, FeatureCacheSnapshot};
+use feature_catalog_registry::{
+    FeatureCatalogRegistry, FeatureCatalogRegistryConfig, FeatureCatalogRegistryError,
+    FeatureCatalogRegistryQuery, FeatureCatalogRegistrySnapshot,
+};
 use historical_data_lake::{
     HistoricalDataLake, HistoricalDataLakeConfig, HistoricalDataLakeError, HistoricalDataLakeQuery,
     HistoricalDataLakeSnapshot,
@@ -33,11 +37,11 @@ use portfolio_ledger::{
 };
 use protocol::{
     RuntimeAssetListingState, RuntimeAssetRecord, RuntimeDeploymentRecord, RuntimeDeploymentState,
-    RuntimeExecutionCostModelRecord, RuntimeHistoricalDatasetKind,
-    RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode, RuntimeReplayCorpusRecord,
-    RuntimeResearchEvidenceBundleRecord, RuntimeResearchExperimentRecord,
-    RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord, RuntimeRunRecord,
-    RuntimeVenueMarketType,
+    RuntimeExecutionCostModelRecord, RuntimeFeatureCatalogStatus, RuntimeFeatureDefinitionRecord,
+    RuntimeHistoricalDatasetKind, RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode,
+    RuntimeRegimeTagRecord, RuntimeReplayCorpusRecord, RuntimeResearchEvidenceBundleRecord,
+    RuntimeResearchExperimentRecord, RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord,
+    RuntimeRunRecord, RuntimeVenueMarketType,
 };
 use reconciler::{Reconciler, ReconcilerConfig, ReconcilerError, ReconcilerSnapshot};
 use research_registry::{
@@ -94,6 +98,7 @@ pub struct RuntimeAppState {
     research_registry: ResearchRegistry,
     asset_registry: AssetRegistry,
     historical_data_lake: HistoricalDataLake,
+    feature_catalog_registry: FeatureCatalogRegistry,
     cost_model_registry: CostModelRegistry,
     portfolio_ledger: PortfolioLedger,
     runtime_allocator: RuntimeAllocator,
@@ -131,6 +136,10 @@ impl RuntimeAppState {
         let historical_data_lake =
             HistoricalDataLake::new(HistoricalDataLakeConfig::new(config.database_url.clone()))
                 .expect("historical data lake to initialize");
+        let feature_catalog_registry = FeatureCatalogRegistry::new(
+            FeatureCatalogRegistryConfig::new(config.database_url.clone()),
+        )
+        .expect("feature catalog registry to initialize");
         let cost_model_registry =
             CostModelRegistry::new(CostModelRegistryConfig::new(config.database_url.clone()))
                 .expect("cost model registry to initialize");
@@ -169,6 +178,7 @@ impl RuntimeAppState {
             research_registry,
             asset_registry,
             historical_data_lake,
+            feature_catalog_registry,
             cost_model_registry,
             portfolio_ledger,
             runtime_allocator,
@@ -206,6 +216,10 @@ impl RuntimeAppState {
 
     fn historical_data_lake_snapshot(&self) -> HistoricalDataLakeSnapshot {
         self.historical_data_lake.snapshot_now()
+    }
+
+    fn feature_catalog_registry_snapshot(&self) -> FeatureCatalogRegistrySnapshot {
+        self.feature_catalog_registry.snapshot_now()
     }
 
     fn cost_model_registry_snapshot(&self) -> CostModelRegistrySnapshot {
@@ -253,6 +267,7 @@ pub struct RuntimeHealthResponse {
     pub research_registry: ResearchRegistrySnapshot,
     pub asset_registry: AssetRegistrySnapshot,
     pub historical_data_lake: HistoricalDataLakeSnapshot,
+    pub feature_catalog_registry: FeatureCatalogRegistrySnapshot,
     pub cost_model_registry: CostModelRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
@@ -276,6 +291,7 @@ pub struct RuntimeMetricsResponse {
     pub research_registry: ResearchRegistrySnapshot,
     pub asset_registry: AssetRegistrySnapshot,
     pub historical_data_lake: HistoricalDataLakeSnapshot,
+    pub feature_catalog_registry: FeatureCatalogRegistrySnapshot,
     pub cost_model_registry: CostModelRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
@@ -342,6 +358,20 @@ struct RuntimeCostModelQueryParams {
     pub pair_symbol: Option<String>,
     pub market_type: Option<RuntimeVenueMarketType>,
     pub mode: Option<RuntimeMode>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeFeatureCatalogQueryParams {
+    pub feature_id: Option<String>,
+    pub feature_key: Option<String>,
+    pub regime_tag_id: Option<String>,
+    pub regime_key: Option<String>,
+    pub venue_key: Option<String>,
+    pub asset_key: Option<String>,
+    pub pair_symbol: Option<String>,
+    pub market_type: Option<RuntimeVenueMarketType>,
+    pub status: Option<RuntimeFeatureCatalogStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -440,6 +470,18 @@ pub fn app(config: RuntimeConfig) -> Router {
             post(create_replay_corpus_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/features"),
+            get(feature_catalog_query_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/features/definitions"),
+            post(create_feature_definition_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/features/regime-tags"),
+            post(create_regime_tag_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/cost-models"),
             get(cost_model_query_handler).post(create_cost_model_handler),
         )
@@ -467,6 +509,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let research_registry = state.research_registry_snapshot();
     let asset_registry = state.asset_registry_snapshot();
     let historical_data_lake = state.historical_data_lake_snapshot();
+    let feature_catalog_registry = state.feature_catalog_registry_snapshot();
     let cost_model_registry = state.cost_model_registry_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
     let allocator = state.runtime_allocator_snapshot();
@@ -479,6 +522,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         && research_registry.status == "healthy"
         && asset_registry.status == "healthy"
         && historical_data_lake.status == "healthy"
+        && feature_catalog_registry.status == "healthy"
         && cost_model_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
         && allocator.status == "healthy"
@@ -508,6 +552,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         research_registry,
         asset_registry,
         historical_data_lake,
+        feature_catalog_registry,
         cost_model_registry,
         portfolio_ledger,
         allocator,
@@ -531,6 +576,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         research_registry: state.research_registry_snapshot(),
         asset_registry: state.asset_registry_snapshot(),
         historical_data_lake: state.historical_data_lake_snapshot(),
+        feature_catalog_registry: state.feature_catalog_registry_snapshot(),
         cost_model_registry: state.cost_model_registry_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
         allocator: state.runtime_allocator_snapshot(),
@@ -1136,6 +1182,22 @@ async fn scorecards_handler(
         .portfolio_ledger
         .snapshot_for_deployment(&deployment_id)
         .map_err(map_ledger_error)?;
+    let strategy_spec = state
+        .execution_planner
+        .strategy_specs()
+        .into_iter()
+        .find(|spec| spec.strategy_key == deployment.strategy_key)
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::BAD_REQUEST,
+                "unsupported-strategy",
+                json!({ "strategyKey": deployment.strategy_key }),
+            )
+        })?;
+    let feature_catalog = state
+        .feature_catalog_registry
+        .select_for_strategy(&deployment, &strategy_spec)
+        .map_err(map_feature_catalog_registry_error)?;
     let cost_model = state
         .cost_model_registry
         .select_for_deployment(&deployment)
@@ -1144,10 +1206,13 @@ async fn scorecards_handler(
         &RuntimeScorecardConfig::default(),
         &RuntimeScorecardInput {
             deployment,
+            strategy_spec,
             runs,
             verdicts,
             plans,
             cost_model,
+            feature_definitions: feature_catalog.feature_definitions,
+            regime_tags: feature_catalog.regime_tags,
             allocator_decisions,
             submit_attempt_count: reconciliation_bundle.submit_attempts.len() as u64,
             receipt_count: reconciliation_bundle.receipts.len() as u64,
@@ -1591,6 +1656,94 @@ async fn create_replay_corpus_handler(
             "source": "runtime-rs",
             "created": result.created,
             "replayCorpus": result.record,
+        }),
+    ))
+}
+
+async fn feature_catalog_query_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeFeatureCatalogQueryParams>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let filters = query.clone();
+    let registry = state
+        .feature_catalog_registry
+        .query(&FeatureCatalogRegistryQuery {
+            feature_id: query.feature_id.filter(|value| !value.trim().is_empty()),
+            feature_key: query.feature_key.filter(|value| !value.trim().is_empty()),
+            regime_tag_id: query.regime_tag_id.filter(|value| !value.trim().is_empty()),
+            regime_key: query.regime_key.filter(|value| !value.trim().is_empty()),
+            venue_key: query.venue_key.filter(|value| !value.trim().is_empty()),
+            asset_key: query.asset_key.filter(|value| !value.trim().is_empty()),
+            pair_symbol: query.pair_symbol.filter(|value| !value.trim().is_empty()),
+            market_type: query.market_type,
+            status: query.status,
+        })
+        .map_err(map_feature_catalog_registry_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "filters": filters,
+            "registry": {
+                "featureDefinitions": registry.feature_definitions,
+                "regimeTags": registry.regime_tags,
+            },
+        }),
+    ))
+}
+
+async fn create_feature_definition_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeFeatureDefinitionRecord =
+        parse_json_body(&body, "invalid-runtime-feature-definition")?;
+    let result = state
+        .feature_catalog_registry
+        .upsert_feature_definition(&record)
+        .map_err(map_feature_catalog_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "featureDefinition": result.record,
+        }),
+    ))
+}
+
+async fn create_regime_tag_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeRegimeTagRecord = parse_json_body(&body, "invalid-runtime-regime-tag")?;
+    let result = state
+        .feature_catalog_registry
+        .upsert_regime_tag(&record)
+        .map_err(map_feature_catalog_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "regimeTag": result.record,
         }),
     ))
 }
@@ -2114,6 +2267,52 @@ fn map_allocator_error(error: RuntimeAllocatorError) -> JsonPayload {
         RuntimeAllocatorError::Serialization(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-allocator-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn map_feature_catalog_registry_error(error: FeatureCatalogRegistryError) -> JsonPayload {
+    match error {
+        FeatureCatalogRegistryError::InvalidFeatureDefinition { feature_id, reason } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-runtime-feature-definition",
+            json!({ "featureId": feature_id, "reason": reason }),
+        ),
+        FeatureCatalogRegistryError::InvalidRegimeTag {
+            regime_tag_id,
+            reason,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-runtime-regime-tag",
+            json!({ "regimeTagId": regime_tag_id, "reason": reason }),
+        ),
+        FeatureCatalogRegistryError::DatasetSnapshotMissing {
+            record_id,
+            dataset_id,
+            snapshot_id,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "runtime-feature-catalog-dataset-missing",
+            json!({
+                "recordId": record_id,
+                "datasetId": dataset_id,
+                "snapshotId": snapshot_id,
+            }),
+        ),
+        FeatureCatalogRegistryError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-feature-catalog-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        FeatureCatalogRegistryError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-feature-catalog-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        FeatureCatalogRegistryError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-feature-catalog-error",
             json!({ "reason": error.to_string() }),
         ),
     }
@@ -2845,6 +3044,89 @@ mod tests {
         })
     }
 
+    fn runtime_feature_definition(feature_id: &str, feature_key: &str, status: &str) -> Value {
+        json!({
+            "schemaVersion": "v1",
+            "featureId": feature_id,
+            "featureKey": feature_key,
+            "version": "1.0.0",
+            "title": "Candidate feature definition",
+            "summary": "Candidate feature definition published through the runtime operator surface.",
+            "status": status,
+            "marketType": "spot",
+            "venueKeys": ["jupiter"],
+            "assetKeys": ["SOL", "USDC"],
+            "pairSymbols": ["SOL/USDC"],
+            "inputRequirements": [
+                {
+                    "inputKey": "mid_price_usd",
+                    "required": true,
+                    "freshnessMs": 20000
+                }
+            ],
+            "derivedFromFeatureKeys": [],
+            "freshnessSloMs": 20000,
+            "maxAllowedDriftBps": 50,
+            "minCoverageBps": 9800,
+            "provenance": {
+                "generatedBy": "strategy-lab::feature-catalog",
+                "generatedRevision": "candidate",
+                "generatedAt": "2026-03-10T16:05:00.000Z"
+            },
+            "datasetSnapshots": [
+                {
+                    "datasetId": "dataset_feed_replay_sol_usdc_market_events",
+                    "snapshotId": "snapshot_2026_03_07_seed",
+                    "capturedAt": "2026-03-10T00:00:00.000Z",
+                    "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+                    "contentDigest": "sha256:fixture"
+                }
+            ],
+            "createdAt": "2026-03-10T16:05:00.000Z",
+            "updatedAt": "2026-03-10T16:05:00.000Z",
+            "tags": ["candidate", "signal"]
+        })
+    }
+
+    fn runtime_regime_tag(regime_tag_id: &str, regime_key: &str, status: &str) -> Value {
+        json!({
+            "schemaVersion": "v1",
+            "regimeTagId": regime_tag_id,
+            "regimeKey": regime_key,
+            "version": "1.0.0",
+            "title": "Candidate regime tag",
+            "summary": "Candidate regime tag published through the runtime operator surface.",
+            "status": status,
+            "dimension": "trend",
+            "value": "confirmed",
+            "marketType": "spot",
+            "venueKeys": ["jupiter"],
+            "assetKeys": ["SOL", "USDC"],
+            "pairSymbols": ["SOL/USDC"],
+            "sourceFeatureKeys": ["short_return_bps"],
+            "freshnessSloMs": 20000,
+            "maxAllowedDriftBps": 50,
+            "minConfidenceBps": 8600,
+            "provenance": {
+                "generatedBy": "strategy-lab::regime-catalog",
+                "generatedRevision": "candidate",
+                "generatedAt": "2026-03-10T16:10:00.000Z"
+            },
+            "datasetSnapshots": [
+                {
+                    "datasetId": "dataset_feed_replay_sol_usdc_market_events",
+                    "snapshotId": "snapshot_2026_03_07_seed",
+                    "capturedAt": "2026-03-10T00:00:00.000Z",
+                    "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+                    "contentDigest": "sha256:fixture"
+                }
+            ],
+            "createdAt": "2026-03-10T16:10:00.000Z",
+            "updatedAt": "2026-03-10T16:10:00.000Z",
+            "tags": ["candidate", "signal"]
+        })
+    }
+
     async fn read_json(response: axum::response::Response) -> Value {
         let body = response
             .into_body()
@@ -2891,6 +3173,16 @@ mod tests {
         assert_eq!(payload.historical_data_lake.status, "healthy");
         assert_eq!(payload.historical_data_lake.dataset_snapshot_count, 2);
         assert_eq!(payload.historical_data_lake.replay_corpus_count, 1);
+        assert_eq!(payload.feature_catalog_registry.status, "healthy");
+        assert_eq!(payload.feature_catalog_registry.feature_definition_count, 4);
+        assert_eq!(
+            payload
+                .feature_catalog_registry
+                .active_feature_definition_count,
+            4
+        );
+        assert_eq!(payload.feature_catalog_registry.regime_tag_count, 4);
+        assert_eq!(payload.feature_catalog_registry.active_regime_tag_count, 4);
         assert_eq!(payload.cost_model_registry.status, "healthy");
         assert_eq!(payload.cost_model_registry.model_count, 3);
         assert_eq!(payload.cost_model_registry.active_model_count, 3);
@@ -2937,6 +3229,9 @@ mod tests {
         assert_eq!(payload.asset_registry.asset_count, 2);
         assert_eq!(payload.historical_data_lake.status, "healthy");
         assert_eq!(payload.historical_data_lake.dataset_snapshot_count, 2);
+        assert_eq!(payload.feature_catalog_registry.status, "healthy");
+        assert_eq!(payload.feature_catalog_registry.feature_definition_count, 4);
+        assert_eq!(payload.feature_catalog_registry.regime_tag_count, 4);
         assert_eq!(payload.cost_model_registry.status, "healthy");
         assert_eq!(payload.cost_model_registry.model_count, 3);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
@@ -4693,6 +4988,121 @@ mod tests {
             json!("cost_model_jupiter_sol_usdc_candidate")
         );
         assert_eq!(write_payload["costModel"]["status"], json!("draft"));
+    }
+
+    #[tokio::test]
+    async fn serves_feature_catalog_registry_and_accepts_writes() {
+        let router = app(test_config());
+
+        let list_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/features?venueKey=jupiter&assetKey=SOL&pairSymbol=SOL%2FUSDC&marketType=spot&status=active")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_payload = read_json(list_response).await;
+        let feature_ids = list_payload["registry"]["featureDefinitions"]
+            .as_array()
+            .expect("feature definitions")
+            .iter()
+            .map(|entry| entry["featureId"].as_str().expect("featureId").to_string())
+            .collect::<Vec<_>>();
+        let regime_tag_ids = list_payload["registry"]["regimeTags"]
+            .as_array()
+            .expect("regime tags")
+            .iter()
+            .map(|entry| {
+                entry["regimeTagId"]
+                    .as_str()
+                    .expect("regimeTagId")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert!(feature_ids.contains(&"feature_long_return_bps_v1".to_string()));
+        assert!(regime_tag_ids.contains(&"regime_liquidity_state_v1".to_string()));
+
+        let feature_definition = runtime_feature_definition(
+            "feature_microprice_delta_bps_v1",
+            "microprice_delta_bps",
+            "draft",
+        );
+        let feature_write_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/features/definitions")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(feature_definition.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(feature_write_response.status(), StatusCode::CREATED);
+        let feature_write_payload = read_json(feature_write_response).await;
+        assert_eq!(
+            feature_write_payload["featureDefinition"]["featureId"],
+            json!("feature_microprice_delta_bps_v1")
+        );
+        assert_eq!(
+            feature_write_payload["featureDefinition"]["status"],
+            json!("draft")
+        );
+
+        let regime_tag = runtime_regime_tag(
+            "regime_microprice_confirmation_v1",
+            "microprice_confirmation",
+            "draft",
+        );
+        let regime_write_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/features/regime-tags")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(regime_tag.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(regime_write_response.status(), StatusCode::CREATED);
+        let regime_write_payload = read_json(regime_write_response).await;
+        assert_eq!(
+            regime_write_payload["regimeTag"]["regimeTagId"],
+            json!("regime_microprice_confirmation_v1")
+        );
+        assert_eq!(regime_write_payload["regimeTag"]["status"], json!("draft"));
+
+        let filtered_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/features?featureKey=microprice_delta_bps&regimeKey=microprice_confirmation&status=draft")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(filtered_response.status(), StatusCode::OK);
+        let filtered_payload = read_json(filtered_response).await;
+        assert_eq!(
+            filtered_payload["registry"]["featureDefinitions"][0]["featureKey"],
+            json!("microprice_delta_bps")
+        );
+        assert_eq!(
+            filtered_payload["registry"]["regimeTags"][0]["regimeKey"],
+            json!("microprice_confirmation")
+        );
     }
 
     #[tokio::test]

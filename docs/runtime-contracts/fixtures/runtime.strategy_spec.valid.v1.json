@@ -37,6 +37,7 @@
       "notes": "Requires fresh short-window return inputs for every evaluation."
     }
   ],
+  "regimeRequirements": ["short_trend"],
   "parameterSpecs": [
     {
       "key": "policy.max_notional_usd",

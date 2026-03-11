@@ -245,6 +245,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "feature-catalog-registry"
+version = "0.1.0"
+dependencies = [
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "strategy-core",
+ "thiserror",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1031,6 +1043,7 @@ dependencies = [
  "exec-client",
  "execution-planner",
  "feature-cache",
+ "feature-catalog-registry",
  "historical-data-lake",
  "http-body-util",
  "market-adapters",
@@ -1059,6 +1072,7 @@ version = "0.1.0"
 dependencies = [
  "protocol",
  "serde",
+ "strategy-core",
  "thiserror",
  "time",
 ]

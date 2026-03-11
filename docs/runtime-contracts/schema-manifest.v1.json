@@ -63,6 +63,16 @@
       "schemaFile": "docs/runtime-contracts/schemas/runtime.replay_corpus.v1.schema.json"
     },
     {
+      "name": "featureDefinition",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/feature_definition",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.feature_definition.v1.schema.json"
+    },
+    {
+      "name": "regimeTag",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/regime_tag",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.regime_tag.v1.schema.json"
+    },
+    {
       "name": "executionCostModel",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/execution_cost_model",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.execution_cost_model.v1.schema.json"

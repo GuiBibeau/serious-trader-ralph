@@ -1,14 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use protocol::{
     RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard, RuntimeCostScorecard,
     RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeExecutionCostModelRecord,
     RuntimeExecutionCostModelStatus, RuntimeExecutionPlan, RuntimeExpectedObservedScorecard,
-    RuntimeLedgerSnapshot, RuntimeMode, RuntimePlanQualityScorecard, RuntimePnlScorecard,
-    RuntimePromotionGateCheck, RuntimePromotionGateDecision, RuntimePromotionGateStatus,
-    RuntimePromotionReadinessReport, RuntimeReconciliationResult, RuntimeReconciliationStatus,
+    RuntimeFeatureCatalogScorecard, RuntimeFeatureDefinitionRecord, RuntimeLedgerSnapshot,
+    RuntimeMode, RuntimePlanQualityScorecard, RuntimePnlScorecard, RuntimePromotionGateCheck,
+    RuntimePromotionGateDecision, RuntimePromotionGateStatus, RuntimePromotionReadinessReport,
+    RuntimeReconciliationResult, RuntimeReconciliationStatus, RuntimeRegimeTagRecord,
     RuntimeRiskDecision, RuntimeRiskScorecard, RuntimeRiskVerdict, RuntimeRunRecord,
-    RuntimeRunState, RuntimeScorecard, RuntimeTriggerQualityScorecard,
+    RuntimeRunState, RuntimeScorecard, RuntimeStrategySpec, RuntimeTriggerQualityScorecard,
     RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use thiserror::Error;
@@ -29,6 +30,8 @@ pub struct RuntimeScorecardConfig {
     pub paper_max_correction_count: u64,
     pub signal_max_stale_feature_rejects: u64,
     pub required_cost_model_coverage_bps: u16,
+    pub required_feature_definition_coverage_bps: u16,
+    pub required_regime_tag_coverage_bps: u16,
     pub shadow_max_cost_drift_bps: u16,
     pub paper_max_cost_drift_bps: u16,
     pub shadow_max_latency_drift_ms: u64,
@@ -51,6 +54,8 @@ impl Default for RuntimeScorecardConfig {
             paper_max_correction_count: 0,
             signal_max_stale_feature_rejects: 0,
             required_cost_model_coverage_bps: 10_000,
+            required_feature_definition_coverage_bps: 10_000,
+            required_regime_tag_coverage_bps: 10_000,
             shadow_max_cost_drift_bps: 100,
             paper_max_cost_drift_bps: 75,
             shadow_max_latency_drift_ms: 15_000,
@@ -62,10 +67,13 @@ impl Default for RuntimeScorecardConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeScorecardInput {
     pub deployment: RuntimeDeploymentRecord,
+    pub strategy_spec: RuntimeStrategySpec,
     pub runs: Vec<RuntimeRunRecord>,
     pub verdicts: Vec<RuntimeRiskVerdict>,
     pub plans: Vec<RuntimeExecutionPlan>,
     pub cost_model: Option<RuntimeExecutionCostModelRecord>,
+    pub feature_definitions: Vec<RuntimeFeatureDefinitionRecord>,
+    pub regime_tags: Vec<RuntimeRegimeTagRecord>,
     pub allocator_decisions: Vec<RuntimeAllocatorDecisionRecord>,
     pub submit_attempt_count: u64,
     pub receipt_count: u64,
@@ -249,6 +257,7 @@ fn build_scorecard(
     };
     let max_drawdown_usd = format_usd_cents(max_drawdown_cents(input)?);
     let cost = build_cost_scorecard(input)?;
+    let feature_catalog = build_feature_catalog_scorecard(input);
 
     Ok(RuntimeScorecard {
         trigger_quality: RuntimeTriggerQualityScorecard {
@@ -305,6 +314,7 @@ fn build_scorecard(
             kill_switch_pause_count,
         },
         cost,
+        feature_catalog,
         allocator: RuntimeAllocatorScorecard {
             decision_count: allocator_decision_count,
             full_grant_count: allocator_full_grant_count,
@@ -399,6 +409,100 @@ fn build_cost_scorecard(
     })
 }
 
+fn build_feature_catalog_scorecard(
+    input: &RuntimeScorecardInput,
+) -> RuntimeFeatureCatalogScorecard {
+    let required_feature_keys = input
+        .strategy_spec
+        .feature_requirements
+        .iter()
+        .filter(|requirement| requirement.required)
+        .map(|requirement| requirement.feature_key.clone())
+        .collect::<BTreeSet<_>>();
+    let defined_feature_keys = input
+        .feature_definitions
+        .iter()
+        .map(|record| record.feature_key.clone())
+        .collect::<BTreeSet<_>>();
+    let missing_feature_keys = required_feature_keys
+        .iter()
+        .filter(|feature_key| !defined_feature_keys.contains(*feature_key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let required_regime_keys = input
+        .strategy_spec
+        .regime_requirements
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let defined_regime_keys = input
+        .regime_tags
+        .iter()
+        .map(|record| record.regime_key.clone())
+        .collect::<BTreeSet<_>>();
+    let missing_regime_keys = required_regime_keys
+        .iter()
+        .filter(|regime_key| !defined_regime_keys.contains(*regime_key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let defined_feature_count = required_feature_keys
+        .iter()
+        .filter(|feature_key| defined_feature_keys.contains(*feature_key))
+        .count() as u64;
+    let defined_regime_tag_count = required_regime_keys
+        .iter()
+        .filter(|regime_key| defined_regime_keys.contains(*regime_key))
+        .count() as u64;
+    let max_observed_feature_age_ms = input
+        .verdicts
+        .iter()
+        .map(|verdict| verdict.observed.feature_age_ms)
+        .max()
+        .unwrap_or(0);
+    let freshness_slo_ms = input
+        .strategy_spec
+        .feature_requirements
+        .iter()
+        .filter_map(|requirement| requirement.freshness_ms)
+        .chain(
+            input
+                .feature_definitions
+                .iter()
+                .map(|record| record.freshness_slo_ms),
+        )
+        .min();
+    let max_allowed_feature_drift_bps = input
+        .feature_definitions
+        .iter()
+        .map(|record| record.max_allowed_drift_bps)
+        .chain(
+            input
+                .regime_tags
+                .iter()
+                .map(|record| record.max_allowed_drift_bps),
+        )
+        .max();
+    RuntimeFeatureCatalogScorecard {
+        required_feature_count: required_feature_keys.len() as u64,
+        defined_feature_count,
+        feature_definition_coverage_bps: full_ratio_bps(
+            defined_feature_count,
+            required_feature_keys.len() as u64,
+        ),
+        required_regime_tag_count: required_regime_keys.len() as u64,
+        defined_regime_tag_count,
+        regime_tag_coverage_bps: full_ratio_bps(
+            defined_regime_tag_count,
+            required_regime_keys.len() as u64,
+        ),
+        max_observed_feature_age_ms,
+        freshness_slo_ms,
+        max_allowed_feature_drift_bps,
+        missing_feature_keys,
+        missing_regime_keys,
+    }
+}
+
 fn build_promotion_gates(
     config: &RuntimeScorecardConfig,
     input: &RuntimeScorecardInput,
@@ -464,6 +568,18 @@ fn shadow_to_paper_gate(
             scorecard.cost.model_coverage_bps,
             config.required_cost_model_coverage_bps,
             "Every planned shadow run must be covered by the active execution cost model.",
+        ),
+        minimum_bps_check(
+            "shadow-feature-definition-coverage",
+            scorecard.feature_catalog.feature_definition_coverage_bps,
+            config.required_feature_definition_coverage_bps,
+            "Shadow promotion requires all declared feature definitions to be published and active.",
+        ),
+        minimum_bps_check(
+            "shadow-regime-tag-coverage",
+            scorecard.feature_catalog.regime_tag_coverage_bps,
+            config.required_regime_tag_coverage_bps,
+            "Shadow promotion requires all declared regime tags to be published and active.",
         ),
         maximum_bps_check(
             "shadow-max-cost-drift",
@@ -592,6 +708,18 @@ fn paper_to_live_gate(
             scorecard.cost.model_coverage_bps,
             config.required_cost_model_coverage_bps,
             "Every planned paper run must be covered by the active execution cost model.",
+        ),
+        minimum_bps_check(
+            "paper-feature-definition-coverage",
+            scorecard.feature_catalog.feature_definition_coverage_bps,
+            config.required_feature_definition_coverage_bps,
+            "Paper promotion requires all declared feature definitions to remain published and active.",
+        ),
+        minimum_bps_check(
+            "paper-regime-tag-coverage",
+            scorecard.feature_catalog.regime_tag_coverage_bps,
+            config.required_regime_tag_coverage_bps,
+            "Paper promotion requires all declared regime tags to remain published and active.",
         ),
         maximum_bps_check(
             "paper-max-cost-drift",
@@ -948,6 +1076,21 @@ fn build_proof_artifact_markdown(
         scorecard.cost.cost_drift_usd,
         scorecard.cost.latency_drift_ms,
     ));
+    markdown.push_str(&format!(
+        "- Feature catalog: {} / {} features ({}), {} / {} regime tags ({}), max age {}ms{}\n",
+        scorecard.feature_catalog.defined_feature_count,
+        scorecard.feature_catalog.required_feature_count,
+        format_bps(scorecard.feature_catalog.feature_definition_coverage_bps),
+        scorecard.feature_catalog.defined_regime_tag_count,
+        scorecard.feature_catalog.required_regime_tag_count,
+        format_bps(scorecard.feature_catalog.regime_tag_coverage_bps),
+        scorecard.feature_catalog.max_observed_feature_age_ms,
+        scorecard
+            .feature_catalog
+            .freshness_slo_ms
+            .map(|value| format!(", slo {}ms", value))
+            .unwrap_or_default(),
+    ));
     markdown.push_str("\n### Promotion Gates\n");
     for gate in promotion_gates {
         markdown.push_str(&format!(
@@ -1070,6 +1213,13 @@ fn ratio_bps(numerator: u64, denominator: u64) -> u16 {
         return 0;
     }
     ((numerator.saturating_mul(10_000)) / denominator) as u16
+}
+
+fn full_ratio_bps(numerator: u64, denominator: u64) -> u16 {
+    if denominator == 0 {
+        return 10_000;
+    }
+    ratio_bps(numerator, denominator)
 }
 
 fn ratio_bps_from_cents(numerator_cents: i64, denominator_cents: i64) -> u16 {
@@ -1216,12 +1366,14 @@ mod tests {
     use protocol::{
         RuntimeCapital, RuntimeDeploymentState, RuntimeExecutionAction,
         RuntimeExecutionCostAssumptions, RuntimeExecutionCostModelRecord,
-        RuntimeExecutionCostModelStatus, RuntimeExecutionSlice, RuntimeLane, RuntimeLedgerBalance,
-        RuntimeLedgerTotals, RuntimePair, RuntimePolicy, RuntimePositionSide,
-        RuntimeReconciliationStatus, RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason,
-        RuntimeRiskSeverity, RuntimeTrigger, RuntimeTriggerKind, RuntimeVenueLatencyProfile,
-        RuntimeVenueMarketType,
+        RuntimeExecutionCostModelStatus, RuntimeExecutionSlice, RuntimeFeatureCatalogStatus,
+        RuntimeFeatureDefinitionRecord, RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerTotals,
+        RuntimePair, RuntimePolicy, RuntimePositionSide, RuntimeReconciliationStatus,
+        RuntimeRegimeDimension, RuntimeRegimeTagRecord, RuntimeRiskLimits, RuntimeRiskObserved,
+        RuntimeRiskReason, RuntimeRiskSeverity, RuntimeTrigger, RuntimeTriggerKind,
+        RuntimeVenueLatencyProfile, RuntimeVenueMarketType,
     };
+    use strategy_core::StrategyKind;
 
     #[test]
     fn builds_shadow_scorecard_and_promotion_gate() {
@@ -1284,10 +1436,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: Some(cost_model(&deployment)),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
                 submit_attempt_count: 3,
                 receipt_count: 3,
@@ -1377,10 +1532,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: Some(cost_model(&deployment)),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
                 submit_attempt_count: 5,
                 receipt_count: 5,
@@ -1440,10 +1598,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: None,
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
                 submit_attempt_count: 3,
                 receipt_count: 3,
@@ -1535,10 +1696,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: Some(cost_model(&deployment)),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
                 submit_attempt_count: 5,
                 receipt_count: 5,
@@ -1622,10 +1786,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: Some(cost_model(&deployment)),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
                 submit_attempt_count: 2,
                 receipt_count: 2,
@@ -1706,10 +1873,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: Some(cost_model(&deployment)),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
                 submit_attempt_count: 4,
                 receipt_count: 4,
@@ -1784,10 +1954,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: Some(cost_model(&deployment)),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
                 submit_attempt_count: 3,
                 receipt_count: 3,
@@ -1868,10 +2041,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: Some(cost_model(&deployment)),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
                 submit_attempt_count: 6,
                 receipt_count: 6,
@@ -1946,10 +2122,13 @@ mod tests {
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
+                strategy_spec: strategy_spec(&deployment),
                 runs,
                 verdicts,
                 plans,
                 cost_model: Some(cost_model(&deployment)),
+                feature_definitions: feature_definitions(&deployment),
+                regime_tags: regime_tags(&deployment),
                 allocator_decisions,
                 submit_attempt_count: 5,
                 receipt_count: 5,
@@ -2217,6 +2396,126 @@ mod tests {
             tags: vec!["seed".to_string(), "spot".to_string()],
             notes: Some("Synthetic test cost model.".to_string()),
         }
+    }
+
+    fn strategy_spec(deployment: &RuntimeDeploymentRecord) -> RuntimeStrategySpec {
+        strategy_kind(&deployment.strategy_key).spec()
+    }
+
+    fn strategy_kind(strategy_key: &str) -> StrategyKind {
+        match strategy_key {
+            "dca" => StrategyKind::Dca,
+            "threshold_rebalance" => StrategyKind::ThresholdRebalance,
+            "twap" => StrategyKind::Twap,
+            "trend_following" => StrategyKind::TrendFollowing,
+            "mean_reversion" => StrategyKind::MeanReversion,
+            "breakout" => StrategyKind::Breakout,
+            "macro_rotation" => StrategyKind::MacroRotation,
+            "volatility_target" => StrategyKind::VolatilityTarget,
+            other => panic!("unsupported strategy key in test helper: {other}"),
+        }
+    }
+
+    fn feature_definitions(
+        deployment: &RuntimeDeploymentRecord,
+    ) -> Vec<RuntimeFeatureDefinitionRecord> {
+        strategy_spec(deployment)
+            .feature_requirements
+            .into_iter()
+            .map(|requirement| RuntimeFeatureDefinitionRecord {
+                schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                feature_id: format!("feature_{}_v1", requirement.feature_key),
+                feature_key: requirement.feature_key,
+                version: "1.0.0".to_string(),
+                title: "Feature definition".to_string(),
+                summary: "Synthetic feature definition for scorecard tests.".to_string(),
+                status: RuntimeFeatureCatalogStatus::Active,
+                market_type: RuntimeVenueMarketType::Spot,
+                venue_keys: vec![deployment.venue_key.clone()],
+                asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+                pair_symbols: vec![deployment.pair.symbol.clone()],
+                input_requirements: vec![protocol::RuntimeFeatureInputRequirement {
+                    input_key: "mid_price_usd".to_string(),
+                    required: true,
+                    freshness_ms: requirement.freshness_ms,
+                    notes: Some("Synthetic feature input requirement.".to_string()),
+                }],
+                derived_from_feature_keys: vec![],
+                freshness_slo_ms: requirement.freshness_ms.unwrap_or(20_000),
+                max_allowed_drift_bps: 50,
+                min_coverage_bps: 10_000,
+                provenance: protocol::RuntimeCatalogProvenance {
+                    generated_by: "runtime-scorecards::tests".to_string(),
+                    generated_revision: Some("seed".to_string()),
+                    generated_at: "2026-03-10T00:00:00.000Z".to_string(),
+                    notes: Some("Synthetic test provenance.".to_string()),
+                },
+                dataset_snapshots: vec![protocol::RuntimeDatasetSnapshotRef {
+                    dataset_id: "dataset_feed_replay_sol_usdc_market_events".to_string(),
+                    snapshot_id: "snapshot_2026_03_07_seed".to_string(),
+                    captured_at: "2026-03-10T00:00:00.000Z".to_string(),
+                    uri: Some(
+                        "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents"
+                            .to_string(),
+                    ),
+                    content_digest: Some("sha256:fixture".to_string()),
+                }],
+                created_at: "2026-03-10T00:00:00.000Z".to_string(),
+                updated_at: "2026-03-10T00:00:00.000Z".to_string(),
+                tags: vec!["test".to_string()],
+                notes: Some("Synthetic test feature definition.".to_string()),
+            })
+            .collect()
+    }
+
+    fn regime_tags(deployment: &RuntimeDeploymentRecord) -> Vec<RuntimeRegimeTagRecord> {
+        strategy_spec(deployment)
+            .regime_requirements
+            .into_iter()
+            .map(|regime_key| RuntimeRegimeTagRecord {
+                schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                regime_tag_id: format!("regime_{}_v1", regime_key),
+                regime_key: regime_key.clone(),
+                version: "1.0.0".to_string(),
+                title: "Regime tag".to_string(),
+                summary: "Synthetic regime tag for scorecard tests.".to_string(),
+                status: RuntimeFeatureCatalogStatus::Active,
+                dimension: match regime_key.as_str() {
+                    "volatility_band" => RuntimeRegimeDimension::Volatility,
+                    "liquidity_state" => RuntimeRegimeDimension::Liquidity,
+                    _ => RuntimeRegimeDimension::Trend,
+                },
+                value: "classified".to_string(),
+                market_type: RuntimeVenueMarketType::Spot,
+                venue_keys: vec![deployment.venue_key.clone()],
+                asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+                pair_symbols: vec![deployment.pair.symbol.clone()],
+                source_feature_keys: vec!["short_return_bps".to_string()],
+                freshness_slo_ms: 20_000,
+                max_allowed_drift_bps: 50,
+                min_confidence_bps: 8_000,
+                provenance: protocol::RuntimeCatalogProvenance {
+                    generated_by: "runtime-scorecards::tests".to_string(),
+                    generated_revision: Some("seed".to_string()),
+                    generated_at: "2026-03-10T00:00:00.000Z".to_string(),
+                    notes: Some("Synthetic test provenance.".to_string()),
+                },
+                dataset_snapshots: vec![protocol::RuntimeDatasetSnapshotRef {
+                    dataset_id: "dataset_feed_replay_sol_usdc_market_events".to_string(),
+                    snapshot_id: "snapshot_2026_03_07_seed".to_string(),
+                    captured_at: "2026-03-10T00:00:00.000Z".to_string(),
+                    uri: Some(
+                        "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents"
+                            .to_string(),
+                    ),
+                    content_digest: Some("sha256:fixture".to_string()),
+                }],
+                created_at: "2026-03-10T00:00:00.000Z".to_string(),
+                updated_at: "2026-03-10T00:00:00.000Z".to_string(),
+                tags: vec!["test".to_string()],
+                notes: Some("Synthetic test regime tag.".to_string()),
+            })
+            .collect()
     }
 
     fn reconciliation(

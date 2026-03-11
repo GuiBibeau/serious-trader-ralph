@@ -11,6 +11,7 @@ cost-model-registry = { path = "../../crates/cost-model-registry" }
 execution-planner = { path = "../../crates/execution-planner" }
 exec-client = { path = "../../crates/exec-client" }
 feature-cache = { path = "../../crates/feature-cache" }
+feature-catalog-registry = { path = "../../crates/feature-catalog-registry" }
 historical-data-lake = { path = "../../crates/historical-data-lake" }
 market-adapters = { path = "../../crates/market-adapters" }
 portfolio-ledger = { path = "../../crates/portfolio-ledger" }

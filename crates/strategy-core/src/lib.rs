@@ -169,6 +169,18 @@ impl StrategyKind {
         }
     }
 
+    fn regime_requirements(&self) -> Vec<String> {
+        match self {
+            Self::Dca | Self::ThresholdRebalance | Self::Twap => Vec::new(),
+            Self::TrendFollowing | Self::MeanReversion => {
+                vec!["short_trend".to_string()]
+            }
+            Self::Breakout => vec!["long_trend".to_string(), "liquidity_state".to_string()],
+            Self::MacroRotation => vec!["long_trend".to_string()],
+            Self::VolatilityTarget => vec!["volatility_band".to_string()],
+        }
+    }
+
     fn parameter_specs(&self) -> Vec<RuntimeStrategyParameterSpec> {
         let mut parameters = vec![
             decimal_parameter(
@@ -281,6 +293,7 @@ impl StrategyKind {
             supported_venues: self.supported_venues(),
             asset_constraints: self.asset_constraints(),
             feature_requirements: self.feature_requirements(),
+            regime_requirements: self.regime_requirements(),
             parameter_specs: self.parameter_specs(),
             promotion_policy: self.promotion_policy(),
             tags: vec![
@@ -667,6 +680,26 @@ fn validate_spec(spec: &RuntimeStrategySpec) -> Result<(), StrategyCatalogError>
                 "enum parameters must declare allowedValues",
             ));
         }
+    }
+    if spec
+        .feature_requirements
+        .iter()
+        .any(|requirement| requirement.feature_key.trim().is_empty())
+    {
+        return Err(invalid_spec(
+            spec,
+            "featureRequirements.featureKey must not be empty",
+        ));
+    }
+    if spec
+        .regime_requirements
+        .iter()
+        .any(|requirement| requirement.trim().is_empty())
+    {
+        return Err(invalid_spec(
+            spec,
+            "regimeRequirements entries must not be empty",
+        ));
     }
     Ok(())
 }

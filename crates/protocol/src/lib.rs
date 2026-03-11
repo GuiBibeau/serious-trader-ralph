@@ -467,6 +467,22 @@ pub struct RuntimeCostScorecard {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeFeatureCatalogScorecard {
+    pub required_feature_count: u64,
+    pub defined_feature_count: u64,
+    pub feature_definition_coverage_bps: u16,
+    pub required_regime_tag_count: u64,
+    pub defined_regime_tag_count: u64,
+    pub regime_tag_coverage_bps: u16,
+    pub max_observed_feature_age_ms: u64,
+    pub freshness_slo_ms: Option<u64>,
+    pub max_allowed_feature_drift_bps: Option<u16>,
+    pub missing_feature_keys: Vec<String>,
+    pub missing_regime_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeAllocatorPeerGrant {
     pub deployment_id: String,
     pub strategy_key: String,
@@ -525,6 +541,7 @@ pub struct RuntimeScorecard {
     pub pnl: RuntimePnlScorecard,
     pub risk: RuntimeRiskScorecard,
     pub cost: RuntimeCostScorecard,
+    pub feature_catalog: RuntimeFeatureCatalogScorecard,
     pub allocator: RuntimeAllocatorScorecard,
 }
 
@@ -779,6 +796,98 @@ pub enum RuntimeExecutionCostModelStatus {
     Draft,
     Active,
     Deprecated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeFeatureCatalogStatus {
+    Draft,
+    Active,
+    Deprecated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeRegimeDimension {
+    Trend,
+    Volatility,
+    Spread,
+    Liquidity,
+    Funding,
+    Carry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCatalogProvenance {
+    pub generated_by: String,
+    pub generated_revision: Option<String>,
+    pub generated_at: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeFeatureInputRequirement {
+    pub input_key: String,
+    pub required: bool,
+    pub freshness_ms: Option<u64>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeFeatureDefinitionRecord {
+    pub schema_version: String,
+    pub feature_id: String,
+    pub feature_key: String,
+    pub version: String,
+    pub title: String,
+    pub summary: String,
+    pub status: RuntimeFeatureCatalogStatus,
+    pub market_type: RuntimeVenueMarketType,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub pair_symbols: Vec<String>,
+    pub input_requirements: Vec<RuntimeFeatureInputRequirement>,
+    pub derived_from_feature_keys: Vec<String>,
+    pub freshness_slo_ms: u64,
+    pub max_allowed_drift_bps: u16,
+    pub min_coverage_bps: u16,
+    pub provenance: RuntimeCatalogProvenance,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRegimeTagRecord {
+    pub schema_version: String,
+    pub regime_tag_id: String,
+    pub regime_key: String,
+    pub version: String,
+    pub title: String,
+    pub summary: String,
+    pub status: RuntimeFeatureCatalogStatus,
+    pub dimension: RuntimeRegimeDimension,
+    pub value: String,
+    pub market_type: RuntimeVenueMarketType,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub pair_symbols: Vec<String>,
+    pub source_feature_keys: Vec<String>,
+    pub freshness_slo_ms: u64,
+    pub max_allowed_drift_bps: u16,
+    pub min_confidence_bps: u16,
+    pub provenance: RuntimeCatalogProvenance,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1163,6 +1272,7 @@ pub struct RuntimeStrategySpec {
     pub supported_venues: Vec<RuntimeStrategyVenueSupport>,
     pub asset_constraints: Vec<RuntimeStrategyAssetConstraint>,
     pub feature_requirements: Vec<RuntimeStrategyFeatureRequirement>,
+    pub regime_requirements: Vec<String>,
     pub parameter_specs: Vec<RuntimeStrategyParameterSpec>,
     pub promotion_policy: RuntimeStrategyPromotionPolicy,
     pub tags: Vec<String>,
