@@ -467,6 +467,7 @@ describe("worker runtime internal routes", () => {
         health: "/api/internal/runtime/health",
         scorecards: "/api/internal/runtime/scorecards",
         allocator: "/api/internal/runtime/allocator",
+        costModels: "/api/internal/runtime/cost-models",
       },
     });
   });
@@ -890,6 +891,9 @@ describe("worker runtime internal routes", () => {
           triggerQuality: {
             totalRuns: 3,
           },
+          cost: {
+            modelId: "cost_model_jupiter_sol_usdc_spot",
+          },
         },
       },
     });
@@ -976,6 +980,46 @@ describe("worker runtime internal routes", () => {
             evidenceBundleId: "evidence_signal_trend_shadow",
           },
         ],
+      },
+    });
+  });
+
+  test("returns stubbed runtime cost model registry", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/cost-models?venueKey=jupiter&assetKey=SOL&pairSymbol=SOL%2FUSDC&marketType=spot&mode=paper",
+        {
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+          },
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "stub",
+      filters: {
+        venueKey: "jupiter",
+        assetKey: "SOL",
+        pairSymbol: "SOL/USDC",
+        marketType: "spot",
+        mode: "paper",
+      },
+      registry: {
+        costModels: expect.arrayContaining([
+          expect.objectContaining({
+            modelId: "cost_model_jupiter_sol_usdc_spot",
+            venueKey: "jupiter",
+            marketType: "spot",
+          }),
+        ]),
       },
     });
   });

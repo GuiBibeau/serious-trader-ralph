@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "v1",
+  "modelId": "cost_model_jupiter_sol_usdc_spot",
+  "venueKey": "jupiter",
+  "marketType": "spot",
+  "pairSymbol": "SOL/USDC",
+  "instrumentId": "SOL/USDC",
+  "assetKeys": ["SOL", "USDC"],
+  "modeCoverage": ["shadow", "paper", "live"],
+  "status": "active",
+  "assumptions": {
+    "feeBps": 8,
+    "slippageBps": 22,
+    "marketImpactBps": 12,
+    "partialFillRateBps": 50,
+    "partialFillPenaltyBps": 12
+  },
+  "latencyProfile": {
+    "expectedQuoteMs": 250,
+    "expectedSubmitMs": 750,
+    "expectedSettlementMs": 5000
+  },
+  "datasetSnapshots": [
+    {
+      "datasetId": "dataset_feed_replay_sol_usdc_market_events",
+      "snapshotId": "snapshot_2026_03_07_seed",
+      "capturedAt": "2026-03-10T00:00:00.000Z",
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+      "contentDigest": "sha256:fixture"
+    },
+    {
+      "datasetId": "dataset_feed_replay_sol_usdc_slot_events",
+      "snapshotId": "snapshot_2026_03_07_seed",
+      "capturedAt": "2026-03-10T00:00:00.000Z",
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+      "contentDigest": "sha256:fixture"
+    }
+  ],
+  "createdAt": "2026-03-10T00:00:00.000Z",
+  "updatedAt": "2026-03-10T00:00:00.000Z",
+  "tags": ["seed", "spot"],
+  "notes": "Bootstrap Jupiter SOL/USDC spot cost model from the checked-in replay corpus."
+}

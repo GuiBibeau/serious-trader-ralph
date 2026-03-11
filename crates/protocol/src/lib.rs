@@ -449,6 +449,24 @@ pub struct RuntimeRiskScorecard {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeCostScorecard {
+    pub model_id: Option<String>,
+    pub model_status: Option<RuntimeExecutionCostModelStatus>,
+    pub covered_run_count: u64,
+    pub model_coverage_bps: u16,
+    pub evaluated_notional_usd: String,
+    pub modeled_total_cost_usd: String,
+    pub observed_total_cost_usd: String,
+    pub cost_drift_usd: String,
+    pub cost_drift_bps: u16,
+    pub expected_end_to_end_latency_ms: u64,
+    pub observed_end_to_end_latency_ms: u64,
+    pub latency_drift_ms: u64,
+    pub reconciliation_drift_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeAllocatorPeerGrant {
     pub deployment_id: String,
     pub strategy_key: String,
@@ -506,6 +524,7 @@ pub struct RuntimeScorecard {
     pub expected_vs_observed: RuntimeExpectedObservedScorecard,
     pub pnl: RuntimePnlScorecard,
     pub risk: RuntimeRiskScorecard,
+    pub cost: RuntimeCostScorecard,
     pub allocator: RuntimeAllocatorScorecard,
 }
 
@@ -750,6 +769,46 @@ pub struct RuntimeReplayCorpusRecord {
     pub fixture_uri: Option<String>,
     pub content_digest: Option<String>,
     pub deterministic_seed: Option<u64>,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeExecutionCostModelStatus {
+    Draft,
+    Active,
+    Deprecated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExecutionCostAssumptions {
+    pub fee_bps: u16,
+    pub slippage_bps: u16,
+    pub market_impact_bps: u16,
+    pub partial_fill_rate_bps: u16,
+    pub partial_fill_penalty_bps: u16,
+    pub financing_cost_bps_per_day: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExecutionCostModelRecord {
+    pub schema_version: String,
+    pub model_id: String,
+    pub venue_key: String,
+    pub market_type: RuntimeVenueMarketType,
+    pub pair_symbol: String,
+    pub instrument_id: Option<String>,
+    pub asset_keys: Vec<String>,
+    pub mode_coverage: Vec<RuntimeMode>,
+    pub status: RuntimeExecutionCostModelStatus,
+    pub assumptions: RuntimeExecutionCostAssumptions,
+    pub latency_profile: RuntimeVenueLatencyProfile,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub created_at: String,
+    pub updated_at: String,
     pub tags: Vec<String>,
     pub notes: Option<String>,
 }

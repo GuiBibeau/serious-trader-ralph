@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
+  parseRuntimeExecutionCostModelRecord,
   parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeReplayCorpusRecord,
   parseRuntimeStrategySpec,
@@ -31,6 +32,7 @@ describe("worker runtime contract bridge", () => {
       "researchEvidenceBundle",
       "historicalDatasetSnapshot",
       "replayCorpus",
+      "executionCostModel",
       "venueCapability",
       "assetRecord",
       "strategySpec",
@@ -105,5 +107,16 @@ describe("worker runtime contract bridge", () => {
       "replay_corpus_sol_usdc_feed_gateway_seed",
     );
     expect(replayCorpus.datasetSnapshots).toHaveLength(2);
+  });
+
+  test("worker can parse the canonical execution cost model fixture", () => {
+    const costModel = parseRuntimeExecutionCostModelRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.execution_cost_model.valid.v1.json",
+      ),
+    );
+
+    expect(costModel.modelId).toBe("cost_model_jupiter_sol_usdc_spot");
+    expect(costModel.marketType).toBe("spot");
   });
 });

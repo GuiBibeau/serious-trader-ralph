@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use protocol::{
-    RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard, RuntimeDeploymentRecord,
-    RuntimeDeploymentState, RuntimeExecutionPlan, RuntimeExpectedObservedScorecard,
+    RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard, RuntimeCostScorecard,
+    RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeExecutionCostModelRecord,
+    RuntimeExecutionCostModelStatus, RuntimeExecutionPlan, RuntimeExpectedObservedScorecard,
     RuntimeLedgerSnapshot, RuntimeMode, RuntimePlanQualityScorecard, RuntimePnlScorecard,
     RuntimePromotionGateCheck, RuntimePromotionGateDecision, RuntimePromotionGateStatus,
     RuntimePromotionReadinessReport, RuntimeReconciliationResult, RuntimeReconciliationStatus,
@@ -27,6 +28,11 @@ pub struct RuntimeScorecardConfig {
     pub paper_max_pause_verdicts: u64,
     pub paper_max_correction_count: u64,
     pub signal_max_stale_feature_rejects: u64,
+    pub required_cost_model_coverage_bps: u16,
+    pub shadow_max_cost_drift_bps: u16,
+    pub paper_max_cost_drift_bps: u16,
+    pub shadow_max_latency_drift_ms: u64,
+    pub paper_max_latency_drift_ms: u64,
 }
 
 impl Default for RuntimeScorecardConfig {
@@ -44,6 +50,11 @@ impl Default for RuntimeScorecardConfig {
             paper_max_pause_verdicts: 0,
             paper_max_correction_count: 0,
             signal_max_stale_feature_rejects: 0,
+            required_cost_model_coverage_bps: 10_000,
+            shadow_max_cost_drift_bps: 100,
+            paper_max_cost_drift_bps: 75,
+            shadow_max_latency_drift_ms: 15_000,
+            paper_max_latency_drift_ms: 10_000,
         }
     }
 }
@@ -54,6 +65,7 @@ pub struct RuntimeScorecardInput {
     pub runs: Vec<RuntimeRunRecord>,
     pub verdicts: Vec<RuntimeRiskVerdict>,
     pub plans: Vec<RuntimeExecutionPlan>,
+    pub cost_model: Option<RuntimeExecutionCostModelRecord>,
     pub allocator_decisions: Vec<RuntimeAllocatorDecisionRecord>,
     pub submit_attempt_count: u64,
     pub receipt_count: u64,
@@ -66,6 +78,8 @@ pub struct RuntimeScorecardInput {
 pub enum RuntimeScorecardError {
     #[error("invalid usd amount for {field}: {value}")]
     InvalidUsdAmount { field: &'static str, value: String },
+    #[error("invalid timestamp for {field}: {value}")]
+    InvalidTimestamp { field: &'static str, value: String },
 }
 
 pub fn build_readiness_report(
@@ -234,6 +248,7 @@ fn build_scorecard(
         zero_pnl_totals()
     };
     let max_drawdown_usd = format_usd_cents(max_drawdown_cents(input)?);
+    let cost = build_cost_scorecard(input)?;
 
     Ok(RuntimeScorecard {
         trigger_quality: RuntimeTriggerQualityScorecard {
@@ -289,6 +304,7 @@ fn build_scorecard(
             concentration_reject_count,
             kill_switch_pause_count,
         },
+        cost,
         allocator: RuntimeAllocatorScorecard {
             decision_count: allocator_decision_count,
             full_grant_count: allocator_full_grant_count,
@@ -296,6 +312,90 @@ fn build_scorecard(
             zero_grant_count: allocator_zero_grant_count,
             full_grant_rate_bps: ratio_bps(allocator_full_grant_count, allocator_decision_count),
         },
+    })
+}
+
+fn build_cost_scorecard(
+    input: &RuntimeScorecardInput,
+) -> Result<RuntimeCostScorecard, RuntimeScorecardError> {
+    let evaluated_notional_cents = input.plans.iter().try_fold(0_i64, |total, plan| {
+        plan.slices.iter().try_fold(total, |slice_total, slice| {
+            Ok(slice_total + parse_usd_cents("plan.slices[].notionalUsd", &slice.notional_usd)?)
+        })
+    })?;
+    let reconciliation_drift_cents =
+        input
+            .reconciliations
+            .iter()
+            .try_fold(0_i64, |total, reconciliation| {
+                Ok(total
+                    + parse_usd_cents(
+                        "reconciliation.positionDeltaUsd",
+                        &reconciliation.position_delta_usd,
+                    )?
+                    .abs())
+            })?;
+    let reconciliation_drift_count = input
+        .reconciliations
+        .iter()
+        .filter(|result| {
+            result.status != RuntimeReconciliationStatus::Passed || result.correction_applied
+        })
+        .count() as u64;
+    let observed_end_to_end_latency_ms = average_observed_end_to_end_latency_ms(input)?;
+
+    let Some(model) = input.cost_model.as_ref() else {
+        return Ok(RuntimeCostScorecard {
+            model_id: None,
+            model_status: None,
+            covered_run_count: 0,
+            model_coverage_bps: 0,
+            evaluated_notional_usd: format_usd_cents(evaluated_notional_cents),
+            modeled_total_cost_usd: "0.00".to_string(),
+            observed_total_cost_usd: format_usd_cents(reconciliation_drift_cents),
+            cost_drift_usd: format_usd_cents(reconciliation_drift_cents),
+            cost_drift_bps: ratio_bps_from_cents(
+                reconciliation_drift_cents,
+                evaluated_notional_cents,
+            ),
+            expected_end_to_end_latency_ms: 0,
+            observed_end_to_end_latency_ms,
+            latency_drift_ms: observed_end_to_end_latency_ms,
+            reconciliation_drift_count,
+        });
+    };
+
+    let active = model.status == RuntimeExecutionCostModelStatus::Active;
+    let modeled_total_cost_cents = if active {
+        input.plans.iter().try_fold(0_i64, |total, plan| {
+            modeled_plan_cost_cents(plan, model).map(|plan_cost| total + plan_cost)
+        })?
+    } else {
+        0
+    };
+    let observed_total_cost_cents = modeled_total_cost_cents + reconciliation_drift_cents;
+    let expected_end_to_end_latency_ms = if active {
+        model.latency_profile.expected_submit_ms + model.latency_profile.expected_settlement_ms
+    } else {
+        0
+    };
+    let latency_drift_ms = expected_end_to_end_latency_ms.abs_diff(observed_end_to_end_latency_ms);
+    let covered_run_count = if active { input.plans.len() as u64 } else { 0 };
+
+    Ok(RuntimeCostScorecard {
+        model_id: Some(model.model_id.clone()),
+        model_status: Some(model.status.clone()),
+        covered_run_count,
+        model_coverage_bps: ratio_bps(covered_run_count, input.plans.len() as u64),
+        evaluated_notional_usd: format_usd_cents(evaluated_notional_cents),
+        modeled_total_cost_usd: format_usd_cents(modeled_total_cost_cents),
+        observed_total_cost_usd: format_usd_cents(observed_total_cost_cents),
+        cost_drift_usd: format_usd_cents(reconciliation_drift_cents),
+        cost_drift_bps: ratio_bps_from_cents(reconciliation_drift_cents, evaluated_notional_cents),
+        expected_end_to_end_latency_ms,
+        observed_end_to_end_latency_ms,
+        latency_drift_ms,
+        reconciliation_drift_count,
     })
 }
 
@@ -351,6 +451,31 @@ fn shadow_to_paper_gate(
             scorecard.expected_vs_observed.reconciliation_pass_rate_bps,
             config.required_reconciliation_pass_bps,
             "Shadow reconciliation must pass cleanly before paper promotion.",
+        ),
+        exact_match_check(
+            "shadow-cost-model-status",
+            scorecard.cost.model_status == Some(RuntimeExecutionCostModelStatus::Active),
+            cost_model_status_value(scorecard.cost.model_status.as_ref()),
+            "active",
+            "Shadow promotion requires an active, auditable execution cost model.",
+        ),
+        minimum_bps_check(
+            "shadow-cost-model-coverage",
+            scorecard.cost.model_coverage_bps,
+            config.required_cost_model_coverage_bps,
+            "Every planned shadow run must be covered by the active execution cost model.",
+        ),
+        maximum_bps_check(
+            "shadow-max-cost-drift",
+            scorecard.cost.cost_drift_bps,
+            config.shadow_max_cost_drift_bps,
+            "Shadow cost drift must stay within the configured robustness budget.",
+        ),
+        maximum_check(
+            "shadow-max-latency-drift-ms",
+            scorecard.cost.latency_drift_ms,
+            config.shadow_max_latency_drift_ms,
+            "Shadow observed execution latency must remain close to the modeled latency budget.",
         ),
         maximum_check(
             "shadow-max-failed-runs",
@@ -454,6 +579,31 @@ fn paper_to_live_gate(
             scorecard.expected_vs_observed.reconciliation_pass_rate_bps,
             config.required_reconciliation_pass_bps,
             "Paper reconciliation must pass before any live promotion.",
+        ),
+        exact_match_check(
+            "paper-cost-model-status",
+            scorecard.cost.model_status == Some(RuntimeExecutionCostModelStatus::Active),
+            cost_model_status_value(scorecard.cost.model_status.as_ref()),
+            "active",
+            "Paper promotion requires an active, auditable execution cost model.",
+        ),
+        minimum_bps_check(
+            "paper-cost-model-coverage",
+            scorecard.cost.model_coverage_bps,
+            config.required_cost_model_coverage_bps,
+            "Every planned paper run must be covered by the active execution cost model.",
+        ),
+        maximum_bps_check(
+            "paper-max-cost-drift",
+            scorecard.cost.cost_drift_bps,
+            config.paper_max_cost_drift_bps,
+            "Paper-mode cost drift must remain within the live-promotion budget.",
+        ),
+        maximum_check(
+            "paper-max-latency-drift-ms",
+            scorecard.cost.latency_drift_ms,
+            config.paper_max_latency_drift_ms,
+            "Paper-mode observed execution latency must remain close to the modeled latency budget.",
         ),
         maximum_check(
             "paper-max-corrections",
@@ -658,6 +808,25 @@ fn minimum_bps_check(
     }
 }
 
+fn maximum_bps_check(
+    gate_id: &str,
+    observed: u16,
+    threshold: u16,
+    message: &str,
+) -> RuntimePromotionGateCheck {
+    RuntimePromotionGateCheck {
+        gate_id: gate_id.to_string(),
+        status: if observed <= threshold {
+            RuntimePromotionGateStatus::Pass
+        } else {
+            RuntimePromotionGateStatus::Blocked
+        },
+        observed_value: format!("{observed}bps"),
+        threshold_value: format!("{threshold}bps"),
+        message: message.to_string(),
+    }
+}
+
 fn exact_bps_check(
     gate_id: &str,
     observed: u16,
@@ -770,6 +939,15 @@ fn build_proof_artifact_markdown(
         scorecard.pnl.unrealized_pnl_usd,
         scorecard.pnl.max_drawdown_usd,
     ));
+    markdown.push_str(&format!(
+        "- Cost model: `{}` coverage {}, modeled {}, observed {}, drift {}, latency drift {}ms\n",
+        scorecard.cost.model_id.as_deref().unwrap_or("missing"),
+        format_bps(scorecard.cost.model_coverage_bps),
+        scorecard.cost.modeled_total_cost_usd,
+        scorecard.cost.observed_total_cost_usd,
+        scorecard.cost.cost_drift_usd,
+        scorecard.cost.latency_drift_ms,
+    ));
     markdown.push_str("\n### Promotion Gates\n");
     for gate in promotion_gates {
         markdown.push_str(&format!(
@@ -835,11 +1013,91 @@ fn verdict_by_run_id(verdicts: &[RuntimeRiskVerdict]) -> HashMap<&str, &RuntimeR
     map
 }
 
+fn cost_model_status_value(status: Option<&RuntimeExecutionCostModelStatus>) -> &'static str {
+    match status {
+        Some(RuntimeExecutionCostModelStatus::Draft) => "draft",
+        Some(RuntimeExecutionCostModelStatus::Active) => "active",
+        Some(RuntimeExecutionCostModelStatus::Deprecated) => "deprecated",
+        None => "missing",
+    }
+}
+
+fn modeled_plan_cost_cents(
+    plan: &RuntimeExecutionPlan,
+    model: &RuntimeExecutionCostModelRecord,
+) -> Result<i64, RuntimeScorecardError> {
+    let expected_partial_fill_bps = (u64::from(model.assumptions.partial_fill_rate_bps)
+        * u64::from(model.assumptions.partial_fill_penalty_bps)
+        / 10_000) as i64;
+    let total_cost_bps = i64::from(model.assumptions.fee_bps)
+        + i64::from(model.assumptions.slippage_bps)
+        + i64::from(model.assumptions.market_impact_bps)
+        + expected_partial_fill_bps;
+    plan.slices.iter().try_fold(0_i64, |total, slice| {
+        let notional_cents = parse_usd_cents("plan.slices[].notionalUsd", &slice.notional_usd)?;
+        Ok(total + ((notional_cents * total_cost_bps) / 10_000))
+    })
+}
+
+fn average_observed_end_to_end_latency_ms(
+    input: &RuntimeScorecardInput,
+) -> Result<u64, RuntimeScorecardError> {
+    let run_by_id = input
+        .runs
+        .iter()
+        .map(|run| (run.run_id.as_str(), run))
+        .collect::<HashMap<_, _>>();
+    let mut total_ms = 0_u64;
+    let mut count = 0_u64;
+    for reconciliation in &input.reconciliations {
+        let Some(run) = run_by_id.get(reconciliation.run_id.as_str()) else {
+            continue;
+        };
+        let planned_at = parse_timestamp("run.plannedAt", &run.planned_at)?;
+        let completed_at =
+            parse_timestamp("reconciliation.completedAt", &reconciliation.completed_at)?;
+        total_ms = total_ms.saturating_add(timestamp_diff_ms(planned_at, completed_at));
+        count = count.saturating_add(1);
+    }
+    if count == 0 {
+        return Ok(0);
+    }
+    Ok(total_ms / count)
+}
+
 fn ratio_bps(numerator: u64, denominator: u64) -> u16 {
     if denominator == 0 {
         return 0;
     }
     ((numerator.saturating_mul(10_000)) / denominator) as u16
+}
+
+fn ratio_bps_from_cents(numerator_cents: i64, denominator_cents: i64) -> u16 {
+    if denominator_cents <= 0 || numerator_cents <= 0 {
+        return 0;
+    }
+    let numerator = u64::try_from(numerator_cents).unwrap_or(u64::MAX);
+    let denominator = u64::try_from(denominator_cents).unwrap_or(u64::MAX);
+    ratio_bps(numerator, denominator)
+}
+
+fn parse_timestamp(
+    field: &'static str,
+    value: &str,
+) -> Result<OffsetDateTime, RuntimeScorecardError> {
+    OffsetDateTime::parse(value, &Rfc3339).map_err(|_| RuntimeScorecardError::InvalidTimestamp {
+        field,
+        value: value.to_string(),
+    })
+}
+
+fn timestamp_diff_ms(start: OffsetDateTime, end: OffsetDateTime) -> u64 {
+    let diff = (end - start).whole_milliseconds();
+    if diff <= 0 {
+        0
+    } else {
+        diff as u64
+    }
 }
 
 fn parse_usd_cents(field: &'static str, value: &str) -> Result<i64, RuntimeScorecardError> {
@@ -956,10 +1214,13 @@ impl PromotionGateStatusKey for RuntimePromotionGateStatus {
 mod tests {
     use super::*;
     use protocol::{
-        RuntimeCapital, RuntimeDeploymentState, RuntimeExecutionAction, RuntimeExecutionSlice,
-        RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerTotals, RuntimePair, RuntimePolicy,
-        RuntimePositionSide, RuntimeReconciliationStatus, RuntimeRiskLimits, RuntimeRiskObserved,
-        RuntimeRiskReason, RuntimeRiskSeverity, RuntimeTrigger, RuntimeTriggerKind,
+        RuntimeCapital, RuntimeDeploymentState, RuntimeExecutionAction,
+        RuntimeExecutionCostAssumptions, RuntimeExecutionCostModelRecord,
+        RuntimeExecutionCostModelStatus, RuntimeExecutionSlice, RuntimeLane, RuntimeLedgerBalance,
+        RuntimeLedgerTotals, RuntimePair, RuntimePolicy, RuntimePositionSide,
+        RuntimeReconciliationStatus, RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason,
+        RuntimeRiskSeverity, RuntimeTrigger, RuntimeTriggerKind, RuntimeVenueLatencyProfile,
+        RuntimeVenueMarketType,
     };
 
     #[test]
@@ -1026,6 +1287,7 @@ mod tests {
                 runs,
                 verdicts,
                 plans,
+                cost_model: Some(cost_model(&deployment)),
                 allocator_decisions: vec![],
                 submit_attempt_count: 3,
                 receipt_count: 3,
@@ -1038,6 +1300,10 @@ mod tests {
 
         assert_eq!(report.scorecard.trigger_quality.total_runs, 3);
         assert_eq!(report.scorecard.plan_quality.plan_coverage_bps, 10_000);
+        assert_eq!(
+            report.scorecard.cost.model_id.as_deref(),
+            Some("cost_model_jupiter_sol_usdc_spot")
+        );
         assert_eq!(
             report.promotion_gates[0].status,
             RuntimePromotionGateStatus::Pass
@@ -1110,10 +1376,11 @@ mod tests {
         let report = build_readiness_report(
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
-                deployment,
+                deployment: deployment.clone(),
                 runs,
                 verdicts,
                 plans,
+                cost_model: Some(cost_model(&deployment)),
                 allocator_decisions: vec![],
                 submit_attempt_count: 5,
                 receipt_count: 5,
@@ -1129,6 +1396,73 @@ mod tests {
             report.promotion_gates[1].status,
             RuntimePromotionGateStatus::Pass
         );
+    }
+
+    #[test]
+    fn blocks_shadow_promotion_without_active_cost_model() {
+        let deployment = deployment(
+            "deployment_shadow_missing_cost",
+            RuntimeMode::Shadow,
+            RuntimeDeploymentState::Shadow,
+        );
+        let runs = (1..=3)
+            .map(|index| {
+                run(
+                    &format!("run_shadow_missing_cost_{index}"),
+                    RuntimeRunState::Completed,
+                    trigger("operator"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let verdicts = runs
+            .iter()
+            .map(|run| allow_verdict(&deployment, run))
+            .collect::<Vec<_>>();
+        let plans = runs
+            .iter()
+            .map(|run| plan(&deployment, run, true, true))
+            .collect::<Vec<_>>();
+        let reconciliations = runs
+            .iter()
+            .map(|run| reconciliation(&deployment, run, RuntimeReconciliationStatus::Passed, false))
+            .collect::<Vec<_>>();
+        let snapshots = vec![ledger_snapshot(
+            &deployment,
+            "1000.00",
+            "0.00",
+            "1000.00",
+            "0.50",
+            "0.00",
+            "2026-03-08T10:05:00Z",
+        )];
+
+        let report = build_readiness_report(
+            &RuntimeScorecardConfig::default(),
+            &RuntimeScorecardInput {
+                deployment: deployment.clone(),
+                runs,
+                verdicts,
+                plans,
+                cost_model: None,
+                allocator_decisions: vec![],
+                submit_attempt_count: 3,
+                receipt_count: 3,
+                reconciliations,
+                observed_ledger_snapshots: snapshots.clone(),
+                latest_ledger_snapshot: snapshots.last().cloned(),
+            },
+        )
+        .expect("report to build");
+
+        assert_eq!(
+            report.promotion_gates[0].status,
+            RuntimePromotionGateStatus::Blocked
+        );
+        assert!(report.promotion_gates[0]
+            .checks
+            .iter()
+            .any(|check| check.gate_id == "shadow-cost-model-status"
+                && check.status == RuntimePromotionGateStatus::Blocked));
     }
 
     #[test]
@@ -1200,10 +1534,11 @@ mod tests {
         let report = build_readiness_report(
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
-                deployment,
+                deployment: deployment.clone(),
                 runs,
                 verdicts,
                 plans,
+                cost_model: Some(cost_model(&deployment)),
                 allocator_decisions: vec![],
                 submit_attempt_count: 5,
                 receipt_count: 5,
@@ -1227,6 +1562,11 @@ mod tests {
             .checks
             .iter()
             .any(|check| check.gate_id == "paper-max-drawdown"
+                && check.status == RuntimePromotionGateStatus::Blocked));
+        assert!(report.promotion_gates[1]
+            .checks
+            .iter()
+            .any(|check| check.gate_id == "paper-max-cost-drift"
                 && check.status == RuntimePromotionGateStatus::Blocked));
     }
 
@@ -1281,10 +1621,11 @@ mod tests {
         let report = build_readiness_report(
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
-                deployment,
+                deployment: deployment.clone(),
                 runs,
                 verdicts,
                 plans,
+                cost_model: Some(cost_model(&deployment)),
                 allocator_decisions: vec![],
                 submit_attempt_count: 2,
                 receipt_count: 2,
@@ -1364,10 +1705,11 @@ mod tests {
         let report = build_readiness_report(
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
-                deployment,
+                deployment: deployment.clone(),
                 runs,
                 verdicts,
                 plans,
+                cost_model: Some(cost_model(&deployment)),
                 allocator_decisions: vec![],
                 submit_attempt_count: 4,
                 receipt_count: 4,
@@ -1441,10 +1783,11 @@ mod tests {
         let report = build_readiness_report(
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
-                deployment,
+                deployment: deployment.clone(),
                 runs,
                 verdicts,
                 plans,
+                cost_model: Some(cost_model(&deployment)),
                 allocator_decisions: vec![],
                 submit_attempt_count: 3,
                 receipt_count: 3,
@@ -1524,10 +1867,11 @@ mod tests {
         let report = build_readiness_report(
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
-                deployment,
+                deployment: deployment.clone(),
                 runs,
                 verdicts,
                 plans,
+                cost_model: Some(cost_model(&deployment)),
                 allocator_decisions: vec![],
                 submit_attempt_count: 6,
                 receipt_count: 6,
@@ -1601,10 +1945,11 @@ mod tests {
         let report = build_readiness_report(
             &RuntimeScorecardConfig::default(),
             &RuntimeScorecardInput {
-                deployment,
+                deployment: deployment.clone(),
                 runs,
                 verdicts,
                 plans,
+                cost_model: Some(cost_model(&deployment)),
                 allocator_decisions,
                 submit_attempt_count: 5,
                 receipt_count: 5,
@@ -1833,6 +2178,47 @@ mod tests {
         }
     }
 
+    fn cost_model(deployment: &RuntimeDeploymentRecord) -> RuntimeExecutionCostModelRecord {
+        RuntimeExecutionCostModelRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            model_id: format!("cost_model_{}_sol_usdc_spot", deployment.venue_key),
+            venue_key: deployment.venue_key.clone(),
+            market_type: RuntimeVenueMarketType::Spot,
+            pair_symbol: deployment.pair.symbol.clone(),
+            instrument_id: Some(deployment.pair.symbol.clone()),
+            asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+            mode_coverage: vec![RuntimeMode::Shadow, RuntimeMode::Paper, RuntimeMode::Live],
+            status: RuntimeExecutionCostModelStatus::Active,
+            assumptions: RuntimeExecutionCostAssumptions {
+                fee_bps: 8,
+                slippage_bps: 22,
+                market_impact_bps: 12,
+                partial_fill_rate_bps: 100,
+                partial_fill_penalty_bps: 10,
+                financing_cost_bps_per_day: None,
+            },
+            latency_profile: RuntimeVenueLatencyProfile {
+                expected_quote_ms: 250,
+                expected_submit_ms: 750,
+                expected_settlement_ms: 5_000,
+            },
+            dataset_snapshots: vec![protocol::RuntimeDatasetSnapshotRef {
+                dataset_id: "dataset_feed_replay_sol_usdc_market_events".to_string(),
+                snapshot_id: "snapshot_2026_03_07_seed".to_string(),
+                captured_at: "2026-03-10T00:00:00.000Z".to_string(),
+                uri: Some(
+                    "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents"
+                        .to_string(),
+                ),
+                content_digest: Some("sha256:fixture".to_string()),
+            }],
+            created_at: "2026-03-10T00:00:00.000Z".to_string(),
+            updated_at: "2026-03-10T00:00:00.000Z".to_string(),
+            tags: vec!["seed".to_string(), "spot".to_string()],
+            notes: Some("Synthetic test cost model.".to_string()),
+        }
+    }
+
     fn reconciliation(
         deployment: &RuntimeDeploymentRecord,
         run: &RuntimeRunRecord,
@@ -1846,9 +2232,17 @@ mod tests {
             run_id: run.run_id.clone(),
             receipt_id: format!("receipt_{}", run.run_id),
             completed_at: "2026-03-08T10:00:00Z".to_string(),
-            status,
+            status: status.clone(),
             wallet_deltas: vec![],
-            position_delta_usd: "0.00".to_string(),
+            position_delta_usd: if correction_applied {
+                "1.00".to_string()
+            } else {
+                match status {
+                    RuntimeReconciliationStatus::Passed => "0.00".to_string(),
+                    RuntimeReconciliationStatus::NeedsManualReview => "1.50".to_string(),
+                    RuntimeReconciliationStatus::Failed => "3.00".to_string(),
+                }
+            },
             notes: vec![],
             correction_applied,
         }
