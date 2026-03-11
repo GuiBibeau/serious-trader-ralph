@@ -343,6 +343,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "historical-data-lake"
+version = "0.1.0"
+dependencies = [
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1007,6 +1019,7 @@ dependencies = [
  "exec-client",
  "execution-planner",
  "feature-cache",
+ "historical-data-lake",
  "http-body-util",
  "market-adapters",
  "portfolio-ledger",

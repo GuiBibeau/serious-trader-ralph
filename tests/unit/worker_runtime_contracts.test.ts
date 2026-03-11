@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import {
   parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
+  parseRuntimeHistoricalDatasetSnapshotRecord,
+  parseRuntimeReplayCorpusRecord,
   parseRuntimeStrategySpec,
   parseRuntimeVenueCapability,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
@@ -27,6 +29,8 @@ describe("worker runtime contract bridge", () => {
       "researchSource",
       "researchExperiment",
       "researchEvidenceBundle",
+      "historicalDatasetSnapshot",
+      "replayCorpus",
       "venueCapability",
       "assetRecord",
       "strategySpec",
@@ -75,5 +79,31 @@ describe("worker runtime contract bridge", () => {
 
     expect(assetRecord.assetKey).toBe("SOL");
     expect(assetRecord.venueMappings[0]?.venueKey).toBe("jupiter");
+  });
+
+  test("worker can parse the canonical historical dataset fixture", () => {
+    const datasetSnapshot = parseRuntimeHistoricalDatasetSnapshotRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.historical_dataset_snapshot.valid.v1.json",
+      ),
+    );
+
+    expect(datasetSnapshot.datasetId).toBe(
+      "dataset_feed_replay_sol_usdc_market_events",
+    );
+    expect(datasetSnapshot.datasetKind).toBe("market_events");
+  });
+
+  test("worker can parse the canonical replay corpus fixture", () => {
+    const replayCorpus = parseRuntimeReplayCorpusRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.replay_corpus.valid.v1.json",
+      ),
+    );
+
+    expect(replayCorpus.corpusId).toBe(
+      "replay_corpus_sol_usdc_feed_gateway_seed",
+    );
+    expect(replayCorpus.datasetSnapshots).toHaveLength(2);
   });
 });

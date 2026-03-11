@@ -322,6 +322,110 @@ const RuntimeArtifactRefSchema = z
   })
   .strict();
 
+export const RuntimeHistoricalDatasetAcquisitionKindSchema = z.enum([
+  "exchange_export",
+  "rpc_archive",
+  "research_fixture",
+  "manual_import",
+  "derived",
+]);
+
+export const RuntimeHistoricalDatasetKindSchema = z.enum([
+  "trades",
+  "bars",
+  "order_book_l2",
+  "funding_rates",
+  "borrow_rates",
+  "reference_metadata",
+  "market_events",
+  "slot_events",
+]);
+
+export const RuntimeDatasetNormalizationKindSchema = z.enum([
+  "raw",
+  "normalized",
+  "aggregated",
+  "replay_ready",
+]);
+
+export const RuntimeDatasetStorageFormatSchema = z.enum([
+  "json",
+  "jsonl",
+  "parquet",
+  "csv",
+  "fixture_json",
+]);
+
+export const RuntimeDatasetRetentionClassSchema = z.enum([
+  "seed",
+  "research",
+  "production",
+]);
+
+export const RuntimeReplayCorpusKindSchema = z.enum([
+  "feed_gateway_v1",
+  "bar_series_v1",
+  "order_book_l2_v1",
+]);
+
+const RuntimeHistoricalDatasetProvenanceSchema = z
+  .object({
+    acquisitionKind: RuntimeHistoricalDatasetAcquisitionKindSchema,
+    collectedFrom: NON_EMPTY_STRING_SCHEMA,
+    provider: NON_EMPTY_STRING_SCHEMA.optional(),
+    collectedAt: ISO_DATETIME_SCHEMA,
+    generator: NON_EMPTY_STRING_SCHEMA.optional(),
+    generatorRevision: NON_EMPTY_STRING_SCHEMA.optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+export const RuntimeHistoricalDatasetSnapshotRecordSchema =
+  VersionedSchema.extend({
+    datasetId: NON_EMPTY_STRING_SCHEMA,
+    snapshotId: NON_EMPTY_STRING_SCHEMA,
+    datasetKind: RuntimeHistoricalDatasetKindSchema,
+    normalizationKind: RuntimeDatasetNormalizationKindSchema,
+    format: RuntimeDatasetStorageFormatSchema,
+    retentionClass: RuntimeDatasetRetentionClassSchema,
+    capturedAt: ISO_DATETIME_SCHEMA,
+    coverageStartAt: ISO_DATETIME_SCHEMA,
+    coverageEndAt: ISO_DATETIME_SCHEMA,
+    rowCount: z.number().int().nonnegative(),
+    venueKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+    assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+    pairSymbols: z.array(NON_EMPTY_STRING_SCHEMA),
+    chainKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+    uri: NON_EMPTY_STRING_SCHEMA,
+    contentDigest: NON_EMPTY_STRING_SCHEMA,
+    compression: NON_EMPTY_STRING_SCHEMA.optional(),
+    timeBucketSeconds: z.number().int().positive().optional(),
+    provenance: RuntimeHistoricalDatasetProvenanceSchema,
+    samplingNotes: NON_EMPTY_STRING_SCHEMA.optional(),
+    compactionNotes: NON_EMPTY_STRING_SCHEMA.optional(),
+    tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  }).strict();
+
+export const RuntimeReplayCorpusRecordSchema = VersionedSchema.extend({
+  corpusId: NON_EMPTY_STRING_SCHEMA,
+  title: NON_EMPTY_STRING_SCHEMA,
+  summary: NON_EMPTY_STRING_SCHEMA,
+  replayKind: RuntimeReplayCorpusKindSchema,
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  venueKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  pairSymbols: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  chainKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
+  fixtureUri: NON_EMPTY_STRING_SCHEMA.optional(),
+  contentDigest: NON_EMPTY_STRING_SCHEMA.optional(),
+  deterministicSeed: z.number().int().nonnegative().optional(),
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+  notes: NON_EMPTY_STRING_SCHEMA.optional(),
+}).strict();
+
 const RuntimeResearchSourceProvenanceSchema = z
   .object({
     acquisitionKind: RuntimeResearchSourceAcquisitionKindSchema,
@@ -658,6 +762,30 @@ export type RuntimeResearchSourceAcquisitionKind = z.infer<
 export type RuntimeResearchSourceProvenance = z.infer<
   typeof RuntimeResearchSourceProvenanceSchema
 >;
+export type RuntimeHistoricalDatasetAcquisitionKind = z.infer<
+  typeof RuntimeHistoricalDatasetAcquisitionKindSchema
+>;
+export type RuntimeHistoricalDatasetKind = z.infer<
+  typeof RuntimeHistoricalDatasetKindSchema
+>;
+export type RuntimeDatasetNormalizationKind = z.infer<
+  typeof RuntimeDatasetNormalizationKindSchema
+>;
+export type RuntimeDatasetStorageFormat = z.infer<
+  typeof RuntimeDatasetStorageFormatSchema
+>;
+export type RuntimeDatasetRetentionClass = z.infer<
+  typeof RuntimeDatasetRetentionClassSchema
+>;
+export type RuntimeHistoricalDatasetSnapshotRecord = z.infer<
+  typeof RuntimeHistoricalDatasetSnapshotRecordSchema
+>;
+export type RuntimeReplayCorpusKind = z.infer<
+  typeof RuntimeReplayCorpusKindSchema
+>;
+export type RuntimeReplayCorpusRecord = z.infer<
+  typeof RuntimeReplayCorpusRecordSchema
+>;
 export type RuntimeResearchSourceRecord = z.infer<
   typeof RuntimeResearchSourceRecordSchema
 >;
@@ -770,6 +898,17 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
       "https://trader-ralph.com/schemas/runtime/v1/research_evidence_bundle",
     outputFile: "runtime.research_evidence_bundle.v1.schema.json",
   },
+  historicalDatasetSnapshot: {
+    schema: RuntimeHistoricalDatasetSnapshotRecordSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/historical_dataset_snapshot",
+    outputFile: "runtime.historical_dataset_snapshot.v1.schema.json",
+  },
+  replayCorpus: {
+    schema: RuntimeReplayCorpusRecordSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/replay_corpus",
+    outputFile: "runtime.replay_corpus.v1.schema.json",
+  },
   venueCapability: {
     schema: RuntimeVenueCapabilitySchema,
     schemaId: "https://trader-ralph.com/schemas/runtime/v1/venue_capability",
@@ -851,6 +990,18 @@ export function parseRuntimeResearchSourceRecord(
   return RuntimeResearchSourceRecordSchema.parse(input);
 }
 
+export function parseRuntimeHistoricalDatasetSnapshotRecord(
+  input: unknown,
+): RuntimeHistoricalDatasetSnapshotRecord {
+  return RuntimeHistoricalDatasetSnapshotRecordSchema.parse(input);
+}
+
+export function parseRuntimeReplayCorpusRecord(
+  input: unknown,
+): RuntimeReplayCorpusRecord {
+  return RuntimeReplayCorpusRecordSchema.parse(input);
+}
+
 export function parseRuntimeResearchExperimentRecord(
   input: unknown,
 ): RuntimeResearchExperimentRecord {
@@ -907,6 +1058,16 @@ export function safeParseRuntimeResearchHypothesisRecord(input: unknown) {
 
 export function safeParseRuntimeResearchSourceRecord(input: unknown) {
   return RuntimeResearchSourceRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeHistoricalDatasetSnapshotRecord(
+  input: unknown,
+) {
+  return RuntimeHistoricalDatasetSnapshotRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeReplayCorpusRecord(input: unknown) {
+  return RuntimeReplayCorpusRecordSchema.safeParse(input);
 }
 
 export function safeParseRuntimeResearchExperimentRecord(input: unknown) {

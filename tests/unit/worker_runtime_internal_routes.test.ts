@@ -339,6 +339,65 @@ const VALID_RUNTIME_ASSET = {
   tags: ["candidate", "meme"],
 };
 
+const VALID_RUNTIME_DATASET_SNAPSHOT = {
+  schemaVersion: "v1",
+  datasetId: "dataset_feed_replay_sol_usdc_market_events",
+  snapshotId: "snapshot_2026_03_07_seed",
+  datasetKind: "market_events",
+  normalizationKind: "replay_ready",
+  format: "fixture_json",
+  retentionClass: "seed",
+  capturedAt: "2026-03-10T00:00:00.000Z",
+  coverageStartAt: "2026-03-07T00:00:00Z",
+  coverageEndAt: "2026-03-07T00:00:05Z",
+  rowCount: 2,
+  venueKeys: ["jupiter"],
+  assetKeys: ["SOL", "USDC"],
+  pairSymbols: ["SOL/USDC"],
+  chainKeys: ["solana-mainnet"],
+  uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+  contentDigest: "sha256:fixture",
+  provenance: {
+    acquisitionKind: "research_fixture",
+    collectedFrom:
+      "services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+    provider: "repo-fixture",
+    collectedAt: "2026-03-10T00:00:00.000Z",
+    generator: "runtime-rs",
+    generatorRevision: "feed-replay-seed-v1",
+  },
+  tags: ["seed", "replay"],
+};
+
+const VALID_RUNTIME_REPLAY_CORPUS = {
+  schemaVersion: "v1",
+  corpusId: "replay_corpus_sol_usdc_feed_gateway_seed",
+  title: "SOL/USDC feed gateway seed replay corpus",
+  summary:
+    "Deterministic replay corpus seeded from the checked-in runtime feed fixture.",
+  replayKind: "feed_gateway_v1",
+  createdAt: "2026-03-10T00:00:00.000Z",
+  updatedAt: "2026-03-10T00:00:00.000Z",
+  venueKeys: ["jupiter", "helius"],
+  assetKeys: ["SOL", "USDC"],
+  pairSymbols: ["SOL/USDC"],
+  chainKeys: ["solana-mainnet"],
+  datasetSnapshots: [
+    {
+      datasetId: "dataset_feed_replay_sol_usdc_market_events",
+      snapshotId: "snapshot_2026_03_07_seed",
+      capturedAt: "2026-03-10T00:00:00.000Z",
+      uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+      contentDigest: "sha256:fixture",
+    },
+  ],
+  fixtureUri:
+    "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+  contentDigest: "sha256:fixture",
+  deterministicSeed: 100,
+  tags: ["seed", "replay"],
+};
+
 describe("worker runtime internal routes", () => {
   test("requires runtime service auth", async () => {
     const env = createWorkerLiveEnv();
@@ -1087,6 +1146,103 @@ describe("worker runtime internal routes", () => {
       asset: {
         assetKey: "BONK",
         listingState: "paper",
+      },
+    });
+  });
+
+  test("returns stubbed runtime historical data lake", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/datasets?datasetId=dataset_feed_replay_sol_usdc_market_events&snapshotId=snapshot_2026_03_07_seed&corpusId=replay_corpus_sol_usdc_feed_gateway_seed&venueKey=jupiter&assetKey=SOL&datasetKind=market_events",
+        {
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+          },
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "stub",
+      filters: {
+        datasetId: "dataset_feed_replay_sol_usdc_market_events",
+        snapshotId: "snapshot_2026_03_07_seed",
+        corpusId: "replay_corpus_sol_usdc_feed_gateway_seed",
+        venueKey: "jupiter",
+        assetKey: "SOL",
+        datasetKind: "market_events",
+      },
+    });
+    expect(payload.registry.datasetSnapshots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          datasetId: "dataset_feed_replay_sol_usdc_market_events",
+        }),
+      ]),
+    );
+    expect(payload.registry.replayCorpora).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          corpusId: "replay_corpus_sol_usdc_feed_gateway_seed",
+        }),
+      ]),
+    );
+  });
+
+  test("accepts stubbed runtime historical data writes", async () => {
+    const env = createWorkerLiveEnv();
+
+    const datasetResponse = await worker.fetch(
+      new Request("http://localhost/api/internal/runtime/datasets/snapshots", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer runtime-service-secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(VALID_RUNTIME_DATASET_SNAPSHOT),
+      }),
+      env,
+      createExecutionContextStub(),
+    );
+    expect(datasetResponse.status).toBe(201);
+    expect(await datasetResponse.json()).toMatchObject({
+      ok: true,
+      source: "stub",
+      created: true,
+      datasetSnapshot: {
+        datasetId: "dataset_feed_replay_sol_usdc_market_events",
+      },
+    });
+
+    const replayResponse = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/datasets/replay-corpora",
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(VALID_RUNTIME_REPLAY_CORPUS),
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+    expect(replayResponse.status).toBe(201);
+    expect(await replayResponse.json()).toMatchObject({
+      ok: true,
+      source: "stub",
+      created: true,
+      replayCorpus: {
+        corpusId: "replay_corpus_sol_usdc_feed_gateway_seed",
       },
     });
   });

@@ -6,8 +6,10 @@ import {
   parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionPlan,
+  parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeLedgerSnapshot,
   parseRuntimeReconciliationResult,
+  parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchEvidenceBundleRecord,
   parseRuntimeResearchExperimentRecord,
   parseRuntimeResearchHypothesisRecord,
@@ -251,6 +253,63 @@ describe("runtime protocol contracts", () => {
       assetKeys: ["SOL", "USDC"],
       tags: ["signal"],
     });
+    const datasetSnapshot = parseRuntimeHistoricalDatasetSnapshotRecord({
+      schemaVersion: "v1",
+      datasetId: "dataset_feed_replay_sol_usdc_market_events",
+      snapshotId: "snapshot_2026_03_07_seed",
+      datasetKind: "market_events",
+      normalizationKind: "replay_ready",
+      format: "fixture_json",
+      retentionClass: "seed",
+      capturedAt: "2026-03-10T00:00:00.000Z",
+      coverageStartAt: "2026-03-07T00:00:00Z",
+      coverageEndAt: "2026-03-07T00:00:05Z",
+      rowCount: 2,
+      venueKeys: ["jupiter"],
+      assetKeys: ["SOL", "USDC"],
+      pairSymbols: ["SOL/USDC"],
+      chainKeys: ["solana-mainnet"],
+      uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+      contentDigest: "sha256:fixture",
+      provenance: {
+        acquisitionKind: "research_fixture",
+        collectedFrom:
+          "services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+        provider: "repo-fixture",
+        collectedAt: "2026-03-10T00:00:00.000Z",
+        generator: "runtime-rs",
+        generatorRevision: "feed-replay-seed-v1",
+      },
+      tags: ["seed", "replay"],
+    });
+    const replayCorpus = parseRuntimeReplayCorpusRecord({
+      schemaVersion: "v1",
+      corpusId: "replay_corpus_sol_usdc_feed_gateway_seed",
+      title: "SOL/USDC feed gateway seed replay corpus",
+      summary:
+        "Deterministic replay corpus seeded from the checked-in runtime feed fixture.",
+      replayKind: "feed_gateway_v1",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:00.000Z",
+      venueKeys: ["jupiter", "helius"],
+      assetKeys: ["SOL", "USDC"],
+      pairSymbols: ["SOL/USDC"],
+      chainKeys: ["solana-mainnet"],
+      datasetSnapshots: [
+        {
+          datasetId: datasetSnapshot.datasetId,
+          snapshotId: datasetSnapshot.snapshotId,
+          capturedAt: datasetSnapshot.capturedAt,
+          uri: datasetSnapshot.uri,
+          contentDigest: datasetSnapshot.contentDigest,
+        },
+      ],
+      fixtureUri:
+        "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+      contentDigest: "sha256:fixture",
+      deterministicSeed: 100,
+      tags: ["seed", "replay"],
+    });
     const experiment = parseRuntimeResearchExperimentRecord({
       schemaVersion: "v1",
       experimentId: "experiment_signal_trend_shadow",
@@ -439,6 +498,8 @@ describe("runtime protocol contracts", () => {
     expect(reconciliation.status).toBe("passed");
     expect(hypothesis.status).toBe("candidate");
     expect(sourceRecord.sourceKind).toBe("paper");
+    expect(datasetSnapshot.datasetKind).toBe("market_events");
+    expect(replayCorpus.replayKind).toBe("feed_gateway_v1");
     expect(experiment.datasetSnapshots).toHaveLength(1);
     expect(evidenceBundle.promotionTarget).toBe("paper");
     expect(venueCapability.adapterKeys).toContain("jupiter");

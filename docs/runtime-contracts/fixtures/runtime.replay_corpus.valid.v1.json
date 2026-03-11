@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "v1",
+  "corpusId": "replay_corpus_sol_usdc_feed_gateway_seed",
+  "title": "SOL/USDC feed gateway seed replay corpus",
+  "summary": "Deterministic replay corpus seeded from the checked-in runtime feed fixture.",
+  "replayKind": "feed_gateway_v1",
+  "createdAt": "2026-03-10T00:00:00.000Z",
+  "updatedAt": "2026-03-10T00:00:00.000Z",
+  "venueKeys": ["jupiter", "helius"],
+  "assetKeys": ["SOL", "USDC"],
+  "pairSymbols": ["SOL/USDC"],
+  "chainKeys": ["solana-mainnet"],
+  "datasetSnapshots": [
+    {
+      "datasetId": "dataset_feed_replay_sol_usdc_market_events",
+      "snapshotId": "snapshot_2026_03_07_seed",
+      "capturedAt": "2026-03-10T00:00:00.000Z",
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+      "contentDigest": "sha256:fixture"
+    },
+    {
+      "datasetId": "dataset_feed_replay_sol_usdc_slot_events",
+      "snapshotId": "snapshot_2026_03_07_seed",
+      "capturedAt": "2026-03-10T00:00:00.000Z",
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+      "contentDigest": "sha256:fixture"
+    }
+  ],
+  "fixtureUri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+  "contentDigest": "sha256:fixture",
+  "deterministicSeed": 100,
+  "tags": ["seed", "deterministic", "feed-gateway"],
+  "notes": "References the checked-in SOL/USDC runtime replay fixture."
+}

@@ -7,7 +7,9 @@ import {
   parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionPlan,
+  parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeLedgerSnapshot,
+  parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchEvidenceBundleRecord,
   parseRuntimeResearchExperimentRecord,
   parseRuntimeResearchHypothesisRecord,
@@ -18,7 +20,9 @@ import {
   type RuntimeAssetRecord,
   type RuntimeDeploymentRecord,
   type RuntimeExecutionPlan,
+  type RuntimeHistoricalDatasetSnapshotRecord,
   type RuntimeLedgerSnapshot,
+  type RuntimeReplayCorpusRecord,
   type RuntimeResearchEvidenceBundleRecord,
   type RuntimeResearchExperimentRecord,
   type RuntimeResearchHypothesisRecord,
@@ -43,6 +47,9 @@ const INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH = `${INTERNAL_RUNTIME_RESEARCH_
 const INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/evidence-bundles`;
 const INTERNAL_RUNTIME_ASSETS_PATH = `${INTERNAL_RUNTIME_PREFIX}/assets`;
 const INTERNAL_RUNTIME_ASSETS_PREFIX = `${INTERNAL_RUNTIME_ASSETS_PATH}/`;
+const INTERNAL_RUNTIME_DATASETS_PATH = `${INTERNAL_RUNTIME_PREFIX}/datasets`;
+const INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH = `${INTERNAL_RUNTIME_DATASETS_PATH}/snapshots`;
+const INTERNAL_RUNTIME_REPLAY_CORPORA_PATH = `${INTERNAL_RUNTIME_DATASETS_PATH}/replay-corpora`;
 const FIXTURE_TIMESTAMP = "2026-03-07T00:00:00.000Z";
 const FIXTURE_BASE_MINT = "So11111111111111111111111111111111111111112";
 const FIXTURE_QUOTE_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -481,6 +488,13 @@ function createRuntimeHealthFixture() {
       liveAssetCount: 2,
       lastError: null,
     },
+    historicalDataLake: {
+      status: "healthy",
+      datasetSnapshotCount: 2,
+      replayCorpusCount: 1,
+      latestSnapshotCapturedAt: FIXTURE_TIMESTAMP,
+      lastError: null,
+    },
     allocator: {
       status: "healthy",
       decisionCount: 1,
@@ -724,6 +738,100 @@ function createRuntimeAssetRegistryFixture() {
   };
 }
 
+function createRuntimeHistoricalDatasetSnapshotFixture(
+  datasetId = "dataset_feed_replay_sol_usdc_market_events",
+): RuntimeHistoricalDatasetSnapshotRecord {
+  const isSlotDataset = datasetId.includes("slot");
+  return parseRuntimeHistoricalDatasetSnapshotRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    datasetId,
+    snapshotId: "snapshot_2026_03_07_seed",
+    datasetKind: isSlotDataset ? "slot_events" : "market_events",
+    normalizationKind: "replay_ready",
+    format: "fixture_json",
+    retentionClass: "seed",
+    capturedAt: FIXTURE_TIMESTAMP,
+    coverageStartAt: "2026-03-07T00:00:00Z",
+    coverageEndAt: "2026-03-07T00:00:05Z",
+    rowCount: isSlotDataset ? 3 : 2,
+    venueKeys: [isSlotDataset ? "helius" : "jupiter"],
+    assetKeys: ["SOL", "USDC"],
+    pairSymbols: ["SOL/USDC"],
+    chainKeys: ["solana-mainnet"],
+    uri: `repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#${
+      isSlotDataset ? "slotEvents" : "marketEvents"
+    }`,
+    contentDigest: "sha256:fixture",
+    provenance: {
+      acquisitionKind: "research_fixture",
+      collectedFrom:
+        "services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+      provider: "repo-fixture",
+      collectedAt: FIXTURE_TIMESTAMP,
+      generator: "runtime-rs",
+      generatorRevision: "feed-replay-seed-v1",
+      notes: "Stubbed historical dataset provenance.",
+    },
+    samplingNotes: "Complete deterministic fixture coverage.",
+    compactionNotes: "No compaction applied to the fixture seed.",
+    tags: ["seed", "deterministic", "replay"],
+    notes: "Stubbed historical dataset snapshot fixture.",
+  });
+}
+
+function createRuntimeReplayCorpusFixture(): RuntimeReplayCorpusRecord {
+  return parseRuntimeReplayCorpusRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    corpusId: "replay_corpus_sol_usdc_feed_gateway_seed",
+    title: "SOL/USDC feed gateway seed replay corpus",
+    summary:
+      "Deterministic replay corpus seeded from the checked-in runtime feed fixture.",
+    replayKind: "feed_gateway_v1",
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+    venueKeys: ["jupiter", "helius"],
+    assetKeys: ["SOL", "USDC"],
+    pairSymbols: ["SOL/USDC"],
+    chainKeys: ["solana-mainnet"],
+    datasetSnapshots: [
+      {
+        datasetId: "dataset_feed_replay_sol_usdc_market_events",
+        snapshotId: "snapshot_2026_03_07_seed",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+        contentDigest: "sha256:fixture",
+      },
+      {
+        datasetId: "dataset_feed_replay_sol_usdc_slot_events",
+        snapshotId: "snapshot_2026_03_07_seed",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+        contentDigest: "sha256:fixture",
+      },
+    ],
+    fixtureUri:
+      "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+    contentDigest: "sha256:fixture",
+    deterministicSeed: 100,
+    tags: ["seed", "deterministic", "feed-gateway"],
+    notes: "Stubbed replay corpus fixture.",
+  });
+}
+
+function createRuntimeHistoricalDataLakeFixture() {
+  return {
+    datasetSnapshots: [
+      createRuntimeHistoricalDatasetSnapshotFixture(
+        "dataset_feed_replay_sol_usdc_market_events",
+      ),
+      createRuntimeHistoricalDatasetSnapshotFixture(
+        "dataset_feed_replay_sol_usdc_slot_events",
+      ),
+    ],
+    replayCorpora: [createRuntimeReplayCorpusFixture()],
+  };
+}
+
 async function readJsonBody(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -763,6 +871,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       allocator: INTERNAL_RUNTIME_ALLOCATOR_PATH,
       research: INTERNAL_RUNTIME_RESEARCH_PATH,
       assets: INTERNAL_RUNTIME_ASSETS_PATH,
+      datasets: INTERNAL_RUNTIME_DATASETS_PATH,
       executionPlans: INTERNAL_RUNTIME_EXECUTION_PLANS_PATH,
       health: `${INTERNAL_RUNTIME_PREFIX}/health`,
     },
@@ -1210,6 +1319,55 @@ export async function transitionRuntimeAssetListingState(input: {
   });
 }
 
+export async function readRuntimeHistoricalDataLake(input: {
+  env: Env;
+  datasetId?: string;
+  snapshotId?: string;
+  corpusId?: string;
+  venueKey?: string;
+  assetKey?: string;
+  datasetKind?: string;
+}): Promise<RuntimeInternalJsonResult> {
+  const search = new URLSearchParams();
+  if (input.datasetId) search.set("datasetId", input.datasetId);
+  if (input.snapshotId) search.set("snapshotId", input.snapshotId);
+  if (input.corpusId) search.set("corpusId", input.corpusId);
+  if (input.venueKey) search.set("venueKey", input.venueKey);
+  if (input.assetKey) search.set("assetKey", input.assetKey);
+  if (input.datasetKind) search.set("datasetKind", input.datasetKind);
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "GET",
+    pathname: search.size
+      ? `${INTERNAL_RUNTIME_DATASETS_PATH}?${search.toString()}`
+      : INTERNAL_RUNTIME_DATASETS_PATH,
+  });
+}
+
+export async function writeRuntimeHistoricalDatasetSnapshot(input: {
+  env: Env;
+  datasetSnapshot: RuntimeHistoricalDatasetSnapshotRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH,
+    body: input.datasetSnapshot,
+  });
+}
+
+export async function writeRuntimeReplayCorpus(input: {
+  env: Env;
+  replayCorpus: RuntimeReplayCorpusRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_REPLAY_CORPORA_PATH,
+    body: input.replayCorpus,
+  });
+}
+
 export async function readRuntimePositionSnapshot(
   env: Env,
   deploymentId: string,
@@ -1268,6 +1426,9 @@ export async function handleRuntimeInternalRoute(
     url.pathname === INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH ||
     url.pathname === INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH ||
     url.pathname === INTERNAL_RUNTIME_ASSETS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_DATASETS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_REPLAY_CORPORA_PATH ||
     url.pathname === INTERNAL_RUNTIME_EXECUTION_PLANS_PATH ||
     url.pathname.startsWith(INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX) ||
     url.pathname.startsWith(INTERNAL_RUNTIME_ASSETS_PREFIX) ||
@@ -1377,6 +1538,25 @@ export async function handleRuntimeInternalRoute(
         listingState: url.searchParams.get("listingState"),
       },
       registry: createRuntimeAssetRegistryFixture(),
+    });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_DATASETS_PATH
+  ) {
+    return json({
+      ok: true,
+      source: "stub",
+      filters: {
+        datasetId: url.searchParams.get("datasetId"),
+        snapshotId: url.searchParams.get("snapshotId"),
+        corpusId: url.searchParams.get("corpusId"),
+        venueKey: url.searchParams.get("venueKey"),
+        assetKey: url.searchParams.get("assetKey"),
+        datasetKind: url.searchParams.get("datasetKind"),
+      },
+      registry: createRuntimeHistoricalDataLakeFixture(),
     });
   }
 
@@ -1684,6 +1864,68 @@ export async function handleRuntimeInternalRoute(
         source: "stub",
         created: true,
         asset,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH
+  ) {
+    let datasetSnapshot: RuntimeHistoricalDatasetSnapshotRecord;
+    try {
+      const payload = await readJsonBody(request);
+      datasetSnapshot = parseRuntimeHistoricalDatasetSnapshotRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-historical-dataset-snapshot",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        datasetSnapshot,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_REPLAY_CORPORA_PATH
+  ) {
+    let replayCorpus: RuntimeReplayCorpusRecord;
+    try {
+      const payload = await readJsonBody(request);
+      replayCorpus = parseRuntimeReplayCorpusRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-replay-corpus",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        replayCorpus,
       },
       { status: 201 },
     );

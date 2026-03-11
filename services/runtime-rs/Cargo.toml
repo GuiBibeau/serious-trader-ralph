@@ -10,6 +10,7 @@ asset-registry = { path = "../../crates/asset-registry" }
 execution-planner = { path = "../../crates/execution-planner" }
 exec-client = { path = "../../crates/exec-client" }
 feature-cache = { path = "../../crates/feature-cache" }
+historical-data-lake = { path = "../../crates/historical-data-lake" }
 market-adapters = { path = "../../crates/market-adapters" }
 portfolio-ledger = { path = "../../crates/portfolio-ledger" }
 protocol = { path = "../../crates/protocol" }
