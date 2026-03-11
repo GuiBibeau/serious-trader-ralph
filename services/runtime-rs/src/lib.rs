@@ -17,7 +17,7 @@ use backtesting_engine::{
 };
 use cost_model_registry::{
     CostModelRegistry, CostModelRegistryConfig, CostModelRegistryError, CostModelRegistryQuery,
-    CostModelRegistrySnapshot,
+    CostModelRegistrySnapshot, CostObservationQuery,
 };
 use exec_client::{
     ExecClient, ExecClientConfig, ExecClientError, ExecReceiptObservation, ExecSubmitResponse,
@@ -42,7 +42,8 @@ use portfolio_ledger::{
 use protocol::{
     RuntimeAssetListingState, RuntimeAssetRecord, RuntimeBacktestBaseline,
     RuntimeBacktestWindowMode, RuntimeDeploymentRecord, RuntimeDeploymentState,
-    RuntimeExecutionCostModelRecord, RuntimeExecutionCostModelStatus, RuntimeFeatureCatalogStatus,
+    RuntimeExecutionCostModelRecord, RuntimeExecutionCostModelStatus,
+    RuntimeExecutionCostObservationRecord, RuntimeFeatureCatalogStatus,
     RuntimeFeatureDefinitionRecord, RuntimeHistoricalDatasetKind,
     RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode, RuntimeRegimeTagRecord,
     RuntimeReplayCorpusRecord, RuntimeResearchEvidenceBundleRecord,
@@ -63,7 +64,8 @@ use runtime_allocator::{
 };
 use runtime_ops::{health_snapshot, RuntimeConfig};
 use runtime_scorecards::{
-    build_readiness_report, RuntimeScorecardConfig, RuntimeScorecardError, RuntimeScorecardInput,
+    build_cost_observation, build_readiness_report, RuntimeCostObservationInput,
+    RuntimeScorecardConfig, RuntimeScorecardError, RuntimeScorecardInput,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -405,6 +407,20 @@ struct RuntimeCostModelQueryParams {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct RuntimeCostObservationQueryParams {
+    pub observation_id: Option<String>,
+    pub model_id: Option<String>,
+    pub deployment_id: Option<String>,
+    pub run_id: Option<String>,
+    pub venue_key: Option<String>,
+    pub asset_key: Option<String>,
+    pub pair_symbol: Option<String>,
+    pub market_type: Option<RuntimeVenueMarketType>,
+    pub mode: Option<RuntimeMode>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct RuntimeFeatureCatalogQueryParams {
     pub feature_id: Option<String>,
     pub feature_key: Option<String>,
@@ -531,6 +547,10 @@ pub fn app(config: RuntimeConfig) -> Router {
         .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/cost-models"),
             get(cost_model_query_handler).post(create_cost_model_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/cost-model-observations"),
+            get(cost_observation_query_handler).post(create_cost_observation_handler),
         )
         .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/assets/{{asset_key}}/transition"),
@@ -1033,11 +1053,30 @@ async fn evaluate_deployment_handler(
                         deployment_id: deployment_id.clone(),
                         run_id: coordinated_run.run_id.clone(),
                         plan: plan.clone(),
-                        receipt,
+                        receipt: receipt.clone(),
                         expected_ledger: reconciliation_expected_ledger,
                         observed_ledger: observed_ledger.clone(),
                     })
                     .map_err(map_reconciler_error)?;
+                if let Some(cost_model) = state
+                    .cost_model_registry
+                    .select_for_deployment(&coordinated_deployment)
+                    .map_err(map_cost_model_registry_error)?
+                {
+                    let cost_observation = build_cost_observation(&RuntimeCostObservationInput {
+                        deployment: coordinated_deployment.clone(),
+                        run: coordinated_run.clone(),
+                        plan: plan.clone(),
+                        cost_model,
+                        receipt_observed_at: receipt.observed_at.clone(),
+                        reconciliation: reconciliation_outcome.result.clone(),
+                    })
+                    .map_err(map_scorecard_error)?;
+                    state
+                        .cost_model_registry
+                        .upsert_observation(&cost_observation)
+                        .map_err(map_cost_model_registry_error)?;
+                }
                 let reconciliation_failure_code = match reconciliation_outcome.result.status {
                     protocol::RuntimeReconciliationStatus::Passed => None,
                     protocol::RuntimeReconciliationStatus::NeedsManualReview => {
@@ -1253,6 +1292,13 @@ async fn scorecards_handler(
         .cost_model_registry
         .select_for_deployment(&deployment)
         .map_err(map_cost_model_registry_error)?;
+    let cost_observations = state
+        .cost_model_registry
+        .query_observations(&CostObservationQuery {
+            deployment_id: Some(deployment_id.clone()),
+            ..CostObservationQuery::default()
+        })
+        .map_err(map_cost_model_registry_error)?;
     let report = build_readiness_report(
         &RuntimeScorecardConfig::default(),
         &RuntimeScorecardInput {
@@ -1262,6 +1308,7 @@ async fn scorecards_handler(
             verdicts,
             plans,
             cost_model,
+            cost_observations,
             feature_definitions: feature_catalog.feature_definitions,
             regime_tags: feature_catalog.regime_tags,
             allocator_decisions,
@@ -2066,6 +2113,69 @@ async fn create_cost_model_handler(
     ))
 }
 
+async fn cost_observation_query_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeCostObservationQueryParams>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let filters = query.clone();
+    let observations = state
+        .cost_model_registry
+        .query_observations(&CostObservationQuery {
+            observation_id: query
+                .observation_id
+                .filter(|value| !value.trim().is_empty()),
+            model_id: query.model_id.filter(|value| !value.trim().is_empty()),
+            deployment_id: query.deployment_id.filter(|value| !value.trim().is_empty()),
+            run_id: query.run_id.filter(|value| !value.trim().is_empty()),
+            venue_key: query.venue_key.filter(|value| !value.trim().is_empty()),
+            asset_key: query.asset_key.filter(|value| !value.trim().is_empty()),
+            pair_symbol: query.pair_symbol.filter(|value| !value.trim().is_empty()),
+            market_type: query.market_type,
+            mode: query.mode,
+        })
+        .map_err(map_cost_model_registry_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "filters": filters,
+            "registry": {
+                "costObservations": observations,
+            },
+        }),
+    ))
+}
+
+async fn create_cost_observation_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeExecutionCostObservationRecord =
+        parse_json_body(&body, "invalid-runtime-execution-cost-observation")?;
+    let result = state
+        .cost_model_registry
+        .upsert_observation(&record)
+        .map_err(map_cost_model_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "costObservation": result.record,
+        }),
+    ))
+}
+
 struct ShadowEvaluationResponse {
     created: bool,
     deployment: RuntimeDeploymentRecord,
@@ -2602,6 +2712,27 @@ fn map_cost_model_registry_error(error: CostModelRegistryError) -> JsonPayload {
             StatusCode::NOT_FOUND,
             "execution-cost-model-not-found",
             json!({ "modelId": model_id }),
+        ),
+        CostModelRegistryError::InvalidObservation {
+            observation_id,
+            reason,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-execution-cost-observation",
+            json!({ "observationId": observation_id, "reason": reason }),
+        ),
+        CostModelRegistryError::ObservationModelMismatch {
+            observation_id,
+            model_id,
+            reason,
+        } => error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "execution-cost-observation-model-mismatch",
+            json!({
+                "observationId": observation_id,
+                "modelId": model_id,
+                "reason": reason,
+            }),
         ),
         CostModelRegistryError::Io(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -4359,6 +4490,21 @@ mod tests {
                                 "partialFillRateBps": 0,
                                 "partialFillPenaltyBps": 0
                             },
+                            "calibration": {
+                                "calibrationId": "calibration_jupiter_sol_usdc_spot_backtest",
+                                "methodology": "backtest_bootstrap",
+                                "sampleStartAt": "2026-03-01T00:00:00.000Z",
+                                "sampleEndAt": "2026-03-10T14:00:00.000Z",
+                                "sampleCount": 48,
+                                "confidenceBps": 9100,
+                                "referenceNotionalUsd": "25.00",
+                                "tags": ["backtest"]
+                            },
+                            "driftGuard": {
+                                "maxCostDriftBps": 50,
+                                "maxLatencyDriftMs": 2500,
+                                "maxReconciliationDriftUsd": "1.00"
+                            },
                             "latencyProfile": {
                                 "expectedQuoteMs": 100,
                                 "expectedSubmitMs": 200,
@@ -5797,6 +5943,21 @@ mod tests {
                 "partialFillRateBps": 50,
                 "partialFillPenaltyBps": 10
             },
+            "calibration": {
+                "calibrationId": "calibration_jupiter_sol_usdc_candidate",
+                "methodology": "candidate_bootstrap",
+                "sampleStartAt": "2026-03-01T00:00:00.000Z",
+                "sampleEndAt": "2026-03-10T15:05:00.000Z",
+                "sampleCount": 64,
+                "confidenceBps": 8800,
+                "referenceNotionalUsd": "25.00",
+                "tags": ["candidate", "spot"]
+            },
+            "driftGuard": {
+                "maxCostDriftBps": 60,
+                "maxLatencyDriftMs": 3000,
+                "maxReconciliationDriftUsd": "1.25"
+            },
             "latencyProfile": {
                 "expectedQuoteMs": 275,
                 "expectedSubmitMs": 800,
@@ -5967,6 +6128,7 @@ mod tests {
             symbol: "BONK/USDC".to_string(),
             base_mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263".to_string(),
             quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            market_type: protocol::RuntimeVenueMarketType::Spot,
         };
         state
             .strategy_registry

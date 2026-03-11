@@ -3,9 +3,10 @@ use std::collections::{BTreeSet, HashMap};
 use protocol::{
     RuntimeAllocatorDecisionRecord, RuntimeAllocatorScorecard, RuntimeCostScorecard,
     RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeExecutionCostModelRecord,
-    RuntimeExecutionCostModelStatus, RuntimeExecutionPlan, RuntimeExpectedObservedScorecard,
-    RuntimeFeatureCatalogScorecard, RuntimeFeatureDefinitionRecord, RuntimeLedgerSnapshot,
-    RuntimeMode, RuntimePlanQualityScorecard, RuntimePnlScorecard, RuntimePromotionGateCheck,
+    RuntimeExecutionCostModelStatus, RuntimeExecutionCostObservationRecord, RuntimeExecutionPlan,
+    RuntimeExpectedObservedScorecard, RuntimeFeatureCatalogScorecard,
+    RuntimeFeatureDefinitionRecord, RuntimeLedgerSnapshot, RuntimeMode,
+    RuntimePlanQualityScorecard, RuntimePnlScorecard, RuntimePromotionGateCheck,
     RuntimePromotionGateDecision, RuntimePromotionGateStatus, RuntimePromotionReadinessReport,
     RuntimeReconciliationResult, RuntimeReconciliationStatus, RuntimeRegimeTagRecord,
     RuntimeRiskDecision, RuntimeRiskScorecard, RuntimeRiskVerdict, RuntimeRunRecord,
@@ -30,6 +31,7 @@ pub struct RuntimeScorecardConfig {
     pub paper_max_correction_count: u64,
     pub signal_max_stale_feature_rejects: u64,
     pub required_cost_model_coverage_bps: u16,
+    pub required_cost_observation_coverage_bps: u16,
     pub required_feature_definition_coverage_bps: u16,
     pub required_regime_tag_coverage_bps: u16,
     pub shadow_max_cost_drift_bps: u16,
@@ -54,6 +56,7 @@ impl Default for RuntimeScorecardConfig {
             paper_max_correction_count: 0,
             signal_max_stale_feature_rejects: 0,
             required_cost_model_coverage_bps: 10_000,
+            required_cost_observation_coverage_bps: 10_000,
             required_feature_definition_coverage_bps: 10_000,
             required_regime_tag_coverage_bps: 10_000,
             shadow_max_cost_drift_bps: 100,
@@ -72,6 +75,7 @@ pub struct RuntimeScorecardInput {
     pub verdicts: Vec<RuntimeRiskVerdict>,
     pub plans: Vec<RuntimeExecutionPlan>,
     pub cost_model: Option<RuntimeExecutionCostModelRecord>,
+    pub cost_observations: Vec<RuntimeExecutionCostObservationRecord>,
     pub feature_definitions: Vec<RuntimeFeatureDefinitionRecord>,
     pub regime_tags: Vec<RuntimeRegimeTagRecord>,
     pub allocator_decisions: Vec<RuntimeAllocatorDecisionRecord>,
@@ -90,6 +94,16 @@ pub enum RuntimeScorecardError {
     InvalidTimestamp { field: &'static str, value: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCostObservationInput {
+    pub deployment: RuntimeDeploymentRecord,
+    pub run: RuntimeRunRecord,
+    pub plan: RuntimeExecutionPlan,
+    pub cost_model: RuntimeExecutionCostModelRecord,
+    pub receipt_observed_at: String,
+    pub reconciliation: RuntimeReconciliationResult,
+}
+
 pub fn build_readiness_report(
     config: &RuntimeScorecardConfig,
     input: &RuntimeScorecardInput,
@@ -105,6 +119,56 @@ pub fn build_readiness_report(
         proof_artifact_markdown: build_proof_artifact_markdown(input, &scorecard, &promotion_gates),
         scorecard,
         promotion_gates,
+    })
+}
+
+pub fn build_cost_observation(
+    input: &RuntimeCostObservationInput,
+) -> Result<RuntimeExecutionCostObservationRecord, RuntimeScorecardError> {
+    let modeled_total_cost_cents = modeled_plan_cost_cents(&input.plan, &input.cost_model)?;
+    let reconciliation_drift_cents = parse_usd_cents(
+        "reconciliation.positionDeltaUsd",
+        &input.reconciliation.position_delta_usd,
+    )?
+    .abs();
+    let observed_total_cost_cents = modeled_total_cost_cents + reconciliation_drift_cents;
+    let evaluated_notional_cents = plan_notional_cents(std::slice::from_ref(&input.plan))?;
+    let expected_end_to_end_latency_ms = input.cost_model.latency_profile.expected_submit_ms
+        + input.cost_model.latency_profile.expected_settlement_ms;
+    let planned_at = parse_timestamp("run.plannedAt", &input.run.planned_at)?;
+    let receipt_observed_at = parse_timestamp("receipt.observedAt", &input.receipt_observed_at)?;
+    let observed_end_to_end_latency_ms = timestamp_diff_ms(planned_at, receipt_observed_at);
+
+    Ok(RuntimeExecutionCostObservationRecord {
+        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+        observation_id: format!("costobs_{}", input.run.run_id),
+        model_id: input.cost_model.model_id.clone(),
+        deployment_id: input.deployment.deployment_id.clone(),
+        run_id: input.run.run_id.clone(),
+        receipt_id: input.reconciliation.receipt_id.clone(),
+        venue_key: input.deployment.venue_key.clone(),
+        market_type: input.deployment.pair.market_type.clone(),
+        pair_symbol: input.deployment.pair.symbol.clone(),
+        asset_keys: input.cost_model.asset_keys.clone(),
+        mode: input.deployment.mode.clone(),
+        observed_at: input.receipt_observed_at.clone(),
+        evaluated_notional_usd: format_usd_cents(evaluated_notional_cents),
+        modeled_total_cost_usd: format_usd_cents(modeled_total_cost_cents),
+        observed_total_cost_usd: format_usd_cents(observed_total_cost_cents),
+        cost_drift_usd: format_usd_cents(reconciliation_drift_cents),
+        cost_drift_bps: ratio_bps_from_cents(reconciliation_drift_cents, evaluated_notional_cents),
+        expected_end_to_end_latency_ms,
+        observed_end_to_end_latency_ms,
+        latency_drift_ms: expected_end_to_end_latency_ms.abs_diff(observed_end_to_end_latency_ms),
+        reconciliation_status: input.reconciliation.status.clone(),
+        reconciliation_drift_usd: format_usd_cents(reconciliation_drift_cents),
+        tags: vec![
+            "cost-observation".to_string(),
+            input.deployment.mode.as_ref().to_string(),
+        ],
+        notes: Some(
+            "Derived from runtime plan, receipt, and reconciliation artifacts.".to_string(),
+        ),
     })
 }
 
@@ -328,11 +392,7 @@ fn build_scorecard(
 fn build_cost_scorecard(
     input: &RuntimeScorecardInput,
 ) -> Result<RuntimeCostScorecard, RuntimeScorecardError> {
-    let evaluated_notional_cents = input.plans.iter().try_fold(0_i64, |total, plan| {
-        plan.slices.iter().try_fold(total, |slice_total, slice| {
-            Ok(slice_total + parse_usd_cents("plan.slices[].notionalUsd", &slice.notional_usd)?)
-        })
-    })?;
+    let evaluated_notional_cents = plan_notional_cents(&input.plans)?;
     let reconciliation_drift_cents =
         input
             .reconciliations
@@ -358,8 +418,12 @@ fn build_cost_scorecard(
         return Ok(RuntimeCostScorecard {
             model_id: None,
             model_status: None,
+            calibration_id: None,
+            calibration_confidence_bps: None,
             covered_run_count: 0,
             model_coverage_bps: 0,
+            observation_count: 0,
+            observation_coverage_bps: 0,
             evaluated_notional_usd: format_usd_cents(evaluated_notional_cents),
             modeled_total_cost_usd: "0.00".to_string(),
             observed_total_cost_usd: format_usd_cents(reconciliation_drift_cents),
@@ -376,34 +440,90 @@ fn build_cost_scorecard(
     };
 
     let active = model.status == RuntimeExecutionCostModelStatus::Active;
-    let modeled_total_cost_cents = if active {
-        input.plans.iter().try_fold(0_i64, |total, plan| {
-            modeled_plan_cost_cents(plan, model).map(|plan_cost| total + plan_cost)
-        })?
-    } else {
-        0
-    };
-    let observed_total_cost_cents = modeled_total_cost_cents + reconciliation_drift_cents;
-    let expected_end_to_end_latency_ms = if active {
-        model.latency_profile.expected_submit_ms + model.latency_profile.expected_settlement_ms
-    } else {
-        0
-    };
-    let latency_drift_ms = expected_end_to_end_latency_ms.abs_diff(observed_end_to_end_latency_ms);
     let covered_run_count = if active { input.plans.len() as u64 } else { 0 };
+    let observation_count = input.cost_observations.len() as u64;
+    let (
+        modeled_total_cost_cents,
+        observed_total_cost_cents,
+        latency_expected_ms,
+        latency_observed_ms,
+    ) = if !input.cost_observations.is_empty() {
+        let modeled_total_cost_cents =
+            input
+                .cost_observations
+                .iter()
+                .try_fold(0_i64, |total, observation| {
+                    Ok(total
+                        + parse_usd_cents(
+                            "costObservation.modeledTotalCostUsd",
+                            &observation.modeled_total_cost_usd,
+                        )?)
+                })?;
+        let observed_total_cost_cents =
+            input
+                .cost_observations
+                .iter()
+                .try_fold(0_i64, |total, observation| {
+                    Ok(total
+                        + parse_usd_cents(
+                            "costObservation.observedTotalCostUsd",
+                            &observation.observed_total_cost_usd,
+                        )?)
+                })?;
+        let latency_expected_total_ms = input
+            .cost_observations
+            .iter()
+            .map(|observation| observation.expected_end_to_end_latency_ms)
+            .sum::<u64>();
+        let latency_observed_total_ms = input
+            .cost_observations
+            .iter()
+            .map(|observation| observation.observed_end_to_end_latency_ms)
+            .sum::<u64>();
+        (
+            modeled_total_cost_cents,
+            observed_total_cost_cents,
+            latency_expected_total_ms / observation_count.max(1),
+            latency_observed_total_ms / observation_count.max(1),
+        )
+    } else if active {
+        let modeled_total_cost_cents = input.plans.iter().try_fold(0_i64, |total, plan| {
+            modeled_plan_cost_cents(plan, model).map(|plan_cost| total + plan_cost)
+        })?;
+        (
+            modeled_total_cost_cents,
+            modeled_total_cost_cents + reconciliation_drift_cents,
+            model.latency_profile.expected_submit_ms + model.latency_profile.expected_settlement_ms,
+            observed_end_to_end_latency_ms,
+        )
+    } else {
+        (
+            0,
+            reconciliation_drift_cents,
+            0,
+            observed_end_to_end_latency_ms,
+        )
+    };
+    let expected_end_to_end_latency_ms = if active { latency_expected_ms } else { 0 };
+    let latency_drift_ms = expected_end_to_end_latency_ms.abs_diff(latency_observed_ms);
+    let cost_drift_cents = (observed_total_cost_cents - modeled_total_cost_cents).abs();
 
     Ok(RuntimeCostScorecard {
         model_id: Some(model.model_id.clone()),
         model_status: Some(model.status.clone()),
+        calibration_id: Some(model.calibration.calibration_id.clone()),
+        calibration_confidence_bps: Some(model.calibration.confidence_bps),
         covered_run_count,
         model_coverage_bps: ratio_bps(covered_run_count, input.plans.len() as u64),
+        observation_count,
+        observation_coverage_bps: ratio_bps(observation_count, input.plans.len() as u64),
         evaluated_notional_usd: format_usd_cents(evaluated_notional_cents),
         modeled_total_cost_usd: format_usd_cents(modeled_total_cost_cents),
         observed_total_cost_usd: format_usd_cents(observed_total_cost_cents),
-        cost_drift_usd: format_usd_cents(reconciliation_drift_cents),
-        cost_drift_bps: ratio_bps_from_cents(reconciliation_drift_cents, evaluated_notional_cents),
+        cost_drift_usd: format_usd_cents(cost_drift_cents),
+        cost_drift_bps: ratio_bps_from_cents(cost_drift_cents, evaluated_notional_cents),
         expected_end_to_end_latency_ms,
-        observed_end_to_end_latency_ms,
+        observed_end_to_end_latency_ms: latency_observed_ms,
         latency_drift_ms,
         reconciliation_drift_count,
     })
@@ -570,6 +690,12 @@ fn shadow_to_paper_gate(
             "Every planned shadow run must be covered by the active execution cost model.",
         ),
         minimum_bps_check(
+            "shadow-cost-observation-coverage",
+            scorecard.cost.observation_coverage_bps,
+            config.required_cost_observation_coverage_bps,
+            "Shadow promotion requires modeled-versus-observed cost observations for every planned run.",
+        ),
+        minimum_bps_check(
             "shadow-feature-definition-coverage",
             scorecard.feature_catalog.feature_definition_coverage_bps,
             config.required_feature_definition_coverage_bps,
@@ -584,13 +710,13 @@ fn shadow_to_paper_gate(
         maximum_bps_check(
             "shadow-max-cost-drift",
             scorecard.cost.cost_drift_bps,
-            config.shadow_max_cost_drift_bps,
+            max_cost_drift_threshold_bps(config, input.cost_model.as_ref(), RuntimeMode::Shadow),
             "Shadow cost drift must stay within the configured robustness budget.",
         ),
         maximum_check(
             "shadow-max-latency-drift-ms",
             scorecard.cost.latency_drift_ms,
-            config.shadow_max_latency_drift_ms,
+            max_latency_drift_threshold_ms(config, input.cost_model.as_ref(), RuntimeMode::Shadow),
             "Shadow observed execution latency must remain close to the modeled latency budget.",
         ),
         maximum_check(
@@ -710,6 +836,12 @@ fn paper_to_live_gate(
             "Every planned paper run must be covered by the active execution cost model.",
         ),
         minimum_bps_check(
+            "paper-cost-observation-coverage",
+            scorecard.cost.observation_coverage_bps,
+            config.required_cost_observation_coverage_bps,
+            "Paper promotion requires modeled-versus-observed cost observations for every planned run.",
+        ),
+        minimum_bps_check(
             "paper-feature-definition-coverage",
             scorecard.feature_catalog.feature_definition_coverage_bps,
             config.required_feature_definition_coverage_bps,
@@ -724,13 +856,13 @@ fn paper_to_live_gate(
         maximum_bps_check(
             "paper-max-cost-drift",
             scorecard.cost.cost_drift_bps,
-            config.paper_max_cost_drift_bps,
+            max_cost_drift_threshold_bps(config, input.cost_model.as_ref(), RuntimeMode::Paper),
             "Paper-mode cost drift must remain within the live-promotion budget.",
         ),
         maximum_check(
             "paper-max-latency-drift-ms",
             scorecard.cost.latency_drift_ms,
-            config.paper_max_latency_drift_ms,
+            max_latency_drift_threshold_ms(config, input.cost_model.as_ref(), RuntimeMode::Paper),
             "Paper-mode observed execution latency must remain close to the modeled latency budget.",
         ),
         maximum_check(
@@ -1068,9 +1200,16 @@ fn build_proof_artifact_markdown(
         scorecard.pnl.max_drawdown_usd,
     ));
     markdown.push_str(&format!(
-        "- Cost model: `{}` coverage {}, modeled {}, observed {}, drift {}, latency drift {}ms\n",
+        "- Cost model: `{}` calibration `{}` confidence {} coverage {}, observation coverage {}, modeled {}, observed {}, drift {}, latency drift {}ms\n",
         scorecard.cost.model_id.as_deref().unwrap_or("missing"),
+        scorecard.cost.calibration_id.as_deref().unwrap_or("missing"),
+        scorecard
+            .cost
+            .calibration_confidence_bps
+            .map(format_bps)
+            .unwrap_or_else(|| "n/a".to_string()),
         format_bps(scorecard.cost.model_coverage_bps),
+        format_bps(scorecard.cost.observation_coverage_bps),
         scorecard.cost.modeled_total_cost_usd,
         scorecard.cost.observed_total_cost_usd,
         scorecard.cost.cost_drift_usd,
@@ -1102,6 +1241,34 @@ fn build_proof_artifact_markdown(
         ));
     }
     markdown
+}
+
+fn max_cost_drift_threshold_bps(
+    config: &RuntimeScorecardConfig,
+    model: Option<&RuntimeExecutionCostModelRecord>,
+    source_mode: RuntimeMode,
+) -> u16 {
+    let configured = match source_mode {
+        RuntimeMode::Shadow => config.shadow_max_cost_drift_bps,
+        RuntimeMode::Paper | RuntimeMode::Live => config.paper_max_cost_drift_bps,
+    };
+    model
+        .map(|record| configured.min(record.drift_guard.max_cost_drift_bps))
+        .unwrap_or(configured)
+}
+
+fn max_latency_drift_threshold_ms(
+    config: &RuntimeScorecardConfig,
+    model: Option<&RuntimeExecutionCostModelRecord>,
+    source_mode: RuntimeMode,
+) -> u64 {
+    let configured = match source_mode {
+        RuntimeMode::Shadow => config.shadow_max_latency_drift_ms,
+        RuntimeMode::Paper | RuntimeMode::Live => config.paper_max_latency_drift_ms,
+    };
+    model
+        .map(|record| configured.min(record.drift_guard.max_latency_drift_ms))
+        .unwrap_or(configured)
 }
 
 fn latest_ledger_snapshot(input: &RuntimeScorecardInput) -> Option<RuntimeLedgerSnapshot> {
@@ -1163,6 +1330,14 @@ fn cost_model_status_value(status: Option<&RuntimeExecutionCostModelStatus>) -> 
         Some(RuntimeExecutionCostModelStatus::Deprecated) => "deprecated",
         None => "missing",
     }
+}
+
+fn plan_notional_cents(plans: &[RuntimeExecutionPlan]) -> Result<i64, RuntimeScorecardError> {
+    plans.iter().try_fold(0_i64, |total, plan| {
+        plan.slices.iter().try_fold(total, |slice_total, slice| {
+            Ok(slice_total + parse_usd_cents("plan.slices[].notionalUsd", &slice.notional_usd)?)
+        })
+    })
 }
 
 fn modeled_plan_cost_cents(
@@ -1437,10 +1612,11 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
-                runs,
+                runs: runs.clone(),
                 verdicts,
-                plans,
+                plans: plans.clone(),
                 cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
@@ -1533,10 +1709,11 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
-                runs,
+                runs: runs.clone(),
                 verdicts,
-                plans,
+                plans: plans.clone(),
                 cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
@@ -1603,6 +1780,7 @@ mod tests {
                 verdicts,
                 plans,
                 cost_model: None,
+                cost_observations: vec![],
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
@@ -1697,10 +1875,11 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
-                runs,
+                runs: runs.clone(),
                 verdicts,
-                plans,
+                plans: plans.clone(),
                 cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
@@ -1787,10 +1966,11 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
-                runs,
+                runs: runs.clone(),
                 verdicts,
-                plans,
+                plans: plans.clone(),
                 cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
@@ -1874,10 +2054,11 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
-                runs,
+                runs: runs.clone(),
                 verdicts,
-                plans,
+                plans: plans.clone(),
                 cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
@@ -1955,10 +2136,11 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
-                runs,
+                runs: runs.clone(),
                 verdicts,
-                plans,
+                plans: plans.clone(),
                 cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
@@ -2042,10 +2224,11 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
-                runs,
+                runs: runs.clone(),
                 verdicts,
-                plans,
+                plans: plans.clone(),
                 cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions: vec![],
@@ -2123,10 +2306,11 @@ mod tests {
             &RuntimeScorecardInput {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
-                runs,
+                runs: runs.clone(),
                 verdicts,
-                plans,
+                plans: plans.clone(),
                 cost_model: Some(cost_model(&deployment)),
+                cost_observations: cost_observations(&deployment, &runs, &plans, &reconciliations),
                 feature_definitions: feature_definitions(&deployment),
                 regime_tags: regime_tags(&deployment),
                 allocator_decisions,
@@ -2177,6 +2361,7 @@ mod tests {
                 symbol: "SOL/USDC".to_string(),
                 base_mint: "So11111111111111111111111111111111111111112".to_string(),
                 quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                market_type: RuntimeVenueMarketType::Spot,
             },
             mode,
             state,
@@ -2376,6 +2561,22 @@ mod tests {
                 partial_fill_penalty_bps: 10,
                 financing_cost_bps_per_day: None,
             },
+            calibration: protocol::RuntimeExecutionCostCalibration {
+                calibration_id: format!("calibration_{}_sol_usdc_spot", deployment.venue_key),
+                methodology: "seeded-regression".to_string(),
+                sample_start_at: "2026-03-01T00:00:00.000Z".to_string(),
+                sample_end_at: "2026-03-10T00:00:00.000Z".to_string(),
+                sample_count: 64,
+                confidence_bps: 9_200,
+                reference_notional_usd: "1000.00".to_string(),
+                tags: vec!["seed".to_string(), "spot".to_string()],
+                notes: Some("Synthetic calibration fixture.".to_string()),
+            },
+            drift_guard: protocol::RuntimeExecutionCostDriftGuard {
+                max_cost_drift_bps: 500,
+                max_latency_drift_ms: 500,
+                max_reconciliation_drift_usd: "1.00".to_string(),
+            },
             latency_profile: RuntimeVenueLatencyProfile {
                 expected_quote_ms: 250,
                 expected_submit_ms: 750,
@@ -2396,6 +2597,34 @@ mod tests {
             tags: vec!["seed".to_string(), "spot".to_string()],
             notes: Some("Synthetic test cost model.".to_string()),
         }
+    }
+
+    fn cost_observations(
+        deployment: &RuntimeDeploymentRecord,
+        runs: &[RuntimeRunRecord],
+        plans: &[RuntimeExecutionPlan],
+        reconciliations: &[RuntimeReconciliationResult],
+    ) -> Vec<protocol::RuntimeExecutionCostObservationRecord> {
+        let model = cost_model(deployment);
+        plans
+            .iter()
+            .zip(reconciliations.iter())
+            .map(|(plan, reconciliation)| {
+                let run = runs
+                    .iter()
+                    .find(|candidate| candidate.run_id == reconciliation.run_id)
+                    .expect("matching run for reconciliation");
+                build_cost_observation(&RuntimeCostObservationInput {
+                    deployment: deployment.clone(),
+                    run: run.clone(),
+                    plan: plan.clone(),
+                    cost_model: model.clone(),
+                    receipt_observed_at: "2026-03-08T10:00:06Z".to_string(),
+                    reconciliation: reconciliation.clone(),
+                })
+                .expect("cost observation to build")
+            })
+            .collect()
     }
 
     fn strategy_spec(deployment: &RuntimeDeploymentRecord) -> RuntimeStrategySpec {

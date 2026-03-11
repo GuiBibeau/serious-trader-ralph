@@ -6,6 +6,10 @@ fn default_runtime_venue_key() -> String {
     "jupiter".to_string()
 }
 
+fn default_runtime_market_type() -> RuntimeVenueMarketType {
+    RuntimeVenueMarketType::Spot
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeMode {
@@ -158,6 +162,8 @@ pub struct RuntimePair {
     pub symbol: String,
     pub base_mint: String,
     pub quote_mint: String,
+    #[serde(default = "default_runtime_market_type")]
+    pub market_type: RuntimeVenueMarketType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -452,8 +458,12 @@ pub struct RuntimeRiskScorecard {
 pub struct RuntimeCostScorecard {
     pub model_id: Option<String>,
     pub model_status: Option<RuntimeExecutionCostModelStatus>,
+    pub calibration_id: Option<String>,
+    pub calibration_confidence_bps: Option<u16>,
     pub covered_run_count: u64,
     pub model_coverage_bps: u16,
+    pub observation_count: u64,
+    pub observation_coverage_bps: u16,
     pub evaluated_notional_usd: String,
     pub modeled_total_cost_usd: String,
     pub observed_total_cost_usd: String,
@@ -925,6 +935,28 @@ pub struct RuntimeExecutionCostAssumptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeExecutionCostCalibration {
+    pub calibration_id: String,
+    pub methodology: String,
+    pub sample_start_at: String,
+    pub sample_end_at: String,
+    pub sample_count: u64,
+    pub confidence_bps: u16,
+    pub reference_notional_usd: String,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExecutionCostDriftGuard {
+    pub max_cost_drift_bps: u16,
+    pub max_latency_drift_ms: u64,
+    pub max_reconciliation_drift_usd: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeExecutionCostModelRecord {
     pub schema_version: String,
     pub model_id: String,
@@ -936,10 +968,41 @@ pub struct RuntimeExecutionCostModelRecord {
     pub mode_coverage: Vec<RuntimeMode>,
     pub status: RuntimeExecutionCostModelStatus,
     pub assumptions: RuntimeExecutionCostAssumptions,
+    pub calibration: RuntimeExecutionCostCalibration,
+    pub drift_guard: RuntimeExecutionCostDriftGuard,
     pub latency_profile: RuntimeVenueLatencyProfile,
     pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
     pub created_at: String,
     pub updated_at: String,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExecutionCostObservationRecord {
+    pub schema_version: String,
+    pub observation_id: String,
+    pub model_id: String,
+    pub deployment_id: String,
+    pub run_id: String,
+    pub receipt_id: String,
+    pub venue_key: String,
+    pub market_type: RuntimeVenueMarketType,
+    pub pair_symbol: String,
+    pub asset_keys: Vec<String>,
+    pub mode: RuntimeMode,
+    pub observed_at: String,
+    pub evaluated_notional_usd: String,
+    pub modeled_total_cost_usd: String,
+    pub observed_total_cost_usd: String,
+    pub cost_drift_usd: String,
+    pub cost_drift_bps: u16,
+    pub expected_end_to_end_latency_ms: u64,
+    pub observed_end_to_end_latency_ms: u64,
+    pub latency_drift_ms: u64,
+    pub reconciliation_status: RuntimeReconciliationStatus,
+    pub reconciliation_drift_usd: String,
     pub tags: Vec<String>,
     pub notes: Option<String>,
 }

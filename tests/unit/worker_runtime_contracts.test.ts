@@ -6,6 +6,7 @@ import {
   parseRuntimeBacktestReport,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
+  parseRuntimeExecutionCostObservationRecord,
   parseRuntimeFeatureDefinitionRecord,
   parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeRegimeTagRecord,
@@ -39,6 +40,7 @@ describe("worker runtime contract bridge", () => {
       "featureDefinition",
       "regimeTag",
       "executionCostModel",
+      "executionCostObservation",
       "venueCapability",
       "assetRecord",
       "strategySpec",
@@ -157,5 +159,19 @@ describe("worker runtime contract bridge", () => {
 
     expect(costModel.modelId).toBe("cost_model_jupiter_sol_usdc_spot");
     expect(costModel.marketType).toBe("spot");
+    expect(costModel.calibration.calibrationId).toBe(
+      "calibration_jupiter_sol_usdc_spot_seed",
+    );
+  });
+
+  test("worker can parse the canonical execution cost observation fixture", () => {
+    const costObservation = parseRuntimeExecutionCostObservationRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.execution_cost_observation.valid.v1.json",
+      ),
+    );
+
+    expect(costObservation.modelId).toBe("cost_model_jupiter_sol_usdc_spot");
+    expect(costObservation.costDriftBps).toBe(80);
   });
 });

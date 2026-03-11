@@ -7,6 +7,7 @@ import {
   parseRuntimeBacktestReport,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
+  parseRuntimeExecutionCostObservationRecord,
   parseRuntimeExecutionPlan,
   parseRuntimeFeatureDefinitionRecord,
   parseRuntimeHistoricalDatasetSnapshotRecord,
@@ -68,6 +69,7 @@ describe("runtime protocol contracts", () => {
 
     expect(deployment.state).toBe("shadow");
     expect(deployment.pair.baseMint).toBe(SOL_MINT);
+    expect(deployment.pair.marketType).toBe("spot");
   });
 
   test("rejects a deployment without tags", () => {
@@ -330,6 +332,23 @@ describe("runtime protocol contracts", () => {
         marketImpactBps: 12,
         partialFillRateBps: 50,
         partialFillPenaltyBps: 12,
+        financingCostBpsPerDay: "0",
+      },
+      calibration: {
+        calibrationId: "calibration_jupiter_sol_usdc_spot_seed",
+        methodology: "seed_replay_bootstrap",
+        sampleStartAt: "2026-03-07T00:00:00.000Z",
+        sampleEndAt: "2026-03-10T00:00:00.000Z",
+        sampleCount: 240,
+        confidenceBps: 8600,
+        referenceNotionalUsd: "25.00",
+        tags: ["seed", "bootstrap"],
+        notes: "Bootstrap calibration from replay coverage.",
+      },
+      driftGuard: {
+        maxCostDriftBps: 90,
+        maxLatencyDriftMs: 8000,
+        maxReconciliationDriftUsd: "1.50",
       },
       latencyProfile: {
         expectedQuoteMs: 250,
@@ -348,6 +367,33 @@ describe("runtime protocol contracts", () => {
       createdAt: "2026-03-10T00:00:00.000Z",
       updatedAt: "2026-03-10T00:00:00.000Z",
       tags: ["seed", "spot"],
+    });
+    const costObservation = parseRuntimeExecutionCostObservationRecord({
+      schemaVersion: "v1",
+      observationId: "costobs_jupiter_deployment_shadow_fixture_run_1",
+      modelId: "cost_model_jupiter_sol_usdc_spot",
+      deploymentId: "deployment_shadow_fixture",
+      runId: "deployment_shadow_fixture_run_1",
+      receiptId: "receipt_jupiter_deployment_shadow_fixture_run_1",
+      venueKey: "jupiter",
+      marketType: "spot",
+      pairSymbol: "SOL/USDC",
+      assetKeys: ["SOL", "USDC"],
+      mode: "paper",
+      observedAt: "2026-03-10T00:00:00.000Z",
+      evaluatedNotionalUsd: "25.00",
+      modeledTotalCostUsd: "0.11",
+      observedTotalCostUsd: "0.13",
+      costDriftUsd: "0.02",
+      costDriftBps: 80,
+      expectedEndToEndLatencyMs: 5750,
+      observedEndToEndLatencyMs: 6125,
+      latencyDriftMs: 375,
+      reconciliationStatus: "passed",
+      reconciliationDriftUsd: "0.02",
+      tags: ["cost-observation", "paper"],
+      notes:
+        "Derived from runtime plan, receipt, and reconciliation artifacts.",
     });
     const featureDefinition = parseRuntimeFeatureDefinitionRecord({
       schemaVersion: "v1",
@@ -727,6 +773,11 @@ describe("runtime protocol contracts", () => {
     expect(datasetSnapshot.datasetKind).toBe("market_events");
     expect(replayCorpus.replayKind).toBe("feed_gateway_v1");
     expect(costModel.marketType).toBe("spot");
+    expect(costModel.calibration.calibrationId).toBe(
+      "calibration_jupiter_sol_usdc_spot_seed",
+    );
+    expect(costModel.driftGuard.maxCostDriftBps).toBe(90);
+    expect(costObservation.costDriftBps).toBe(80);
     expect(featureDefinition.featureKey).toBe("short_return_bps");
     expect(regimeTag.regimeKey).toBe("long_trend");
     expect(experiment.datasetSnapshots).toHaveLength(1);

@@ -1125,6 +1125,7 @@ mod tests {
                 symbol: "SOL/USDC".to_string(),
                 base_mint: "So11111111111111111111111111111111111111112".to_string(),
                 quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                market_type: protocol::RuntimeVenueMarketType::Spot,
             },
             mode: protocol::RuntimeMode::Shadow,
             state: RuntimeDeploymentState::Shadow,

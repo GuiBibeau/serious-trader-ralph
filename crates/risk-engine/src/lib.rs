@@ -760,7 +760,7 @@ mod tests {
 
     use protocol::{
         RuntimeCapital, RuntimeDeploymentState, RuntimeLane, RuntimeMode, RuntimePair,
-        RuntimePolicy, RuntimeRunState, RuntimeTrigger, RuntimeTriggerKind,
+        RuntimePolicy, RuntimeRunState, RuntimeTrigger, RuntimeTriggerKind, RuntimeVenueMarketType,
     };
 
     use super::*;
@@ -793,6 +793,7 @@ mod tests {
                 symbol: "SOL/USDC".to_string(),
                 base_mint: "So11111111111111111111111111111111111111112".to_string(),
                 quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                market_type: RuntimeVenueMarketType::Spot,
             },
             mode: RuntimeMode::Shadow,
             state: RuntimeDeploymentState::Shadow,

@@ -26,6 +26,7 @@ const PairSchema = z
     symbol: NON_EMPTY_STRING_SCHEMA,
     baseMint: PUBKEY_SCHEMA,
     quoteMint: PUBKEY_SCHEMA,
+    marketType: z.enum(["spot", "perp", "options"]).default("spot"),
   })
   .strict();
 
@@ -934,6 +935,28 @@ const RuntimeExecutionCostAssumptionsSchema = z
   })
   .strict();
 
+const RuntimeExecutionCostCalibrationSchema = z
+  .object({
+    calibrationId: NON_EMPTY_STRING_SCHEMA,
+    methodology: NON_EMPTY_STRING_SCHEMA,
+    sampleStartAt: ISO_DATETIME_SCHEMA,
+    sampleEndAt: ISO_DATETIME_SCHEMA,
+    sampleCount: z.number().int().positive(),
+    confidenceBps: BPS_SCHEMA,
+    referenceNotionalUsd: DECIMAL_STRING_SCHEMA,
+    tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeExecutionCostDriftGuardSchema = z
+  .object({
+    maxCostDriftBps: BPS_SCHEMA,
+    maxLatencyDriftMs: z.number().int().nonnegative(),
+    maxReconciliationDriftUsd: DECIMAL_STRING_SCHEMA,
+  })
+  .strict();
+
 export const RuntimeExecutionCostModelRecordSchema = VersionedSchema.extend({
   modelId: NON_EMPTY_STRING_SCHEMA,
   venueKey: NON_EMPTY_STRING_SCHEMA,
@@ -944,6 +967,8 @@ export const RuntimeExecutionCostModelRecordSchema = VersionedSchema.extend({
   modeCoverage: z.array(RuntimeModeSchema).min(1),
   status: RuntimeExecutionCostModelStatusSchema,
   assumptions: RuntimeExecutionCostAssumptionsSchema,
+  calibration: RuntimeExecutionCostCalibrationSchema,
+  driftGuard: RuntimeExecutionCostDriftGuardSchema,
   latencyProfile: RuntimeVenueLatencyProfileSchema,
   datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
   createdAt: ISO_DATETIME_SCHEMA,
@@ -951,6 +976,33 @@ export const RuntimeExecutionCostModelRecordSchema = VersionedSchema.extend({
   tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
   notes: NON_EMPTY_STRING_SCHEMA.optional(),
 }).strict();
+
+export const RuntimeExecutionCostObservationRecordSchema =
+  VersionedSchema.extend({
+    observationId: NON_EMPTY_STRING_SCHEMA,
+    modelId: NON_EMPTY_STRING_SCHEMA,
+    deploymentId: NON_EMPTY_STRING_SCHEMA,
+    runId: NON_EMPTY_STRING_SCHEMA,
+    receiptId: NON_EMPTY_STRING_SCHEMA,
+    venueKey: NON_EMPTY_STRING_SCHEMA,
+    marketType: RuntimeVenueMarketTypeSchema,
+    pairSymbol: NON_EMPTY_STRING_SCHEMA,
+    assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+    mode: RuntimeModeSchema,
+    observedAt: ISO_DATETIME_SCHEMA,
+    evaluatedNotionalUsd: DECIMAL_STRING_SCHEMA,
+    modeledTotalCostUsd: DECIMAL_STRING_SCHEMA,
+    observedTotalCostUsd: DECIMAL_STRING_SCHEMA,
+    costDriftUsd: DECIMAL_STRING_SCHEMA,
+    costDriftBps: BPS_SCHEMA,
+    expectedEndToEndLatencyMs: z.number().int().nonnegative(),
+    observedEndToEndLatencyMs: z.number().int().nonnegative(),
+    latencyDriftMs: z.number().int().nonnegative(),
+    reconciliationStatus: z.enum(["passed", "needs_manual_review", "failed"]),
+    reconciliationDriftUsd: DECIMAL_STRING_SCHEMA,
+    tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  }).strict();
 
 export type RuntimeMode = z.infer<typeof RuntimeModeSchema>;
 export type RuntimeLane = z.infer<typeof RuntimeLaneSchema>;
@@ -1019,8 +1071,17 @@ export type RuntimeRegimeTagRecord = z.infer<
 export type RuntimeExecutionCostModelStatus = z.infer<
   typeof RuntimeExecutionCostModelStatusSchema
 >;
+export type RuntimeExecutionCostCalibration = z.infer<
+  typeof RuntimeExecutionCostCalibrationSchema
+>;
+export type RuntimeExecutionCostDriftGuard = z.infer<
+  typeof RuntimeExecutionCostDriftGuardSchema
+>;
 export type RuntimeExecutionCostModelRecord = z.infer<
   typeof RuntimeExecutionCostModelRecordSchema
+>;
+export type RuntimeExecutionCostObservationRecord = z.infer<
+  typeof RuntimeExecutionCostObservationRecordSchema
 >;
 export type RuntimeResearchSourceRecord = z.infer<
   typeof RuntimeResearchSourceRecordSchema
@@ -1174,6 +1235,12 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
       "https://trader-ralph.com/schemas/runtime/v1/execution_cost_model",
     outputFile: "runtime.execution_cost_model.v1.schema.json",
   },
+  executionCostObservation: {
+    schema: RuntimeExecutionCostObservationRecordSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/execution_cost_observation",
+    outputFile: "runtime.execution_cost_observation.v1.schema.json",
+  },
   venueCapability: {
     schema: RuntimeVenueCapabilitySchema,
     schemaId: "https://trader-ralph.com/schemas/runtime/v1/venue_capability",
@@ -1285,6 +1352,12 @@ export function parseRuntimeExecutionCostModelRecord(
   return RuntimeExecutionCostModelRecordSchema.parse(input);
 }
 
+export function parseRuntimeExecutionCostObservationRecord(
+  input: unknown,
+): RuntimeExecutionCostObservationRecord {
+  return RuntimeExecutionCostObservationRecordSchema.parse(input);
+}
+
 export function parseRuntimeResearchExperimentRecord(
   input: unknown,
 ): RuntimeResearchExperimentRecord {
@@ -1369,6 +1442,10 @@ export function safeParseRuntimeRegimeTagRecord(input: unknown) {
 
 export function safeParseRuntimeExecutionCostModelRecord(input: unknown) {
   return RuntimeExecutionCostModelRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeExecutionCostObservationRecord(input: unknown) {
+  return RuntimeExecutionCostObservationRecordSchema.safeParse(input);
 }
 
 export function safeParseRuntimeResearchExperimentRecord(input: unknown) {

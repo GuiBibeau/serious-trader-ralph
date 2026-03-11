@@ -44,9 +44,14 @@
           "type": "string",
           "minLength": 32,
           "maxLength": 64
+        },
+        "marketType": {
+          "default": "spot",
+          "type": "string",
+          "enum": ["spot", "perp", "options"]
         }
       },
-      "required": ["symbol", "baseMint", "quoteMint"],
+      "required": ["symbol", "baseMint", "quoteMint", "marketType"],
       "additionalProperties": false
     },
     "mode": {

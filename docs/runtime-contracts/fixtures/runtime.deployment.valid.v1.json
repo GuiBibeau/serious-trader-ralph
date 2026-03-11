@@ -8,7 +8,8 @@
   "pair": {
     "symbol": "SOL/USDC",
     "baseMint": "So11111111111111111111111111111111111111112",
-    "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "marketType": "spot"
   },
   "mode": "shadow",
   "state": "shadow",

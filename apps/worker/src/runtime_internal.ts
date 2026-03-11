@@ -8,6 +8,7 @@ import {
   parseRuntimeBacktestReport,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
+  parseRuntimeExecutionCostObservationRecord,
   parseRuntimeExecutionPlan,
   parseRuntimeFeatureDefinitionRecord,
   parseRuntimeHistoricalDatasetSnapshotRecord,
@@ -25,6 +26,7 @@ import {
   type RuntimeBacktestReport,
   type RuntimeDeploymentRecord,
   type RuntimeExecutionCostModelRecord,
+  type RuntimeExecutionCostObservationRecord,
   type RuntimeExecutionPlan,
   type RuntimeFeatureDefinitionRecord,
   type RuntimeHistoricalDatasetSnapshotRecord,
@@ -63,6 +65,7 @@ const INTERNAL_RUNTIME_FEATURES_PATH = `${INTERNAL_RUNTIME_PREFIX}/features`;
 const INTERNAL_RUNTIME_FEATURE_DEFINITIONS_PATH = `${INTERNAL_RUNTIME_FEATURES_PATH}/definitions`;
 const INTERNAL_RUNTIME_REGIME_TAGS_PATH = `${INTERNAL_RUNTIME_FEATURES_PATH}/regime-tags`;
 const INTERNAL_RUNTIME_COST_MODELS_PATH = `${INTERNAL_RUNTIME_PREFIX}/cost-models`;
+const INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH = `${INTERNAL_RUNTIME_PREFIX}/cost-model-observations`;
 const FIXTURE_TIMESTAMP = "2026-03-07T00:00:00.000Z";
 const FIXTURE_BASE_MINT = "So11111111111111111111111111111111111111112";
 const FIXTURE_QUOTE_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -934,6 +937,31 @@ function createRuntimeCostModelFixture(
       partialFillRateBps: venueKey === "phoenix" ? 125 : 50,
       partialFillPenaltyBps: venueKey === "phoenix" ? 10 : 12,
     },
+    calibration: {
+      calibrationId: `calibration_${venueKey}_sol_usdc_spot_seed`,
+      methodology: "seed_replay_bootstrap",
+      sampleStartAt: "2026-03-07T00:00:00.000Z",
+      sampleEndAt: FIXTURE_TIMESTAMP,
+      sampleCount:
+        venueKey === "phoenix" ? 160 : venueKey === "magicblock" ? 180 : 240,
+      confidenceBps:
+        venueKey === "phoenix" ? 7900 : venueKey === "magicblock" ? 8100 : 8600,
+      referenceNotionalUsd: "25.00",
+      tags: ["seed", "bootstrap"],
+      notes: "Stubbed execution cost model calibration.",
+    },
+    driftGuard: {
+      maxCostDriftBps:
+        venueKey === "phoenix" ? 70 : venueKey === "magicblock" ? 80 : 90,
+      maxLatencyDriftMs:
+        venueKey === "phoenix" ? 5000 : venueKey === "magicblock" ? 6000 : 8000,
+      maxReconciliationDriftUsd:
+        venueKey === "phoenix"
+          ? "1.00"
+          : venueKey === "magicblock"
+            ? "1.25"
+            : "1.50",
+    },
     latencyProfile: {
       expectedQuoteMs:
         venueKey === "phoenix" ? 150 : venueKey === "magicblock" ? 200 : 250,
@@ -971,6 +999,50 @@ function createRuntimeCostModelRegistryFixture() {
       createRuntimeCostModelFixture("jupiter"),
       createRuntimeCostModelFixture("magicblock"),
       createRuntimeCostModelFixture("phoenix"),
+    ],
+  };
+}
+
+function createRuntimeCostObservationFixture(
+  venueKey = "jupiter",
+): RuntimeExecutionCostObservationRecord {
+  return parseRuntimeExecutionCostObservationRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    observationId: `costobs_${venueKey}_deployment_shadow_fixture_run_1`,
+    modelId: `cost_model_${venueKey}_sol_usdc_spot`,
+    deploymentId: "deployment_shadow_fixture",
+    runId: "deployment_shadow_fixture_run_1",
+    receiptId: `receipt_${venueKey}_deployment_shadow_fixture_run_1`,
+    venueKey,
+    marketType: "spot",
+    pairSymbol: "SOL/USDC",
+    assetKeys: ["SOL", "USDC"],
+    mode: "paper",
+    observedAt: FIXTURE_TIMESTAMP,
+    evaluatedNotionalUsd: "25.00",
+    modeledTotalCostUsd: venueKey === "phoenix" ? "0.05" : "0.11",
+    observedTotalCostUsd: venueKey === "phoenix" ? "0.06" : "0.13",
+    costDriftUsd: venueKey === "phoenix" ? "0.01" : "0.02",
+    costDriftBps: venueKey === "phoenix" ? 40 : 80,
+    expectedEndToEndLatencyMs:
+      venueKey === "phoenix" ? 4350 : venueKey === "magicblock" ? 3400 : 5750,
+    observedEndToEndLatencyMs:
+      venueKey === "phoenix" ? 4525 : venueKey === "magicblock" ? 3625 : 6125,
+    latencyDriftMs:
+      venueKey === "phoenix" ? 175 : venueKey === "magicblock" ? 225 : 375,
+    reconciliationStatus: "passed",
+    reconciliationDriftUsd: venueKey === "phoenix" ? "0.01" : "0.02",
+    tags: ["cost-observation", "paper"],
+    notes: "Stubbed modeled-versus-observed execution cost observation.",
+  });
+}
+
+function createRuntimeCostObservationRegistryFixture() {
+  return {
+    costObservations: [
+      createRuntimeCostObservationFixture("jupiter"),
+      createRuntimeCostObservationFixture("magicblock"),
+      createRuntimeCostObservationFixture("phoenix"),
     ],
   };
 }
@@ -1274,6 +1346,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       backtests: INTERNAL_RUNTIME_BACKTESTS_PATH,
       features: INTERNAL_RUNTIME_FEATURES_PATH,
       costModels: INTERNAL_RUNTIME_COST_MODELS_PATH,
+      costModelObservations: INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH,
       executionPlans: INTERNAL_RUNTIME_EXECUTION_PLANS_PATH,
       health: `${INTERNAL_RUNTIME_PREFIX}/health`,
     },
@@ -1905,6 +1978,49 @@ export async function writeRuntimeExecutionCostModel(input: {
   });
 }
 
+export async function readRuntimeExecutionCostObservations(input: {
+  env: Env;
+  observationId?: string;
+  modelId?: string;
+  deploymentId?: string;
+  runId?: string;
+  venueKey?: string;
+  assetKey?: string;
+  pairSymbol?: string;
+  marketType?: string;
+  mode?: string;
+}): Promise<RuntimeInternalJsonResult> {
+  const search = new URLSearchParams();
+  if (input.observationId) search.set("observationId", input.observationId);
+  if (input.modelId) search.set("modelId", input.modelId);
+  if (input.deploymentId) search.set("deploymentId", input.deploymentId);
+  if (input.runId) search.set("runId", input.runId);
+  if (input.venueKey) search.set("venueKey", input.venueKey);
+  if (input.assetKey) search.set("assetKey", input.assetKey);
+  if (input.pairSymbol) search.set("pairSymbol", input.pairSymbol);
+  if (input.marketType) search.set("marketType", input.marketType);
+  if (input.mode) search.set("mode", input.mode);
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "GET",
+    pathname: search.size
+      ? `${INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH}?${search.toString()}`
+      : INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH,
+  });
+}
+
+export async function writeRuntimeExecutionCostObservation(input: {
+  env: Env;
+  costObservation: RuntimeExecutionCostObservationRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH,
+    body: input.costObservation,
+  });
+}
+
 export async function readRuntimePositionSnapshot(
   env: Env,
   deploymentId: string,
@@ -1968,6 +2084,7 @@ export async function handleRuntimeInternalRoute(
     url.pathname === INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH ||
     url.pathname === INTERNAL_RUNTIME_REPLAY_CORPORA_PATH ||
     url.pathname === INTERNAL_RUNTIME_COST_MODELS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH ||
     url.pathname === INTERNAL_RUNTIME_EXECUTION_PLANS_PATH ||
     url.pathname.startsWith(INTERNAL_RUNTIME_DEPLOYMENTS_PREFIX) ||
     url.pathname.startsWith(INTERNAL_RUNTIME_ASSETS_PREFIX) ||
@@ -2158,6 +2275,28 @@ export async function handleRuntimeInternalRoute(
         mode: url.searchParams.get("mode"),
       },
       registry: createRuntimeCostModelRegistryFixture(),
+    });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH
+  ) {
+    return json({
+      ok: true,
+      source: "stub",
+      filters: {
+        observationId: url.searchParams.get("observationId"),
+        modelId: url.searchParams.get("modelId"),
+        deploymentId: url.searchParams.get("deploymentId"),
+        runId: url.searchParams.get("runId"),
+        venueKey: url.searchParams.get("venueKey"),
+        assetKey: url.searchParams.get("assetKey"),
+        pairSymbol: url.searchParams.get("pairSymbol"),
+        marketType: url.searchParams.get("marketType"),
+        mode: url.searchParams.get("mode"),
+      },
+      registry: createRuntimeCostObservationRegistryFixture(),
     });
   }
 
@@ -2589,6 +2728,37 @@ export async function handleRuntimeInternalRoute(
         source: "stub",
         created: true,
         costModel,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH
+  ) {
+    let costObservation: RuntimeExecutionCostObservationRecord;
+    try {
+      const payload = await readJsonBody(request);
+      costObservation = parseRuntimeExecutionCostObservationRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-execution-cost-observation",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        costObservation,
       },
       { status: 201 },
     );

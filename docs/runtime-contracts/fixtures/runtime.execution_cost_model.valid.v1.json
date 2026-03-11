@@ -13,7 +13,24 @@
     "slippageBps": 22,
     "marketImpactBps": 12,
     "partialFillRateBps": 50,
-    "partialFillPenaltyBps": 12
+    "partialFillPenaltyBps": 12,
+    "financingCostBpsPerDay": "0"
+  },
+  "calibration": {
+    "calibrationId": "calibration_jupiter_sol_usdc_spot_seed",
+    "methodology": "seed_replay_bootstrap",
+    "sampleStartAt": "2026-03-07T00:00:00.000Z",
+    "sampleEndAt": "2026-03-10T00:00:00.000Z",
+    "sampleCount": 240,
+    "confidenceBps": 8600,
+    "referenceNotionalUsd": "25.00",
+    "tags": ["seed", "bootstrap"],
+    "notes": "Bootstrap calibration from the checked-in SOL/USDC replay corpus."
+  },
+  "driftGuard": {
+    "maxCostDriftBps": 90,
+    "maxLatencyDriftMs": 8000,
+    "maxReconciliationDriftUsd": "1.50"
   },
   "latencyProfile": {
     "expectedQuoteMs": 250,

@@ -1189,7 +1189,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use protocol::{RuntimeCapital, RuntimeLane, RuntimePair, RuntimePolicy};
+    use protocol::{
+        RuntimeCapital, RuntimeLane, RuntimePair, RuntimePolicy, RuntimeVenueMarketType,
+    };
     use strategy_core::{StrategyCatalog, StrategyKind};
 
     #[cfg(unix)]
@@ -1268,6 +1270,7 @@ mod tests {
                 symbol: "SOL/USDC".to_string(),
                 base_mint: "So11111111111111111111111111111111111111112".to_string(),
                 quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                market_type: RuntimeVenueMarketType::Spot,
             },
             mode,
             state,
