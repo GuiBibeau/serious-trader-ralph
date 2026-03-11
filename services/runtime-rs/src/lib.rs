@@ -11,6 +11,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use backtesting_engine::{
+    BacktestRunRequest, BacktestingEngine, BacktestingEngineConfig, BacktestingEngineError,
+    BacktestingEngineSnapshot, BacktestingQuery,
+};
 use cost_model_registry::{
     CostModelRegistry, CostModelRegistryConfig, CostModelRegistryError, CostModelRegistryQuery,
     CostModelRegistrySnapshot,
@@ -36,10 +40,12 @@ use portfolio_ledger::{
     PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
 };
 use protocol::{
-    RuntimeAssetListingState, RuntimeAssetRecord, RuntimeDeploymentRecord, RuntimeDeploymentState,
-    RuntimeExecutionCostModelRecord, RuntimeFeatureCatalogStatus, RuntimeFeatureDefinitionRecord,
-    RuntimeHistoricalDatasetKind, RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode,
-    RuntimeRegimeTagRecord, RuntimeReplayCorpusRecord, RuntimeResearchEvidenceBundleRecord,
+    RuntimeAssetListingState, RuntimeAssetRecord, RuntimeBacktestBaseline,
+    RuntimeBacktestWindowMode, RuntimeDeploymentRecord, RuntimeDeploymentState,
+    RuntimeExecutionCostModelRecord, RuntimeExecutionCostModelStatus, RuntimeFeatureCatalogStatus,
+    RuntimeFeatureDefinitionRecord, RuntimeHistoricalDatasetKind,
+    RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode, RuntimeRegimeTagRecord,
+    RuntimeReplayCorpusRecord, RuntimeResearchEvidenceBundleRecord,
     RuntimeResearchExperimentRecord, RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord,
     RuntimeRunRecord, RuntimeVenueMarketType,
 };
@@ -98,6 +104,7 @@ pub struct RuntimeAppState {
     research_registry: ResearchRegistry,
     asset_registry: AssetRegistry,
     historical_data_lake: HistoricalDataLake,
+    backtesting_engine: BacktestingEngine,
     feature_catalog_registry: FeatureCatalogRegistry,
     cost_model_registry: CostModelRegistry,
     portfolio_ledger: PortfolioLedger,
@@ -136,6 +143,9 @@ impl RuntimeAppState {
         let historical_data_lake =
             HistoricalDataLake::new(HistoricalDataLakeConfig::new(config.database_url.clone()))
                 .expect("historical data lake to initialize");
+        let backtesting_engine =
+            BacktestingEngine::new(BacktestingEngineConfig::new(config.database_url.clone()))
+                .expect("backtesting engine to initialize");
         let feature_catalog_registry = FeatureCatalogRegistry::new(
             FeatureCatalogRegistryConfig::new(config.database_url.clone()),
         )
@@ -178,6 +188,7 @@ impl RuntimeAppState {
             research_registry,
             asset_registry,
             historical_data_lake,
+            backtesting_engine,
             feature_catalog_registry,
             cost_model_registry,
             portfolio_ledger,
@@ -216,6 +227,10 @@ impl RuntimeAppState {
 
     fn historical_data_lake_snapshot(&self) -> HistoricalDataLakeSnapshot {
         self.historical_data_lake.snapshot_now()
+    }
+
+    fn backtesting_engine_snapshot(&self) -> BacktestingEngineSnapshot {
+        self.backtesting_engine.snapshot_now()
     }
 
     fn feature_catalog_registry_snapshot(&self) -> FeatureCatalogRegistrySnapshot {
@@ -267,6 +282,7 @@ pub struct RuntimeHealthResponse {
     pub research_registry: ResearchRegistrySnapshot,
     pub asset_registry: AssetRegistrySnapshot,
     pub historical_data_lake: HistoricalDataLakeSnapshot,
+    pub backtesting_engine: BacktestingEngineSnapshot,
     pub feature_catalog_registry: FeatureCatalogRegistrySnapshot,
     pub cost_model_registry: CostModelRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
@@ -291,6 +307,7 @@ pub struct RuntimeMetricsResponse {
     pub research_registry: ResearchRegistrySnapshot,
     pub asset_registry: AssetRegistrySnapshot,
     pub historical_data_lake: HistoricalDataLakeSnapshot,
+    pub backtesting_engine: BacktestingEngineSnapshot,
     pub feature_catalog_registry: FeatureCatalogRegistrySnapshot,
     pub cost_model_registry: CostModelRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
@@ -347,6 +364,32 @@ struct RuntimeHistoricalDataLakeQueryParams {
     pub venue_key: Option<String>,
     pub asset_key: Option<String>,
     pub dataset_kind: Option<RuntimeHistoricalDatasetKind>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeBacktestQueryParams {
+    pub report_id: Option<String>,
+    pub experiment_id: Option<String>,
+    pub strategy_key: Option<String>,
+    pub promotion_eligible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeBacktestRunRequestPayload {
+    pub report_id: Option<String>,
+    pub experiment_id: String,
+    pub replay_corpus_id: String,
+    pub venue_key: String,
+    pub pair_symbol: String,
+    pub market_type: RuntimeVenueMarketType,
+    pub window_mode: RuntimeBacktestWindowMode,
+    pub training_window_observations: u32,
+    pub testing_window_observations: u32,
+    pub step_observations: u32,
+    pub purge_observations: u32,
+    pub baseline_strategies: Vec<RuntimeBacktestBaseline>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -462,6 +505,10 @@ pub fn app(config: RuntimeConfig) -> Router {
             get(historical_data_lake_query_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/backtests"),
+            get(backtests_query_handler).post(run_backtest_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/datasets/snapshots"),
             post(create_historical_dataset_snapshot_handler),
         )
@@ -509,6 +556,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let research_registry = state.research_registry_snapshot();
     let asset_registry = state.asset_registry_snapshot();
     let historical_data_lake = state.historical_data_lake_snapshot();
+    let backtesting_engine = state.backtesting_engine_snapshot();
     let feature_catalog_registry = state.feature_catalog_registry_snapshot();
     let cost_model_registry = state.cost_model_registry_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
@@ -522,6 +570,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         && research_registry.status == "healthy"
         && asset_registry.status == "healthy"
         && historical_data_lake.status == "healthy"
+        && backtesting_engine.status == "healthy"
         && feature_catalog_registry.status == "healthy"
         && cost_model_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
@@ -552,6 +601,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         research_registry,
         asset_registry,
         historical_data_lake,
+        backtesting_engine,
         feature_catalog_registry,
         cost_model_registry,
         portfolio_ledger,
@@ -576,6 +626,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         research_registry: state.research_registry_snapshot(),
         asset_registry: state.asset_registry_snapshot(),
         historical_data_lake: state.historical_data_lake_snapshot(),
+        backtesting_engine: state.backtesting_engine_snapshot(),
         feature_catalog_registry: state.feature_catalog_registry_snapshot(),
         cost_model_registry: state.cost_model_registry_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
@@ -1473,6 +1524,7 @@ async fn create_research_evidence_bundle_handler(
     authorize_internal_request(&headers, &state)?;
     let record: RuntimeResearchEvidenceBundleRecord =
         parse_json_body(&body, "invalid-runtime-research-evidence-bundle")?;
+    enforce_backtest_evidence_gate(&state, &record)?;
     let result = state
         .research_registry
         .upsert_evidence_bundle(&record)
@@ -1490,6 +1542,214 @@ async fn create_research_evidence_bundle_handler(
             "evidenceBundle": result.record,
         }),
     ))
+}
+
+async fn backtests_query_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeBacktestQueryParams>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let filters = query.clone();
+    let reports = state
+        .backtesting_engine
+        .query(&BacktestingQuery {
+            report_id: query.report_id.filter(|value| !value.trim().is_empty()),
+            experiment_id: query.experiment_id.filter(|value| !value.trim().is_empty()),
+            strategy_key: query.strategy_key.filter(|value| !value.trim().is_empty()),
+            promotion_eligible: query.promotion_eligible,
+        })
+        .map_err(map_backtesting_engine_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "filters": filters,
+            "reports": reports,
+        }),
+    ))
+}
+
+async fn run_backtest_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let request: RuntimeBacktestRunRequestPayload =
+        parse_json_body(&body, "invalid-runtime-backtest-run")?;
+    let experiment = state
+        .research_registry
+        .get_experiment(&request.experiment_id)
+        .map_err(map_research_registry_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "research-experiment-not-found",
+                json!({ "experimentId": request.experiment_id }),
+            )
+        })?;
+    let strategy_spec = state
+        .execution_planner
+        .strategy_specs()
+        .into_iter()
+        .find(|spec| spec.strategy_key == experiment.strategy_key)
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::BAD_REQUEST,
+                "unsupported-strategy",
+                json!({ "strategyKey": experiment.strategy_key }),
+            )
+        })?;
+    let replay_corpus = state
+        .historical_data_lake
+        .query(&HistoricalDataLakeQuery {
+            corpus_id: Some(request.replay_corpus_id.clone()),
+            venue_key: Some(request.venue_key.clone()),
+            ..HistoricalDataLakeQuery::default()
+        })
+        .map_err(map_historical_data_lake_error)?
+        .replay_corpora
+        .into_iter()
+        .find(|record| record.corpus_id == request.replay_corpus_id)
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "replay-corpus-not-found",
+                json!({ "corpusId": request.replay_corpus_id }),
+            )
+        })?;
+    let feature_catalog = state
+        .feature_catalog_registry
+        .query(&FeatureCatalogRegistryQuery {
+            venue_key: Some(request.venue_key.clone()),
+            pair_symbol: Some(request.pair_symbol.clone()),
+            market_type: Some(request.market_type.clone()),
+            status: Some(RuntimeFeatureCatalogStatus::Active),
+            ..FeatureCatalogRegistryQuery::default()
+        })
+        .map_err(map_feature_catalog_registry_error)?;
+    let mut cost_models = state
+        .cost_model_registry
+        .query(&CostModelRegistryQuery {
+            venue_key: Some(request.venue_key.clone()),
+            pair_symbol: Some(request.pair_symbol.clone()),
+            market_type: Some(request.market_type.clone()),
+            ..CostModelRegistryQuery::default()
+        })
+        .map_err(map_cost_model_registry_error)?;
+    cost_models.retain(|model| model.status == RuntimeExecutionCostModelStatus::Active);
+    cost_models.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    let result = state
+        .backtesting_engine
+        .run(&BacktestRunRequest {
+            report_id: request.report_id,
+            experiment,
+            strategy_spec,
+            cost_model: cost_models.into_iter().next(),
+            feature_definitions: feature_catalog.feature_definitions,
+            regime_tags: feature_catalog.regime_tags,
+            replay_corpus,
+            config: protocol::RuntimeBacktestConfig {
+                replay_corpus_id: request.replay_corpus_id,
+                venue_key: request.venue_key,
+                pair_symbol: request.pair_symbol,
+                market_type: request.market_type,
+                window_mode: request.window_mode,
+                training_window_observations: request.training_window_observations,
+                testing_window_observations: request.testing_window_observations,
+                step_observations: request.step_observations,
+                purge_observations: request.purge_observations,
+                baseline_strategies: request.baseline_strategies,
+            },
+        })
+        .map_err(map_backtesting_engine_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "report": result.report,
+        }),
+    ))
+}
+
+fn enforce_backtest_evidence_gate(
+    state: &RuntimeAppState,
+    record: &RuntimeResearchEvidenceBundleRecord,
+) -> Result<(), JsonPayload> {
+    if !promotion_target_requires_backtest(&record.promotion_target) {
+        return Ok(());
+    }
+    let Some(report_id) = record
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.kind == "backtest-report")
+        .and_then(|artifact| parse_backtest_artifact_uri(&artifact.uri))
+    else {
+        return Err(error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "backtest-evidence-required",
+            json!({
+                "promotionTarget": record.promotion_target,
+                "requiredArtifactKind": "backtest-report",
+            }),
+        ));
+    };
+    let report = state
+        .backtesting_engine
+        .get_report(&report_id)
+        .map_err(map_backtesting_engine_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "backtest-report-not-found",
+                json!({ "reportId": report_id }),
+            )
+        })?;
+    if !report.promotion_eligible {
+        return Err(error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "backtest-promotion-blocked",
+            json!({
+                "reportId": report.report_id,
+                "blockingReasons": report.blocking_reasons,
+            }),
+        ));
+    }
+    if report.experiment_id != record.experiment_id || report.strategy_key != record.strategy_key {
+        return Err(error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "backtest-report-mismatch",
+            json!({
+                "reportId": report.report_id,
+                "reportExperimentId": report.experiment_id,
+                "reportStrategyKey": report.strategy_key,
+                "evidenceExperimentId": record.experiment_id,
+                "evidenceStrategyKey": record.strategy_key,
+            }),
+        ));
+    }
+    Ok(())
+}
+
+fn promotion_target_requires_backtest(promotion_target: &str) -> bool {
+    matches!(
+        promotion_target,
+        "paper" | "limited_live" | "broad_live" | "live"
+    )
+}
+
+fn parse_backtest_artifact_uri(uri: &str) -> Option<String> {
+    uri.strip_prefix("runtime-backtest://")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 async fn asset_query_handler(
@@ -2356,6 +2616,74 @@ fn map_cost_model_registry_error(error: CostModelRegistryError) -> JsonPayload {
         CostModelRegistryError::Serialization(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-execution-cost-model-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn map_backtesting_engine_error(error: BacktestingEngineError) -> JsonPayload {
+    match error {
+        BacktestingEngineError::InvalidConfig { reason } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-runtime-backtest-config",
+            json!({ "reason": reason }),
+        ),
+        BacktestingEngineError::InvalidTimestamp { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-runtime-backtest-timestamp",
+            json!({ "field": field, "value": value }),
+        ),
+        BacktestingEngineError::InvalidNumber { field, value } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-runtime-backtest-number",
+            json!({ "field": field, "value": value }),
+        ),
+        BacktestingEngineError::UnsupportedFixtureUri { uri } => error_json(
+            StatusCode::BAD_REQUEST,
+            "unsupported-runtime-backtest-fixture-uri",
+            json!({ "uri": uri }),
+        ),
+        BacktestingEngineError::MissingFixtureUri { corpus_id } => error_json(
+            StatusCode::BAD_REQUEST,
+            "runtime-backtest-fixture-missing",
+            json!({ "corpusId": corpus_id }),
+        ),
+        BacktestingEngineError::InsufficientObservations {
+            required,
+            available,
+        } => error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "runtime-backtest-insufficient-observations",
+            json!({ "required": required, "available": available }),
+        ),
+        BacktestingEngineError::ReportNotFound { report_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "runtime-backtest-report-not-found",
+            json!({ "reportId": report_id }),
+        ),
+        BacktestingEngineError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-backtest-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        BacktestingEngineError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-backtest-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        BacktestingEngineError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-backtest-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        BacktestingEngineError::FeedFixture(error) => error_json(
+            StatusCode::BAD_REQUEST,
+            "runtime-backtest-fixture-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        BacktestingEngineError::FeatureCache(error) => error_json(
+            StatusCode::BAD_REQUEST,
+            "runtime-backtest-feature-error",
             json!({ "reason": error.to_string() }),
         ),
     }
@@ -3679,7 +4007,7 @@ mod tests {
                             "experimentId": "experiment_signal_trend_shadow",
                             "strategyKey": "trend_following",
                             "status": "ready_for_review",
-                            "promotionTarget": "paper",
+                            "promotionTarget": "shadow",
                             "createdAt": "2026-03-10T14:21:00.000Z",
                             "updatedAt": "2026-03-10T14:21:00.000Z",
                             "venueKeys": ["jupiter"],
@@ -3709,7 +4037,7 @@ mod tests {
                                     "uri": "r2://artifacts/proof-markdown.md"
                                 }
                             ],
-                            "summary": "Evidence bundle for shadow-to-paper review.",
+                            "summary": "Evidence bundle for shadow review.",
                             "tags": ["promotion"]
                         })
                         .to_string(),
@@ -3744,6 +4072,526 @@ mod tests {
             query_payload["registry"]["evidenceBundles"][0]["evidenceBundleId"],
             json!("evidence_signal_trend_shadow")
         );
+    }
+
+    #[tokio::test]
+    async fn runs_backtests_and_requires_passing_reports_for_paper_evidence() {
+        let router = app(test_config());
+
+        for snapshot in [
+            json!({
+                "schemaVersion": "v1",
+                "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+                "snapshotId": "snapshot_2026_03_07_backtest",
+                "datasetKind": "market_events",
+                "normalizationKind": "replay_ready",
+                "format": "fixture_json",
+                "retentionClass": "research",
+                "capturedAt": "2026-03-10T14:00:00.000Z",
+                "coverageStartAt": "2026-03-07T00:00:00Z",
+                "coverageEndAt": "2026-03-07T00:00:25Z",
+                "rowCount": 6,
+                "venueKeys": ["jupiter"],
+                "assetKeys": ["SOL", "USDC"],
+                "pairSymbols": ["SOL/USDC"],
+                "chainKeys": ["solana-mainnet"],
+                "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+                "contentDigest": "sha256:feature-cache",
+                "provenance": {
+                    "acquisitionKind": "research_fixture",
+                    "collectedFrom": "services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json",
+                    "provider": "repo-fixture",
+                    "collectedAt": "2026-03-10T14:00:00.000Z",
+                    "generator": "strategy-lab-tests",
+                    "generatorRevision": "seed",
+                    "notes": "Test market-event snapshot."
+                },
+                "samplingNotes": "Full deterministic market-event fixture.",
+                "compactionNotes": "No compaction applied.",
+                "tags": ["research", "backtest"]
+            }),
+            json!({
+                "schemaVersion": "v1",
+                "datasetId": "dataset_feature_cache_sol_usdc_slot_events",
+                "snapshotId": "snapshot_2026_03_07_backtest",
+                "datasetKind": "slot_events",
+                "normalizationKind": "replay_ready",
+                "format": "fixture_json",
+                "retentionClass": "research",
+                "capturedAt": "2026-03-10T14:00:00.000Z",
+                "coverageStartAt": "2026-03-07T00:00:23Z",
+                "coverageEndAt": "2026-03-07T00:00:25Z",
+                "rowCount": 3,
+                "venueKeys": ["helius"],
+                "assetKeys": ["SOL", "USDC"],
+                "pairSymbols": ["SOL/USDC"],
+                "chainKeys": ["solana-mainnet"],
+                "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#slotEvents",
+                "contentDigest": "sha256:feature-cache",
+                "provenance": {
+                    "acquisitionKind": "research_fixture",
+                    "collectedFrom": "services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json",
+                    "provider": "repo-fixture",
+                    "collectedAt": "2026-03-10T14:00:00.000Z",
+                    "generator": "strategy-lab-tests",
+                    "generatorRevision": "seed",
+                    "notes": "Test slot-event snapshot."
+                },
+                "samplingNotes": "Full deterministic slot-event fixture.",
+                "compactionNotes": "No compaction applied.",
+                "tags": ["research", "backtest"]
+            }),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/internal/runtime/datasets/snapshots")
+                        .header("authorization", "Bearer runtime-service-secret")
+                        .header("content-type", "application/json")
+                        .body(Body::from(snapshot.to_string()))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+
+        let replay_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/datasets/replay-corpora")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "corpusId": "replay_corpus_sol_usdc_feature_cache",
+                            "title": "SOL/USDC feature cache replay corpus",
+                            "summary": "Deterministic replay corpus for runtime backtest coverage.",
+                            "replayKind": "feed_gateway_v1",
+                            "createdAt": "2026-03-10T14:00:00.000Z",
+                            "updatedAt": "2026-03-10T14:00:00.000Z",
+                            "venueKeys": ["jupiter", "helius"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "pairSymbols": ["SOL/USDC"],
+                            "chainKeys": ["solana-mainnet"],
+                            "datasetSnapshots": [
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z",
+                                    "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+                                    "contentDigest": "sha256:feature-cache"
+                                },
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_slot_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z",
+                                    "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#slotEvents",
+                                    "contentDigest": "sha256:feature-cache"
+                                }
+                            ],
+                            "fixtureUri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json",
+                            "contentDigest": "sha256:feature-cache",
+                            "deterministicSeed": 100,
+                            "tags": ["research", "backtest"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(replay_response.status(), StatusCode::CREATED);
+
+        let source_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/sources")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "sourceId": "source_strategy_lab_seed",
+                            "sourceKind": "paper",
+                            "title": "Deterministic backtest seed",
+                            "url": "https://example.com/papers/seed",
+                            "canonicalUrl": "https://example.com/papers/seed",
+                            "authors": ["Ada Researcher"],
+                            "retrievedAt": "2026-03-10T14:00:00.000Z",
+                            "contentDigest": "sha256:seed",
+                            "provenance": {
+                                "acquisitionKind": "paper_feed",
+                                "collectedFrom": "https://example.com/feed/seed.xml",
+                                "hostname": "example.com",
+                                "publisher": "Example Research",
+                                "firstSeenAt": "2026-03-10T14:00:00.000Z",
+                                "lastSeenAt": "2026-03-10T14:00:00.000Z"
+                            },
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "tags": ["backtest"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(source_response.status(), StatusCode::CREATED);
+
+        let hypothesis_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/hypotheses")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "hypothesisId": "hypothesis_alloc_dca",
+                            "strategyKey": "dca",
+                            "title": "DCA replay confidence",
+                            "thesis": "A deterministic upward replay should keep bounded accumulation positive.",
+                            "status": "candidate",
+                            "createdAt": "2026-03-10T14:05:00.000Z",
+                            "updatedAt": "2026-03-10T14:05:00.000Z",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "sourceCitations": [{ "sourceId": "source_strategy_lab_seed" }],
+                            "tags": ["backtest"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(hypothesis_response.status(), StatusCode::CREATED);
+
+        let experiment_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/experiments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "experimentId": "experiment_alloc_dca_backtest",
+                            "hypothesisId": "hypothesis_alloc_dca",
+                            "strategyKey": "dca",
+                            "status": "completed",
+                            "createdAt": "2026-03-10T14:10:00.000Z",
+                            "updatedAt": "2026-03-10T14:20:00.000Z",
+                            "completedAt": "2026-03-10T14:20:00.000Z",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "sourceCitations": [{ "sourceId": "source_strategy_lab_seed" }],
+                            "codeRevision": {
+                                "vcs": "git",
+                                "repository": "github.com/GuiBibeau/serious-trader-ralph",
+                                "revision": "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+                                "treeDirty": false
+                            },
+                            "datasetSnapshots": [
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z",
+                                    "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+                                    "contentDigest": "sha256:feature-cache"
+                                },
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_slot_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z",
+                                    "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#slotEvents",
+                                    "contentDigest": "sha256:feature-cache"
+                                }
+                            ],
+                            "artifacts": [],
+                            "summary": "DCA backtest experiment ready for evaluation.",
+                            "tags": ["backtest"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(experiment_response.status(), StatusCode::CREATED);
+
+        let cost_model_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/cost-models")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "modelId": "cost_model_jupiter_sol_usdc_spot_backtest",
+                            "venueKey": "jupiter",
+                            "marketType": "spot",
+                            "pairSymbol": "SOL/USDC",
+                            "instrumentId": "SOL/USDC",
+                            "assetKeys": ["SOL", "USDC"],
+                            "modeCoverage": ["shadow", "paper"],
+                            "status": "active",
+                            "assumptions": {
+                                "feeBps": 0,
+                                "slippageBps": 0,
+                                "marketImpactBps": 0,
+                                "partialFillRateBps": 0,
+                                "partialFillPenaltyBps": 0
+                            },
+                            "latencyProfile": {
+                                "expectedQuoteMs": 100,
+                                "expectedSubmitMs": 200,
+                                "expectedSettlementMs": 1000
+                            },
+                            "datasetSnapshots": [
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z"
+                                },
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_slot_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z"
+                                }
+                            ],
+                            "createdAt": "2026-03-10T14:20:30.000Z",
+                            "updatedAt": "2026-03-10T14:20:30.000Z",
+                            "tags": ["backtest"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(cost_model_response.status(), StatusCode::CREATED);
+
+        let missing_backtest_evidence = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/evidence-bundles")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "evidenceBundleId": "evidence_alloc_dca_missing_backtest",
+                            "experimentId": "experiment_alloc_dca_backtest",
+                            "strategyKey": "dca",
+                            "status": "ready_for_review",
+                            "promotionTarget": "paper",
+                            "createdAt": "2026-03-10T14:21:00.000Z",
+                            "updatedAt": "2026-03-10T14:21:00.000Z",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "sourceCitations": [{ "sourceId": "source_strategy_lab_seed" }],
+                            "codeRevision": {
+                                "vcs": "git",
+                                "repository": "github.com/GuiBibeau/serious-trader-ralph",
+                                "revision": "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+                                "treeDirty": false
+                            },
+                            "datasetSnapshots": [
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z"
+                                }
+                            ],
+                            "artifacts": [
+                                {
+                                    "artifactId": "proof-markdown",
+                                    "kind": "proof-bundle",
+                                    "uri": "r2://artifacts/proof-markdown.md"
+                                }
+                            ],
+                            "summary": "Paper promotion without backtest evidence should fail.",
+                            "tags": ["promotion"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(
+            missing_backtest_evidence.status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        let backtest_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/backtests")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "reportId": "backtest_alloc_dca_report",
+                            "experimentId": "experiment_alloc_dca_backtest",
+                            "replayCorpusId": "replay_corpus_sol_usdc_feature_cache",
+                            "venueKey": "jupiter",
+                            "pairSymbol": "SOL/USDC",
+                            "marketType": "spot",
+                            "windowMode": "rolling",
+                            "trainingWindowObservations": 2,
+                            "testingWindowObservations": 1,
+                            "stepObservations": 1,
+                            "purgeObservations": 0,
+                            "baselineStrategies": ["flat_cash", "buy_and_hold"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(backtest_response.status(), StatusCode::CREATED);
+        let backtest_payload = read_json(backtest_response).await;
+        assert_eq!(
+            backtest_payload["report"]["status"],
+            json!("completed"),
+            "{backtest_payload:?}"
+        );
+        assert_eq!(backtest_payload["report"]["promotionEligible"], json!(true));
+
+        let mismatched_evidence_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/evidence-bundles")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "evidenceBundleId": "evidence_alloc_dca_wrong_backtest",
+                            "experimentId": "experiment_alloc_dca_backtest",
+                            "strategyKey": "trend_following",
+                            "status": "ready_for_review",
+                            "promotionTarget": "paper",
+                            "createdAt": "2026-03-10T14:21:30.000Z",
+                            "updatedAt": "2026-03-10T14:21:30.000Z",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "sourceCitations": [{ "sourceId": "source_strategy_lab_seed" }],
+                            "codeRevision": {
+                                "vcs": "git",
+                                "repository": "github.com/GuiBibeau/serious-trader-ralph",
+                                "revision": "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+                                "treeDirty": false
+                            },
+                            "datasetSnapshots": [
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z"
+                                }
+                            ],
+                            "artifacts": [
+                                {
+                                    "artifactId": "backtest-report",
+                                    "kind": "backtest-report",
+                                    "uri": "runtime-backtest://backtest_alloc_dca_report"
+                                }
+                            ],
+                            "summary": "Paper promotion with a mismatched backtest report should fail.",
+                            "tags": ["promotion", "backtest"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(
+            mismatched_evidence_response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let mismatched_evidence_payload = read_json(mismatched_evidence_response).await;
+        assert_eq!(
+            mismatched_evidence_payload["error"],
+            json!("backtest-report-mismatch")
+        );
+
+        let evidence_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/evidence-bundles")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "schemaVersion": "v1",
+                            "evidenceBundleId": "evidence_alloc_dca_paper",
+                            "experimentId": "experiment_alloc_dca_backtest",
+                            "strategyKey": "dca",
+                            "status": "ready_for_review",
+                            "promotionTarget": "paper",
+                            "createdAt": "2026-03-10T14:22:00.000Z",
+                            "updatedAt": "2026-03-10T14:22:00.000Z",
+                            "venueKeys": ["jupiter"],
+                            "assetKeys": ["SOL", "USDC"],
+                            "sourceCitations": [{ "sourceId": "source_strategy_lab_seed" }],
+                            "codeRevision": {
+                                "vcs": "git",
+                                "repository": "github.com/GuiBibeau/serious-trader-ralph",
+                                "revision": "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+                                "treeDirty": false
+                            },
+                            "datasetSnapshots": [
+                                {
+                                    "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+                                    "snapshotId": "snapshot_2026_03_07_backtest",
+                                    "capturedAt": "2026-03-10T14:00:00.000Z"
+                                }
+                            ],
+                            "artifacts": [
+                                {
+                                    "artifactId": "backtest-report",
+                                    "kind": "backtest-report",
+                                    "uri": "runtime-backtest://backtest_alloc_dca_report"
+                                }
+                            ],
+                            "summary": "Paper promotion backed by a passing backtest report.",
+                            "tags": ["promotion", "backtest"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(evidence_response.status(), StatusCode::CREATED);
     }
 
     #[tokio::test]

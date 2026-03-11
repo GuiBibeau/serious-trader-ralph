@@ -4,6 +4,7 @@ import {
   canTransitionRuntimeDeploymentState,
   canTransitionRuntimeRunState,
   parseRuntimeAssetRecord,
+  parseRuntimeBacktestReport,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
   parseRuntimeExecutionPlan,
@@ -491,6 +492,113 @@ describe("runtime protocol contracts", () => {
       summary: "Evidence bundle for shadow-to-paper review.",
       tags: ["promotion"],
     });
+    const backtestReport = parseRuntimeBacktestReport({
+      schemaVersion: "v1",
+      reportId: "backtest_alloc_dca_report",
+      experimentId: "experiment_alloc_dca_backtest",
+      strategyKey: "dca",
+      status: "completed",
+      generatedAt: "2026-03-10T14:21:30.000Z",
+      venueKeys: ["jupiter"],
+      assetKeys: ["SOL", "USDC"],
+      codeRevision: {
+        vcs: "git",
+        repository: "github.com/GuiBibeau/serious-trader-ralph",
+        revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+        treeDirty: false,
+      },
+      datasetSnapshots: [
+        {
+          datasetId: "dataset_feature_cache_sol_usdc_market_events",
+          snapshotId: "snapshot_2026_03_07_backtest",
+          capturedAt: "2026-03-10T14:00:00.000Z",
+        },
+      ],
+      strategySpecDigest:
+        "sha256:1992048eb2efcd762981bd78d6ae7685c39873c4ccb8189681e2003ca8d84bff",
+      config: {
+        replayCorpusId: "replay_corpus_sol_usdc_feature_cache",
+        venueKey: "jupiter",
+        pairSymbol: "SOL/USDC",
+        marketType: "spot",
+        windowMode: "rolling",
+        trainingWindowObservations: 2,
+        testingWindowObservations: 1,
+        stepObservations: 1,
+        purgeObservations: 0,
+        baselineStrategies: ["flat_cash", "buy_and_hold"],
+      },
+      foldReports: [
+        {
+          foldId: "fold_0",
+          foldIndex: 0,
+          trainingStartAt: "2026-03-07T00:00:00Z",
+          trainingEndAt: "2026-03-07T00:00:10Z",
+          testStartAt: "2026-03-07T00:00:10Z",
+          testEndAt: "2026-03-07T00:00:15Z",
+          trainObservationCount: 2,
+          purgedObservationCount: 0,
+          testObservationCount: 1,
+          metrics: {
+            observationCount: 1,
+            tradeCount: 1,
+            grossReturnBps: "22.5384",
+            netReturnBps: "22.5384",
+            totalCostBps: "0.0000",
+            winRateBps: 10000,
+            maxDrawdownBps: "0.0000",
+          },
+          baselineComparisons: [
+            {
+              baseline: "flat_cash",
+              baselineReturnBps: "0.0000",
+              excessReturnBps: "22.5384",
+            },
+          ],
+          regimeMetrics: [
+            {
+              regimeKey: "short_trend",
+              regimeValue: "flat",
+              observationCount: 1,
+              tradeCount: 1,
+              netReturnBps: "22.5384",
+              winRateBps: 10000,
+            },
+          ],
+        },
+      ],
+      aggregateMetrics: {
+        observationCount: 1,
+        tradeCount: 1,
+        grossReturnBps: "22.5384",
+        netReturnBps: "22.5384",
+        totalCostBps: "0.0000",
+        winRateBps: 10000,
+        maxDrawdownBps: "0.0000",
+      },
+      aggregateBaselineComparisons: [
+        {
+          baseline: "flat_cash",
+          baselineReturnBps: "0.0000",
+          excessReturnBps: "22.5384",
+        },
+      ],
+      aggregateRegimeMetrics: [
+        {
+          regimeKey: "short_trend",
+          regimeValue: "flat",
+          observationCount: 1,
+          tradeCount: 1,
+          netReturnBps: "22.5384",
+          winRateBps: 10000,
+        },
+      ],
+      promotionEligible: true,
+      blockingReasons: [],
+      summary:
+        "Backtest cleared two walk-forward folds for dca with positive aggregate net return.",
+      tags: ["backtest", "paper"],
+    });
     const strategySpec = parseRuntimeStrategySpec({
       schemaVersion: "v1",
       strategyKey: "trend_following",
@@ -623,6 +731,8 @@ describe("runtime protocol contracts", () => {
     expect(regimeTag.regimeKey).toBe("long_trend");
     expect(experiment.datasetSnapshots).toHaveLength(1);
     expect(evidenceBundle.promotionTarget).toBe("paper");
+    expect(backtestReport.promotionEligible).toBe(true);
+    expect(backtestReport.config.windowMode).toBe("rolling");
     expect(venueCapability.adapterKeys).toContain("jupiter");
     expect(assetRecord.venueMappings[0]?.venueKey).toBe("jupiter");
     expect(strategySpec.pluginKey).toBe("builtin::trend_following");

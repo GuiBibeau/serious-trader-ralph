@@ -630,6 +630,28 @@ pub enum RuntimeResearchEvidenceStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeBacktestStatus {
+    Completed,
+    Blocked,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeBacktestWindowMode {
+    Rolling,
+    Expanding,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeBacktestBaseline {
+    FlatCash,
+    BuyAndHold,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeResearchCitation {
     pub source_id: String,
@@ -1012,6 +1034,94 @@ pub struct RuntimeResearchEvidenceBundleRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBacktestConfig {
+    pub replay_corpus_id: String,
+    pub venue_key: String,
+    pub pair_symbol: String,
+    pub market_type: RuntimeVenueMarketType,
+    pub window_mode: RuntimeBacktestWindowMode,
+    pub training_window_observations: u32,
+    pub testing_window_observations: u32,
+    pub step_observations: u32,
+    pub purge_observations: u32,
+    pub baseline_strategies: Vec<RuntimeBacktestBaseline>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBacktestMetrics {
+    pub observation_count: u32,
+    pub trade_count: u32,
+    pub gross_return_bps: String,
+    pub net_return_bps: String,
+    pub total_cost_bps: String,
+    pub win_rate_bps: u16,
+    pub max_drawdown_bps: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBacktestBaselineComparison {
+    pub baseline: RuntimeBacktestBaseline,
+    pub baseline_return_bps: String,
+    pub excess_return_bps: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBacktestRegimeMetrics {
+    pub regime_key: String,
+    pub regime_value: String,
+    pub observation_count: u32,
+    pub trade_count: u32,
+    pub net_return_bps: String,
+    pub win_rate_bps: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBacktestFoldReport {
+    pub fold_id: String,
+    pub fold_index: u32,
+    pub training_start_at: String,
+    pub training_end_at: String,
+    pub test_start_at: String,
+    pub test_end_at: String,
+    pub train_observation_count: u32,
+    pub purged_observation_count: u32,
+    pub test_observation_count: u32,
+    pub metrics: RuntimeBacktestMetrics,
+    pub baseline_comparisons: Vec<RuntimeBacktestBaselineComparison>,
+    pub regime_metrics: Vec<RuntimeBacktestRegimeMetrics>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBacktestReport {
+    pub schema_version: String,
+    pub report_id: String,
+    pub experiment_id: String,
+    pub strategy_key: String,
+    pub status: RuntimeBacktestStatus,
+    pub generated_at: String,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub code_revision: RuntimeCodeRevisionRef,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub strategy_spec_digest: String,
+    pub config: RuntimeBacktestConfig,
+    pub fold_reports: Vec<RuntimeBacktestFoldReport>,
+    pub aggregate_metrics: RuntimeBacktestMetrics,
+    pub aggregate_baseline_comparisons: Vec<RuntimeBacktestBaselineComparison>,
+    pub aggregate_regime_metrics: Vec<RuntimeBacktestRegimeMetrics>,
+    pub promotion_eligible: bool,
+    pub blocking_reasons: Vec<String>,
+    pub summary: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeStrategyCategory {
     Allocation,
@@ -1327,6 +1437,9 @@ mod tests {
             "runtime.research_evidence_bundle.valid.v1.json",
         ))
         .expect("research evidence bundle fixture to deserialize");
+        let backtest: RuntimeBacktestReport =
+            serde_json::from_str(&read_fixture("runtime.backtest_report.valid.v1.json"))
+                .expect("backtest report fixture to deserialize");
         let venue_capability: RuntimeVenueCapability =
             serde_json::from_str(&read_fixture("runtime.venue_capability.valid.v1.json"))
                 .expect("venue capability fixture to deserialize");
@@ -1350,6 +1463,7 @@ mod tests {
         assert_eq!(source.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(experiment.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(evidence.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
+        assert_eq!(backtest.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(
             venue_capability.schema_version,
             RUNTIME_PROTOCOL_SCHEMA_VERSION
@@ -1362,6 +1476,8 @@ mod tests {
         assert_eq!(plan.slices.len(), 1);
         assert_eq!(experiment.dataset_snapshots.len(), 1);
         assert_eq!(evidence.artifacts.len(), 2);
+        assert_eq!(backtest.fold_reports.len(), 2);
+        assert!(backtest.promotion_eligible);
         assert_eq!(venue_capability.venue_key, "jupiter");
         assert_eq!(asset_record.asset_key, "SOL");
         assert_eq!(strategy_spec.strategy_key, "trend_following");

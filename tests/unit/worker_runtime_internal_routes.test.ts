@@ -398,6 +398,161 @@ const VALID_RUNTIME_REPLAY_CORPUS = {
   tags: ["seed", "replay"],
 };
 
+const VALID_RUNTIME_BACKTEST_REPORT = {
+  schemaVersion: "v1",
+  reportId: "backtest_alloc_dca_report",
+  experimentId: "experiment_alloc_dca_backtest",
+  strategyKey: "dca",
+  status: "completed",
+  generatedAt: "2026-03-10T00:00:00.000Z",
+  venueKeys: ["jupiter"],
+  assetKeys: ["SOL", "USDC"],
+  codeRevision: {
+    vcs: "git",
+    repository: "github.com/GuiBibeau/serious-trader-ralph",
+    revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+    treeDirty: false,
+  },
+  datasetSnapshots: [
+    {
+      datasetId: "dataset_feature_cache_sol_usdc_market_events",
+      snapshotId: "snapshot_2026_03_07_backtest",
+      capturedAt: "2026-03-10T00:00:00.000Z",
+      uri: "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+      contentDigest: "sha256:feature-cache",
+    },
+  ],
+  strategySpecDigest:
+    "sha256:1992048eb2efcd762981bd78d6ae7685c39873c4ccb8189681e2003ca8d84bff",
+  config: {
+    replayCorpusId: "replay_corpus_sol_usdc_feature_cache",
+    venueKey: "jupiter",
+    pairSymbol: "SOL/USDC",
+    marketType: "spot",
+    windowMode: "rolling",
+    trainingWindowObservations: 2,
+    testingWindowObservations: 1,
+    stepObservations: 1,
+    purgeObservations: 0,
+    baselineStrategies: ["flat_cash", "buy_and_hold"],
+  },
+  foldReports: [
+    {
+      foldId: "fold_0",
+      foldIndex: 0,
+      trainingStartAt: "2026-03-07T00:00:00Z",
+      trainingEndAt: "2026-03-07T00:00:10Z",
+      testStartAt: "2026-03-07T00:00:10Z",
+      testEndAt: "2026-03-07T00:00:15Z",
+      trainObservationCount: 2,
+      purgedObservationCount: 0,
+      testObservationCount: 1,
+      metrics: {
+        observationCount: 1,
+        tradeCount: 1,
+        grossReturnBps: "22.5384",
+        netReturnBps: "22.5384",
+        totalCostBps: "0.0000",
+        winRateBps: 10000,
+        maxDrawdownBps: "0.0000",
+      },
+      baselineComparisons: [
+        {
+          baseline: "flat_cash",
+          baselineReturnBps: "0.0000",
+          excessReturnBps: "22.5384",
+        },
+      ],
+      regimeMetrics: [
+        {
+          regimeKey: "short_trend",
+          regimeValue: "flat",
+          observationCount: 1,
+          tradeCount: 1,
+          netReturnBps: "22.5384",
+          winRateBps: 10000,
+        },
+      ],
+    },
+    {
+      foldId: "fold_1",
+      foldIndex: 1,
+      trainingStartAt: "2026-03-07T00:00:05Z",
+      trainingEndAt: "2026-03-07T00:00:15Z",
+      testStartAt: "2026-03-07T00:00:15Z",
+      testEndAt: "2026-03-07T00:00:20Z",
+      trainObservationCount: 2,
+      purgedObservationCount: 0,
+      testObservationCount: 1,
+      metrics: {
+        observationCount: 1,
+        tradeCount: 1,
+        grossReturnBps: "18.1150",
+        netReturnBps: "18.1150",
+        totalCostBps: "0.0000",
+        winRateBps: 10000,
+        maxDrawdownBps: "0.0000",
+      },
+      baselineComparisons: [
+        {
+          baseline: "flat_cash",
+          baselineReturnBps: "0.0000",
+          excessReturnBps: "18.1150",
+        },
+      ],
+      regimeMetrics: [
+        {
+          regimeKey: "short_trend",
+          regimeValue: "up",
+          observationCount: 1,
+          tradeCount: 1,
+          netReturnBps: "18.1150",
+          winRateBps: 10000,
+        },
+      ],
+    },
+  ],
+  aggregateMetrics: {
+    observationCount: 2,
+    tradeCount: 2,
+    grossReturnBps: "40.6534",
+    netReturnBps: "40.6534",
+    totalCostBps: "0.0000",
+    winRateBps: 10000,
+    maxDrawdownBps: "0.0000",
+  },
+  aggregateBaselineComparisons: [
+    {
+      baseline: "flat_cash",
+      baselineReturnBps: "0.0000",
+      excessReturnBps: "40.6534",
+    },
+  ],
+  aggregateRegimeMetrics: [
+    {
+      regimeKey: "short_trend",
+      regimeValue: "flat",
+      observationCount: 1,
+      tradeCount: 1,
+      netReturnBps: "22.5384",
+      winRateBps: 10000,
+    },
+    {
+      regimeKey: "short_trend",
+      regimeValue: "up",
+      observationCount: 1,
+      tradeCount: 1,
+      netReturnBps: "18.1150",
+      winRateBps: 10000,
+    },
+  ],
+  promotionEligible: true,
+  blockingReasons: [],
+  summary:
+    "Backtest cleared two walk-forward folds for dca with positive aggregate net return.",
+  tags: ["backtest", "paper"],
+};
+
 describe("worker runtime internal routes", () => {
   test("requires runtime service auth", async () => {
     const env = createWorkerLiveEnv();
@@ -467,6 +622,7 @@ describe("worker runtime internal routes", () => {
         health: "/api/internal/runtime/health",
         scorecards: "/api/internal/runtime/scorecards",
         allocator: "/api/internal/runtime/allocator",
+        backtests: "/api/internal/runtime/backtests",
         costModels: "/api/internal/runtime/cost-models",
       },
     });
@@ -901,6 +1057,79 @@ describe("worker runtime internal routes", () => {
       sourceMode: "shadow",
       targetMode: "paper",
       status: "pass",
+    });
+  });
+
+  test("returns stubbed runtime backtests", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/backtests?strategyKey=dca&promotionEligible=true",
+        {
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+          },
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      source: "stub",
+      filters: {
+        strategyKey: "dca",
+        promotionEligible: "true",
+      },
+      reports: [
+        {
+          reportId: "backtest_alloc_dca_report",
+          strategyKey: "dca",
+          status: "completed",
+          promotionEligible: true,
+          config: {
+            marketType: "spot",
+            windowMode: "rolling",
+          },
+        },
+      ],
+    });
+  });
+
+  test("accepts runtime backtest reports through the private route family", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request("http://localhost/api/internal/runtime/backtests", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer runtime-service-secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(VALID_RUNTIME_BACKTEST_REPORT),
+      }),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      source: "stub",
+      created: true,
+      report: {
+        reportId: "backtest_alloc_dca_report",
+        strategyKey: "dca",
+        status: "completed",
+        promotionEligible: true,
+        config: {
+          replayCorpusId: "replay_corpus_sol_usdc_feature_cache",
+          marketType: "spot",
+        },
+      },
     });
   });
 

@@ -1,0 +1,514 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/backtest_report",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "reportId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "experimentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "strategyKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "blocked", "failed"]
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "venueKeys": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "assetKeys": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "codeRevision": {
+      "type": "object",
+      "properties": {
+        "vcs": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "comparedTo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "treeDirty": {
+          "type": "boolean"
+        }
+      },
+      "required": ["vcs", "repository", "revision", "treeDirty"],
+      "additionalProperties": false
+    },
+    "datasetSnapshots": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "datasetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "snapshotId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capturedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "uri": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contentDigest": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["datasetId", "snapshotId", "capturedAt"],
+        "additionalProperties": false
+      }
+    },
+    "strategySpecDigest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "replayCorpusId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "venueKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pairSymbol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "marketType": {
+          "type": "string",
+          "enum": ["spot", "perp", "options"]
+        },
+        "windowMode": {
+          "type": "string",
+          "enum": ["rolling", "expanding"]
+        },
+        "trainingWindowObservations": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "testingWindowObservations": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "stepObservations": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "purgeObservations": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "baselineStrategies": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["flat_cash", "buy_and_hold"]
+          }
+        }
+      },
+      "required": [
+        "replayCorpusId",
+        "venueKey",
+        "pairSymbol",
+        "marketType",
+        "windowMode",
+        "trainingWindowObservations",
+        "testingWindowObservations",
+        "stepObservations",
+        "purgeObservations",
+        "baselineStrategies"
+      ],
+      "additionalProperties": false
+    },
+    "foldReports": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "foldId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "foldIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "trainingStartAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "trainingEndAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "testStartAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "testEndAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "trainObservationCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "purgedObservationCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "testObservationCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "observationCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "tradeCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "grossReturnBps": {
+                "type": "string",
+                "pattern": "^-?\\d+(?:\\.\\d+)?$"
+              },
+              "netReturnBps": {
+                "type": "string",
+                "pattern": "^-?\\d+(?:\\.\\d+)?$"
+              },
+              "totalCostBps": {
+                "type": "string",
+                "pattern": "^-?\\d+(?:\\.\\d+)?$"
+              },
+              "winRateBps": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "maxDrawdownBps": {
+                "type": "string",
+                "pattern": "^-?\\d+(?:\\.\\d+)?$"
+              }
+            },
+            "required": [
+              "observationCount",
+              "tradeCount",
+              "grossReturnBps",
+              "netReturnBps",
+              "totalCostBps",
+              "winRateBps",
+              "maxDrawdownBps"
+            ],
+            "additionalProperties": false
+          },
+          "baselineComparisons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "baseline": {
+                  "type": "string",
+                  "enum": ["flat_cash", "buy_and_hold"]
+                },
+                "baselineReturnBps": {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                },
+                "excessReturnBps": {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                }
+              },
+              "required": ["baseline", "baselineReturnBps", "excessReturnBps"],
+              "additionalProperties": false
+            }
+          },
+          "regimeMetrics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "regimeKey": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "regimeValue": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observationCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "tradeCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "netReturnBps": {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                },
+                "winRateBps": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "required": [
+                "regimeKey",
+                "regimeValue",
+                "observationCount",
+                "tradeCount",
+                "netReturnBps",
+                "winRateBps"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "foldId",
+          "foldIndex",
+          "trainingStartAt",
+          "trainingEndAt",
+          "testStartAt",
+          "testEndAt",
+          "trainObservationCount",
+          "purgedObservationCount",
+          "testObservationCount",
+          "metrics",
+          "baselineComparisons",
+          "regimeMetrics"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "aggregateMetrics": {
+      "type": "object",
+      "properties": {
+        "observationCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tradeCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "grossReturnBps": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
+        "netReturnBps": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
+        "totalCostBps": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
+        "winRateBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "maxDrawdownBps": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        }
+      },
+      "required": [
+        "observationCount",
+        "tradeCount",
+        "grossReturnBps",
+        "netReturnBps",
+        "totalCostBps",
+        "winRateBps",
+        "maxDrawdownBps"
+      ],
+      "additionalProperties": false
+    },
+    "aggregateBaselineComparisons": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "baseline": {
+            "type": "string",
+            "enum": ["flat_cash", "buy_and_hold"]
+          },
+          "baselineReturnBps": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          },
+          "excessReturnBps": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          }
+        },
+        "required": ["baseline", "baselineReturnBps", "excessReturnBps"],
+        "additionalProperties": false
+      }
+    },
+    "aggregateRegimeMetrics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "regimeKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "regimeValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observationCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "tradeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "netReturnBps": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          },
+          "winRateBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "regimeKey",
+          "regimeValue",
+          "observationCount",
+          "tradeCount",
+          "netReturnBps",
+          "winRateBps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "promotionEligible": {
+      "type": "boolean"
+    },
+    "blockingReasons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tags": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "reportId",
+    "experimentId",
+    "strategyKey",
+    "status",
+    "generatedAt",
+    "venueKeys",
+    "assetKeys",
+    "codeRevision",
+    "datasetSnapshots",
+    "strategySpecDigest",
+    "config",
+    "foldReports",
+    "aggregateMetrics",
+    "aggregateBaselineComparisons",
+    "aggregateRegimeMetrics",
+    "promotionEligible",
+    "blockingReasons",
+    "summary",
+    "tags"
+  ],
+  "additionalProperties": false
+}

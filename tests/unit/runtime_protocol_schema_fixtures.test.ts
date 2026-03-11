@@ -84,6 +84,12 @@ describe("runtime protocol schema fixtures", () => {
     ).toBe(true);
     expect(
       validate(
+        "docs/runtime-contracts/schemas/runtime.backtest_report.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.backtest_report.valid.v1.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
         "docs/runtime-contracts/schemas/runtime.historical_dataset_snapshot.v1.schema.json",
         "docs/runtime-contracts/fixtures/runtime.historical_dataset_snapshot.valid.v1.json",
       ),
@@ -150,6 +156,7 @@ describe("runtime protocol schema fixtures", () => {
       "docs/runtime-contracts/schemas/runtime.research_source.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.research_experiment.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.backtest_report.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.historical_dataset_snapshot.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.replay_corpus.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.feature_definition.v1.schema.json",

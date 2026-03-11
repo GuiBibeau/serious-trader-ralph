@@ -53,6 +53,11 @@
       "schemaFile": "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json"
     },
     {
+      "name": "backtestReport",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/backtest_report",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.backtest_report.v1.schema.json"
+    },
+    {
       "name": "historicalDatasetSnapshot",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/historical_dataset_snapshot",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.historical_dataset_snapshot.v1.schema.json"

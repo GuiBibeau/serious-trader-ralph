@@ -282,6 +282,19 @@ export const RuntimeResearchEvidenceStatusSchema = z.enum([
   "superseded",
 ]);
 
+export const RuntimeBacktestStatusSchema = z.enum([
+  "completed",
+  "blocked",
+  "failed",
+]);
+
+export const RuntimeBacktestWindowModeSchema = z.enum(["rolling", "expanding"]);
+
+export const RuntimeBacktestBaselineSchema = z.enum([
+  "flat_cash",
+  "buy_and_hold",
+]);
+
 const RuntimeResearchCitationSchema = z
   .object({
     sourceId: NON_EMPTY_STRING_SCHEMA,
@@ -505,6 +518,119 @@ export const RuntimeResearchEvidenceBundleRecordSchema = VersionedSchema.extend(
   },
 ).strict();
 
+export const RuntimeVenueMarketTypeSchema = z.enum(["spot", "perp", "options"]);
+
+export const RuntimeVenueOrderTypeSchema = z.enum([
+  "market",
+  "limit",
+  "auction",
+  "twap",
+]);
+
+export const RuntimeVenueAuthModelSchema = z.enum([
+  "privy_solana_wallet",
+  "server_signer",
+]);
+
+export const RuntimeVenueFeeModelSchema = z.enum([
+  "venue_quote_inclusive",
+  "maker_taker_bps",
+  "fixed_bps",
+]);
+
+export const RuntimeVenueSettlementBehaviorSchema = z.enum([
+  "swap_atomic",
+  "orderbook_atomic",
+  "orderbook_partial",
+]);
+
+const RuntimeBacktestConfigSchema = z
+  .object({
+    replayCorpusId: NON_EMPTY_STRING_SCHEMA,
+    venueKey: NON_EMPTY_STRING_SCHEMA,
+    pairSymbol: NON_EMPTY_STRING_SCHEMA,
+    marketType: RuntimeVenueMarketTypeSchema,
+    windowMode: RuntimeBacktestWindowModeSchema,
+    trainingWindowObservations: z.number().int().positive(),
+    testingWindowObservations: z.number().int().positive(),
+    stepObservations: z.number().int().positive(),
+    purgeObservations: z.number().int().nonnegative(),
+    baselineStrategies: z.array(RuntimeBacktestBaselineSchema).min(1),
+  })
+  .strict();
+
+const RuntimeBacktestMetricsSchema = z
+  .object({
+    observationCount: z.number().int().nonnegative(),
+    tradeCount: z.number().int().nonnegative(),
+    grossReturnBps: NUMERIC_STRING_SCHEMA,
+    netReturnBps: NUMERIC_STRING_SCHEMA,
+    totalCostBps: NUMERIC_STRING_SCHEMA,
+    winRateBps: BPS_SCHEMA,
+    maxDrawdownBps: NUMERIC_STRING_SCHEMA,
+  })
+  .strict();
+
+const RuntimeBacktestBaselineComparisonSchema = z
+  .object({
+    baseline: RuntimeBacktestBaselineSchema,
+    baselineReturnBps: NUMERIC_STRING_SCHEMA,
+    excessReturnBps: NUMERIC_STRING_SCHEMA,
+  })
+  .strict();
+
+const RuntimeBacktestRegimeMetricsSchema = z
+  .object({
+    regimeKey: NON_EMPTY_STRING_SCHEMA,
+    regimeValue: NON_EMPTY_STRING_SCHEMA,
+    observationCount: z.number().int().nonnegative(),
+    tradeCount: z.number().int().nonnegative(),
+    netReturnBps: NUMERIC_STRING_SCHEMA,
+    winRateBps: BPS_SCHEMA,
+  })
+  .strict();
+
+const RuntimeBacktestFoldReportSchema = z
+  .object({
+    foldId: NON_EMPTY_STRING_SCHEMA,
+    foldIndex: z.number().int().nonnegative(),
+    trainingStartAt: ISO_DATETIME_SCHEMA,
+    trainingEndAt: ISO_DATETIME_SCHEMA,
+    testStartAt: ISO_DATETIME_SCHEMA,
+    testEndAt: ISO_DATETIME_SCHEMA,
+    trainObservationCount: z.number().int().nonnegative(),
+    purgedObservationCount: z.number().int().nonnegative(),
+    testObservationCount: z.number().int().nonnegative(),
+    metrics: RuntimeBacktestMetricsSchema,
+    baselineComparisons: z.array(RuntimeBacktestBaselineComparisonSchema),
+    regimeMetrics: z.array(RuntimeBacktestRegimeMetricsSchema),
+  })
+  .strict();
+
+export const RuntimeBacktestReportSchema = VersionedSchema.extend({
+  reportId: NON_EMPTY_STRING_SCHEMA,
+  experimentId: NON_EMPTY_STRING_SCHEMA,
+  strategyKey: NON_EMPTY_STRING_SCHEMA,
+  status: RuntimeBacktestStatusSchema,
+  generatedAt: ISO_DATETIME_SCHEMA,
+  venueKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+  codeRevision: RuntimeCodeRevisionRefSchema,
+  datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
+  strategySpecDigest: NON_EMPTY_STRING_SCHEMA,
+  config: RuntimeBacktestConfigSchema,
+  foldReports: z.array(RuntimeBacktestFoldReportSchema).min(1),
+  aggregateMetrics: RuntimeBacktestMetricsSchema,
+  aggregateBaselineComparisons: z
+    .array(RuntimeBacktestBaselineComparisonSchema)
+    .min(1),
+  aggregateRegimeMetrics: z.array(RuntimeBacktestRegimeMetricsSchema),
+  promotionEligible: z.boolean(),
+  blockingReasons: z.array(NON_EMPTY_STRING_SCHEMA),
+  summary: NON_EMPTY_STRING_SCHEMA,
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+}).strict();
+
 export const RuntimeStrategyCategorySchema = z.enum([
   "allocation",
   "signal",
@@ -559,32 +685,6 @@ export const RuntimeAssetRiskClassSchema = z.enum([
   "volatile",
   "experimental",
   "restricted",
-]);
-
-export const RuntimeVenueMarketTypeSchema = z.enum(["spot", "perp", "options"]);
-
-export const RuntimeVenueOrderTypeSchema = z.enum([
-  "market",
-  "limit",
-  "auction",
-  "twap",
-]);
-
-export const RuntimeVenueAuthModelSchema = z.enum([
-  "privy_solana_wallet",
-  "server_signer",
-]);
-
-export const RuntimeVenueFeeModelSchema = z.enum([
-  "venue_quote_inclusive",
-  "maker_taker_bps",
-  "fixed_bps",
-]);
-
-export const RuntimeVenueSettlementBehaviorSchema = z.enum([
-  "swap_atomic",
-  "orderbook_atomic",
-  "orderbook_partial",
 ]);
 
 const RuntimeVenuePrecisionSchema = z
@@ -931,6 +1031,14 @@ export type RuntimeResearchExperimentRecord = z.infer<
 export type RuntimeResearchEvidenceBundleRecord = z.infer<
   typeof RuntimeResearchEvidenceBundleRecordSchema
 >;
+export type RuntimeBacktestStatus = z.infer<typeof RuntimeBacktestStatusSchema>;
+export type RuntimeBacktestWindowMode = z.infer<
+  typeof RuntimeBacktestWindowModeSchema
+>;
+export type RuntimeBacktestBaseline = z.infer<
+  typeof RuntimeBacktestBaselineSchema
+>;
+export type RuntimeBacktestReport = z.infer<typeof RuntimeBacktestReportSchema>;
 export type RuntimeOnboardingState = z.infer<
   typeof RuntimeOnboardingStateSchema
 >;
@@ -1033,6 +1141,11 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
     schemaId:
       "https://trader-ralph.com/schemas/runtime/v1/research_evidence_bundle",
     outputFile: "runtime.research_evidence_bundle.v1.schema.json",
+  },
+  backtestReport: {
+    schema: RuntimeBacktestReportSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/backtest_report",
+    outputFile: "runtime.backtest_report.v1.schema.json",
   },
   historicalDatasetSnapshot: {
     schema: RuntimeHistoricalDatasetSnapshotRecordSchema,
@@ -1184,6 +1297,12 @@ export function parseRuntimeResearchEvidenceBundleRecord(
   return RuntimeResearchEvidenceBundleRecordSchema.parse(input);
 }
 
+export function parseRuntimeBacktestReport(
+  input: unknown,
+): RuntimeBacktestReport {
+  return RuntimeBacktestReportSchema.parse(input);
+}
+
 export function parseRuntimeVenueCapability(
   input: unknown,
 ): RuntimeVenueCapability {
@@ -1258,6 +1377,10 @@ export function safeParseRuntimeResearchExperimentRecord(input: unknown) {
 
 export function safeParseRuntimeResearchEvidenceBundleRecord(input: unknown) {
   return RuntimeResearchEvidenceBundleRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeBacktestReport(input: unknown) {
+  return RuntimeBacktestReportSchema.safeParse(input);
 }
 
 export function safeParseRuntimeVenueCapability(input: unknown) {

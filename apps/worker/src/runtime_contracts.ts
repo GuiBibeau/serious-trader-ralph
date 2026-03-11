@@ -1,6 +1,7 @@
 export type {
   RuntimeAssetListingState,
   RuntimeAssetRecord,
+  RuntimeBacktestReport,
   RuntimeDeploymentRecord,
   RuntimeDeploymentState,
   RuntimeExecutionCostModelRecord,
@@ -29,6 +30,7 @@ export {
   canTransitionRuntimeDeploymentState,
   canTransitionRuntimeRunState,
   parseRuntimeAssetRecord,
+  parseRuntimeBacktestReport,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
   parseRuntimeExecutionPlan,
@@ -52,6 +54,7 @@ export {
   RUNTIME_PROTOCOL_SCHEMA_VERSION,
   RUNTIME_RUN_STATE_TRANSITIONS,
   safeParseRuntimeAssetRecord,
+  safeParseRuntimeBacktestReport,
   safeParseRuntimeDeploymentRecord,
   safeParseRuntimeExecutionCostModelRecord,
   safeParseRuntimeExecutionPlan,

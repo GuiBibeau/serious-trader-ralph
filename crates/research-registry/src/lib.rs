@@ -304,6 +304,25 @@ impl ResearchRegistry {
         })
     }
 
+    pub fn get_experiment(
+        &self,
+        experiment_id: &str,
+    ) -> Result<Option<RuntimeResearchExperimentRecord>, ResearchRegistryError> {
+        let connection = self.open_connection()?;
+        Ok(connection
+            .query_row(
+                "SELECT record_json
+                 FROM research_experiments
+                 WHERE experiment_id = ?1
+                 LIMIT 1",
+                params![experiment_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|json| deserialize_json(&json))
+            .transpose()?)
+    }
+
     fn snapshot_counts(
         &self,
     ) -> Result<(u64, u64, u64, u64, Option<String>), ResearchRegistryError> {

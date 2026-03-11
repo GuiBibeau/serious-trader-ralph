@@ -81,6 +81,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "backtesting-engine"
+version = "0.1.0"
+dependencies = [
+ "feature-cache",
+ "market-adapters",
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "strategy-core",
+ "thiserror",
+ "time",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1039,6 +1055,7 @@ version = "0.1.0"
 dependencies = [
  "asset-registry",
  "axum",
+ "backtesting-engine",
  "cost-model-registry",
  "exec-client",
  "execution-planner",

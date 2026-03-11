@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   parseRuntimeAssetRecord,
+  parseRuntimeBacktestReport,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
   parseRuntimeFeatureDefinitionRecord,
@@ -32,6 +33,7 @@ describe("worker runtime contract bridge", () => {
       "researchSource",
       "researchExperiment",
       "researchEvidenceBundle",
+      "backtestReport",
       "historicalDatasetSnapshot",
       "replayCorpus",
       "featureDefinition",
@@ -52,6 +54,17 @@ describe("worker runtime contract bridge", () => {
 
     expect(deployment.deploymentId).toBe("dep_runtime_sol_usdc_shadow");
     expect(deployment.mode).toBe("shadow");
+  });
+
+  test("worker can parse the canonical backtest fixture", () => {
+    const report = parseRuntimeBacktestReport(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.backtest_report.valid.v1.json",
+      ),
+    );
+
+    expect(report.reportId).toBe("backtest_alloc_dca_report");
+    expect(report.promotionEligible).toBe(true);
   });
 
   test("worker can parse the canonical strategy spec fixture", () => {

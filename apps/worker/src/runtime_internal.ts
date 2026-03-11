@@ -5,6 +5,7 @@ import {
 import { json } from "./response";
 import {
   parseRuntimeAssetRecord,
+  parseRuntimeBacktestReport,
   parseRuntimeDeploymentRecord,
   parseRuntimeExecutionCostModelRecord,
   parseRuntimeExecutionPlan,
@@ -21,6 +22,7 @@ import {
   RUNTIME_PROTOCOL_SCHEMA_VERSION,
   type RuntimeAssetListingState,
   type RuntimeAssetRecord,
+  type RuntimeBacktestReport,
   type RuntimeDeploymentRecord,
   type RuntimeExecutionCostModelRecord,
   type RuntimeExecutionPlan,
@@ -54,6 +56,7 @@ const INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH = `${INTERNAL_RUNTIME_RESE
 const INTERNAL_RUNTIME_ASSETS_PATH = `${INTERNAL_RUNTIME_PREFIX}/assets`;
 const INTERNAL_RUNTIME_ASSETS_PREFIX = `${INTERNAL_RUNTIME_ASSETS_PATH}/`;
 const INTERNAL_RUNTIME_DATASETS_PATH = `${INTERNAL_RUNTIME_PREFIX}/datasets`;
+const INTERNAL_RUNTIME_BACKTESTS_PATH = `${INTERNAL_RUNTIME_PREFIX}/backtests`;
 const INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH = `${INTERNAL_RUNTIME_DATASETS_PATH}/snapshots`;
 const INTERNAL_RUNTIME_REPLAY_CORPORA_PATH = `${INTERNAL_RUNTIME_DATASETS_PATH}/replay-corpora`;
 const INTERNAL_RUNTIME_FEATURES_PATH = `${INTERNAL_RUNTIME_PREFIX}/features`;
@@ -724,6 +727,120 @@ function createRuntimeResearchRegistryFixture() {
   };
 }
 
+function createRuntimeBacktestFixture(
+  reportId = "backtest_alloc_dca_report",
+): RuntimeBacktestReport {
+  return parseRuntimeBacktestReport({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    reportId,
+    experimentId: "experiment_alloc_dca_backtest",
+    strategyKey: "dca",
+    status: "completed",
+    generatedAt: FIXTURE_TIMESTAMP,
+    venueKeys: ["jupiter"],
+    assetKeys: ["SOL", "USDC"],
+    codeRevision: {
+      vcs: "git",
+      repository: "github.com/GuiBibeau/serious-trader-ralph",
+      revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+      treeDirty: false,
+    },
+    datasetSnapshots: [
+      {
+        datasetId: "dataset_feature_cache_sol_usdc_market_events",
+        snapshotId: "snapshot_2026_03_07_backtest",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+        contentDigest: "sha256:feature-cache",
+      },
+    ],
+    strategySpecDigest:
+      "sha256:1992048eb2efcd762981bd78d6ae7685c39873c4ccb8189681e2003ca8d84bff",
+    config: {
+      replayCorpusId: "replay_corpus_sol_usdc_feature_cache",
+      venueKey: "jupiter",
+      pairSymbol: "SOL/USDC",
+      marketType: "spot",
+      windowMode: "rolling",
+      trainingWindowObservations: 2,
+      testingWindowObservations: 1,
+      stepObservations: 1,
+      purgeObservations: 0,
+      baselineStrategies: ["flat_cash", "buy_and_hold"],
+    },
+    foldReports: [
+      {
+        foldId: "fold_0",
+        foldIndex: 0,
+        trainingStartAt: "2026-03-07T00:00:00Z",
+        trainingEndAt: "2026-03-07T00:00:10Z",
+        testStartAt: "2026-03-07T00:00:10Z",
+        testEndAt: "2026-03-07T00:00:15Z",
+        trainObservationCount: 2,
+        purgedObservationCount: 0,
+        testObservationCount: 1,
+        metrics: {
+          observationCount: 1,
+          tradeCount: 1,
+          grossReturnBps: "22.5384",
+          netReturnBps: "22.5384",
+          totalCostBps: "0.0000",
+          winRateBps: 10000,
+          maxDrawdownBps: "0.0000",
+        },
+        baselineComparisons: [
+          {
+            baseline: "flat_cash",
+            baselineReturnBps: "0.0000",
+            excessReturnBps: "22.5384",
+          },
+        ],
+        regimeMetrics: [
+          {
+            regimeKey: "short_trend",
+            regimeValue: "flat",
+            observationCount: 1,
+            tradeCount: 1,
+            netReturnBps: "22.5384",
+            winRateBps: 10000,
+          },
+        ],
+      },
+    ],
+    aggregateMetrics: {
+      observationCount: 1,
+      tradeCount: 1,
+      grossReturnBps: "22.5384",
+      netReturnBps: "22.5384",
+      totalCostBps: "0.0000",
+      winRateBps: 10000,
+      maxDrawdownBps: "0.0000",
+    },
+    aggregateBaselineComparisons: [
+      {
+        baseline: "flat_cash",
+        baselineReturnBps: "0.0000",
+        excessReturnBps: "22.5384",
+      },
+    ],
+    aggregateRegimeMetrics: [
+      {
+        regimeKey: "short_trend",
+        regimeValue: "flat",
+        observationCount: 1,
+        tradeCount: 1,
+        netReturnBps: "22.5384",
+        winRateBps: 10000,
+      },
+    ],
+    promotionEligible: true,
+    blockingReasons: [],
+    summary:
+      "Backtest cleared two walk-forward folds for dca with positive aggregate net return.",
+    tags: ["backtest", "paper"],
+  });
+}
+
 function createRuntimeAssetFixture(
   assetKey = "SOL",
   listingState: RuntimeAssetListingState = "live",
@@ -1154,6 +1271,7 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       research: INTERNAL_RUNTIME_RESEARCH_PATH,
       assets: INTERNAL_RUNTIME_ASSETS_PATH,
       datasets: INTERNAL_RUNTIME_DATASETS_PATH,
+      backtests: INTERNAL_RUNTIME_BACKTESTS_PATH,
       features: INTERNAL_RUNTIME_FEATURES_PATH,
       costModels: INTERNAL_RUNTIME_COST_MODELS_PATH,
       executionPlans: INTERNAL_RUNTIME_EXECUTION_PLANS_PATH,
@@ -1628,6 +1746,49 @@ export async function readRuntimeHistoricalDataLake(input: {
   });
 }
 
+export async function readRuntimeBacktests(input: {
+  env: Env;
+  reportId?: string;
+  experimentId?: string;
+  strategyKey?: string;
+  venueKey?: string;
+  assetKey?: string;
+  marketType?: string;
+  status?: string;
+  promotionEligible?: boolean;
+}): Promise<RuntimeInternalJsonResult> {
+  const search = new URLSearchParams();
+  if (input.reportId) search.set("reportId", input.reportId);
+  if (input.experimentId) search.set("experimentId", input.experimentId);
+  if (input.strategyKey) search.set("strategyKey", input.strategyKey);
+  if (input.venueKey) search.set("venueKey", input.venueKey);
+  if (input.assetKey) search.set("assetKey", input.assetKey);
+  if (input.marketType) search.set("marketType", input.marketType);
+  if (input.status) search.set("status", input.status);
+  if (typeof input.promotionEligible === "boolean") {
+    search.set("promotionEligible", String(input.promotionEligible));
+  }
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "GET",
+    pathname: search.size
+      ? `${INTERNAL_RUNTIME_BACKTESTS_PATH}?${search.toString()}`
+      : INTERNAL_RUNTIME_BACKTESTS_PATH,
+  });
+}
+
+export async function runRuntimeBacktest(input: {
+  env: Env;
+  payload: RuntimeBacktestReport | Record<string, unknown>;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_BACKTESTS_PATH,
+    body: input.payload,
+  });
+}
+
 export async function writeRuntimeHistoricalDatasetSnapshot(input: {
   env: Env;
   datasetSnapshot: RuntimeHistoricalDatasetSnapshotRecord;
@@ -1803,6 +1964,7 @@ export async function handleRuntimeInternalRoute(
     url.pathname === INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH ||
     url.pathname === INTERNAL_RUNTIME_ASSETS_PATH ||
     url.pathname === INTERNAL_RUNTIME_DATASETS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_BACKTESTS_PATH ||
     url.pathname === INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH ||
     url.pathname === INTERNAL_RUNTIME_REPLAY_CORPORA_PATH ||
     url.pathname === INTERNAL_RUNTIME_COST_MODELS_PATH ||
@@ -1934,6 +2096,27 @@ export async function handleRuntimeInternalRoute(
         datasetKind: url.searchParams.get("datasetKind"),
       },
       registry: createRuntimeHistoricalDataLakeFixture(),
+    });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === INTERNAL_RUNTIME_BACKTESTS_PATH
+  ) {
+    return json({
+      ok: true,
+      source: "stub",
+      filters: {
+        reportId: url.searchParams.get("reportId"),
+        experimentId: url.searchParams.get("experimentId"),
+        strategyKey: url.searchParams.get("strategyKey"),
+        venueKey: url.searchParams.get("venueKey"),
+        assetKey: url.searchParams.get("assetKey"),
+        marketType: url.searchParams.get("marketType"),
+        status: url.searchParams.get("status"),
+        promotionEligible: url.searchParams.get("promotionEligible"),
+      },
+      reports: [createRuntimeBacktestFixture()],
     });
   }
 
@@ -2344,6 +2527,37 @@ export async function handleRuntimeInternalRoute(
         source: "stub",
         created: true,
         replayCorpus,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_BACKTESTS_PATH
+  ) {
+    let report: RuntimeBacktestReport;
+    try {
+      const payload = await readJsonBody(request);
+      report = parseRuntimeBacktestReport(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-backtest-report",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        report,
       },
       { status: 201 },
     );
