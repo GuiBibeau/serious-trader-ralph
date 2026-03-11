@@ -21,6 +21,7 @@ export type RuntimeOperatorSnapshot = {
   deployments: RuntimeDeploymentRecord[];
   controls: RuntimeOperatorControls;
   canary: Record<string, unknown> | null;
+  leaderboard: Record<string, unknown> | null;
   error: string | null;
 };
 
