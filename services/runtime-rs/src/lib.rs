@@ -19,14 +19,20 @@ use execution_planner::{
     ExecutionPlannerSnapshot, StrategyPluginRegistry,
 };
 use feature_cache::{FeatureCache, FeatureCacheConfig, FeatureCacheSnapshot};
+use historical_data_lake::{
+    HistoricalDataLake, HistoricalDataLakeConfig, HistoricalDataLakeError, HistoricalDataLakeQuery,
+    HistoricalDataLakeSnapshot,
+};
 use market_adapters::{FeedGateway, FeedGatewayConfig, FeedGatewaySnapshot, FeedReplayFixture};
 use portfolio_ledger::{
     PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
 };
 use protocol::{
     RuntimeAssetListingState, RuntimeAssetRecord, RuntimeDeploymentRecord, RuntimeDeploymentState,
-    RuntimeResearchEvidenceBundleRecord, RuntimeResearchExperimentRecord,
-    RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord, RuntimeRunRecord,
+    RuntimeHistoricalDatasetKind, RuntimeHistoricalDatasetSnapshotRecord,
+    RuntimeReplayCorpusRecord, RuntimeResearchEvidenceBundleRecord,
+    RuntimeResearchExperimentRecord, RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord,
+    RuntimeRunRecord,
 };
 use reconciler::{Reconciler, ReconcilerConfig, ReconcilerError, ReconcilerSnapshot};
 use research_registry::{
@@ -82,6 +88,7 @@ pub struct RuntimeAppState {
     strategy_registry: StrategyRegistry,
     research_registry: ResearchRegistry,
     asset_registry: AssetRegistry,
+    historical_data_lake: HistoricalDataLake,
     portfolio_ledger: PortfolioLedger,
     runtime_allocator: RuntimeAllocator,
     risk_engine: RiskEngine,
@@ -115,6 +122,9 @@ impl RuntimeAppState {
         let asset_registry =
             AssetRegistry::new(AssetRegistryConfig::new(config.database_url.clone()))
                 .expect("asset registry to initialize");
+        let historical_data_lake =
+            HistoricalDataLake::new(HistoricalDataLakeConfig::new(config.database_url.clone()))
+                .expect("historical data lake to initialize");
         let portfolio_ledger =
             PortfolioLedger::new(PortfolioLedgerConfig::new(config.database_url.clone()))
                 .expect("portfolio ledger to initialize");
@@ -149,6 +159,7 @@ impl RuntimeAppState {
             strategy_registry,
             research_registry,
             asset_registry,
+            historical_data_lake,
             portfolio_ledger,
             runtime_allocator,
             risk_engine,
@@ -181,6 +192,10 @@ impl RuntimeAppState {
 
     fn asset_registry_snapshot(&self) -> AssetRegistrySnapshot {
         self.asset_registry.snapshot_now()
+    }
+
+    fn historical_data_lake_snapshot(&self) -> HistoricalDataLakeSnapshot {
+        self.historical_data_lake.snapshot_now()
     }
 
     fn portfolio_ledger_snapshot(&self) -> PortfolioLedgerSnapshot {
@@ -223,6 +238,7 @@ pub struct RuntimeHealthResponse {
     pub strategy_registry: StrategyRegistrySnapshot,
     pub research_registry: ResearchRegistrySnapshot,
     pub asset_registry: AssetRegistrySnapshot,
+    pub historical_data_lake: HistoricalDataLakeSnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
@@ -244,6 +260,7 @@ pub struct RuntimeMetricsResponse {
     pub strategy_registry: StrategyRegistrySnapshot,
     pub research_registry: ResearchRegistrySnapshot,
     pub asset_registry: AssetRegistrySnapshot,
+    pub historical_data_lake: HistoricalDataLakeSnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
@@ -287,6 +304,17 @@ struct RuntimeAssetQueryParams {
     pub asset_key: Option<String>,
     pub venue_key: Option<String>,
     pub listing_state: Option<RuntimeAssetListingState>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeHistoricalDataLakeQueryParams {
+    pub dataset_id: Option<String>,
+    pub snapshot_id: Option<String>,
+    pub corpus_id: Option<String>,
+    pub venue_key: Option<String>,
+    pub asset_key: Option<String>,
+    pub dataset_kind: Option<RuntimeHistoricalDatasetKind>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -373,6 +401,18 @@ pub fn app(config: RuntimeConfig) -> Router {
             get(asset_query_handler).post(create_asset_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/datasets"),
+            get(historical_data_lake_query_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/datasets/snapshots"),
+            post(create_historical_dataset_snapshot_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/datasets/replay-corpora"),
+            post(create_replay_corpus_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/assets/{{asset_key}}/transition"),
             post(transition_asset_handler),
         )
@@ -395,6 +435,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let strategy_registry = state.strategy_registry_snapshot();
     let research_registry = state.research_registry_snapshot();
     let asset_registry = state.asset_registry_snapshot();
+    let historical_data_lake = state.historical_data_lake_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
     let allocator = state.runtime_allocator_snapshot();
     let risk_engine = state.risk_engine_snapshot();
@@ -405,6 +446,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         && strategy_registry.status == "healthy"
         && research_registry.status == "healthy"
         && asset_registry.status == "healthy"
+        && historical_data_lake.status == "healthy"
         && portfolio_ledger.status == "healthy"
         && allocator.status == "healthy"
         && risk_engine.status == "healthy"
@@ -432,6 +474,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         strategy_registry,
         research_registry,
         asset_registry,
+        historical_data_lake,
         portfolio_ledger,
         allocator,
         risk_engine,
@@ -453,6 +496,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         strategy_registry: state.strategy_registry_snapshot(),
         research_registry: state.research_registry_snapshot(),
         asset_registry: state.asset_registry_snapshot(),
+        historical_data_lake: state.historical_data_lake_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
         allocator: state.runtime_allocator_snapshot(),
         risk_engine: state.risk_engine_snapshot(),
@@ -1425,6 +1469,92 @@ async fn transition_asset_handler(
     ))
 }
 
+async fn historical_data_lake_query_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeHistoricalDataLakeQueryParams>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let filters = query.clone();
+    let registry = state
+        .historical_data_lake
+        .query(&HistoricalDataLakeQuery {
+            dataset_id: query.dataset_id.filter(|value| !value.trim().is_empty()),
+            snapshot_id: query.snapshot_id.filter(|value| !value.trim().is_empty()),
+            corpus_id: query.corpus_id.filter(|value| !value.trim().is_empty()),
+            venue_key: query.venue_key.filter(|value| !value.trim().is_empty()),
+            asset_key: query.asset_key.filter(|value| !value.trim().is_empty()),
+            dataset_kind: query.dataset_kind,
+        })
+        .map_err(map_historical_data_lake_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "filters": filters,
+            "registry": {
+                "datasetSnapshots": registry.dataset_snapshots,
+                "replayCorpora": registry.replay_corpora,
+            },
+        }),
+    ))
+}
+
+async fn create_historical_dataset_snapshot_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeHistoricalDatasetSnapshotRecord =
+        parse_json_body(&body, "invalid-runtime-historical-dataset-snapshot")?;
+    let result = state
+        .historical_data_lake
+        .upsert_dataset_snapshot(&record)
+        .map_err(map_historical_data_lake_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "datasetSnapshot": result.record,
+        }),
+    ))
+}
+
+async fn create_replay_corpus_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeReplayCorpusRecord =
+        parse_json_body(&body, "invalid-runtime-replay-corpus")?;
+    let result = state
+        .historical_data_lake
+        .upsert_replay_corpus(&record)
+        .map_err(map_historical_data_lake_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "replayCorpus": result.record,
+        }),
+    ))
+}
+
 struct ShadowEvaluationResponse {
     created: bool,
     deployment: RuntimeDeploymentRecord,
@@ -2045,6 +2175,60 @@ fn map_asset_registry_error(error: AssetRegistryError) -> JsonPayload {
     }
 }
 
+fn map_historical_data_lake_error(error: HistoricalDataLakeError) -> JsonPayload {
+    match error {
+        HistoricalDataLakeError::DatasetSnapshotNotFound {
+            dataset_id,
+            snapshot_id,
+        } => error_json(
+            StatusCode::NOT_FOUND,
+            "historical-dataset-snapshot-not-found",
+            json!({ "datasetId": dataset_id, "snapshotId": snapshot_id }),
+        ),
+        HistoricalDataLakeError::ReplayCorpusDatasetMissing {
+            corpus_id,
+            dataset_id,
+            snapshot_id,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "replay-corpus-dataset-missing",
+            json!({
+                "corpusId": corpus_id,
+                "datasetId": dataset_id,
+                "snapshotId": snapshot_id,
+            }),
+        ),
+        HistoricalDataLakeError::InvalidDatasetSnapshot {
+            dataset_id,
+            snapshot_id,
+            reason,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-runtime-historical-dataset-snapshot",
+            json!({
+                "datasetId": dataset_id,
+                "snapshotId": snapshot_id,
+                "reason": reason,
+            }),
+        ),
+        HistoricalDataLakeError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-historical-data-lake-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        HistoricalDataLakeError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-historical-data-lake-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        HistoricalDataLakeError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-historical-data-lake-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
 fn deployment_has_kill_switch(deployment: &RuntimeDeploymentRecord) -> bool {
     deployment
         .tags
@@ -2558,6 +2742,9 @@ mod tests {
         assert_eq!(payload.asset_registry.status, "healthy");
         assert_eq!(payload.asset_registry.asset_count, 2);
         assert_eq!(payload.asset_registry.live_asset_count, 2);
+        assert_eq!(payload.historical_data_lake.status, "healthy");
+        assert_eq!(payload.historical_data_lake.dataset_snapshot_count, 2);
+        assert_eq!(payload.historical_data_lake.replay_corpus_count, 1);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.portfolio_ledger.deployment_count, 0);
         assert_eq!(payload.allocator.status, "healthy");
@@ -2599,6 +2786,8 @@ mod tests {
         assert_eq!(payload.research_registry.status, "healthy");
         assert_eq!(payload.asset_registry.status, "healthy");
         assert_eq!(payload.asset_registry.asset_count, 2);
+        assert_eq!(payload.historical_data_lake.status, "healthy");
+        assert_eq!(payload.historical_data_lake.dataset_snapshot_count, 2);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.allocator.status, "healthy");
         assert_eq!(payload.risk_engine.status, "healthy");
@@ -4154,6 +4343,124 @@ mod tests {
         assert_eq!(
             transition_payload["asset"]["updatedAt"],
             json!("2026-03-10T14:30:00.000Z")
+        );
+    }
+
+    #[tokio::test]
+    async fn serves_historical_data_lake_and_accepts_replay_writes() {
+        let router = app(test_config());
+
+        let list_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/datasets?datasetId=dataset_feed_replay_sol_usdc_market_events&snapshotId=snapshot_2026_03_07_seed&corpusId=replay_corpus_sol_usdc_feed_gateway_seed&venueKey=jupiter&assetKey=SOL&datasetKind=market_events")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_payload = read_json(list_response).await;
+        assert_eq!(
+            list_payload["registry"]["datasetSnapshots"][0]["datasetId"],
+            json!("dataset_feed_replay_sol_usdc_market_events")
+        );
+        assert_eq!(
+            list_payload["registry"]["replayCorpora"][0]["corpusId"],
+            json!("replay_corpus_sol_usdc_feed_gateway_seed")
+        );
+
+        let dataset_snapshot = json!({
+            "schemaVersion": "v1",
+            "datasetId": "dataset_feed_replay_sol_usdc_trades",
+            "snapshotId": "snapshot_2026_03_10_candidate",
+            "datasetKind": "trades",
+            "normalizationKind": "normalized",
+            "format": "jsonl",
+            "retentionClass": "research",
+            "capturedAt": "2026-03-10T15:00:00.000Z",
+            "coverageStartAt": "2026-03-10T14:00:00.000Z",
+            "coverageEndAt": "2026-03-10T15:00:00.000Z",
+            "rowCount": 64,
+            "venueKeys": ["jupiter"],
+            "assetKeys": ["SOL", "USDC"],
+            "pairSymbols": ["SOL/USDC"],
+            "chainKeys": ["solana-mainnet"],
+            "uri": "r2://datasets/trades/sol-usdc/2026-03-10.jsonl",
+            "contentDigest": "sha256:trades",
+            "compression": "gzip",
+            "provenance": {
+                "acquisitionKind": "exchange_export",
+                "collectedFrom": "https://api.jupiter.test.local/export/trades",
+                "provider": "jupiter",
+                "collectedAt": "2026-03-10T15:00:00.000Z"
+            },
+            "tags": ["research", "candidate"]
+        });
+        let write_dataset_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/datasets/snapshots")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(dataset_snapshot.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(write_dataset_response.status(), StatusCode::CREATED);
+        let write_dataset_payload = read_json(write_dataset_response).await;
+        assert_eq!(
+            write_dataset_payload["datasetSnapshot"]["datasetId"],
+            json!("dataset_feed_replay_sol_usdc_trades")
+        );
+
+        let replay_corpus = json!({
+            "schemaVersion": "v1",
+            "corpusId": "replay_corpus_sol_usdc_candidate",
+            "title": "Candidate replay corpus",
+            "summary": "Corpus for candidate walk-forward runs.",
+            "replayKind": "feed_gateway_v1",
+            "createdAt": "2026-03-10T15:01:00.000Z",
+            "updatedAt": "2026-03-10T15:01:00.000Z",
+            "venueKeys": ["jupiter"],
+            "assetKeys": ["SOL", "USDC"],
+            "pairSymbols": ["SOL/USDC"],
+            "chainKeys": ["solana-mainnet"],
+            "datasetSnapshots": [
+                {
+                    "datasetId": "dataset_feed_replay_sol_usdc_trades",
+                    "snapshotId": "snapshot_2026_03_10_candidate",
+                    "capturedAt": "2026-03-10T15:00:00.000Z",
+                    "uri": "r2://datasets/trades/sol-usdc/2026-03-10.jsonl",
+                    "contentDigest": "sha256:trades"
+                }
+            ],
+            "deterministicSeed": 42,
+            "tags": ["candidate"]
+        });
+        let write_replay_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/datasets/replay-corpora")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(replay_corpus.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(write_replay_response.status(), StatusCode::CREATED);
+        let write_replay_payload = read_json(write_replay_response).await;
+        assert_eq!(
+            write_replay_payload["replayCorpus"]["corpusId"],
+            json!("replay_corpus_sol_usdc_candidate")
         );
     }
 

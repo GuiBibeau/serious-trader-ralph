@@ -634,6 +634,127 @@ pub struct RuntimeArtifactRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeHistoricalDatasetAcquisitionKind {
+    ExchangeExport,
+    RpcArchive,
+    ResearchFixture,
+    ManualImport,
+    Derived,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeHistoricalDatasetKind {
+    Trades,
+    Bars,
+    OrderBookL2,
+    FundingRates,
+    BorrowRates,
+    ReferenceMetadata,
+    MarketEvents,
+    SlotEvents,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDatasetNormalizationKind {
+    Raw,
+    Normalized,
+    Aggregated,
+    ReplayReady,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDatasetStorageFormat {
+    Json,
+    Jsonl,
+    Parquet,
+    Csv,
+    FixtureJson,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDatasetRetentionClass {
+    Seed,
+    Research,
+    Production,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeReplayCorpusKind {
+    FeedGatewayV1,
+    BarSeriesV1,
+    OrderBookL2V1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeHistoricalDatasetProvenance {
+    pub acquisition_kind: RuntimeHistoricalDatasetAcquisitionKind,
+    pub collected_from: String,
+    pub provider: Option<String>,
+    pub collected_at: String,
+    pub generator: Option<String>,
+    pub generator_revision: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeHistoricalDatasetSnapshotRecord {
+    pub schema_version: String,
+    pub dataset_id: String,
+    pub snapshot_id: String,
+    pub dataset_kind: RuntimeHistoricalDatasetKind,
+    pub normalization_kind: RuntimeDatasetNormalizationKind,
+    pub format: RuntimeDatasetStorageFormat,
+    pub retention_class: RuntimeDatasetRetentionClass,
+    pub captured_at: String,
+    pub coverage_start_at: String,
+    pub coverage_end_at: String,
+    pub row_count: u64,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub pair_symbols: Vec<String>,
+    pub chain_keys: Vec<String>,
+    pub uri: String,
+    pub content_digest: String,
+    pub compression: Option<String>,
+    pub time_bucket_seconds: Option<u64>,
+    pub provenance: RuntimeHistoricalDatasetProvenance,
+    pub sampling_notes: Option<String>,
+    pub compaction_notes: Option<String>,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeReplayCorpusRecord {
+    pub schema_version: String,
+    pub corpus_id: String,
+    pub title: String,
+    pub summary: String,
+    pub replay_kind: RuntimeReplayCorpusKind,
+    pub created_at: String,
+    pub updated_at: String,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub pair_symbols: Vec<String>,
+    pub chain_keys: Vec<String>,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub fixture_uri: Option<String>,
+    pub content_digest: Option<String>,
+    pub deterministic_seed: Option<u64>,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeResearchSourceProvenance {
     pub acquisition_kind: RuntimeResearchSourceAcquisitionKind,

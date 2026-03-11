@@ -53,6 +53,16 @@
       "schemaFile": "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json"
     },
     {
+      "name": "historicalDatasetSnapshot",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/historical_dataset_snapshot",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.historical_dataset_snapshot.v1.schema.json"
+    },
+    {
+      "name": "replayCorpus",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/replay_corpus",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.replay_corpus.v1.schema.json"
+    },
+    {
       "name": "venueCapability",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/venue_capability",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.venue_capability.v1.schema.json"
