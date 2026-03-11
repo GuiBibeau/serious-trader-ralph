@@ -371,8 +371,20 @@ fn fixture_digest() -> Result<String, HistoricalDataLakeError> {
 }
 
 fn fixture_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json")
+    fixture_path_candidates()
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../{FIXTURE_RELATIVE_PATH}"))
+        })
+}
+
+fn fixture_path_candidates() -> Vec<PathBuf> {
+    vec![
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../{FIXTURE_RELATIVE_PATH}")),
+        PathBuf::from(format!("/app/{FIXTURE_RELATIVE_PATH}")),
+        PathBuf::from(format!("./{FIXTURE_RELATIVE_PATH}")),
+    ]
 }
 
 fn validate_dataset_snapshot(
@@ -796,5 +808,13 @@ mod tests {
             result.dataset_snapshots[0].dataset_id,
             "dataset_feed_replay_sol_usdc_market_events"
         );
+    }
+
+    #[test]
+    fn fixture_path_candidates_include_runtime_image_location() {
+        let candidates = fixture_path_candidates();
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate == &PathBuf::from(format!("/app/{FIXTURE_RELATIVE_PATH}"))));
     }
 }
