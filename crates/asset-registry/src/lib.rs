@@ -88,12 +88,23 @@ pub enum AssetRegistryError {
         asset_key: String,
         venue_key: String,
     },
+    #[error("asset {base_asset_key} does not support quote asset {quote_asset_key}")]
+    QuoteAssetUnsupported {
+        base_asset_key: String,
+        quote_asset_key: String,
+    },
     #[error("asset {asset_key} venue {venue_key} mapping is {listing_state:?} and does not support mode {mode:?}")]
     VenueMappingModeUnsupported {
         asset_key: String,
         venue_key: String,
         listing_state: RuntimeAssetListingState,
         mode: RuntimeMode,
+    },
+    #[error("asset {base_asset_key} venue {venue_key} mapping does not support quote asset {quote_asset_key}")]
+    VenueMappingQuoteUnsupported {
+        base_asset_key: String,
+        quote_asset_key: String,
+        venue_key: String,
     },
     #[error("asset mapping not found for venue {venue_key} native id {native_id}")]
     VenueNativeIdNotFound {
@@ -238,6 +249,8 @@ impl AssetRegistry {
         ensure_asset_mode(&quote_asset, &deployment.mode)?;
         ensure_mapping_mode(&base_asset, &deployment.venue_key, &deployment.mode)?;
         ensure_mapping_mode(&quote_asset, &deployment.venue_key, &deployment.mode)?;
+        ensure_quote_pair_supported(&base_asset, &quote_asset)?;
+        ensure_mapping_quote_supported(&base_asset, &quote_asset, &deployment.venue_key)?;
         Ok(SupportedPair {
             base_asset,
             quote_asset,
@@ -536,6 +549,50 @@ fn ensure_mapping_mode(
     })
 }
 
+fn ensure_quote_pair_supported(
+    base_asset: &RuntimeAssetRecord,
+    quote_asset: &RuntimeAssetRecord,
+) -> Result<(), AssetRegistryError> {
+    if base_asset
+        .quote_asset_keys
+        .iter()
+        .any(|asset_key| asset_key == &quote_asset.asset_key)
+    {
+        return Ok(());
+    }
+    Err(AssetRegistryError::QuoteAssetUnsupported {
+        base_asset_key: base_asset.asset_key.clone(),
+        quote_asset_key: quote_asset.asset_key.clone(),
+    })
+}
+
+fn ensure_mapping_quote_supported(
+    base_asset: &RuntimeAssetRecord,
+    quote_asset: &RuntimeAssetRecord,
+    venue_key: &str,
+) -> Result<(), AssetRegistryError> {
+    let mapping = base_asset
+        .venue_mappings
+        .iter()
+        .find(|mapping| mapping.venue_key == venue_key)
+        .ok_or_else(|| AssetRegistryError::VenueMappingMissing {
+            asset_key: base_asset.asset_key.clone(),
+            venue_key: venue_key.to_string(),
+        })?;
+    if mapping
+        .quote_asset_keys
+        .iter()
+        .any(|asset_key| asset_key == &quote_asset.asset_key)
+    {
+        return Ok(());
+    }
+    Err(AssetRegistryError::VenueMappingQuoteUnsupported {
+        base_asset_key: base_asset.asset_key.clone(),
+        quote_asset_key: quote_asset.asset_key.clone(),
+        venue_key: venue_key.to_string(),
+    })
+}
+
 fn validate_asset_record(record: &RuntimeAssetRecord) -> Result<(), AssetRegistryError> {
     if record.asset_key.trim().is_empty() {
         return Err(AssetRegistryError::InvalidRecord {
@@ -817,6 +874,119 @@ mod tests {
         assert!(matches!(
             error,
             AssetRegistryError::VenueMappingModeUnsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn blocks_pairs_when_base_asset_disallows_the_quote_asset() {
+        let registry = registry("quote-allowlist");
+        let mut sol_asset = registry
+            .get_asset("SOL")
+            .expect("asset lookup")
+            .expect("sol asset");
+        sol_asset.quote_asset_keys = vec!["USDT".to_string()];
+        registry.upsert_asset(&sol_asset).expect("asset update");
+
+        let deployment = RuntimeDeploymentRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            deployment_id: "deployment_live_sol_wrong_quote".to_string(),
+            strategy_key: "dca".to_string(),
+            sleeve_id: "sleeve_alpha".to_string(),
+            owner_user_id: "user_123".to_string(),
+            venue_key: "jupiter".to_string(),
+            pair: protocol::RuntimePair {
+                symbol: "SOL/USDC".to_string(),
+                base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            },
+            mode: RuntimeMode::Live,
+            state: protocol::RuntimeDeploymentState::Live,
+            lane: protocol::RuntimeLane::Safe,
+            created_at: "2026-03-10T00:00:00.000Z".to_string(),
+            updated_at: "2026-03-10T00:00:00.000Z".to_string(),
+            promoted_at: Some("2026-03-10T00:00:00.000Z".to_string()),
+            paused_at: None,
+            killed_at: None,
+            policy: protocol::RuntimePolicy {
+                max_notional_usd: "5.00".to_string(),
+                daily_loss_limit_usd: "25.00".to_string(),
+                max_slippage_bps: 50,
+                max_concurrent_runs: 1,
+                rebalance_tolerance_bps: 100,
+            },
+            capital: protocol::RuntimeCapital {
+                allocated_usd: "25.00".to_string(),
+                reserved_usd: "5.00".to_string(),
+                available_usd: "20.00".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let error = registry
+            .ensure_pair_supported(&deployment)
+            .expect_err("quote allowlist mismatch");
+        assert!(matches!(
+            error,
+            AssetRegistryError::QuoteAssetUnsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn blocks_pairs_when_venue_mapping_disallows_the_quote_asset() {
+        let registry = registry("mapping-quote-allowlist");
+        let mut sol_asset = registry
+            .get_asset("SOL")
+            .expect("asset lookup")
+            .expect("sol asset");
+        let mapping = sol_asset
+            .venue_mappings
+            .iter_mut()
+            .find(|mapping| mapping.venue_key == "jupiter")
+            .expect("jupiter mapping");
+        mapping.quote_asset_keys = vec!["USDT".to_string()];
+        registry.upsert_asset(&sol_asset).expect("asset update");
+
+        let deployment = RuntimeDeploymentRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            deployment_id: "deployment_live_sol_mapping_quote".to_string(),
+            strategy_key: "dca".to_string(),
+            sleeve_id: "sleeve_alpha".to_string(),
+            owner_user_id: "user_123".to_string(),
+            venue_key: "jupiter".to_string(),
+            pair: protocol::RuntimePair {
+                symbol: "SOL/USDC".to_string(),
+                base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            },
+            mode: RuntimeMode::Live,
+            state: protocol::RuntimeDeploymentState::Live,
+            lane: protocol::RuntimeLane::Safe,
+            created_at: "2026-03-10T00:00:00.000Z".to_string(),
+            updated_at: "2026-03-10T00:00:00.000Z".to_string(),
+            promoted_at: Some("2026-03-10T00:00:00.000Z".to_string()),
+            paused_at: None,
+            killed_at: None,
+            policy: protocol::RuntimePolicy {
+                max_notional_usd: "5.00".to_string(),
+                daily_loss_limit_usd: "25.00".to_string(),
+                max_slippage_bps: 50,
+                max_concurrent_runs: 1,
+                rebalance_tolerance_bps: 100,
+            },
+            capital: protocol::RuntimeCapital {
+                allocated_usd: "25.00".to_string(),
+                reserved_usd: "5.00".to_string(),
+                available_usd: "20.00".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let error = registry
+            .ensure_pair_supported(&deployment)
+            .expect_err("mapping quote allowlist mismatch");
+        assert!(matches!(
+            error,
+            AssetRegistryError::VenueMappingQuoteUnsupported { .. }
         ));
     }
 }

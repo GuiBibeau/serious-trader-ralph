@@ -1975,6 +1975,17 @@ fn map_asset_registry_error(error: AssetRegistryError) -> JsonPayload {
             "asset-venue-mapping-missing",
             json!({ "assetKey": asset_key, "venueKey": venue_key }),
         ),
+        AssetRegistryError::QuoteAssetUnsupported {
+            base_asset_key,
+            quote_asset_key,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "asset-quote-not-supported",
+            json!({
+                "baseAssetKey": base_asset_key,
+                "quoteAssetKey": quote_asset_key,
+            }),
+        ),
         AssetRegistryError::VenueMappingModeUnsupported {
             asset_key,
             venue_key,
@@ -1988,6 +1999,19 @@ fn map_asset_registry_error(error: AssetRegistryError) -> JsonPayload {
                 "venueKey": venue_key,
                 "listingState": listing_state,
                 "mode": mode,
+            }),
+        ),
+        AssetRegistryError::VenueMappingQuoteUnsupported {
+            base_asset_key,
+            quote_asset_key,
+            venue_key,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "asset-venue-quote-not-supported",
+            json!({
+                "baseAssetKey": base_asset_key,
+                "quoteAssetKey": quote_asset_key,
+                "venueKey": venue_key,
             }),
         ),
         AssetRegistryError::VenueNativeIdNotFound {
