@@ -96,6 +96,12 @@ describe("runtime protocol schema fixtures", () => {
     ).toBe(true);
     expect(
       validate(
+        "docs/runtime-contracts/schemas/runtime.execution_cost_model.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.execution_cost_model.valid.v1.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
         "docs/runtime-contracts/schemas/runtime.venue_capability.v1.schema.json",
         "docs/runtime-contracts/fixtures/runtime.venue_capability.valid.v1.json",
       ),
@@ -134,6 +140,7 @@ describe("runtime protocol schema fixtures", () => {
       "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.historical_dataset_snapshot.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.replay_corpus.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.execution_cost_model.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.venue_capability.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.asset_record.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.strategy_spec.v1.schema.json",

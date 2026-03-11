@@ -11,6 +11,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use cost_model_registry::{
+    CostModelRegistry, CostModelRegistryConfig, CostModelRegistryError, CostModelRegistryQuery,
+    CostModelRegistrySnapshot,
+};
 use exec_client::{
     ExecClient, ExecClientConfig, ExecClientError, ExecReceiptObservation, ExecSubmitResponse,
 };
@@ -29,10 +33,11 @@ use portfolio_ledger::{
 };
 use protocol::{
     RuntimeAssetListingState, RuntimeAssetRecord, RuntimeDeploymentRecord, RuntimeDeploymentState,
-    RuntimeHistoricalDatasetKind, RuntimeHistoricalDatasetSnapshotRecord,
-    RuntimeReplayCorpusRecord, RuntimeResearchEvidenceBundleRecord,
-    RuntimeResearchExperimentRecord, RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord,
-    RuntimeRunRecord,
+    RuntimeExecutionCostModelRecord, RuntimeHistoricalDatasetKind,
+    RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode, RuntimeReplayCorpusRecord,
+    RuntimeResearchEvidenceBundleRecord, RuntimeResearchExperimentRecord,
+    RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord, RuntimeRunRecord,
+    RuntimeVenueMarketType,
 };
 use reconciler::{Reconciler, ReconcilerConfig, ReconcilerError, ReconcilerSnapshot};
 use research_registry::{
@@ -89,6 +94,7 @@ pub struct RuntimeAppState {
     research_registry: ResearchRegistry,
     asset_registry: AssetRegistry,
     historical_data_lake: HistoricalDataLake,
+    cost_model_registry: CostModelRegistry,
     portfolio_ledger: PortfolioLedger,
     runtime_allocator: RuntimeAllocator,
     risk_engine: RiskEngine,
@@ -125,6 +131,9 @@ impl RuntimeAppState {
         let historical_data_lake =
             HistoricalDataLake::new(HistoricalDataLakeConfig::new(config.database_url.clone()))
                 .expect("historical data lake to initialize");
+        let cost_model_registry =
+            CostModelRegistry::new(CostModelRegistryConfig::new(config.database_url.clone()))
+                .expect("cost model registry to initialize");
         let portfolio_ledger =
             PortfolioLedger::new(PortfolioLedgerConfig::new(config.database_url.clone()))
                 .expect("portfolio ledger to initialize");
@@ -160,6 +169,7 @@ impl RuntimeAppState {
             research_registry,
             asset_registry,
             historical_data_lake,
+            cost_model_registry,
             portfolio_ledger,
             runtime_allocator,
             risk_engine,
@@ -196,6 +206,10 @@ impl RuntimeAppState {
 
     fn historical_data_lake_snapshot(&self) -> HistoricalDataLakeSnapshot {
         self.historical_data_lake.snapshot_now()
+    }
+
+    fn cost_model_registry_snapshot(&self) -> CostModelRegistrySnapshot {
+        self.cost_model_registry.snapshot_now()
     }
 
     fn portfolio_ledger_snapshot(&self) -> PortfolioLedgerSnapshot {
@@ -239,6 +253,7 @@ pub struct RuntimeHealthResponse {
     pub research_registry: ResearchRegistrySnapshot,
     pub asset_registry: AssetRegistrySnapshot,
     pub historical_data_lake: HistoricalDataLakeSnapshot,
+    pub cost_model_registry: CostModelRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
@@ -261,6 +276,7 @@ pub struct RuntimeMetricsResponse {
     pub research_registry: ResearchRegistrySnapshot,
     pub asset_registry: AssetRegistrySnapshot,
     pub historical_data_lake: HistoricalDataLakeSnapshot,
+    pub cost_model_registry: CostModelRegistrySnapshot,
     pub portfolio_ledger: PortfolioLedgerSnapshot,
     pub allocator: RuntimeAllocatorSnapshot,
     pub risk_engine: RiskEngineSnapshot,
@@ -315,6 +331,17 @@ struct RuntimeHistoricalDataLakeQueryParams {
     pub venue_key: Option<String>,
     pub asset_key: Option<String>,
     pub dataset_kind: Option<RuntimeHistoricalDatasetKind>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeCostModelQueryParams {
+    pub model_id: Option<String>,
+    pub venue_key: Option<String>,
+    pub asset_key: Option<String>,
+    pub pair_symbol: Option<String>,
+    pub market_type: Option<RuntimeVenueMarketType>,
+    pub mode: Option<RuntimeMode>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -413,6 +440,10 @@ pub fn app(config: RuntimeConfig) -> Router {
             post(create_replay_corpus_handler),
         )
         .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/cost-models"),
+            get(cost_model_query_handler).post(create_cost_model_handler),
+        )
+        .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/assets/{{asset_key}}/transition"),
             post(transition_asset_handler),
         )
@@ -436,6 +467,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
     let research_registry = state.research_registry_snapshot();
     let asset_registry = state.asset_registry_snapshot();
     let historical_data_lake = state.historical_data_lake_snapshot();
+    let cost_model_registry = state.cost_model_registry_snapshot();
     let portfolio_ledger = state.portfolio_ledger_snapshot();
     let allocator = state.runtime_allocator_snapshot();
     let risk_engine = state.risk_engine_snapshot();
@@ -447,6 +479,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         && research_registry.status == "healthy"
         && asset_registry.status == "healthy"
         && historical_data_lake.status == "healthy"
+        && cost_model_registry.status == "healthy"
         && portfolio_ledger.status == "healthy"
         && allocator.status == "healthy"
         && risk_engine.status == "healthy"
@@ -475,6 +508,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         research_registry,
         asset_registry,
         historical_data_lake,
+        cost_model_registry,
         portfolio_ledger,
         allocator,
         risk_engine,
@@ -497,6 +531,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         research_registry: state.research_registry_snapshot(),
         asset_registry: state.asset_registry_snapshot(),
         historical_data_lake: state.historical_data_lake_snapshot(),
+        cost_model_registry: state.cost_model_registry_snapshot(),
         portfolio_ledger: state.portfolio_ledger_snapshot(),
         allocator: state.runtime_allocator_snapshot(),
         risk_engine: state.risk_engine_snapshot(),
@@ -1101,6 +1136,10 @@ async fn scorecards_handler(
         .portfolio_ledger
         .snapshot_for_deployment(&deployment_id)
         .map_err(map_ledger_error)?;
+    let cost_model = state
+        .cost_model_registry
+        .select_for_deployment(&deployment)
+        .map_err(map_cost_model_registry_error)?;
     let report = build_readiness_report(
         &RuntimeScorecardConfig::default(),
         &RuntimeScorecardInput {
@@ -1108,6 +1147,7 @@ async fn scorecards_handler(
             runs,
             verdicts,
             plans,
+            cost_model,
             allocator_decisions,
             submit_attempt_count: reconciliation_bundle.submit_attempts.len() as u64,
             receipt_count: reconciliation_bundle.receipts.len() as u64,
@@ -1555,6 +1595,64 @@ async fn create_replay_corpus_handler(
     ))
 }
 
+async fn cost_model_query_handler(
+    headers: HeaderMap,
+    Query(query): Query<RuntimeCostModelQueryParams>,
+    State(state): State<RuntimeAppState>,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let filters = query.clone();
+    let registry = state
+        .cost_model_registry
+        .query(&CostModelRegistryQuery {
+            model_id: query.model_id.filter(|value| !value.trim().is_empty()),
+            venue_key: query.venue_key.filter(|value| !value.trim().is_empty()),
+            asset_key: query.asset_key.filter(|value| !value.trim().is_empty()),
+            pair_symbol: query.pair_symbol.filter(|value| !value.trim().is_empty()),
+            market_type: query.market_type,
+            mode: query.mode,
+        })
+        .map_err(map_cost_model_registry_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "filters": filters,
+            "registry": {
+                "costModels": registry,
+            },
+        }),
+    ))
+}
+
+async fn create_cost_model_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeExecutionCostModelRecord =
+        parse_json_body(&body, "invalid-runtime-execution-cost-model")?;
+    let result = state
+        .cost_model_registry
+        .upsert_model(&record)
+        .map_err(map_cost_model_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "costModel": result.record,
+        }),
+    ))
+}
+
 struct ShadowEvaluationResponse {
     created: bool,
     deployment: RuntimeDeploymentRecord,
@@ -1972,6 +2070,11 @@ fn map_scorecard_error(error: RuntimeScorecardError) -> JsonPayload {
             "runtime-scorecard-error",
             json!({ "field": field, "value": value }),
         ),
+        RuntimeScorecardError::InvalidTimestamp { field, value } => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-scorecard-error",
+            json!({ "field": field, "value": value }),
+        ),
     }
 }
 
@@ -2011,6 +2114,49 @@ fn map_allocator_error(error: RuntimeAllocatorError) -> JsonPayload {
         RuntimeAllocatorError::Serialization(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime-allocator-error",
+            json!({ "reason": error.to_string() }),
+        ),
+    }
+}
+
+fn map_cost_model_registry_error(error: CostModelRegistryError) -> JsonPayload {
+    match error {
+        CostModelRegistryError::InvalidModel { model_id, reason } => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-execution-cost-model",
+            json!({ "modelId": model_id, "reason": reason }),
+        ),
+        CostModelRegistryError::DatasetSnapshotMissing {
+            model_id,
+            dataset_id,
+            snapshot_id,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "execution-cost-model-dataset-missing",
+            json!({
+                "modelId": model_id,
+                "datasetId": dataset_id,
+                "snapshotId": snapshot_id,
+            }),
+        ),
+        CostModelRegistryError::ModelNotFound { model_id } => error_json(
+            StatusCode::NOT_FOUND,
+            "execution-cost-model-not-found",
+            json!({ "modelId": model_id }),
+        ),
+        CostModelRegistryError::Io(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-execution-cost-model-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        CostModelRegistryError::Storage(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-execution-cost-model-error",
+            json!({ "reason": error.to_string() }),
+        ),
+        CostModelRegistryError::Serialization(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime-execution-cost-model-error",
             json!({ "reason": error.to_string() }),
         ),
     }
@@ -2745,6 +2891,9 @@ mod tests {
         assert_eq!(payload.historical_data_lake.status, "healthy");
         assert_eq!(payload.historical_data_lake.dataset_snapshot_count, 2);
         assert_eq!(payload.historical_data_lake.replay_corpus_count, 1);
+        assert_eq!(payload.cost_model_registry.status, "healthy");
+        assert_eq!(payload.cost_model_registry.model_count, 3);
+        assert_eq!(payload.cost_model_registry.active_model_count, 3);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.portfolio_ledger.deployment_count, 0);
         assert_eq!(payload.allocator.status, "healthy");
@@ -2788,6 +2937,8 @@ mod tests {
         assert_eq!(payload.asset_registry.asset_count, 2);
         assert_eq!(payload.historical_data_lake.status, "healthy");
         assert_eq!(payload.historical_data_lake.dataset_snapshot_count, 2);
+        assert_eq!(payload.cost_model_registry.status, "healthy");
+        assert_eq!(payload.cost_model_registry.model_count, 3);
         assert_eq!(payload.portfolio_ledger.status, "healthy");
         assert_eq!(payload.allocator.status, "healthy");
         assert_eq!(payload.risk_engine.status, "healthy");
@@ -4462,6 +4613,86 @@ mod tests {
             write_replay_payload["replayCorpus"]["corpusId"],
             json!("replay_corpus_sol_usdc_candidate")
         );
+    }
+
+    #[tokio::test]
+    async fn serves_cost_model_registry_and_accepts_writes() {
+        let router = app(test_config());
+
+        let list_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/cost-models?venueKey=jupiter&assetKey=SOL&pairSymbol=SOL%2FUSDC&marketType=spot&mode=paper")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_payload = read_json(list_response).await;
+        assert_eq!(
+            list_payload["registry"]["costModels"][0]["modelId"],
+            json!("cost_model_jupiter_sol_usdc_spot")
+        );
+
+        let cost_model = json!({
+            "schemaVersion": "v1",
+            "modelId": "cost_model_jupiter_sol_usdc_candidate",
+            "venueKey": "jupiter",
+            "marketType": "spot",
+            "pairSymbol": "SOL/USDC",
+            "instrumentId": "SOL/USDC",
+            "assetKeys": ["SOL", "USDC"],
+            "modeCoverage": ["shadow", "paper"],
+            "status": "draft",
+            "assumptions": {
+                "feeBps": 10,
+                "slippageBps": 30,
+                "marketImpactBps": 15,
+                "partialFillRateBps": 50,
+                "partialFillPenaltyBps": 10
+            },
+            "latencyProfile": {
+                "expectedQuoteMs": 275,
+                "expectedSubmitMs": 800,
+                "expectedSettlementMs": 5500
+            },
+            "datasetSnapshots": [
+                {
+                    "datasetId": "dataset_feed_replay_sol_usdc_market_events",
+                    "snapshotId": "snapshot_2026_03_07_seed",
+                    "capturedAt": "2026-03-10T00:00:00.000Z",
+                    "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+                    "contentDigest": "sha256:fixture"
+                }
+            ],
+            "createdAt": "2026-03-10T15:05:00.000Z",
+            "updatedAt": "2026-03-10T15:05:00.000Z",
+            "tags": ["candidate", "spot"]
+        });
+
+        let write_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/cost-models")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(cost_model.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(write_response.status(), StatusCode::CREATED);
+        let write_payload = read_json(write_response).await;
+        assert_eq!(
+            write_payload["costModel"]["modelId"],
+            json!("cost_model_jupiter_sol_usdc_candidate")
+        );
+        assert_eq!(write_payload["costModel"]["status"], json!("draft"));
     }
 
     #[tokio::test]

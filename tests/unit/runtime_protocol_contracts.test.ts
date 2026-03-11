@@ -5,6 +5,7 @@ import {
   canTransitionRuntimeRunState,
   parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
+  parseRuntimeExecutionCostModelRecord,
   parseRuntimeExecutionPlan,
   parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeLedgerSnapshot,
@@ -310,6 +311,41 @@ describe("runtime protocol contracts", () => {
       deterministicSeed: 100,
       tags: ["seed", "replay"],
     });
+    const costModel = parseRuntimeExecutionCostModelRecord({
+      schemaVersion: "v1",
+      modelId: "cost_model_jupiter_sol_usdc_spot",
+      venueKey: "jupiter",
+      marketType: "spot",
+      pairSymbol: "SOL/USDC",
+      instrumentId: "SOL/USDC",
+      assetKeys: ["SOL", "USDC"],
+      modeCoverage: ["shadow", "paper", "live"],
+      status: "active",
+      assumptions: {
+        feeBps: 8,
+        slippageBps: 22,
+        marketImpactBps: 12,
+        partialFillRateBps: 50,
+        partialFillPenaltyBps: 12,
+      },
+      latencyProfile: {
+        expectedQuoteMs: 250,
+        expectedSubmitMs: 750,
+        expectedSettlementMs: 5000,
+      },
+      datasetSnapshots: [
+        {
+          datasetId: datasetSnapshot.datasetId,
+          snapshotId: datasetSnapshot.snapshotId,
+          capturedAt: datasetSnapshot.capturedAt,
+          uri: datasetSnapshot.uri,
+          contentDigest: datasetSnapshot.contentDigest,
+        },
+      ],
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:00.000Z",
+      tags: ["seed", "spot"],
+    });
     const experiment = parseRuntimeResearchExperimentRecord({
       schemaVersion: "v1",
       experimentId: "experiment_signal_trend_shadow",
@@ -500,6 +536,7 @@ describe("runtime protocol contracts", () => {
     expect(sourceRecord.sourceKind).toBe("paper");
     expect(datasetSnapshot.datasetKind).toBe("market_events");
     expect(replayCorpus.replayKind).toBe("feed_gateway_v1");
+    expect(costModel.marketType).toBe("spot");
     expect(experiment.datasetSnapshots).toHaveLength(1);
     expect(evidenceBundle.promotionTarget).toBe("paper");
     expect(venueCapability.adapterKeys).toContain("jupiter");

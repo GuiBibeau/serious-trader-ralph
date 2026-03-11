@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 axum.workspace = true
 asset-registry = { path = "../../crates/asset-registry" }
+cost-model-registry = { path = "../../crates/cost-model-registry" }
 execution-planner = { path = "../../crates/execution-planner" }
 exec-client = { path = "../../crates/exec-client" }
 feature-cache = { path = "../../crates/feature-cache" }
