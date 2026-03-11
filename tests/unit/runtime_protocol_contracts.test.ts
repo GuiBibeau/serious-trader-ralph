@@ -13,6 +13,7 @@ import {
   parseRuntimeResearchSourceRecord,
   parseRuntimeRiskVerdict,
   parseRuntimeRunRecord,
+  parseRuntimeStrategySpec,
   RUNTIME_DEPLOYMENT_STATE_TRANSITIONS,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
   RUNTIME_RUN_STATE_TRANSITIONS,
@@ -301,6 +302,62 @@ describe("runtime protocol contracts", () => {
       summary: "Evidence bundle for shadow-to-paper review.",
       tags: ["promotion"],
     });
+    const strategySpec = parseRuntimeStrategySpec({
+      schemaVersion: "v1",
+      strategyKey: "trend_following",
+      title: "Trend following",
+      summary:
+        "Follows the short-window return direction from the feature cache.",
+      category: "signal",
+      pluginKey: "builtin::trend_following",
+      defaultLane: "safe",
+      supportedModes: ["shadow", "paper", "live"],
+      laneEligibility: ["safe", "protected"],
+      supportedVenues: [
+        {
+          venueKey: "jupiter",
+          onboardingState: "broad_live_ready",
+        },
+      ],
+      assetConstraints: [
+        {
+          role: "base",
+          assetKeys: [],
+          required: true,
+        },
+        {
+          role: "quote",
+          assetKeys: ["USDC"],
+          required: true,
+        },
+      ],
+      featureRequirements: [
+        {
+          featureKey: "short_return_bps",
+          required: true,
+          freshnessMs: 20000,
+        },
+      ],
+      parameterSpecs: [
+        {
+          key: "policy.max_notional_usd",
+          label: "Max notional USD",
+          kind: "decimal",
+          required: true,
+          defaultValue: "25",
+          allowedValues: [],
+        },
+      ],
+      promotionPolicy: {
+        requiresHumanApproval: true,
+        shadowMinRuns: 5,
+        paperMinRuns: 7,
+        liveLaneAllowlist: ["safe"],
+        requiresFreshFeatures: true,
+        limitedLiveOnly: true,
+      },
+      tags: ["builtin", "signal"],
+    });
 
     expect(run.state).toBe("planned");
     expect(ledger.totals.availableUsd).toBe("95");
@@ -313,6 +370,7 @@ describe("runtime protocol contracts", () => {
     expect(sourceRecord.sourceKind).toBe("paper");
     expect(experiment.datasetSnapshots).toHaveLength(1);
     expect(evidenceBundle.promotionTarget).toBe("paper");
+    expect(strategySpec.pluginKey).toBe("builtin::trend_following");
   });
 
   test("rejects an execution plan without slices", () => {

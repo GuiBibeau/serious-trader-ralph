@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "v1",
+  "strategyKey": "trend_following",
+  "title": "Trend following",
+  "summary": "Follows the short-window return direction from the feature cache.",
+  "category": "signal",
+  "pluginKey": "builtin::trend_following",
+  "defaultLane": "safe",
+  "supportedModes": ["shadow", "paper", "live"],
+  "laneEligibility": ["safe", "protected"],
+  "supportedVenues": [
+    {
+      "venueKey": "jupiter",
+      "onboardingState": "broad_live_ready",
+      "notes": "Current runtime execution and canary coverage is bounded to the Jupiter bridge."
+    }
+  ],
+  "assetConstraints": [
+    {
+      "role": "base",
+      "assetKeys": [],
+      "required": true,
+      "notes": "The base asset is selected from the deployment pair at registration time."
+    },
+    {
+      "role": "quote",
+      "assetKeys": ["USDC"],
+      "required": true,
+      "notes": "The quote leg must remain USD-denominated for current budgeting and canary controls."
+    }
+  ],
+  "featureRequirements": [
+    {
+      "featureKey": "short_return_bps",
+      "required": true,
+      "freshnessMs": 20000,
+      "notes": "Requires fresh short-window return inputs for every evaluation."
+    }
+  ],
+  "parameterSpecs": [
+    {
+      "key": "policy.max_notional_usd",
+      "label": "Max notional USD",
+      "kind": "decimal",
+      "required": true,
+      "defaultValue": "25",
+      "minValue": "0.01",
+      "allowedValues": [],
+      "notes": "Upper bound for any single evaluation or slice."
+    },
+    {
+      "key": "policy.max_slippage_bps",
+      "label": "Max slippage bps",
+      "kind": "bps",
+      "required": true,
+      "defaultValue": "50",
+      "minValue": "1",
+      "maxValue": "250",
+      "allowedValues": [],
+      "notes": "Execution slippage ceiling enforced by the runtime bridge."
+    },
+    {
+      "key": "policy.daily_loss_limit_usd",
+      "label": "Daily loss limit USD",
+      "kind": "decimal",
+      "required": true,
+      "defaultValue": "10",
+      "minValue": "0",
+      "allowedValues": [],
+      "notes": "Daily stop-loss cap enforced by runtime risk controls."
+    }
+  ],
+  "promotionPolicy": {
+    "requiresHumanApproval": true,
+    "shadowMinRuns": 5,
+    "paperMinRuns": 7,
+    "liveLaneAllowlist": ["safe"],
+    "requiresFreshFeatures": true,
+    "limitedLiveOnly": true,
+    "notes": "Signal-driven templates require fresh features and remain bounded to safe-lane live rollout."
+  },
+  "tags": ["builtin", "signal"]
+}

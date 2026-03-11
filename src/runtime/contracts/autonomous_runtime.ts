@@ -379,6 +379,106 @@ export const RuntimeResearchEvidenceBundleRecordSchema = VersionedSchema.extend(
   },
 ).strict();
 
+export const RuntimeStrategyCategorySchema = z.enum([
+  "allocation",
+  "signal",
+  "advanced",
+]);
+
+export const RuntimeStrategyParameterKindSchema = z.enum([
+  "decimal",
+  "integer",
+  "bps",
+  "boolean",
+  "enum",
+]);
+
+export const RuntimeStrategyAssetRoleSchema = z.enum([
+  "base",
+  "quote",
+  "either",
+]);
+
+export const RuntimeOnboardingStateSchema = z.enum([
+  "candidate",
+  "integrated",
+  "shadow_ready",
+  "paper_ready",
+  "limited_live_ready",
+  "broad_live_ready",
+  "paused",
+  "deprecated",
+]);
+
+const RuntimeStrategyVenueSupportSchema = z
+  .object({
+    venueKey: NON_EMPTY_STRING_SCHEMA,
+    onboardingState: RuntimeOnboardingStateSchema,
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeStrategyAssetConstraintSchema = z
+  .object({
+    role: RuntimeStrategyAssetRoleSchema,
+    assetKeys: z.array(NON_EMPTY_STRING_SCHEMA),
+    required: z.boolean(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeStrategyFeatureRequirementSchema = z
+  .object({
+    featureKey: NON_EMPTY_STRING_SCHEMA,
+    required: z.boolean(),
+    freshnessMs: z.number().int().positive().optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeStrategyParameterSpecSchema = z
+  .object({
+    key: NON_EMPTY_STRING_SCHEMA,
+    label: NON_EMPTY_STRING_SCHEMA,
+    kind: RuntimeStrategyParameterKindSchema,
+    required: z.boolean(),
+    defaultValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    minValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    maxValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    allowedValues: z.array(NON_EMPTY_STRING_SCHEMA),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeStrategyPromotionPolicySchema = z
+  .object({
+    requiresHumanApproval: z.boolean(),
+    shadowMinRuns: z.number().int().nonnegative(),
+    paperMinRuns: z.number().int().nonnegative(),
+    liveLaneAllowlist: z.array(RuntimeLaneSchema),
+    requiresFreshFeatures: z.boolean(),
+    limitedLiveOnly: z.boolean(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+export const RuntimeStrategySpecSchema = VersionedSchema.extend({
+  strategyKey: NON_EMPTY_STRING_SCHEMA,
+  title: NON_EMPTY_STRING_SCHEMA,
+  summary: NON_EMPTY_STRING_SCHEMA,
+  category: RuntimeStrategyCategorySchema,
+  pluginKey: NON_EMPTY_STRING_SCHEMA,
+  defaultLane: RuntimeLaneSchema,
+  supportedModes: z.array(RuntimeModeSchema).min(1),
+  laneEligibility: z.array(RuntimeLaneSchema).min(1),
+  supportedVenues: z.array(RuntimeStrategyVenueSupportSchema).min(1),
+  assetConstraints: z.array(RuntimeStrategyAssetConstraintSchema).min(1),
+  featureRequirements: z.array(RuntimeStrategyFeatureRequirementSchema),
+  parameterSpecs: z.array(RuntimeStrategyParameterSpecSchema),
+  promotionPolicy: RuntimeStrategyPromotionPolicySchema,
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+}).strict();
+
 export type RuntimeMode = z.infer<typeof RuntimeModeSchema>;
 export type RuntimeLane = z.infer<typeof RuntimeLaneSchema>;
 export type RuntimeDeploymentState = z.infer<
@@ -407,6 +507,7 @@ export type RuntimeResearchExperimentRecord = z.infer<
 export type RuntimeResearchEvidenceBundleRecord = z.infer<
   typeof RuntimeResearchEvidenceBundleRecordSchema
 >;
+export type RuntimeStrategySpec = z.infer<typeof RuntimeStrategySpecSchema>;
 
 export const RUNTIME_DEPLOYMENT_STATE_TRANSITIONS = {
   draft: ["shadow", "paper", "live", "archived"],
@@ -488,6 +589,11 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
       "https://trader-ralph.com/schemas/runtime/v1/research_evidence_bundle",
     outputFile: "runtime.research_evidence_bundle.v1.schema.json",
   },
+  strategySpec: {
+    schema: RuntimeStrategySpecSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/strategy_spec",
+    outputFile: "runtime.strategy_spec.v1.schema.json",
+  },
 } as const;
 
 export function canTransitionRuntimeDeploymentState(
@@ -566,6 +672,10 @@ export function parseRuntimeResearchEvidenceBundleRecord(
   return RuntimeResearchEvidenceBundleRecordSchema.parse(input);
 }
 
+export function parseRuntimeStrategySpec(input: unknown): RuntimeStrategySpec {
+  return RuntimeStrategySpecSchema.parse(input);
+}
+
 export function safeParseRuntimeDeploymentRecord(input: unknown) {
   return RuntimeDeploymentRecordSchema.safeParse(input);
 }
@@ -604,4 +714,8 @@ export function safeParseRuntimeResearchExperimentRecord(input: unknown) {
 
 export function safeParseRuntimeResearchEvidenceBundleRecord(input: unknown) {
   return RuntimeResearchEvidenceBundleRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategySpec(input: unknown) {
+  return RuntimeStrategySpecSchema.safeParse(input);
 }

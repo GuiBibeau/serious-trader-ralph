@@ -16,19 +16,27 @@ autonomous runtime and strategy-lab research program.
 - Schema manifest: `docs/runtime-contracts/schema-manifest.v1.json`
 - Example fixtures: `docs/runtime-contracts/fixtures/*.json`
 
+The runtime contract set now also includes:
+
+- research lifecycle records for hypotheses, sources, experiments, and
+  evidence bundles,
+- the versioned `RuntimeStrategySpec` artifact used to describe strategy
+  parameters, feature requirements, venue support, asset constraints, and
+  promotion policy,
+- backward-compatible fixtures proving the Worker and Rust runtime can parse
+  the same strategy ABI.
+
 Generate or refresh the schemas with:
 
 ```bash
 bun run contracts:runtime:schemas
 ```
 
-## Intended Rust integration
+## Rust integration
 
-Runtime-rs does not exist in the repo yet. The agreed hook for later issues is:
-
-- `crates/protocol` or `services/runtime-rs` should consume the JSON Schemas and
-  manifest from this directory,
-- any Rust-side structs or serde codegen must derive from the same checked-in
-  schema set,
-- no private runtime route should ship before the Worker and runtime agree on
-  these artifacts.
+- `crates/protocol` mirrors these schemas directly for the runtime hot path.
+- `crates/strategy-core` consumes the shared `RuntimeStrategySpec` contract for
+  the built-in strategy catalog.
+- `services/runtime-rs` and `apps/worker` both consume the same checked-in
+  schema set; no private runtime route should ship before those surfaces agree
+  on these artifacts.

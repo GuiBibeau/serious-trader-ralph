@@ -69,6 +69,15 @@ The bounded live bridge remains intentionally narrow in v1:
 - `runtime.shadowOnly` must be disabled explicitly through Worker ops controls
 - non-live runtime plans still coordinate synthetically through the Worker bridge
 
+Strategy selection is no longer hardcoded as a raw `strategy_key` allowlist:
+
+- `crates/strategy-core` owns the built-in `RuntimeStrategySpec` catalog
+- `crates/strategy-registry` validates deployments against that catalog
+- `crates/execution-planner` loads repo-owned strategy plugins from the same
+  contract surface
+- new strategies can be added by registering a new StrategySpec and planner
+  plugin without widening the public Worker API
+
 ## Local commands
 
 ```bash

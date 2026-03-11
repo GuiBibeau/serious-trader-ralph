@@ -1,17 +1,20 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use feature_cache::DerivedMarketFeatureSnapshot;
 use protocol::{
     RuntimeDeploymentRecord, RuntimeExecutionAction, RuntimeExecutionPlan, RuntimeExecutionSlice,
     RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerSnapshot, RuntimeMode, RuntimeRiskDecision,
-    RuntimeRiskVerdict, RuntimeRunRecord, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeRiskVerdict, RuntimeRunRecord, RuntimeStrategySpec, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use strategy_core::{StrategyCatalog, StrategyCatalogError, StrategyKind, SUPPORTED_STRATEGIES};
 use thiserror::Error;
 use time::OffsetDateTime;
 
@@ -32,6 +35,7 @@ impl ExecutionPlannerConfig {
 #[derive(Debug, Clone)]
 pub struct ExecutionPlanner {
     database_path: PathBuf,
+    strategy_plugins: Arc<StrategyPluginRegistry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,16 +63,37 @@ pub struct ExecutionPlanningResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SwapDirection {
+pub enum SwapDirection {
     BuyBase,
     SellBase,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StrategyTradeDecision {
-    action: RuntimeExecutionAction,
-    direction: SwapDirection,
-    notional_cents: i64,
+pub struct StrategyTradeDecision {
+    pub action: RuntimeExecutionAction,
+    pub direction: SwapDirection,
+    pub notional_cents: i64,
+}
+
+pub trait StrategyPlugin: Send + Sync + std::fmt::Debug {
+    fn spec(&self) -> &RuntimeStrategySpec;
+
+    fn trade_decision(
+        &self,
+        input: &ExecutionPlannerInput,
+    ) -> Result<StrategyTradeDecision, ExecutionPlannerError>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StrategyPluginRegistry {
+    catalog: StrategyCatalog,
+    plugins: BTreeMap<String, Arc<dyn StrategyPlugin>>,
+}
+
+#[derive(Debug, Clone)]
+struct BuiltinStrategyPlugin {
+    spec: RuntimeStrategySpec,
+    planner: fn(&ExecutionPlannerInput) -> Result<StrategyTradeDecision, ExecutionPlannerError>,
 }
 
 const BREAKOUT_SIGNAL_THRESHOLD_BPS: f64 = 15.0;
@@ -79,6 +104,76 @@ const VOLATILITY_TARGET_MEDIUM_THRESHOLD_BPS: f64 = 20.0;
 const VOLATILITY_TARGET_LOW_BPS: i64 = 7_500;
 const VOLATILITY_TARGET_MEDIUM_BPS: i64 = 5_000;
 const VOLATILITY_TARGET_HIGH_BPS: i64 = 2_500;
+
+impl BuiltinStrategyPlugin {
+    fn new(kind: StrategyKind) -> Self {
+        Self {
+            spec: kind.spec(),
+            planner: match kind {
+                StrategyKind::Dca => dca_trade_decision,
+                StrategyKind::ThresholdRebalance => threshold_rebalance_trade_decision,
+                StrategyKind::Twap => twap_trade_decision,
+                StrategyKind::TrendFollowing => trend_following_trade_decision,
+                StrategyKind::MeanReversion => mean_reversion_trade_decision,
+                StrategyKind::Breakout => breakout_trade_decision,
+                StrategyKind::MacroRotation => macro_rotation_trade_decision,
+                StrategyKind::VolatilityTarget => volatility_target_trade_decision,
+            },
+        }
+    }
+}
+
+impl StrategyPlugin for BuiltinStrategyPlugin {
+    fn spec(&self) -> &RuntimeStrategySpec {
+        &self.spec
+    }
+
+    fn trade_decision(
+        &self,
+        input: &ExecutionPlannerInput,
+    ) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+        (self.planner)(input)
+    }
+}
+
+impl StrategyPluginRegistry {
+    pub fn builtin() -> Result<Self, ExecutionPlannerError> {
+        let mut registry = Self::default();
+        for strategy in SUPPORTED_STRATEGIES {
+            registry.register_plugin(BuiltinStrategyPlugin::new(strategy))?;
+        }
+        Ok(registry)
+    }
+
+    pub fn register_plugin<P>(&mut self, plugin: P) -> Result<(), ExecutionPlannerError>
+    where
+        P: StrategyPlugin + 'static,
+    {
+        let strategy_key = plugin.spec().strategy_key.clone();
+        self.catalog.register_spec(plugin.spec().clone())?;
+        self.plugins.insert(strategy_key, Arc::new(plugin));
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn catalog(&self) -> StrategyCatalog {
+        self.catalog.clone()
+    }
+
+    #[must_use]
+    pub fn strategy_specs(&self) -> Vec<RuntimeStrategySpec> {
+        self.catalog.specs()
+    }
+
+    #[must_use]
+    pub fn supported_strategy_keys(&self) -> Vec<String> {
+        self.catalog.keys()
+    }
+
+    fn get(&self, strategy_key: &str) -> Option<&Arc<dyn StrategyPlugin>> {
+        self.plugins.get(strategy_key)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ExecutionPlannerError {
@@ -96,18 +191,39 @@ pub enum ExecutionPlannerError {
     RiskNotAllowed { verdict_id: String },
     #[error("execution plan {plan_id} not found")]
     PlanNotFound { plan_id: String },
+    #[error("unsupported strategy key: {0}")]
+    UnsupportedStrategy(String),
+    #[error(transparent)]
+    StrategyCatalog(#[from] StrategyCatalogError),
 }
 
 impl ExecutionPlanner {
     pub fn new(config: ExecutionPlannerConfig) -> Result<Self, ExecutionPlannerError> {
+        Self::with_plugins(config, StrategyPluginRegistry::builtin()?)
+    }
+
+    pub fn with_plugins(
+        config: ExecutionPlannerConfig,
+        strategy_plugins: StrategyPluginRegistry,
+    ) -> Result<Self, ExecutionPlannerError> {
         let requested_path = normalize_database_path(&config.database_url);
-        match Self::initialize_at_path(requested_path.clone()) {
+        match Self::initialize_at_path(requested_path.clone(), strategy_plugins.clone()) {
             Ok(planner) => Ok(planner),
             Err(error) if should_fallback_to_tmp(&requested_path, &error) => {
-                Self::initialize_at_path(fallback_database_path())
+                Self::initialize_at_path(fallback_database_path(), strategy_plugins)
             }
             Err(error) => Err(error),
         }
+    }
+
+    #[must_use]
+    pub fn supported_strategy_keys(&self) -> Vec<String> {
+        self.strategy_plugins.supported_strategy_keys()
+    }
+
+    #[must_use]
+    pub fn strategy_specs(&self) -> Vec<RuntimeStrategySpec> {
+        self.strategy_plugins.strategy_specs()
     }
 
     pub fn plan_and_store(
@@ -125,7 +241,7 @@ impl ExecutionPlanner {
             });
         }
 
-        let plan = build_plan(input)?;
+        let plan = build_plan(&self.strategy_plugins, input)?;
         persist_plan(&transaction, &plan)?;
         transaction.commit()?;
 
@@ -206,7 +322,10 @@ impl ExecutionPlanner {
         Ok(connection)
     }
 
-    fn initialize_at_path(database_path: PathBuf) -> Result<Self, ExecutionPlannerError> {
+    fn initialize_at_path(
+        database_path: PathBuf,
+        strategy_plugins: StrategyPluginRegistry,
+    ) -> Result<Self, ExecutionPlannerError> {
         if database_path != Path::new(":memory:") {
             if let Some(parent) = database_path
                 .parent()
@@ -215,7 +334,10 @@ impl ExecutionPlanner {
                 fs::create_dir_all(parent)?;
             }
         }
-        let planner = Self { database_path };
+        let planner = Self {
+            database_path,
+            strategy_plugins: Arc::new(strategy_plugins),
+        };
         let connection = planner.open_connection()?;
         initialize_schema(&connection)?;
         Ok(planner)
@@ -276,11 +398,14 @@ fn should_fallback_to_tmp(database_path: &Path, error: &ExecutionPlannerError) -
         | ExecutionPlannerError::InvalidUsdAmount { .. }
         | ExecutionPlannerError::InvalidNumericValue { .. }
         | ExecutionPlannerError::RiskNotAllowed { .. }
-        | ExecutionPlannerError::PlanNotFound { .. } => false,
+        | ExecutionPlannerError::PlanNotFound { .. }
+        | ExecutionPlannerError::UnsupportedStrategy(_)
+        | ExecutionPlannerError::StrategyCatalog(_) => false,
     }
 }
 
 fn build_plan(
+    strategy_plugins: &StrategyPluginRegistry,
     input: &ExecutionPlannerInput,
 ) -> Result<RuntimeExecutionPlan, ExecutionPlannerError> {
     if input.risk_verdict.verdict != RuntimeRiskDecision::Allow {
@@ -291,7 +416,7 @@ fn build_plan(
 
     let lane = selected_lane(&input.deployment);
     let (simulate_only, dry_run) = execution_flags(&input.deployment.mode);
-    let decision = strategy_trade_decision(input)?;
+    let decision = strategy_trade_decision(strategy_plugins, input)?;
     let mid_price = parse_decimal(
         "featureSnapshot.midPriceUsd",
         &input.feature_snapshot.mid_price_usd,
@@ -366,52 +491,118 @@ fn build_plan(
 }
 
 fn strategy_trade_decision(
+    strategy_plugins: &StrategyPluginRegistry,
     input: &ExecutionPlannerInput,
 ) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
-    let base_notional_cents = desired_notional_cents(&input.deployment)?;
-    let short_signal = input
+    let plugin = strategy_plugins
+        .get(&input.deployment.strategy_key)
+        .ok_or_else(|| {
+            ExecutionPlannerError::UnsupportedStrategy(input.deployment.strategy_key.clone())
+        })?;
+    plugin.trade_decision(input)
+}
+
+fn dca_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    Ok(StrategyTradeDecision {
+        action: RuntimeExecutionAction::Buy,
+        direction: SwapDirection::BuyBase,
+        notional_cents: desired_notional_cents(&input.deployment)?,
+    })
+}
+
+fn threshold_rebalance_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    threshold_rebalance_decision(input, desired_notional_cents(&input.deployment)?)
+}
+
+fn twap_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    Ok(twap_decision(
+        input,
+        desired_notional_cents(&input.deployment)?,
+    ))
+}
+
+fn trend_following_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    Ok(signal_following_decision(
+        short_signal(input)?,
+        desired_notional_cents(&input.deployment)?,
+    ))
+}
+
+fn mean_reversion_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    Ok(mean_reversion_decision(
+        short_signal(input)?,
+        desired_notional_cents(&input.deployment)?,
+    ))
+}
+
+fn breakout_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    Ok(breakout_decision(
+        short_signal(input)?,
+        long_signal(input)?,
+        desired_notional_cents(&input.deployment)?,
+    ))
+}
+
+fn macro_rotation_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    Ok(macro_rotation_decision(
+        short_signal(input)?,
+        long_signal(input)?,
+        desired_notional_cents(&input.deployment)?,
+    ))
+}
+
+fn volatility_target_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    volatility_target_decision(
+        input,
+        realized_volatility_bps(input)?,
+        desired_notional_cents(&input.deployment)?,
+    )
+}
+
+fn short_signal(input: &ExecutionPlannerInput) -> Result<f64, ExecutionPlannerError> {
+    input
         .feature_snapshot
         .short_return_bps
         .as_deref()
         .map(|value| parse_signed_decimal("featureSnapshot.shortReturnBps", value))
-        .transpose()?
-        .unwrap_or(0.0);
-    let long_signal = input
+        .transpose()
+        .map(|value| value.unwrap_or(0.0))
+}
+
+fn long_signal(input: &ExecutionPlannerInput) -> Result<Option<f64>, ExecutionPlannerError> {
+    input
         .feature_snapshot
         .long_return_bps
         .as_deref()
         .map(|value| parse_signed_decimal("featureSnapshot.longReturnBps", value))
-        .transpose()?;
-    let realized_volatility_bps = input
+        .transpose()
+}
+
+fn realized_volatility_bps(
+    input: &ExecutionPlannerInput,
+) -> Result<Option<f64>, ExecutionPlannerError> {
+    input
         .feature_snapshot
         .realized_volatility_bps
         .as_deref()
         .map(|value| parse_decimal("featureSnapshot.realizedVolatilityBps", value))
-        .transpose()?;
-    match input.deployment.strategy_key.as_str() {
-        "threshold_rebalance" => threshold_rebalance_decision(input, base_notional_cents),
-        "twap" => Ok(twap_decision(input, base_notional_cents)),
-        "trend_following" => Ok(signal_following_decision(short_signal, base_notional_cents)),
-        "mean_reversion" => Ok(mean_reversion_decision(short_signal, base_notional_cents)),
-        "breakout" => Ok(breakout_decision(
-            short_signal,
-            long_signal,
-            base_notional_cents,
-        )),
-        "macro_rotation" => Ok(macro_rotation_decision(
-            short_signal,
-            long_signal,
-            base_notional_cents,
-        )),
-        "volatility_target" => {
-            volatility_target_decision(input, realized_volatility_bps, base_notional_cents)
-        }
-        _ => Ok(StrategyTradeDecision {
-            action: RuntimeExecutionAction::Buy,
-            direction: SwapDirection::BuyBase,
-            notional_cents: base_notional_cents,
-        }),
-    }
+        .transpose()
 }
 
 fn signal_following_decision(signal: f64, notional_cents: i64) -> StrategyTradeDecision {
@@ -956,10 +1147,33 @@ mod tests {
     use protocol::{
         RuntimeCapital, RuntimeDeploymentState, RuntimeLedgerTotals, RuntimePair, RuntimePolicy,
         RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason, RuntimeRiskSeverity,
-        RuntimeRunState, RuntimeTrigger, RuntimeTriggerKind,
+        RuntimeRunState, RuntimeStrategySpec, RuntimeTrigger, RuntimeTriggerKind,
     };
+    use strategy_core::StrategyKind;
 
     use super::*;
+
+    #[derive(Debug)]
+    struct TestStrategyPlugin {
+        spec: RuntimeStrategySpec,
+    }
+
+    impl StrategyPlugin for TestStrategyPlugin {
+        fn spec(&self) -> &RuntimeStrategySpec {
+            &self.spec
+        }
+
+        fn trade_decision(
+            &self,
+            _input: &ExecutionPlannerInput,
+        ) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+            Ok(StrategyTradeDecision {
+                action: RuntimeExecutionAction::Buy,
+                direction: SwapDirection::BuyBase,
+                notional_cents: 1_234,
+            })
+        }
+    }
 
     fn temp_database_url(test_name: &str) -> String {
         let unique = SystemTime::now()
@@ -975,6 +1189,28 @@ mod tests {
     fn planner(test_name: &str) -> ExecutionPlanner {
         ExecutionPlanner::new(ExecutionPlannerConfig::new(temp_database_url(test_name)))
             .expect("planner to initialize")
+    }
+
+    fn planner_with_plugin(test_name: &str, strategy_key: &str) -> ExecutionPlanner {
+        let mut plugins = StrategyPluginRegistry::default();
+        plugins
+            .register_plugin(TestStrategyPlugin {
+                spec: custom_strategy_spec(strategy_key),
+            })
+            .expect("custom strategy plugin");
+        ExecutionPlanner::with_plugins(
+            ExecutionPlannerConfig::new(temp_database_url(test_name)),
+            plugins,
+        )
+        .expect("planner to initialize")
+    }
+
+    fn custom_strategy_spec(strategy_key: &str) -> RuntimeStrategySpec {
+        let mut spec = StrategyKind::Dca.spec();
+        spec.strategy_key = strategy_key.to_string();
+        spec.plugin_key = format!("test::{strategy_key}");
+        spec.title = "Custom strategy".to_string();
+        spec
     }
 
     fn deployment(
@@ -1251,6 +1487,28 @@ mod tests {
         assert!(result.plan.dry_run);
         assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Buy);
         assert_eq!(result.plan.slices[0].input_amount_atomic, "5000000");
+    }
+
+    #[test]
+    fn can_register_custom_strategy_plugins() {
+        let planner = planner_with_plugin("custom-plugin", "custom_signal");
+        let result = planner
+            .plan_and_store(&input(
+                "run_custom",
+                "custom_signal",
+                RuntimeMode::Shadow,
+                RuntimeLane::Safe,
+                "0.0",
+            ))
+            .expect("custom plan to store");
+
+        assert!(result.created);
+        assert_eq!(result.plan.slices[0].action, RuntimeExecutionAction::Buy);
+        assert_eq!(result.plan.slices[0].input_amount_atomic, "12340000");
+        assert_eq!(
+            planner.supported_strategy_keys(),
+            vec!["custom_signal".to_string()]
+        );
     }
 
     #[test]

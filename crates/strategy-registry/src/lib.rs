@@ -12,7 +12,7 @@ use protocol::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use strategy_core::SUPPORTED_STRATEGIES;
+use strategy_core::{StrategyCatalog, StrategyCatalogError};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -33,6 +33,7 @@ impl StrategyRegistryConfig {
 #[derive(Debug, Clone)]
 pub struct StrategyRegistry {
     database_path: PathBuf,
+    strategy_catalog: StrategyCatalog,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +94,8 @@ pub enum StrategyRegistryError {
     DeploymentNotFound { deployment_id: String },
     #[error("unsupported strategy key: {0}")]
     UnsupportedStrategy(String),
+    #[error(transparent)]
+    StrategyCatalog(#[from] StrategyCatalogError),
     #[error("immutable deployment field changed for {deployment_id}: {field}")]
     ImmutableFieldChanged {
         deployment_id: String,
@@ -132,11 +135,18 @@ pub enum StrategyRegistryError {
 
 impl StrategyRegistry {
     pub fn new(config: StrategyRegistryConfig) -> Result<Self, StrategyRegistryError> {
+        Self::with_catalog(config, StrategyCatalog::builtin()?)
+    }
+
+    pub fn with_catalog(
+        config: StrategyRegistryConfig,
+        strategy_catalog: StrategyCatalog,
+    ) -> Result<Self, StrategyRegistryError> {
         let requested_path = normalize_database_path(&config.database_url);
-        match Self::initialize_at_path(requested_path.clone()) {
+        match Self::initialize_at_path(requested_path.clone(), strategy_catalog.clone()) {
             Ok(registry) => Ok(registry),
             Err(error) if should_fallback_to_tmp(&requested_path, &error) => {
-                Self::initialize_at_path(fallback_database_path())
+                Self::initialize_at_path(fallback_database_path(), strategy_catalog)
             }
             Err(error) => Err(error),
         }
@@ -147,11 +157,16 @@ impl StrategyRegistry {
         &self.database_path
     }
 
+    #[must_use]
+    pub fn supported_strategy_keys(&self) -> Vec<String> {
+        self.strategy_catalog.keys()
+    }
+
     pub fn upsert_deployment(
         &self,
         deployment: &RuntimeDeploymentRecord,
     ) -> Result<DeploymentWriteResult, StrategyRegistryError> {
-        ensure_supported_strategy(&deployment.strategy_key)?;
+        ensure_supported_strategy(&self.strategy_catalog, &deployment.strategy_key)?;
 
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
@@ -630,7 +645,10 @@ impl StrategyRegistry {
         Ok(connection)
     }
 
-    fn initialize_at_path(database_path: PathBuf) -> Result<Self, StrategyRegistryError> {
+    fn initialize_at_path(
+        database_path: PathBuf,
+        strategy_catalog: StrategyCatalog,
+    ) -> Result<Self, StrategyRegistryError> {
         if database_path != Path::new(":memory:") {
             if let Some(parent) = database_path
                 .parent()
@@ -639,7 +657,10 @@ impl StrategyRegistry {
                 fs::create_dir_all(parent)?;
             }
         }
-        let registry = Self { database_path };
+        let registry = Self {
+            database_path,
+            strategy_catalog,
+        };
         let connection = registry.open_connection()?;
         initialize_schema(&connection)?;
         Ok(registry)
@@ -683,6 +704,7 @@ fn should_fallback_to_tmp(database_path: &Path, error: &StrategyRegistryError) -
         StrategyRegistryError::Serialization(_)
         | StrategyRegistryError::DeploymentNotFound { .. }
         | StrategyRegistryError::UnsupportedStrategy(_)
+        | StrategyRegistryError::StrategyCatalog(_)
         | StrategyRegistryError::ImmutableFieldChanged { .. }
         | StrategyRegistryError::InvalidStateTransition { .. }
         | StrategyRegistryError::DeploymentNotShadow { .. }
@@ -722,16 +744,14 @@ fn initialize_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
     )
 }
 
-fn ensure_supported_strategy(strategy_key: &str) -> Result<(), StrategyRegistryError> {
-    if SUPPORTED_STRATEGIES
-        .iter()
-        .any(|strategy| strategy.as_key() == strategy_key)
-    {
-        return Ok(());
-    }
-    Err(StrategyRegistryError::UnsupportedStrategy(
-        strategy_key.to_string(),
-    ))
+fn ensure_supported_strategy(
+    strategy_catalog: &StrategyCatalog,
+    strategy_key: &str,
+) -> Result<(), StrategyRegistryError> {
+    strategy_catalog
+        .get(strategy_key)
+        .map(|_| ())
+        .ok_or_else(|| StrategyRegistryError::UnsupportedStrategy(strategy_key.to_string()))
 }
 
 fn deployment_is_runnable(state: &RuntimeDeploymentState) -> bool {
@@ -1115,6 +1135,7 @@ mod tests {
 
     use super::*;
     use protocol::{RuntimeCapital, RuntimeLane, RuntimePair, RuntimePolicy};
+    use strategy_core::{StrategyCatalog, StrategyKind};
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -1133,6 +1154,16 @@ mod tests {
     fn registry(test_name: &str) -> StrategyRegistry {
         StrategyRegistry::new(StrategyRegistryConfig::new(temp_database_url(test_name)))
             .expect("registry to initialize")
+    }
+
+    fn custom_catalog(strategy_key: &str) -> StrategyCatalog {
+        let mut catalog = StrategyCatalog::default();
+        let mut spec = StrategyKind::Dca.spec();
+        spec.strategy_key = strategy_key.to_string();
+        spec.plugin_key = format!("test::{strategy_key}");
+        spec.title = "Custom strategy".to_string();
+        catalog.register_spec(spec).expect("custom spec");
+        catalog
     }
 
     #[cfg(unix)]
@@ -1284,6 +1315,31 @@ mod tests {
                 .expect("deployment lookup")
                 .expect("deployment to exist"),
             deployment
+        );
+    }
+
+    #[test]
+    fn accepts_deployments_from_custom_catalog() {
+        let registry = StrategyRegistry::with_catalog(
+            StrategyRegistryConfig::new(temp_database_url("custom-catalog")),
+            custom_catalog("custom_signal"),
+        )
+        .expect("registry to initialize");
+        let mut deployment = deployment(
+            "deployment_custom",
+            RuntimeMode::Shadow,
+            RuntimeDeploymentState::Draft,
+        );
+        deployment.strategy_key = "custom_signal".to_string();
+
+        let result = registry
+            .upsert_deployment(&deployment)
+            .expect("custom deployment to store");
+
+        assert!(result.created);
+        assert_eq!(
+            registry.supported_strategy_keys(),
+            vec!["custom_signal".to_string()]
         );
     }
 

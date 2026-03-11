@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   parseRuntimeDeploymentRecord,
+  parseRuntimeStrategySpec,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
 } from "../../apps/worker/src/runtime_contracts.js";
 
@@ -24,6 +25,7 @@ describe("worker runtime contract bridge", () => {
       "researchSource",
       "researchExperiment",
       "researchEvidenceBundle",
+      "strategySpec",
     ]);
   });
 
@@ -36,5 +38,16 @@ describe("worker runtime contract bridge", () => {
 
     expect(deployment.deploymentId).toBe("dep_runtime_sol_usdc_shadow");
     expect(deployment.mode).toBe("shadow");
+  });
+
+  test("worker can parse the canonical strategy spec fixture", () => {
+    const strategySpec = parseRuntimeStrategySpec(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_spec.valid.v1.json",
+      ),
+    );
+
+    expect(strategySpec.strategyKey).toBe("trend_following");
+    expect(strategySpec.pluginKey).toBe("builtin::trend_following");
   });
 });

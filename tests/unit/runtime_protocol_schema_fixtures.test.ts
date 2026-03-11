@@ -82,6 +82,12 @@ describe("runtime protocol schema fixtures", () => {
         "docs/runtime-contracts/fixtures/runtime.research_evidence_bundle.valid.v1.json",
       ),
     ).toBe(true);
+    expect(
+      validate(
+        "docs/runtime-contracts/schemas/runtime.strategy_spec.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.strategy_spec.valid.v1.json",
+      ),
+    ).toBe(true);
   });
 
   test("manifest lists every runtime schema file", () => {
@@ -102,6 +108,7 @@ describe("runtime protocol schema fixtures", () => {
       "docs/runtime-contracts/schemas/runtime.research_source.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.research_experiment.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.strategy_spec.v1.schema.json",
     ]);
   });
 });

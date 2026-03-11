@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/strategy_spec",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "strategyKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "enum": ["allocation", "signal", "advanced"]
+    },
+    "pluginKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "defaultLane": {
+      "type": "string",
+      "enum": ["safe", "protected", "fast"]
+    },
+    "supportedModes": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["shadow", "paper", "live"]
+      }
+    },
+    "laneEligibility": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["safe", "protected", "fast"]
+      }
+    },
+    "supportedVenues": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "venueKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "onboardingState": {
+            "type": "string",
+            "enum": [
+              "candidate",
+              "integrated",
+              "shadow_ready",
+              "paper_ready",
+              "limited_live_ready",
+              "broad_live_ready",
+              "paused",
+              "deprecated"
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["venueKey", "onboardingState"],
+        "additionalProperties": false
+      }
+    },
+    "assetConstraints": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": ["base", "quote", "either"]
+          },
+          "assetKeys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["role", "assetKeys", "required"],
+        "additionalProperties": false
+      }
+    },
+    "featureRequirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "featureKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "freshnessMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["featureKey", "required"],
+        "additionalProperties": false
+      }
+    },
+    "parameterSpecs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["decimal", "integer", "bps", "boolean", "enum"]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "defaultValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "allowedValues": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["key", "label", "kind", "required", "allowedValues"],
+        "additionalProperties": false
+      }
+    },
+    "promotionPolicy": {
+      "type": "object",
+      "properties": {
+        "requiresHumanApproval": {
+          "type": "boolean"
+        },
+        "shadowMinRuns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "paperMinRuns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "liveLaneAllowlist": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["safe", "protected", "fast"]
+          }
+        },
+        "requiresFreshFeatures": {
+          "type": "boolean"
+        },
+        "limitedLiveOnly": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "requiresHumanApproval",
+        "shadowMinRuns",
+        "paperMinRuns",
+        "liveLaneAllowlist",
+        "requiresFreshFeatures",
+        "limitedLiveOnly"
+      ],
+      "additionalProperties": false
+    },
+    "tags": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "strategyKey",
+    "title",
+    "summary",
+    "category",
+    "pluginKey",
+    "defaultLane",
+    "supportedModes",
+    "laneEligibility",
+    "supportedVenues",
+    "assetConstraints",
+    "featureRequirements",
+    "parameterSpecs",
+    "promotionPolicy",
+    "tags"
+  ],
+  "additionalProperties": false
+}

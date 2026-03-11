@@ -51,6 +51,11 @@
       "name": "researchEvidenceBundle",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/research_evidence_bundle",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json"
+    },
+    {
+      "name": "strategySpec",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_spec",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_spec.v1.schema.json"
     }
   ],
   "rustCodegenHook": {

@@ -693,6 +693,117 @@ pub struct RuntimeResearchEvidenceBundleRecord {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeStrategyCategory {
+    Allocation,
+    Signal,
+    Advanced,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeStrategyParameterKind {
+    Decimal,
+    Integer,
+    Bps,
+    Boolean,
+    Enum,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeStrategyAssetRole {
+    Base,
+    Quote,
+    Either,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOnboardingState {
+    Candidate,
+    Integrated,
+    ShadowReady,
+    PaperReady,
+    LimitedLiveReady,
+    BroadLiveReady,
+    Paused,
+    Deprecated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStrategyVenueSupport {
+    pub venue_key: String,
+    pub onboarding_state: RuntimeOnboardingState,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStrategyAssetConstraint {
+    pub role: RuntimeStrategyAssetRole,
+    pub asset_keys: Vec<String>,
+    pub required: bool,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStrategyFeatureRequirement {
+    pub feature_key: String,
+    pub required: bool,
+    pub freshness_ms: Option<u64>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStrategyParameterSpec {
+    pub key: String,
+    pub label: String,
+    pub kind: RuntimeStrategyParameterKind,
+    pub required: bool,
+    pub default_value: Option<String>,
+    pub min_value: Option<String>,
+    pub max_value: Option<String>,
+    pub allowed_values: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStrategyPromotionPolicy {
+    pub requires_human_approval: bool,
+    pub shadow_min_runs: u32,
+    pub paper_min_runs: u32,
+    pub live_lane_allowlist: Vec<RuntimeLane>,
+    pub requires_fresh_features: bool,
+    pub limited_live_only: bool,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStrategySpec {
+    pub schema_version: String,
+    pub strategy_key: String,
+    pub title: String,
+    pub summary: String,
+    pub category: RuntimeStrategyCategory,
+    pub plugin_key: String,
+    pub default_lane: RuntimeLane,
+    pub supported_modes: Vec<RuntimeMode>,
+    pub lane_eligibility: Vec<RuntimeLane>,
+    pub supported_venues: Vec<RuntimeStrategyVenueSupport>,
+    pub asset_constraints: Vec<RuntimeStrategyAssetConstraint>,
+    pub feature_requirements: Vec<RuntimeStrategyFeatureRequirement>,
+    pub parameter_specs: Vec<RuntimeStrategyParameterSpec>,
+    pub promotion_policy: RuntimeStrategyPromotionPolicy,
+    pub tags: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
@@ -742,6 +853,9 @@ mod tests {
             "runtime.research_evidence_bundle.valid.v1.json",
         ))
         .expect("research evidence bundle fixture to deserialize");
+        let strategy_spec: RuntimeStrategySpec =
+            serde_json::from_str(&read_fixture("runtime.strategy_spec.valid.v1.json"))
+                .expect("strategy spec fixture to deserialize");
 
         assert_eq!(deployment.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(run.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
@@ -756,9 +870,14 @@ mod tests {
         assert_eq!(source.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(experiment.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(evidence.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
+        assert_eq!(
+            strategy_spec.schema_version,
+            RUNTIME_PROTOCOL_SCHEMA_VERSION
+        );
         assert_eq!(plan.slices.len(), 1);
         assert_eq!(experiment.dataset_snapshots.len(), 1);
         assert_eq!(evidence.artifacts.len(), 2);
+        assert_eq!(strategy_spec.strategy_key, "trend_following");
     }
 
     #[test]

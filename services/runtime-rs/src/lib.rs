@@ -12,7 +12,7 @@ use exec_client::{
 };
 use execution_planner::{
     ExecutionPlanner, ExecutionPlannerConfig, ExecutionPlannerError, ExecutionPlannerInput,
-    ExecutionPlannerSnapshot,
+    ExecutionPlannerSnapshot, StrategyPluginRegistry,
 };
 use feature_cache::{FeatureCache, FeatureCacheConfig, FeatureCacheSnapshot};
 use market_adapters::{FeedGateway, FeedGatewayConfig, FeedGatewaySnapshot, FeedReplayFixture};
@@ -42,7 +42,7 @@ use runtime_scorecards::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
-use strategy_core::SUPPORTED_STRATEGIES;
+use strategy_core::StrategyCatalog;
 use strategy_registry::{
     ShadowEvaluationTrigger, StrategyRegistry, StrategyRegistryConfig, StrategyRegistryError,
     StrategyRegistrySnapshot,
@@ -96,9 +96,14 @@ impl RuntimeAppState {
         if should_spawn_fixture_keepalive(&config) {
             spawn_fixture_keepalive(feed_gateway.clone(), feature_cache.clone());
         }
-        let strategy_registry =
-            StrategyRegistry::new(StrategyRegistryConfig::new(config.database_url.clone()))
-                .expect("strategy registry to initialize");
+        let strategy_plugins =
+            StrategyPluginRegistry::builtin().expect("strategy plugin registry to initialize");
+        let strategy_catalog: StrategyCatalog = strategy_plugins.catalog();
+        let strategy_registry = StrategyRegistry::with_catalog(
+            StrategyRegistryConfig::new(config.database_url.clone()),
+            strategy_catalog,
+        )
+        .expect("strategy registry to initialize");
         let research_registry =
             ResearchRegistry::new(ResearchRegistryConfig::new(config.database_url.clone()))
                 .expect("research registry to initialize");
@@ -113,9 +118,11 @@ impl RuntimeAppState {
             config.feature_stale_after_ms,
         ))
         .expect("risk engine to initialize");
-        let execution_planner =
-            ExecutionPlanner::new(ExecutionPlannerConfig::new(config.database_url.clone()))
-                .expect("execution planner to initialize");
+        let execution_planner = ExecutionPlanner::with_plugins(
+            ExecutionPlannerConfig::new(config.database_url.clone()),
+            strategy_plugins,
+        )
+        .expect("execution planner to initialize");
         let reconciler = Reconciler::new(ReconcilerConfig::new(config.database_url.clone()))
             .expect("reconciler to initialize");
         let exec_client = ExecClient::new(ExecClientConfig {
@@ -389,10 +396,7 @@ fn health_response(state: &RuntimeAppState) -> RuntimeHealthResponse {
         risk_engine,
         execution_planner,
         reconciler,
-        supported_strategies: SUPPORTED_STRATEGIES
-            .iter()
-            .map(|strategy| strategy.as_key().to_string())
-            .collect(),
+        supported_strategies: state.execution_planner.supported_strategy_keys(),
     }
 }
 
@@ -412,10 +416,7 @@ fn metrics_response(state: &RuntimeAppState) -> RuntimeMetricsResponse {
         risk_engine: state.risk_engine_snapshot(),
         execution_planner: state.execution_planner_snapshot(),
         reconciler: state.reconciler_snapshot(),
-        supported_strategies: SUPPORTED_STRATEGIES
-            .iter()
-            .map(|strategy| strategy.as_key().to_string())
-            .collect(),
+        supported_strategies: state.execution_planner.supported_strategy_keys(),
     }
 }
 
@@ -1459,6 +1460,11 @@ fn map_registry_error(error: StrategyRegistryError) -> JsonPayload {
             "unsupported-strategy",
             json!({ "strategyKey": strategy_key }),
         ),
+        StrategyRegistryError::StrategyCatalog(error) => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-strategy-spec",
+            json!({ "reason": error.to_string() }),
+        ),
         StrategyRegistryError::ImmutableFieldChanged {
             deployment_id,
             field,
@@ -1604,6 +1610,16 @@ fn map_execution_planner_error(error: ExecutionPlannerError) -> JsonPayload {
             StatusCode::NOT_FOUND,
             "execution-plan-not-found",
             json!({ "planId": plan_id }),
+        ),
+        ExecutionPlannerError::UnsupportedStrategy(strategy_key) => error_json(
+            StatusCode::BAD_REQUEST,
+            "unsupported-strategy",
+            json!({ "strategyKey": strategy_key }),
+        ),
+        ExecutionPlannerError::StrategyCatalog(error) => error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid-strategy-spec",
+            json!({ "reason": error.to_string() }),
         ),
         ExecutionPlannerError::Io(error) => error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
