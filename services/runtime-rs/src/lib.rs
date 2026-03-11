@@ -1,3 +1,5 @@
+mod paper_execution;
+
 use std::sync::{Arc, RwLock};
 
 use asset_registry::{
@@ -36,6 +38,7 @@ use historical_data_lake::{
     HistoricalDataLakeSnapshot,
 };
 use market_adapters::{FeedGateway, FeedGatewayConfig, FeedGatewaySnapshot, FeedReplayFixture};
+use paper_execution::{simulate_paper_execution, PaperExecutionError};
 use portfolio_ledger::{
     PortfolioLedger, PortfolioLedgerConfig, PortfolioLedgerError, PortfolioLedgerSnapshot,
 };
@@ -984,11 +987,23 @@ async fn evaluate_deployment_handler(
                     .apply_noop_execution_plan(&coordinated_run.run_id, &plan.plan_id)
                     .map_err(map_registry_error)?;
             } else {
-                let submit = state
-                    .exec_client
-                    .submit_plan(&plan)
-                    .await
-                    .map_err(map_exec_client_error)?;
+                let paper_simulation = if plan.mode == protocol::RuntimeMode::Paper {
+                    Some(
+                        simulate_paper_execution(&coordinated_deployment, &plan, &ledger_snapshot)
+                            .map_err(map_paper_execution_error)?,
+                    )
+                } else {
+                    None
+                };
+                let submit = if let Some(simulation) = paper_simulation.as_ref() {
+                    simulation.submit.clone()
+                } else {
+                    state
+                        .exec_client
+                        .submit_plan(&plan)
+                        .await
+                        .map_err(map_exec_client_error)?
+                };
                 state
                     .reconciler
                     .record_submit_attempt(
@@ -1033,11 +1048,14 @@ async fn evaluate_deployment_handler(
                 let observed_ledger = observed_ledger_override
                     .or_else(|| submit.observed_ledger.clone())
                     .unwrap_or_else(|| ledger_snapshot.clone());
-                let reconciliation_expected_ledger = if is_runtime_canary {
-                    observed_ledger.clone()
-                } else {
-                    ledger_snapshot.clone()
-                };
+                let reconciliation_expected_ledger =
+                    if let Some(simulation) = paper_simulation.as_ref() {
+                        simulation.expected_ledger.clone()
+                    } else if is_runtime_canary {
+                        observed_ledger.clone()
+                    } else {
+                        ledger_snapshot.clone()
+                    };
                 state
                     .reconciler
                     .record_wallet_observation(
@@ -1095,7 +1113,10 @@ async fn evaluate_deployment_handler(
                         reconciliation_failure_message.as_deref(),
                     )
                     .map_err(map_registry_error)?;
-                if reconciliation_outcome.should_apply_correction {
+                let should_sync_paper_snapshot = plan.mode == protocol::RuntimeMode::Paper
+                    && reconciliation_outcome.result.status
+                        != protocol::RuntimeReconciliationStatus::Failed;
+                if reconciliation_outcome.should_apply_correction || should_sync_paper_snapshot {
                     state
                         .portfolio_ledger
                         .apply_observed_snapshot(&deployment_id, &observed_ledger)
@@ -2608,6 +2629,16 @@ fn map_exec_client_error(error: ExecClientError) -> JsonPayload {
         json!({
             "code": error.code,
             "message": error.message,
+        }),
+    )
+}
+
+fn map_paper_execution_error(error: PaperExecutionError) -> JsonPayload {
+    error_json(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "paper-execution-failed",
+        json!({
+            "reason": error.to_string(),
         }),
     )
 }
@@ -5018,6 +5049,127 @@ mod tests {
             json!(false)
         );
         assert_eq!(evaluation_payload["coordination"]["accepted"], json!(true));
+        assert_eq!(
+            evaluation_payload["coordination"]["source"],
+            json!("runtime-rs-paper")
+        );
+        assert_eq!(
+            evaluation_payload["reconciliation"]["receiptId"],
+            evaluation_payload["coordination"]["receipt"]["receiptId"]
+        );
+        assert_eq!(
+            evaluation_payload["observedLedger"]["deploymentId"],
+            json!("deployment_mean_paper")
+        );
+    }
+
+    #[tokio::test]
+    async fn paper_runs_emit_auditable_execution_artifacts() {
+        let fixture_path = write_replay_fixture("paper-auditable", &["140.00", "140.40", "140.80"]);
+        let router = app(test_config_with_runtime(None, Some(&fixture_path)));
+        let mut deployment = runtime_deployment(
+            "deployment_auditable_paper",
+            "sleeve_alpha",
+            "1000.00",
+            "5.00",
+        );
+        deployment["mode"] = json!("paper");
+        deployment["state"] = json!("paper");
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(deployment.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let evaluate_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/deployments/deployment_auditable_paper/evaluate")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(evaluate_response.status(), StatusCode::CREATED);
+        let evaluation_payload = read_json(evaluate_response).await;
+        assert_eq!(
+            evaluation_payload["coordination"]["source"],
+            json!("runtime-rs-paper")
+        );
+        assert_eq!(
+            evaluation_payload["coordination"]["receipt"]["status"],
+            json!("filled")
+        );
+        assert!(evaluation_payload["coordination"]["receipt"]["notes"]
+            .as_array()
+            .expect("receipt notes")
+            .iter()
+            .any(|note| note == "paper-profile:jupiter"));
+        assert_eq!(
+            evaluation_payload["reconciliation"]["status"],
+            json!("passed")
+        );
+
+        let reconciliations_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/api/internal/runtime/reconciliations?deploymentId=deployment_auditable_paper",
+                    )
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(reconciliations_response.status(), StatusCode::OK);
+        let reconciliations_payload = read_json(reconciliations_response).await;
+        assert_eq!(
+            reconciliations_payload["receipts"][0]["source"],
+            json!("runtime-rs-paper")
+        );
+        assert_eq!(
+            reconciliations_payload["results"][0]["receiptId"],
+            evaluation_payload["coordination"]["receipt"]["receiptId"]
+        );
+
+        let positions_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/positions?deploymentId=deployment_auditable_paper")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(positions_response.status(), StatusCode::OK);
+        let positions_payload = read_json(positions_response).await;
+        assert_eq!(
+            positions_payload["snapshot"]["deploymentId"],
+            json!("deployment_auditable_paper")
+        );
+        assert!(positions_payload["snapshot"]["positions"]
+            .as_array()
+            .expect("positions")
+            .iter()
+            .any(|position| position["instrumentId"] == "SOL/USDC"));
     }
 
     #[tokio::test]

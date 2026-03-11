@@ -67,7 +67,9 @@ The bounded live bridge remains intentionally narrow in v1:
 - only `lane=safe` plans are eligible
 - only single-slice live plans are accepted
 - `runtime.shadowOnly` must be disabled explicitly through Worker ops controls
-- non-live runtime plans still coordinate synthetically through the Worker bridge
+- paper mode uses a deterministic runtime-owned simulator that emits canonical
+  submit attempts, receipts, observed ledgers, and reconciliation artifacts
+- shadow mode still coordinates synthetically through the Worker bridge
 
 Strategy selection is no longer hardcoded as a raw `strategy_key` allowlist:
 
