@@ -58,6 +58,30 @@ describe("runtime protocol schema fixtures", () => {
         "docs/runtime-contracts/fixtures/runtime.reconciliation_result.valid.v1.json",
       ),
     ).toBe(true);
+    expect(
+      validate(
+        "docs/runtime-contracts/schemas/runtime.research_hypothesis.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.research_hypothesis.valid.v1.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
+        "docs/runtime-contracts/schemas/runtime.research_source.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.research_source.valid.v1.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
+        "docs/runtime-contracts/schemas/runtime.research_experiment.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.research_experiment.valid.v1.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
+        "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.research_evidence_bundle.valid.v1.json",
+      ),
+    ).toBe(true);
   });
 
   test("manifest lists every runtime schema file", () => {
@@ -74,6 +98,10 @@ describe("runtime protocol schema fixtures", () => {
       "docs/runtime-contracts/schemas/runtime.risk_verdict.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.execution_plan.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.reconciliation_result.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.research_hypothesis.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.research_source.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.research_experiment.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.research_evidence_bundle.v1.schema.json",
     ]);
   });
 });

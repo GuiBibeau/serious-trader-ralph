@@ -242,7 +242,8 @@ impl ResearchRegistry {
     pub fn upsert_evidence_bundle(
         &self,
         record: &RuntimeResearchEvidenceBundleRecord,
-    ) -> Result<ResearchWriteResult<RuntimeResearchEvidenceBundleRecord>, ResearchRegistryError> {
+    ) -> Result<ResearchWriteResult<RuntimeResearchEvidenceBundleRecord>, ResearchRegistryError>
+    {
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
         ensure_experiment_exists(&transaction, &record.experiment_id)?;
@@ -564,8 +565,22 @@ where
     );
     connection.execute(&sql, params_from_iter(values.into_iter()))?;
 
-    replace_key_rows(connection, spec.table, spec.id_column, spec.id_value, "venue", spec.venue_keys)?;
-    replace_key_rows(connection, spec.table, spec.id_column, spec.id_value, "asset", spec.asset_keys)?;
+    replace_key_rows(
+        connection,
+        spec.table,
+        spec.id_column,
+        spec.id_value,
+        "venue",
+        spec.venue_keys,
+    )?;
+    replace_key_rows(
+        connection,
+        spec.table,
+        spec.id_column,
+        spec.id_value,
+        "asset",
+        spec.asset_keys,
+    )?;
     if spec.table != "research_sources" {
         replace_source_rows(
             connection,
@@ -595,9 +610,7 @@ fn replace_key_rows(
     )?;
     for key in keys {
         connection.execute(
-            &format!(
-                "INSERT INTO {link_table} ({id_column}, {key_column}) VALUES (?1, ?2)"
-            ),
+            &format!("INSERT INTO {link_table} ({id_column}, {key_column}) VALUES (?1, ?2)"),
             params![id_value, key],
         )?;
     }
@@ -639,13 +652,21 @@ where
     let mut values = Vec::new();
 
     if table != "research_sources" {
-        if let Some(strategy_key) = query.strategy_key.as_ref().filter(|value| !value.trim().is_empty()) {
+        if let Some(strategy_key) = query
+            .strategy_key
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
             sql.push_str(&format!(" AND {alias}.strategy_key = ?"));
             values.push(strategy_key.clone());
         }
     }
 
-    if let Some(venue_key) = query.venue_key.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(venue_key) = query
+        .venue_key
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         sql.push_str(&format!(
             " AND EXISTS (
                 SELECT 1 FROM {} venue_filter
@@ -657,7 +678,11 @@ where
         values.push(venue_key.clone());
     }
 
-    if let Some(asset_key) = query.asset_key.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(asset_key) = query
+        .asset_key
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         sql.push_str(&format!(
             " AND EXISTS (
                 SELECT 1 FROM {} asset_filter
@@ -669,7 +694,11 @@ where
         values.push(asset_key.clone());
     }
 
-    if let Some(source_id) = query.source_id.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(source_id) = query
+        .source_id
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         if table == "research_sources" {
             sql.push_str(&format!(" AND {alias}.source_id = ?"));
         } else {
@@ -685,9 +714,13 @@ where
         values.push(source_id.clone());
     }
 
-    sql.push_str(&format!(" ORDER BY {alias}.updated_at DESC, {alias}.{id_column} DESC"));
+    sql.push_str(&format!(
+        " ORDER BY {alias}.updated_at DESC, {alias}.{id_column} DESC"
+    ));
     let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(params_from_iter(values.iter()), |row| row.get::<_, String>(0))?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        row.get::<_, String>(0)
+    })?;
     let mut records = Vec::new();
     for row in rows {
         records.push(deserialize_json(&row?)?);
@@ -989,7 +1022,10 @@ fn should_fallback_to_tmp(database_path: &Path, error: &ResearchRegistryError) -
     {
         return false;
     }
-    matches!(error, ResearchRegistryError::Io(_) | ResearchRegistryError::Storage(_))
+    matches!(
+        error,
+        ResearchRegistryError::Io(_) | ResearchRegistryError::Storage(_)
+    )
 }
 
 #[cfg(test)]
@@ -999,7 +1035,8 @@ mod tests {
     use protocol::{
         RuntimeArtifactRef, RuntimeCodeRevisionRef, RuntimeDatasetSnapshotRef,
         RuntimeResearchEvidenceStatus, RuntimeResearchExperimentStatus,
-        RuntimeResearchHypothesisStatus, RuntimeResearchSourceKind, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+        RuntimeResearchHypothesisStatus, RuntimeResearchSourceKind,
+        RUNTIME_PROTOCOL_SCHEMA_VERSION,
     };
 
     use super::*;
@@ -1143,19 +1180,30 @@ mod tests {
     #[test]
     fn stores_and_queries_research_records() {
         let registry = registry("query");
-        assert!(registry.upsert_source(&source_record()).expect("source").created);
-        assert!(registry
-            .upsert_hypothesis(&hypothesis_record())
-            .expect("hypothesis")
-            .created);
-        assert!(registry
-            .upsert_experiment(&experiment_record())
-            .expect("experiment")
-            .created);
-        assert!(registry
-            .upsert_evidence_bundle(&evidence_bundle_record())
-            .expect("evidence")
-            .created);
+        assert!(
+            registry
+                .upsert_source(&source_record())
+                .expect("source")
+                .created
+        );
+        assert!(
+            registry
+                .upsert_hypothesis(&hypothesis_record())
+                .expect("hypothesis")
+                .created
+        );
+        assert!(
+            registry
+                .upsert_experiment(&experiment_record())
+                .expect("experiment")
+                .created
+        );
+        assert!(
+            registry
+                .upsert_evidence_bundle(&evidence_bundle_record())
+                .expect("evidence")
+                .created
+        );
 
         let result = registry
             .query(&ResearchRegistryQuery {
@@ -1170,7 +1218,10 @@ mod tests {
         assert_eq!(result.sources.len(), 1);
         assert_eq!(result.experiments.len(), 1);
         assert_eq!(result.evidence_bundles.len(), 1);
-        assert_eq!(result.experiments[0].code_revision.revision, code_revision().revision);
+        assert_eq!(
+            result.experiments[0].code_revision.revision,
+            code_revision().revision
+        );
 
         let snapshot = registry.snapshot_now();
         assert_eq!(snapshot.hypothesis_count, 1);
@@ -1202,6 +1253,9 @@ mod tests {
 
         assert!(first.created);
         assert!(!second.created);
-        assert_eq!(second.record.experiment_id, "experiment_signal_trend_shadow");
+        assert_eq!(
+            second.record.experiment_id,
+            "experiment_signal_trend_shadow"
+        );
     }
 }

@@ -738,9 +738,10 @@ mod tests {
         let experiment: RuntimeResearchExperimentRecord =
             serde_json::from_str(&read_fixture("runtime.research_experiment.valid.v1.json"))
                 .expect("research experiment fixture to deserialize");
-        let evidence: RuntimeResearchEvidenceBundleRecord =
-            serde_json::from_str(&read_fixture("runtime.research_evidence_bundle.valid.v1.json"))
-                .expect("research evidence bundle fixture to deserialize");
+        let evidence: RuntimeResearchEvidenceBundleRecord = serde_json::from_str(&read_fixture(
+            "runtime.research_evidence_bundle.valid.v1.json",
+        ))
+        .expect("research evidence bundle fixture to deserialize");
 
         assert_eq!(deployment.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(run.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
