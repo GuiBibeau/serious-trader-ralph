@@ -63,6 +63,8 @@ pub struct ResearchRegistryQueryResult {
     pub reproducibility_bundles: Vec<RuntimeResearchReproducibilityBundleRecord>,
 }
 
+type ResearchRegistrySnapshotCounts = (u64, u64, u64, u64, u64, Option<String>);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchWriteResult<T> {
     pub record: T,
@@ -393,9 +395,7 @@ impl ResearchRegistry {
             .transpose()?)
     }
 
-    fn snapshot_counts(
-        &self,
-    ) -> Result<(u64, u64, u64, u64, u64, Option<String>), ResearchRegistryError> {
+    fn snapshot_counts(&self) -> Result<ResearchRegistrySnapshotCounts, ResearchRegistryError> {
         let connection = self.open_connection()?;
         let hypothesis_count =
             connection.query_row("SELECT COUNT(*) FROM research_hypotheses", [], |row| {
