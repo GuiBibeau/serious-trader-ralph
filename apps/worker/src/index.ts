@@ -158,6 +158,7 @@ import {
   readRuntimeDeploymentRuns,
   readRuntimePnlSummary,
   readRuntimePositionSnapshot,
+  readRuntimeResearchRegistry,
   readRuntimeScorecard,
 } from "./runtime_internal";
 import { runRuntimeResearchBriefWorkflow } from "./runtime_research_briefs";
@@ -2247,6 +2248,43 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "ops-control-reset-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/research"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const result = await readRuntimeResearchRegistry({
+            env,
+            strategyKey: url.searchParams.get("strategyKey") ?? undefined,
+            venueKey: url.searchParams.get("venueKey") ?? undefined,
+            assetKey: url.searchParams.get("assetKey") ?? undefined,
+            sourceId: url.searchParams.get("sourceId") ?? undefined,
+          });
+          return withCors(json(result.payload, { status: result.status }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-registry-read-failed",
               },
               { status: 503 },
             ),
