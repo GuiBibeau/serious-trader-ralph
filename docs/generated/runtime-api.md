@@ -1,22 +1,51 @@
-# Runtime Internal API Contract (Planned)
+# Runtime Internal API Contract
 
-This document records the canonical payload families that later internal routes
-must use. The routes themselves are introduced in `#259`; this file exists now
-so Worker and runtime-rs do not invent separate shapes.
+This document records the canonical payload families used by the private
+runtime-to-Worker HTTP+JSON surface. The Worker remains the only public edge;
+these routes are for repo-owned internal orchestration, research, and
+evaluation flows.
 
-## Planned route families
+## Route families
 
 | Route family | Canonical schema |
 | --- | --- |
+| `GET /api/internal/runtime/health` | runtime health projection |
 | `POST /api/internal/runtime/deployments` | `RuntimeDeploymentRecord` |
 | `GET /api/internal/runtime/deployments` | `RuntimeDeploymentRecord[]` |
 | `GET /api/internal/runtime/deployments/:id` | `RuntimeDeploymentRecord` |
-| `GET /api/internal/runtime/runs/:deploymentId` | `RuntimeRunRecord` |
+| `POST /api/internal/runtime/deployments/:id/pause` | `RuntimeDeploymentRecord` state transition |
+| `POST /api/internal/runtime/deployments/:id/resume` | `RuntimeDeploymentRecord` state transition |
+| `POST /api/internal/runtime/deployments/:id/kill` | `RuntimeDeploymentRecord` state transition |
+| `POST /api/internal/runtime/deployments/:id/evaluate` | `RuntimeRunRecord` |
+| `GET /api/internal/runtime/runs/:deploymentId` | `RuntimeRunRecord[]` |
+| `GET /api/internal/runtime/execution-plans` | `RuntimeExecutionPlan[]` |
+| `GET /api/internal/runtime/reconciliations` | `RuntimeReconciliationResult[]` |
 | `GET /api/internal/runtime/positions` | `RuntimeLedgerSnapshot` |
 | `GET /api/internal/runtime/pnl` | `RuntimeLedgerSnapshot.totals` projection |
 | `GET /api/internal/runtime/scorecards` | `RuntimePromotionReadinessReport` |
 | `GET /api/internal/runtime/leaderboards` | `RuntimeStrategyLeaderboard` |
-| execution coordination payloads | `RuntimeRiskVerdict`, `RuntimeExecutionPlan`, `RuntimeReconciliationResult` |
+| `GET /api/internal/runtime/allocator` | `RuntimeAllocatorDecisionRecord`, `RuntimeAllocatorScorecard` |
+| `GET /api/internal/runtime/research` | research registry projection |
+| `POST /api/internal/runtime/research/hypotheses` | `RuntimeResearchHypothesisRecord` |
+| `POST /api/internal/runtime/research/sources` | `RuntimeResearchSourceRecord` |
+| `POST /api/internal/runtime/research/experiments` | `RuntimeResearchExperimentRecord` |
+| `POST /api/internal/runtime/research/evidence-bundles` | `RuntimeResearchEvidenceBundleRecord` |
+| `POST /api/internal/runtime/research/reproducibility-bundles` | `RuntimeResearchReproducibilityBundleRecord` |
+| `POST /api/internal/runtime/research/reproducibility-bundles/rerun` | `RuntimeResearchReproducibilityBundleRecord` with updated verification |
+| `GET /api/internal/runtime/assets` | `RuntimeAssetRecord[]` |
+| `POST /api/internal/runtime/assets` | `RuntimeAssetRecord` |
+| `POST /api/internal/runtime/assets/:assetKey/transition` | `RuntimeAssetRecord` state transition |
+| `GET /api/internal/runtime/datasets` | dataset registry projection |
+| `POST /api/internal/runtime/datasets/snapshots` | `RuntimeHistoricalDatasetSnapshotRecord` |
+| `POST /api/internal/runtime/datasets/replay-corpora` | `RuntimeReplayCorpusRecord` |
+| `GET /api/internal/runtime/backtests` | `RuntimeBacktestReport[]` |
+| `POST /api/internal/runtime/backtests` | `RuntimeBacktestReport` plus linked reproducibility bundle |
+| `GET /api/internal/runtime/features` | feature catalog projection |
+| `POST /api/internal/runtime/features/definitions` | `RuntimeFeatureDefinitionRecord` |
+| `POST /api/internal/runtime/features/regime-tags` | `RuntimeRegimeTagRecord` |
+| `GET /api/internal/runtime/cost-models` | `RuntimeExecutionCostModelRecord[]` |
+| `POST /api/internal/runtime/cost-models` | `RuntimeExecutionCostModelRecord` |
+| `POST /api/internal/runtime/cost-model-observations` | cost observation registry projection |
 
 ## Artifact locations
 
@@ -28,5 +57,7 @@ so Worker and runtime-rs do not invent separate shapes.
 
 - Public x402 and execution routes remain unchanged.
 - Internal transport starts as HTTP+JSON.
-- Rust code generation is deferred to the runtime-rs workspace work, but it
-  must consume the schema manifest above instead of redefining payloads.
+- Backtest runs auto-persist a reproducibility bundle tied to the exact code
+  revision, dataset snapshots, and expected result used to build the report.
+- Paper and live promotion evidence must include both a `backtest-report`
+  artifact and a matching `reproducibility-bundle` artifact.

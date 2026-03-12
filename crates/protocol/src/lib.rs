@@ -547,6 +547,9 @@ pub struct RuntimeAllocatorScorecard {
 pub struct RuntimeResearchScorecard {
     pub backtest_report_id: Option<String>,
     pub backtest_status: Option<RuntimeBacktestStatus>,
+    pub reproducibility_bundle_id: Option<String>,
+    pub reproducibility_verified_at: Option<String>,
+    pub reproducibility_passed: bool,
     pub promotion_eligible: bool,
     pub fold_count: u32,
     pub positive_fold_count: u32,
@@ -1247,6 +1250,110 @@ pub struct RuntimeBacktestReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum RuntimeExperimentVerificationMode {
+    Exact,
+    BoundedTolerance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExperimentCatalogVersionRef {
+    pub record_id: String,
+    pub key: String,
+    pub version: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExperimentCostModelRef {
+    pub model_id: String,
+    pub calibration_id: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExperimentManifest {
+    pub manifest_id: String,
+    pub generated_at: String,
+    pub code_revision: RuntimeCodeRevisionRef,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub replay_corpus_id: Option<String>,
+    pub venue_key: Option<String>,
+    pub pair_symbol: Option<String>,
+    pub market_type: Option<RuntimeVenueMarketType>,
+    pub strategy_spec_digest: Option<String>,
+    pub feature_versions: Vec<RuntimeExperimentCatalogVersionRef>,
+    pub regime_versions: Vec<RuntimeExperimentCatalogVersionRef>,
+    pub cost_model: Option<RuntimeExperimentCostModelRef>,
+    pub backtest_config: Option<RuntimeBacktestConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExperimentExpectedResult {
+    pub report_id: Option<String>,
+    pub status: Option<RuntimeBacktestStatus>,
+    pub promotion_eligible: bool,
+    pub aggregate_metrics: Option<RuntimeBacktestMetrics>,
+    pub aggregate_baseline_comparisons: Vec<RuntimeBacktestBaselineComparison>,
+    pub aggregate_regime_metrics: Vec<RuntimeBacktestRegimeMetrics>,
+    pub blocking_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExperimentVerificationTolerance {
+    pub max_net_return_delta_bps: String,
+    pub max_total_cost_delta_bps: String,
+    pub max_drawdown_delta_bps: String,
+    pub max_win_rate_delta_bps: u16,
+    pub max_trade_count_delta: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeExperimentVerificationResult {
+    pub verified_at: String,
+    pub verification_mode: RuntimeExperimentVerificationMode,
+    pub passed: bool,
+    pub report_id: Option<String>,
+    pub rerun_report_id: Option<String>,
+    pub net_return_delta_bps: String,
+    pub total_cost_delta_bps: String,
+    pub max_drawdown_delta_bps: String,
+    pub win_rate_delta_bps: u16,
+    pub trade_count_delta: u32,
+    pub blocking_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResearchReproducibilityBundleRecord {
+    pub schema_version: String,
+    pub reproducibility_bundle_id: String,
+    pub experiment_id: String,
+    pub strategy_key: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub venue_keys: Vec<String>,
+    pub asset_keys: Vec<String>,
+    pub source_citations: Vec<RuntimeResearchCitation>,
+    pub code_revision: RuntimeCodeRevisionRef,
+    pub dataset_snapshots: Vec<RuntimeDatasetSnapshotRef>,
+    pub manifest: RuntimeExperimentManifest,
+    pub expected_result: RuntimeExperimentExpectedResult,
+    pub artifacts: Vec<RuntimeArtifactRef>,
+    pub linked_evidence_bundle_ids: Vec<String>,
+    pub verification_tolerance: RuntimeExperimentVerificationTolerance,
+    pub latest_verification: Option<RuntimeExperimentVerificationResult>,
+    pub summary: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeStrategyCategory {
     Allocation,
     Signal,
@@ -1561,6 +1668,11 @@ mod tests {
             "runtime.research_evidence_bundle.valid.v1.json",
         ))
         .expect("research evidence bundle fixture to deserialize");
+        let reproducibility_bundle: RuntimeResearchReproducibilityBundleRecord =
+            serde_json::from_str(&read_fixture(
+                "runtime.research_reproducibility_bundle.valid.v1.json",
+            ))
+            .expect("research reproducibility bundle fixture to deserialize");
         let backtest: RuntimeBacktestReport =
             serde_json::from_str(&read_fixture("runtime.backtest_report.valid.v1.json"))
                 .expect("backtest report fixture to deserialize");
@@ -1587,6 +1699,10 @@ mod tests {
         assert_eq!(source.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(experiment.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(evidence.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
+        assert_eq!(
+            reproducibility_bundle.schema_version,
+            RUNTIME_PROTOCOL_SCHEMA_VERSION
+        );
         assert_eq!(backtest.schema_version, RUNTIME_PROTOCOL_SCHEMA_VERSION);
         assert_eq!(
             venue_capability.schema_version,
@@ -1600,6 +1716,10 @@ mod tests {
         assert_eq!(plan.slices.len(), 1);
         assert_eq!(experiment.dataset_snapshots.len(), 1);
         assert_eq!(evidence.artifacts.len(), 2);
+        assert_eq!(
+            reproducibility_bundle.expected_result.report_id.as_deref(),
+            Some("backtest_alloc_dca_report")
+        );
         assert_eq!(backtest.fold_reports.len(), 2);
         assert!(backtest.promotion_eligible);
         assert_eq!(venue_capability.venue_key, "jupiter");

@@ -18,6 +18,7 @@ import {
   parseRuntimeResearchEvidenceBundleRecord,
   parseRuntimeResearchExperimentRecord,
   parseRuntimeResearchHypothesisRecord,
+  parseRuntimeResearchReproducibilityBundleRecord,
   parseRuntimeResearchSourceRecord,
   parseRuntimeRunRecord,
   RUNTIME_PROTOCOL_SCHEMA_VERSION,
@@ -36,6 +37,7 @@ import {
   type RuntimeResearchEvidenceBundleRecord,
   type RuntimeResearchExperimentRecord,
   type RuntimeResearchHypothesisRecord,
+  type RuntimeResearchReproducibilityBundleRecord,
   type RuntimeResearchSourceRecord,
   type RuntimeRunRecord,
 } from "./runtime_contracts";
@@ -56,6 +58,8 @@ const INTERNAL_RUNTIME_RESEARCH_HYPOTHESES_PATH = `${INTERNAL_RUNTIME_RESEARCH_P
 const INTERNAL_RUNTIME_RESEARCH_SOURCES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/sources`;
 const INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/experiments`;
 const INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/evidence-bundles`;
+const INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_BUNDLES_PATH = `${INTERNAL_RUNTIME_RESEARCH_PATH}/reproducibility-bundles`;
+const INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_RERUN_PATH = `${INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_BUNDLES_PATH}/rerun`;
 const INTERNAL_RUNTIME_ASSETS_PATH = `${INTERNAL_RUNTIME_PREFIX}/assets`;
 const INTERNAL_RUNTIME_ASSETS_PREFIX = `${INTERNAL_RUNTIME_ASSETS_PATH}/`;
 const INTERNAL_RUNTIME_DATASETS_PATH = `${INTERNAL_RUNTIME_PREFIX}/datasets`;
@@ -799,12 +803,163 @@ function createRuntimeResearchEvidenceBundleFixture(): RuntimeResearchEvidenceBu
   });
 }
 
+function createRuntimeResearchReproducibilityBundleFixture(): RuntimeResearchReproducibilityBundleRecord {
+  return parseRuntimeResearchReproducibilityBundleRecord({
+    schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    reproducibilityBundleId: "repro_signal_trend_shadow",
+    experimentId: "experiment_signal_trend_shadow",
+    strategyKey: "trend_following",
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+    venueKeys: ["jupiter"],
+    assetKeys: ["SOL", "USDC"],
+    sourceCitations: [
+      {
+        sourceId: "source_paper_microstructure",
+        locator: "sec-2",
+        materialDigest: "sha256:citation",
+      },
+    ],
+    codeRevision: {
+      vcs: "git",
+      repository: "github.com/GuiBibeau/serious-trader-ralph",
+      revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+      comparedTo: "main~1",
+      treeDirty: false,
+    },
+    datasetSnapshots: [
+      {
+        datasetId: "dataset_features_sol_usdc",
+        snapshotId: "snapshot_2026_03_10",
+        capturedAt: FIXTURE_TIMESTAMP,
+        uri: "r2://datasets/features/2026-03-10.parquet",
+        contentDigest: "sha256:dataset",
+      },
+    ],
+    manifest: {
+      manifestId: "manifest_signal_trend_shadow",
+      generatedAt: FIXTURE_TIMESTAMP,
+      codeRevision: {
+        vcs: "git",
+        repository: "github.com/GuiBibeau/serious-trader-ralph",
+        revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+        comparedTo: "main~1",
+        treeDirty: false,
+      },
+      datasetSnapshots: [
+        {
+          datasetId: "dataset_features_sol_usdc",
+          snapshotId: "snapshot_2026_03_10",
+          capturedAt: FIXTURE_TIMESTAMP,
+          uri: "r2://datasets/features/2026-03-10.parquet",
+          contentDigest: "sha256:dataset",
+        },
+      ],
+      replayCorpusId: "replay_corpus_sol_usdc_feed_gateway_seed",
+      venueKey: "jupiter",
+      pairSymbol: "SOL/USDC",
+      marketType: "spot",
+      strategySpecDigest: "sha256:strategy",
+      featureVersions: [
+        {
+          recordId: "feature_short_return",
+          key: "short_return_bps",
+          version: "v1",
+          updatedAt: FIXTURE_TIMESTAMP,
+        },
+      ],
+      regimeVersions: [
+        {
+          recordId: "regime_long_trend",
+          key: "long_trend",
+          version: "v1",
+          updatedAt: FIXTURE_TIMESTAMP,
+        },
+      ],
+      costModel: {
+        modelId: "cost_model_jupiter_sol_usdc_spot",
+        calibrationId: "calibration_seed",
+        updatedAt: FIXTURE_TIMESTAMP,
+      },
+      backtestConfig: {
+        replayCorpusId: "replay_corpus_sol_usdc_feed_gateway_seed",
+        venueKey: "jupiter",
+        pairSymbol: "SOL/USDC",
+        marketType: "spot",
+        windowMode: "rolling",
+        trainingWindowObservations: 32,
+        testingWindowObservations: 8,
+        stepObservations: 4,
+        purgeObservations: 2,
+        baselineStrategies: ["flat_cash", "buy_and_hold"],
+      },
+    },
+    expectedResult: {
+      reportId: "backtest_alloc_dca_report",
+      status: "completed",
+      promotionEligible: true,
+      aggregateMetrics: {
+        observationCount: 8,
+        tradeCount: 3,
+        grossReturnBps: "42.1500",
+        netReturnBps: "39.4000",
+        totalCostBps: "2.7500",
+        winRateBps: 6667,
+        maxDrawdownBps: "8.1000",
+      },
+      aggregateBaselineComparisons: [],
+      aggregateRegimeMetrics: [],
+      blockingReasons: [],
+    },
+    artifacts: [
+      {
+        artifactId: "repro-manifest",
+        kind: "reproducibility-manifest",
+        uri: "runtime-reproducibility://repro_signal_trend_shadow",
+        createdAt: FIXTURE_TIMESTAMP,
+      },
+      {
+        artifactId: "backtest-report",
+        kind: "backtest-report",
+        uri: "runtime-backtest://backtest_alloc_dca_report",
+        createdAt: FIXTURE_TIMESTAMP,
+      },
+    ],
+    linkedEvidenceBundleIds: ["evidence_signal_trend_shadow"],
+    verificationTolerance: {
+      maxNetReturnDeltaBps: "0.1000",
+      maxTotalCostDeltaBps: "0.1000",
+      maxDrawdownDeltaBps: "0.1000",
+      maxWinRateDeltaBps: 1,
+      maxTradeCountDelta: 0,
+    },
+    latestVerification: {
+      verifiedAt: FIXTURE_TIMESTAMP,
+      verificationMode: "bounded_tolerance",
+      passed: true,
+      reportId: "backtest_alloc_dca_report",
+      rerunReportId: "backtest_alloc_dca_report",
+      netReturnDeltaBps: "0.0000",
+      totalCostDeltaBps: "0.0000",
+      maxDrawdownDeltaBps: "0.0000",
+      winRateDeltaBps: 0,
+      tradeCountDelta: 0,
+      blockingReasons: [],
+    },
+    summary: "Reproducibility bundle for the trend-following backtest.",
+    tags: ["reproducible"],
+  });
+}
+
 function createRuntimeResearchRegistryFixture() {
   return {
     hypotheses: [createRuntimeResearchHypothesisFixture()],
     sources: [createRuntimeResearchSourceFixture()],
     experiments: [createRuntimeResearchExperimentFixture()],
     evidenceBundles: [createRuntimeResearchEvidenceBundleFixture()],
+    reproducibilityBundles: [
+      createRuntimeResearchReproducibilityBundleFixture(),
+    ],
   };
 }
 
@@ -1420,6 +1575,8 @@ function buildRuntimeHealthPayload(env: Env, service: string) {
       leaderboards: INTERNAL_RUNTIME_LEADERBOARDS_PATH,
       allocator: INTERNAL_RUNTIME_ALLOCATOR_PATH,
       research: INTERNAL_RUNTIME_RESEARCH_PATH,
+      reproducibilityBundles:
+        INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_BUNDLES_PATH,
       assets: INTERNAL_RUNTIME_ASSETS_PATH,
       datasets: INTERNAL_RUNTIME_DATASETS_PATH,
       backtests: INTERNAL_RUNTIME_BACKTESTS_PATH,
@@ -1851,6 +2008,32 @@ export async function writeRuntimeResearchEvidenceBundle(input: {
   });
 }
 
+export async function writeRuntimeResearchReproducibilityBundle(input: {
+  env: Env;
+  reproducibilityBundle: RuntimeResearchReproducibilityBundleRecord;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_BUNDLES_PATH,
+    body: input.reproducibilityBundle,
+  });
+}
+
+export async function rerunRuntimeResearchReproducibilityBundle(input: {
+  env: Env;
+  reproducibilityBundleId: string;
+}): Promise<RuntimeInternalJsonResult> {
+  return await dispatchRuntimeInternalJson({
+    env: input.env,
+    method: "POST",
+    pathname: INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_RERUN_PATH,
+    body: {
+      reproducibilityBundleId: input.reproducibilityBundleId,
+    },
+  });
+}
+
 export async function readRuntimeAssetRegistry(input: {
   env: Env;
   assetKey?: string;
@@ -2186,6 +2369,8 @@ export async function handleRuntimeInternalRoute(
     url.pathname === INTERNAL_RUNTIME_RESEARCH_SOURCES_PATH ||
     url.pathname === INTERNAL_RUNTIME_RESEARCH_EXPERIMENTS_PATH ||
     url.pathname === INTERNAL_RUNTIME_RESEARCH_EVIDENCE_BUNDLES_PATH ||
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_BUNDLES_PATH ||
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_RERUN_PATH ||
     url.pathname === INTERNAL_RUNTIME_ASSETS_PATH ||
     url.pathname === INTERNAL_RUNTIME_DATASETS_PATH ||
     url.pathname === INTERNAL_RUNTIME_BACKTESTS_PATH ||
@@ -2694,6 +2879,58 @@ export async function handleRuntimeInternalRoute(
         evidenceBundle,
       },
       { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_BUNDLES_PATH
+  ) {
+    let reproducibilityBundle: RuntimeResearchReproducibilityBundleRecord;
+    try {
+      const payload = await readJsonBody(request);
+      reproducibilityBundle =
+        parseRuntimeResearchReproducibilityBundleRecord(payload);
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: "invalid-runtime-research-reproducibility-bundle",
+          details: {
+            reason: error instanceof Error ? error.message : "unknown-error",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: true,
+        reproducibilityBundle,
+      },
+      { status: 201 },
+    );
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === INTERNAL_RUNTIME_RESEARCH_REPRODUCIBILITY_RERUN_PATH
+  ) {
+    return json(
+      {
+        ok: true,
+        source: "stub",
+        created: false,
+        reproducibilityBundle:
+          createRuntimeResearchReproducibilityBundleFixture(),
+        rerunReport: createRuntimeBacktestFixture(),
+        verification:
+          createRuntimeResearchReproducibilityBundleFixture()
+            .latestVerification,
+      },
+      { status: 200 },
     );
   }
 

@@ -174,10 +174,37 @@ Route surface:
 - `GET /api/internal/runtime/allocator?deploymentId=:deploymentId`
 
 Scorecards now include the latest linked backtest evidence, significance and
-regime-stability metrics, and optional research-backed promotion gate checks.
-The leaderboard route ranks candidate strategies from the same research
-scorecard signals plus deployment readiness when a candidate already has a
-runtime deployment.
+regime-stability metrics, reproducibility verification state, and optional
+research-backed promotion gate checks. The leaderboard route ranks candidate
+strategies from the same research scorecard signals plus deployment readiness
+when a candidate already has a runtime deployment.
+
+Research and evaluation routes now preserve the evidence chain needed for paper
+and limited-live promotion:
+
+- `GET /api/internal/runtime/research`
+- `POST /api/internal/runtime/research/hypotheses`
+- `POST /api/internal/runtime/research/sources`
+- `POST /api/internal/runtime/research/experiments`
+- `POST /api/internal/runtime/research/evidence-bundles`
+- `POST /api/internal/runtime/research/reproducibility-bundles`
+- `POST /api/internal/runtime/research/reproducibility-bundles/rerun`
+- `GET /api/internal/runtime/backtests`
+- `POST /api/internal/runtime/backtests`
+
+Every successful `POST /api/internal/runtime/backtests` run now persists a
+linked reproducibility bundle with the exact code revision, dataset snapshots,
+backtest configuration, and expected result used to build the report. Reruns
+verify the bundle under bounded tolerance and write the latest verification
+result back into the research registry.
+
+Promotion evidence is stricter now:
+
+- `paper` and live-target evidence still require a `backtest-report` artifact
+- the same evidence bundle must also include a matching
+  `reproducibility-bundle` artifact
+- the bundle must match the experiment id, strategy key, and backtest report id
+  carried by the promotion record
 
 Example shadow evaluation flow:
 

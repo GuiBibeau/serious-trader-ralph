@@ -47,16 +47,18 @@ use portfolio_ledger::{
 };
 use protocol::{
     RuntimeAssetListingState, RuntimeAssetRecord, RuntimeBacktestBaseline, RuntimeBacktestReport,
-    RuntimeBacktestWindowMode, RuntimeDeploymentRecord, RuntimeDeploymentState,
-    RuntimeExecutionCostModelRecord, RuntimeExecutionCostModelStatus,
-    RuntimeExecutionCostObservationRecord, RuntimeFeatureCatalogStatus,
-    RuntimeFeatureDefinitionRecord, RuntimeHistoricalDatasetKind,
+    RuntimeBacktestStatus, RuntimeBacktestWindowMode, RuntimeDeploymentRecord,
+    RuntimeDeploymentState, RuntimeExecutionCostModelRecord, RuntimeExecutionCostModelStatus,
+    RuntimeExecutionCostObservationRecord, RuntimeExperimentCatalogVersionRef,
+    RuntimeExperimentExpectedResult, RuntimeExperimentManifest, RuntimeExperimentVerificationMode,
+    RuntimeExperimentVerificationResult, RuntimeExperimentVerificationTolerance,
+    RuntimeFeatureCatalogStatus, RuntimeFeatureDefinitionRecord, RuntimeHistoricalDatasetKind,
     RuntimeHistoricalDatasetSnapshotRecord, RuntimeMode, RuntimePromotionGateStatus,
     RuntimePromotionReadinessReport, RuntimeRegimeTagRecord, RuntimeReplayCorpusRecord,
     RuntimeResearchEvidenceBundleRecord, RuntimeResearchExperimentRecord,
-    RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord, RuntimeRunRecord,
-    RuntimeStrategyLeaderboard, RuntimeStrategyLeaderboardEntry, RuntimeVenueMarketType,
-    RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeResearchHypothesisRecord, RuntimeResearchReproducibilityBundleRecord,
+    RuntimeResearchSourceRecord, RuntimeRunRecord, RuntimeStrategyLeaderboard,
+    RuntimeStrategyLeaderboardEntry, RuntimeVenueMarketType, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use reconciler::{Reconciler, ReconcilerConfig, ReconcilerError, ReconcilerSnapshot};
 use research_registry::{
@@ -412,6 +414,12 @@ struct RuntimeBacktestRunRequestPayload {
     pub baseline_strategies: Vec<RuntimeBacktestBaseline>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeReproducibilityRerunRequestPayload {
+    pub reproducibility_bundle_id: String,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeCostModelQueryParams {
@@ -533,6 +541,14 @@ pub fn app(config: RuntimeConfig) -> Router {
         .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/research/evidence-bundles"),
             post(create_research_evidence_bundle_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/research/reproducibility-bundles"),
+            post(create_research_reproducibility_bundle_handler),
+        )
+        .route(
+            &format!("{INTERNAL_RUNTIME_PREFIX}/research/reproducibility-bundles/rerun"),
+            post(rerun_research_reproducibility_bundle_handler),
         )
         .route(
             &format!("{INTERNAL_RUNTIME_PREFIX}/assets"),
@@ -1334,6 +1350,12 @@ fn build_runtime_scorecard_report(
         &deployment.pair.market_type,
     )
     .map_err(map_backtesting_engine_error)?;
+    let reproducibility_bundle = backtest_report
+        .as_ref()
+        .map(|report| latest_reproducibility_bundle_for_report(state, report))
+        .transpose()
+        .map_err(map_research_registry_error)?
+        .flatten();
 
     build_readiness_report(
         &RuntimeScorecardConfig::default(),
@@ -1341,6 +1363,7 @@ fn build_runtime_scorecard_report(
             deployment,
             strategy_spec,
             backtest_report,
+            reproducibility_bundle,
             runs,
             verdicts,
             plans,
@@ -1378,6 +1401,20 @@ fn latest_relevant_backtest_report(
         report.config.venue_key == venue_key
             && report.config.pair_symbol == pair_symbol
             && report.config.market_type == *market_type
+    }))
+}
+
+fn latest_reproducibility_bundle_for_report(
+    state: &RuntimeAppState,
+    report: &RuntimeBacktestReport,
+) -> Result<Option<RuntimeResearchReproducibilityBundleRecord>, ResearchRegistryError> {
+    let result = state.research_registry.query(&ResearchRegistryQuery {
+        strategy_key: Some(report.strategy_key.clone()),
+        ..ResearchRegistryQuery::default()
+    })?;
+    Ok(result.reproducibility_bundles.into_iter().find(|bundle| {
+        bundle.experiment_id == report.experiment_id
+            && bundle.expected_result.report_id.as_deref() == Some(report.report_id.as_str())
     }))
 }
 
@@ -1535,8 +1572,11 @@ fn build_strategy_leaderboard_entry(
     report: RuntimeBacktestReport,
     deployment: Option<RuntimeDeploymentRecord>,
 ) -> Result<RuntimeStrategyLeaderboardEntry, JsonPayload> {
+    let reproducibility_bundle = latest_reproducibility_bundle_for_report(state, &report)
+        .map_err(map_research_registry_error)?;
     let research =
-        build_research_scorecard_from_backtest(Some(&report)).map_err(map_scorecard_error)?;
+        build_research_scorecard_from_backtest(Some(&report), reproducibility_bundle.as_ref())
+            .map_err(map_scorecard_error)?;
     let readiness = deployment
         .clone()
         .map(|deployment_record| build_runtime_scorecard_report(state, deployment_record))
@@ -1770,6 +1810,7 @@ async fn research_query_handler(
                 "sources": result.sources,
                 "experiments": result.experiments,
                 "evidenceBundles": result.evidence_bundles,
+                "reproducibilityBundles": result.reproducibility_bundles,
             },
         }),
     ))
@@ -1884,6 +1925,71 @@ async fn create_research_evidence_bundle_handler(
     ))
 }
 
+async fn create_research_reproducibility_bundle_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let record: RuntimeResearchReproducibilityBundleRecord =
+        parse_json_body(&body, "invalid-runtime-research-reproducibility-bundle")?;
+    let result = state
+        .research_registry
+        .upsert_reproducibility_bundle(&record)
+        .map_err(map_research_registry_error)?;
+    Ok(OkJson::with_status(
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "reproducibilityBundle": result.record,
+        }),
+    ))
+}
+
+async fn rerun_research_reproducibility_bundle_handler(
+    headers: HeaderMap,
+    State(state): State<RuntimeAppState>,
+    body: Bytes,
+) -> HandlerResult {
+    authorize_internal_request(&headers, &state)?;
+    let request: RuntimeReproducibilityRerunRequestPayload =
+        parse_json_body(&body, "invalid-runtime-research-reproducibility-rerun")?;
+    let bundle = state
+        .research_registry
+        .get_reproducibility_bundle(&request.reproducibility_bundle_id)
+        .map_err(map_research_registry_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "research-reproducibility-bundle-not-found",
+                json!({ "reproducibilityBundleId": request.reproducibility_bundle_id }),
+            )
+        })?;
+    let (updated_bundle, rerun_report, verification) =
+        rerun_reproducibility_bundle(&state, bundle)?;
+    let result = state
+        .research_registry
+        .upsert_reproducibility_bundle(&updated_bundle)
+        .map_err(map_research_registry_error)?;
+    Ok(OkJson::with_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "source": "runtime-rs",
+            "created": result.created,
+            "reproducibilityBundle": result.record,
+            "rerunReport": rerun_report,
+            "verification": verification,
+        }),
+    ))
+}
+
 async fn backtests_query_handler(
     headers: HeaderMap,
     Query(query): Query<RuntimeBacktestQueryParams>,
@@ -1981,15 +2087,19 @@ async fn run_backtest_handler(
         .map_err(map_cost_model_registry_error)?;
     cost_models.retain(|model| model.status == RuntimeExecutionCostModelStatus::Active);
     cost_models.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    let primary_cost_model = cost_models.first().cloned();
+    let feature_definitions = feature_catalog.feature_definitions.clone();
+    let regime_tags = feature_catalog.regime_tags.clone();
+    let experiment_record = experiment.clone();
     let result = state
         .backtesting_engine
         .run(&BacktestRunRequest {
             report_id: request.report_id,
             experiment,
             strategy_spec,
-            cost_model: cost_models.into_iter().next(),
-            feature_definitions: feature_catalog.feature_definitions,
-            regime_tags: feature_catalog.regime_tags,
+            cost_model: primary_cost_model.clone(),
+            feature_definitions,
+            regime_tags,
             replay_corpus,
             config: protocol::RuntimeBacktestConfig {
                 replay_corpus_id: request.replay_corpus_id,
@@ -2005,6 +2115,17 @@ async fn run_backtest_handler(
             },
         })
         .map_err(map_backtesting_engine_error)?;
+    let reproducibility_bundle = build_backtest_reproducibility_bundle(
+        &experiment_record,
+        primary_cost_model.as_ref(),
+        &feature_catalog.feature_definitions,
+        &feature_catalog.regime_tags,
+        &result.report,
+    );
+    state
+        .research_registry
+        .upsert_reproducibility_bundle(&reproducibility_bundle)
+        .map_err(map_research_registry_error)?;
     Ok(OkJson::with_status(
         if result.created {
             StatusCode::CREATED
@@ -2018,6 +2139,373 @@ async fn run_backtest_handler(
             "report": result.report,
         }),
     ))
+}
+
+fn build_backtest_reproducibility_bundle(
+    experiment: &RuntimeResearchExperimentRecord,
+    cost_model: Option<&RuntimeExecutionCostModelRecord>,
+    feature_definitions: &[RuntimeFeatureDefinitionRecord],
+    regime_tags: &[RuntimeRegimeTagRecord],
+    report: &RuntimeBacktestReport,
+) -> RuntimeResearchReproducibilityBundleRecord {
+    let bundle_id = format!("repro_{}", report.report_id);
+    let manifest_id = format!("manifest_{}", report.report_id);
+    let feature_versions = feature_definitions
+        .iter()
+        .map(|record| RuntimeExperimentCatalogVersionRef {
+            record_id: record.feature_id.clone(),
+            key: record.feature_key.clone(),
+            version: record.version.clone(),
+            updated_at: record.updated_at.clone(),
+        })
+        .collect::<Vec<_>>();
+    let regime_versions = regime_tags
+        .iter()
+        .map(|record| RuntimeExperimentCatalogVersionRef {
+            record_id: record.regime_tag_id.clone(),
+            key: record.regime_key.clone(),
+            version: record.version.clone(),
+            updated_at: record.updated_at.clone(),
+        })
+        .collect::<Vec<_>>();
+    RuntimeResearchReproducibilityBundleRecord {
+        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+        reproducibility_bundle_id: bundle_id.clone(),
+        experiment_id: experiment.experiment_id.clone(),
+        strategy_key: report.strategy_key.clone(),
+        created_at: report.generated_at.clone(),
+        updated_at: report.generated_at.clone(),
+        venue_keys: report.venue_keys.clone(),
+        asset_keys: report.asset_keys.clone(),
+        source_citations: experiment.source_citations.clone(),
+        code_revision: report.code_revision.clone(),
+        dataset_snapshots: report.dataset_snapshots.clone(),
+        manifest: RuntimeExperimentManifest {
+            manifest_id,
+            generated_at: report.generated_at.clone(),
+            code_revision: report.code_revision.clone(),
+            dataset_snapshots: report.dataset_snapshots.clone(),
+            replay_corpus_id: Some(report.config.replay_corpus_id.clone()),
+            venue_key: Some(report.config.venue_key.clone()),
+            pair_symbol: Some(report.config.pair_symbol.clone()),
+            market_type: Some(report.config.market_type.clone()),
+            strategy_spec_digest: Some(report.strategy_spec_digest.clone()),
+            feature_versions,
+            regime_versions,
+            cost_model: cost_model.map(|model| protocol::RuntimeExperimentCostModelRef {
+                model_id: model.model_id.clone(),
+                calibration_id: model.calibration.calibration_id.clone(),
+                updated_at: model.updated_at.clone(),
+            }),
+            backtest_config: Some(report.config.clone()),
+        },
+        expected_result: RuntimeExperimentExpectedResult {
+            report_id: Some(report.report_id.clone()),
+            status: Some(report.status.clone()),
+            promotion_eligible: report.promotion_eligible,
+            aggregate_metrics: Some(report.aggregate_metrics.clone()),
+            aggregate_baseline_comparisons: report.aggregate_baseline_comparisons.clone(),
+            aggregate_regime_metrics: report.aggregate_regime_metrics.clone(),
+            blocking_reasons: report.blocking_reasons.clone(),
+        },
+        artifacts: vec![
+            protocol::RuntimeArtifactRef {
+                artifact_id: format!("manifest-{}", report.report_id),
+                kind: "reproducibility-manifest".to_string(),
+                uri: format!("runtime-reproducibility://{}", bundle_id),
+                content_digest: None,
+                created_at: Some(report.generated_at.clone()),
+                notes: Some("Canonical reproducibility manifest and expected result.".to_string()),
+            },
+            protocol::RuntimeArtifactRef {
+                artifact_id: format!("backtest-{}", report.report_id),
+                kind: "backtest-report".to_string(),
+                uri: format!("runtime-backtest://{}", report.report_id),
+                content_digest: None,
+                created_at: Some(report.generated_at.clone()),
+                notes: Some(
+                    "Backtest report referenced by the reproducibility bundle.".to_string(),
+                ),
+            },
+        ],
+        linked_evidence_bundle_ids: Vec::new(),
+        verification_tolerance: default_reproducibility_tolerance(),
+        latest_verification: None,
+        summary: format!(
+            "Reproducibility bundle for {} on {} {}.",
+            report.strategy_key, report.config.venue_key, report.config.pair_symbol
+        ),
+        tags: vec!["reproducible".to_string(), "backtest".to_string()],
+    }
+}
+
+fn default_reproducibility_tolerance() -> RuntimeExperimentVerificationTolerance {
+    RuntimeExperimentVerificationTolerance {
+        max_net_return_delta_bps: "0.1000".to_string(),
+        max_total_cost_delta_bps: "0.1000".to_string(),
+        max_drawdown_delta_bps: "0.1000".to_string(),
+        max_win_rate_delta_bps: 1,
+        max_trade_count_delta: 0,
+    }
+}
+
+fn rerun_reproducibility_bundle(
+    state: &RuntimeAppState,
+    bundle: RuntimeResearchReproducibilityBundleRecord,
+) -> Result<
+    (
+        RuntimeResearchReproducibilityBundleRecord,
+        RuntimeBacktestReport,
+        RuntimeExperimentVerificationResult,
+    ),
+    JsonPayload,
+> {
+    let config = bundle.manifest.backtest_config.clone().ok_or_else(|| {
+        error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reproducibility-manifest-backtest-config-required",
+            json!({ "reproducibilityBundleId": bundle.reproducibility_bundle_id }),
+        )
+    })?;
+    let experiment = state
+        .research_registry
+        .get_experiment(&bundle.experiment_id)
+        .map_err(map_research_registry_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "research-experiment-not-found",
+                json!({ "experimentId": bundle.experiment_id }),
+            )
+        })?;
+    let strategy_spec = state
+        .execution_planner
+        .strategy_specs()
+        .into_iter()
+        .find(|spec| spec.strategy_key == bundle.strategy_key)
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::BAD_REQUEST,
+                "unsupported-strategy",
+                json!({ "strategyKey": bundle.strategy_key }),
+            )
+        })?;
+    let replay_corpus = state
+        .historical_data_lake
+        .query(&HistoricalDataLakeQuery {
+            corpus_id: Some(config.replay_corpus_id.clone()),
+            venue_key: Some(config.venue_key.clone()),
+            ..HistoricalDataLakeQuery::default()
+        })
+        .map_err(map_historical_data_lake_error)?
+        .replay_corpora
+        .into_iter()
+        .find(|record| record.corpus_id == config.replay_corpus_id)
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "replay-corpus-not-found",
+                json!({ "corpusId": config.replay_corpus_id }),
+            )
+        })?;
+    let feature_catalog = state
+        .feature_catalog_registry
+        .query(&FeatureCatalogRegistryQuery {
+            venue_key: Some(config.venue_key.clone()),
+            pair_symbol: Some(config.pair_symbol.clone()),
+            market_type: Some(config.market_type.clone()),
+            status: Some(RuntimeFeatureCatalogStatus::Active),
+            ..FeatureCatalogRegistryQuery::default()
+        })
+        .map_err(map_feature_catalog_registry_error)?;
+    let mut cost_models = state
+        .cost_model_registry
+        .query(&CostModelRegistryQuery {
+            venue_key: Some(config.venue_key.clone()),
+            pair_symbol: Some(config.pair_symbol.clone()),
+            market_type: Some(config.market_type.clone()),
+            ..CostModelRegistryQuery::default()
+        })
+        .map_err(map_cost_model_registry_error)?;
+    cost_models.retain(|model| model.status == RuntimeExecutionCostModelStatus::Active);
+    cost_models.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    let rerun_report = state
+        .backtesting_engine
+        .preview(&BacktestRunRequest {
+            report_id: bundle.expected_result.report_id.clone(),
+            experiment,
+            strategy_spec,
+            cost_model: cost_models.first().cloned(),
+            feature_definitions: feature_catalog.feature_definitions,
+            regime_tags: feature_catalog.regime_tags,
+            replay_corpus,
+            config,
+        })
+        .map_err(map_backtesting_engine_error)?;
+    let verification = compare_reproducibility_bundle(&bundle, &rerun_report)?;
+    let mut updated_bundle = bundle.clone();
+    updated_bundle.updated_at = verification.verified_at.clone();
+    updated_bundle.latest_verification = Some(verification.clone());
+    Ok((updated_bundle, rerun_report, verification))
+}
+
+fn compare_reproducibility_bundle(
+    bundle: &RuntimeResearchReproducibilityBundleRecord,
+    rerun_report: &RuntimeBacktestReport,
+) -> Result<RuntimeExperimentVerificationResult, JsonPayload> {
+    let expected = &bundle.expected_result;
+    let expected_metrics = expected.aggregate_metrics.as_ref().ok_or_else(|| {
+        error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reproducibility-expected-metrics-required",
+            json!({ "reproducibilityBundleId": bundle.reproducibility_bundle_id }),
+        )
+    })?;
+    let rerun_metrics = &rerun_report.aggregate_metrics;
+    let tolerance = &bundle.verification_tolerance;
+    let net_return_delta = absolute_bps_delta(
+        "expectedResult.aggregateMetrics.netReturnBps",
+        &expected_metrics.net_return_bps,
+        &rerun_metrics.net_return_bps,
+    )?;
+    let total_cost_delta = absolute_bps_delta(
+        "expectedResult.aggregateMetrics.totalCostBps",
+        &expected_metrics.total_cost_bps,
+        &rerun_metrics.total_cost_bps,
+    )?;
+    let max_drawdown_delta = absolute_bps_delta(
+        "expectedResult.aggregateMetrics.maxDrawdownBps",
+        &expected_metrics.max_drawdown_bps,
+        &rerun_metrics.max_drawdown_bps,
+    )?;
+    let max_net_return_tolerance = parse_numeric_metric(
+        "verificationTolerance.maxNetReturnDeltaBps",
+        &tolerance.max_net_return_delta_bps,
+    )?;
+    let max_total_cost_tolerance = parse_numeric_metric(
+        "verificationTolerance.maxTotalCostDeltaBps",
+        &tolerance.max_total_cost_delta_bps,
+    )?;
+    let max_drawdown_tolerance = parse_numeric_metric(
+        "verificationTolerance.maxDrawdownDeltaBps",
+        &tolerance.max_drawdown_delta_bps,
+    )?;
+    let win_rate_delta = expected_metrics
+        .win_rate_bps
+        .abs_diff(rerun_metrics.win_rate_bps);
+    let trade_count_delta = expected_metrics
+        .trade_count
+        .abs_diff(rerun_metrics.trade_count);
+    let verification_mode = if max_net_return_tolerance == 0.0
+        && max_total_cost_tolerance == 0.0
+        && max_drawdown_tolerance == 0.0
+        && tolerance.max_win_rate_delta_bps == 0
+        && tolerance.max_trade_count_delta == 0
+    {
+        RuntimeExperimentVerificationMode::Exact
+    } else {
+        RuntimeExperimentVerificationMode::BoundedTolerance
+    };
+    let mut blocking_reasons = Vec::new();
+    if expected
+        .report_id
+        .as_ref()
+        .is_some_and(|report_id| report_id != &rerun_report.report_id)
+    {
+        blocking_reasons.push(format!(
+            "report id mismatch: expected {}, got {}",
+            expected.report_id.as_deref().unwrap_or("n/a"),
+            rerun_report.report_id
+        ));
+    }
+    if expected
+        .status
+        .as_ref()
+        .is_some_and(|status| status != &rerun_report.status)
+    {
+        blocking_reasons.push(format!(
+            "backtest status mismatch: expected {}, got {}",
+            backtest_status_label(expected.status.as_ref().expect("status to exist")),
+            backtest_status_label(&rerun_report.status)
+        ));
+    }
+    if expected.promotion_eligible != rerun_report.promotion_eligible {
+        blocking_reasons.push(format!(
+            "promotion eligibility mismatch: expected {}, got {}",
+            expected.promotion_eligible, rerun_report.promotion_eligible
+        ));
+    }
+    if net_return_delta > max_net_return_tolerance {
+        blocking_reasons.push(format!(
+            "net return delta {} bps exceeded tolerance {} bps",
+            format_decimal_bps(net_return_delta),
+            tolerance.max_net_return_delta_bps
+        ));
+    }
+    if total_cost_delta > max_total_cost_tolerance {
+        blocking_reasons.push(format!(
+            "total cost delta {} bps exceeded tolerance {} bps",
+            format_decimal_bps(total_cost_delta),
+            tolerance.max_total_cost_delta_bps
+        ));
+    }
+    if max_drawdown_delta > max_drawdown_tolerance {
+        blocking_reasons.push(format!(
+            "max drawdown delta {} bps exceeded tolerance {} bps",
+            format_decimal_bps(max_drawdown_delta),
+            tolerance.max_drawdown_delta_bps
+        ));
+    }
+    if win_rate_delta > tolerance.max_win_rate_delta_bps {
+        blocking_reasons.push(format!(
+            "win rate delta {} bps exceeded tolerance {} bps",
+            win_rate_delta, tolerance.max_win_rate_delta_bps
+        ));
+    }
+    if trade_count_delta > tolerance.max_trade_count_delta {
+        blocking_reasons.push(format!(
+            "trade count delta {} exceeded tolerance {}",
+            trade_count_delta, tolerance.max_trade_count_delta
+        ));
+    }
+    let verified_at = OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("verification timestamp");
+    Ok(RuntimeExperimentVerificationResult {
+        verified_at,
+        verification_mode,
+        passed: blocking_reasons.is_empty(),
+        report_id: expected.report_id.clone(),
+        rerun_report_id: Some(rerun_report.report_id.clone()),
+        net_return_delta_bps: format_decimal_bps(net_return_delta),
+        total_cost_delta_bps: format_decimal_bps(total_cost_delta),
+        max_drawdown_delta_bps: format_decimal_bps(max_drawdown_delta),
+        win_rate_delta_bps: win_rate_delta,
+        trade_count_delta,
+        blocking_reasons,
+    })
+}
+
+fn absolute_bps_delta(
+    field: &'static str,
+    expected: &str,
+    observed: &str,
+) -> Result<f64, JsonPayload> {
+    let expected_value = parse_numeric_metric(field, expected)?;
+    let observed_value = parse_numeric_metric(field, observed)?;
+    Ok((expected_value - observed_value).abs())
+}
+
+fn format_decimal_bps(value: f64) -> String {
+    format!("{value:.4}")
+}
+
+fn backtest_status_label(status: &RuntimeBacktestStatus) -> &'static str {
+    match status {
+        RuntimeBacktestStatus::Completed => "completed",
+        RuntimeBacktestStatus::Blocked => "blocked",
+        RuntimeBacktestStatus::Failed => "failed",
+    }
 }
 
 fn enforce_backtest_evidence_gate(
@@ -2076,6 +2564,60 @@ fn enforce_backtest_evidence_gate(
             }),
         ));
     }
+    let Some(reproducibility_bundle_id) = record
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.kind == "reproducibility-bundle")
+        .and_then(|artifact| parse_reproducibility_artifact_uri(&artifact.uri))
+    else {
+        return Err(error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reproducibility-bundle-required",
+            json!({
+                "promotionTarget": record.promotion_target,
+                "requiredArtifactKind": "reproducibility-bundle",
+            }),
+        ));
+    };
+    let reproducibility_bundle = state
+        .research_registry
+        .get_reproducibility_bundle(&reproducibility_bundle_id)
+        .map_err(map_research_registry_error)?
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "reproducibility-bundle-not-found",
+                json!({ "reproducibilityBundleId": reproducibility_bundle_id }),
+            )
+        })?;
+    if reproducibility_bundle.experiment_id != record.experiment_id
+        || reproducibility_bundle.strategy_key != record.strategy_key
+    {
+        return Err(error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reproducibility-bundle-mismatch",
+            json!({
+                "reproducibilityBundleId": reproducibility_bundle.reproducibility_bundle_id,
+                "bundleExperimentId": reproducibility_bundle.experiment_id,
+                "bundleStrategyKey": reproducibility_bundle.strategy_key,
+                "evidenceExperimentId": record.experiment_id,
+                "evidenceStrategyKey": record.strategy_key,
+            }),
+        ));
+    }
+    if reproducibility_bundle.expected_result.report_id.as_deref()
+        != Some(report.report_id.as_str())
+    {
+        return Err(error_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reproducibility-report-mismatch",
+            json!({
+                "reproducibilityBundleId": reproducibility_bundle.reproducibility_bundle_id,
+                "bundleReportId": reproducibility_bundle.expected_result.report_id,
+                "reportId": report.report_id,
+            }),
+        ));
+    }
     Ok(())
 }
 
@@ -2088,6 +2630,12 @@ fn promotion_target_requires_backtest(promotion_target: &str) -> bool {
 
 fn parse_backtest_artifact_uri(uri: &str) -> Option<String> {
     uri.strip_prefix("runtime-backtest://")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_reproducibility_artifact_uri(uri: &str) -> Option<String> {
+    uri.strip_prefix("runtime-reproducibility://")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
@@ -4953,6 +5501,24 @@ mod tests {
             "{backtest_payload:?}"
         );
         assert_eq!(backtest_payload["report"]["promotionEligible"], json!(true));
+        let research_query_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/runtime/research?strategyKey=dca")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(research_query_response.status(), StatusCode::OK);
+        let research_query_payload = read_json(research_query_response).await;
+        assert_eq!(
+            research_query_payload["registry"]["reproducibilityBundles"][0]
+                ["reproducibilityBundleId"],
+            json!("repro_backtest_alloc_dca_report")
+        );
 
         let mismatched_evidence_response = router
             .clone()
@@ -5053,6 +5619,11 @@ mod tests {
                                     "artifactId": "backtest-report",
                                     "kind": "backtest-report",
                                     "uri": "runtime-backtest://backtest_alloc_dca_report"
+                                },
+                                {
+                                    "artifactId": "reproducibility-bundle",
+                                    "kind": "reproducibility-bundle",
+                                    "uri": "runtime-reproducibility://repro_backtest_alloc_dca_report"
                                 }
                             ],
                             "summary": "Paper promotion backed by a passing backtest report.",
@@ -5065,6 +5636,32 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(evidence_response.status(), StatusCode::CREATED);
+
+        let rerun_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/runtime/research/reproducibility-bundles/rerun")
+                    .header("authorization", "Bearer runtime-service-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "reproducibilityBundleId": "repro_backtest_alloc_dca_report"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(rerun_response.status(), StatusCode::OK);
+        let rerun_payload = read_json(rerun_response).await;
+        assert_eq!(rerun_payload["verification"]["passed"], json!(true));
+        assert_eq!(
+            rerun_payload["reproducibilityBundle"]["latestVerification"]["verificationMode"],
+            json!("bounded_tolerance")
+        );
     }
 
     #[tokio::test]

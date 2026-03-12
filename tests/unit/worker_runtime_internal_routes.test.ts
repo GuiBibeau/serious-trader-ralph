@@ -623,6 +623,8 @@ describe("worker runtime internal routes", () => {
         scorecards: "/api/internal/runtime/scorecards",
         leaderboards: "/api/internal/runtime/leaderboards",
         allocator: "/api/internal/runtime/allocator",
+        reproducibilityBundles:
+          "/api/internal/runtime/research/reproducibility-bundles",
         backtests: "/api/internal/runtime/backtests",
         costModels: "/api/internal/runtime/cost-models",
       },
@@ -1238,6 +1240,11 @@ describe("worker runtime internal routes", () => {
         evidenceBundles: [
           {
             evidenceBundleId: "evidence_signal_trend_shadow",
+          },
+        ],
+        reproducibilityBundles: [
+          {
+            reproducibilityBundleId: "repro_signal_trend_shadow",
           },
         ],
       },
