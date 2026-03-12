@@ -1,4 +1,51 @@
 {
+  "sources": [
+    {
+      "schemaVersion": "v1",
+      "sourceId": "source_jup_usdc_onboarding_pilot",
+      "sourceKind": "article",
+      "title": "Operational checklist for JUP/USDC bounded onboarding",
+      "url": "https://example.com/research/jup-usdc-onboarding-checklist",
+      "canonicalUrl": "https://example.com/research/jup-usdc-onboarding-checklist",
+      "authors": ["Ralph Ops"],
+      "publishedAt": "2026-03-10T00:00:00Z",
+      "retrievedAt": "2026-03-11T00:00:00Z",
+      "contentDigest": "sha256:jup-onboarding-source",
+      "provenance": {
+        "acquisitionKind": "manual_url",
+        "collectedFrom": "https://example.com/research/jup-usdc-onboarding-checklist",
+        "hostname": "example.com",
+        "publisher": "Example Research",
+        "firstSeenAt": "2026-03-11T00:00:00Z",
+        "lastSeenAt": "2026-03-11T00:00:00Z"
+      },
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["JUP", "USDC"],
+      "tags": ["pilot", "asset-onboarding"]
+    }
+  ],
+  "hypotheses": [
+    {
+      "schemaVersion": "v1",
+      "hypothesisId": "hypothesis_jup_usdc_onboarding",
+      "strategyKey": "dca",
+      "title": "Bounded DCA flow remains safe for JUP onboarding",
+      "thesis": "A tiny-notional DCA sleeve on JUP/USDC can be onboarded safely when replay, readiness, and cost controls remain inside the bounded paper thresholds.",
+      "status": "candidate",
+      "createdAt": "2026-03-11T00:05:00Z",
+      "updatedAt": "2026-03-11T00:05:00Z",
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["JUP", "USDC"],
+      "sourceCitations": [
+        {
+          "sourceId": "source_jup_usdc_onboarding_pilot",
+          "locator": "ops-checklist",
+          "materialDigest": "sha256:jup-onboarding-source"
+        }
+      ],
+      "tags": ["pilot", "candidate", "asset-onboarding"]
+    }
+  ],
   "assets": [
     {
       "schemaVersion": "v1",
@@ -264,7 +311,13 @@
       "completedAt": "2026-03-11T00:15:00Z",
       "venueKeys": ["jupiter"],
       "assetKeys": ["JUP", "USDC"],
-      "sourceCitations": [],
+      "sourceCitations": [
+        {
+          "sourceId": "source_jup_usdc_onboarding_pilot",
+          "locator": "ops-checklist",
+          "materialDigest": "sha256:jup-onboarding-source"
+        }
+      ],
       "codeRevision": {
         "vcs": "git",
         "repository": "github.com/GuiBibeau/serious-trader-ralph",
@@ -305,7 +358,13 @@
       "updatedAt": "2026-03-11T00:20:00Z",
       "venueKeys": ["jupiter"],
       "assetKeys": ["JUP", "USDC"],
-      "sourceCitations": [],
+      "sourceCitations": [
+        {
+          "sourceId": "source_jup_usdc_onboarding_pilot",
+          "locator": "ops-checklist",
+          "materialDigest": "sha256:jup-onboarding-source"
+        }
+      ],
       "codeRevision": {
         "vcs": "git",
         "repository": "github.com/GuiBibeau/serious-trader-ralph",
@@ -322,6 +381,13 @@
         }
       ],
       "artifacts": [
+        {
+          "artifactId": "backtest-report",
+          "kind": "backtest-report",
+          "uri": "runtime-backtest://backtest_jup_usdc_onboarding",
+          "contentDigest": "sha256:jup-onboarding-backtest",
+          "createdAt": "2026-03-11T00:20:00Z"
+        },
         {
           "artifactId": "jup-onboarding-proof",
           "kind": "proof-bundle",

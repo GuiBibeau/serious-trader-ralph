@@ -68,6 +68,36 @@ export type RuntimeResearchCurationWorkflowResult = {
   markdown: string;
 };
 
+export type RuntimeResearchCurationIo = {
+  writeRuntimeResearchSource: typeof writeRuntimeResearchSource;
+  writeRuntimeResearchHypothesis: typeof writeRuntimeResearchHypothesis;
+  writeRuntimeAsset: typeof writeRuntimeAsset;
+  writeRuntimeHistoricalDatasetSnapshot: typeof writeRuntimeHistoricalDatasetSnapshot;
+  writeRuntimeReplayCorpus: typeof writeRuntimeReplayCorpus;
+  writeRuntimeFeatureDefinition: typeof writeRuntimeFeatureDefinition;
+  writeRuntimeRegimeTag: typeof writeRuntimeRegimeTag;
+  writeRuntimeExecutionCostModel: typeof writeRuntimeExecutionCostModel;
+  writeRuntimeExecutionCostObservation: typeof writeRuntimeExecutionCostObservation;
+  writeRuntimeResearchExperiment: typeof writeRuntimeResearchExperiment;
+  runRuntimeBacktest: typeof runRuntimeBacktest;
+  writeRuntimeResearchEvidenceBundle: typeof writeRuntimeResearchEvidenceBundle;
+};
+
+const defaultRuntimeResearchCurationIo: RuntimeResearchCurationIo = {
+  writeRuntimeResearchSource,
+  writeRuntimeResearchHypothesis,
+  writeRuntimeAsset,
+  writeRuntimeHistoricalDatasetSnapshot,
+  writeRuntimeReplayCorpus,
+  writeRuntimeFeatureDefinition,
+  writeRuntimeRegimeTag,
+  writeRuntimeExecutionCostModel,
+  writeRuntimeExecutionCostObservation,
+  writeRuntimeResearchExperiment,
+  runRuntimeBacktest,
+  writeRuntimeResearchEvidenceBundle,
+};
+
 function createdFromResponse(response: RuntimeInternalJsonResult): boolean {
   return response.payload.created === true || response.status === 201;
 }
@@ -201,33 +231,35 @@ export function buildRuntimeResearchCurationMarkdown(
 export async function runRuntimeResearchCurationWorkflow(input: {
   env: Env;
   request: RuntimeResearchCurationRequest;
+  io?: RuntimeResearchCurationIo;
 }): Promise<RuntimeResearchCurationWorkflowResult> {
+  const io = input.io ?? defaultRuntimeResearchCurationIo;
   const summary: RuntimeResearchCurationSummary = {
     sources: await persistCollection({
       items: input.request.sources,
       writeItem: async (sourceRecord) =>
-        await writeRuntimeResearchSource({ env: input.env, sourceRecord }),
+        await io.writeRuntimeResearchSource({ env: input.env, sourceRecord }),
       parseItem: parseRuntimeResearchSourceRecord,
       selectPayloadItem: (payload) => payload.sourceRecord ?? payload.record,
     }),
     hypotheses: await persistCollection({
       items: input.request.hypotheses,
       writeItem: async (hypothesis) =>
-        await writeRuntimeResearchHypothesis({ env: input.env, hypothesis }),
+        await io.writeRuntimeResearchHypothesis({ env: input.env, hypothesis }),
       parseItem: parseRuntimeResearchHypothesisRecord,
       selectPayloadItem: (payload) => payload.hypothesis ?? payload.record,
     }),
     assets: await persistCollection({
       items: input.request.assets,
       writeItem: async (asset) =>
-        await writeRuntimeAsset({ env: input.env, asset }),
+        await io.writeRuntimeAsset({ env: input.env, asset }),
       parseItem: parseRuntimeAssetRecord,
       selectPayloadItem: (payload) => payload.asset ?? payload.record,
     }),
     datasetSnapshots: await persistCollection({
       items: input.request.datasetSnapshots,
       writeItem: async (datasetSnapshot) =>
-        await writeRuntimeHistoricalDatasetSnapshot({
+        await io.writeRuntimeHistoricalDatasetSnapshot({
           env: input.env,
           datasetSnapshot,
         }),
@@ -237,14 +269,14 @@ export async function runRuntimeResearchCurationWorkflow(input: {
     replayCorpora: await persistCollection({
       items: input.request.replayCorpora,
       writeItem: async (replayCorpus) =>
-        await writeRuntimeReplayCorpus({ env: input.env, replayCorpus }),
+        await io.writeRuntimeReplayCorpus({ env: input.env, replayCorpus }),
       parseItem: parseRuntimeReplayCorpusRecord,
       selectPayloadItem: (payload) => payload.replayCorpus ?? payload.record,
     }),
     featureDefinitions: await persistCollection({
       items: input.request.featureDefinitions,
       writeItem: async (featureDefinition) =>
-        await writeRuntimeFeatureDefinition({
+        await io.writeRuntimeFeatureDefinition({
           env: input.env,
           featureDefinition,
         }),
@@ -255,14 +287,14 @@ export async function runRuntimeResearchCurationWorkflow(input: {
     regimeTags: await persistCollection({
       items: input.request.regimeTags,
       writeItem: async (regimeTag) =>
-        await writeRuntimeRegimeTag({ env: input.env, regimeTag }),
+        await io.writeRuntimeRegimeTag({ env: input.env, regimeTag }),
       parseItem: parseRuntimeRegimeTagRecord,
       selectPayloadItem: (payload) => payload.regimeTag ?? payload.record,
     }),
     costModels: await persistCollection({
       items: input.request.costModels,
       writeItem: async (costModel) =>
-        await writeRuntimeExecutionCostModel({
+        await io.writeRuntimeExecutionCostModel({
           env: input.env,
           costModel,
         }),
@@ -272,7 +304,7 @@ export async function runRuntimeResearchCurationWorkflow(input: {
     costObservations: await persistCollection({
       items: input.request.costObservations,
       writeItem: async (costObservation) =>
-        await writeRuntimeExecutionCostObservation({
+        await io.writeRuntimeExecutionCostObservation({
           env: input.env,
           costObservation,
         }),
@@ -282,26 +314,28 @@ export async function runRuntimeResearchCurationWorkflow(input: {
     experiments: await persistCollection({
       items: input.request.experiments,
       writeItem: async (experiment) =>
-        await writeRuntimeResearchExperiment({ env: input.env, experiment }),
+        await io.writeRuntimeResearchExperiment({ env: input.env, experiment }),
       parseItem: parseRuntimeResearchExperimentRecord,
       selectPayloadItem: (payload) => payload.experiment ?? payload.record,
     }),
+    backtests: await persistCollection({
+      items: input.request.backtests,
+      writeItem: async (payload) =>
+        await io.runRuntimeBacktest({ env: input.env, payload }),
+      parseItem: parseRuntimeBacktestReport,
+      selectPayloadItem: (payload) => payload.report ?? payload.record,
+    }),
+    // Backtests must be persisted before evidence bundles so same-request
+    // promotions can reference freshly created runtime-backtest artifacts.
     evidenceBundles: await persistCollection({
       items: input.request.evidenceBundles,
       writeItem: async (evidenceBundle) =>
-        await writeRuntimeResearchEvidenceBundle({
+        await io.writeRuntimeResearchEvidenceBundle({
           env: input.env,
           evidenceBundle,
         }),
       parseItem: parseRuntimeResearchEvidenceBundleRecord,
       selectPayloadItem: (payload) => payload.evidenceBundle ?? payload.record,
-    }),
-    backtests: await persistCollection({
-      items: input.request.backtests,
-      writeItem: async (payload) =>
-        await runRuntimeBacktest({ env: input.env, payload }),
-      parseItem: parseRuntimeBacktestReport,
-      selectPayloadItem: (payload) => payload.report ?? payload.record,
     }),
   };
 

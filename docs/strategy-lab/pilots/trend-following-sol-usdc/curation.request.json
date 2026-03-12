@@ -129,6 +129,13 @@
       ],
       "artifacts": [
         {
+          "artifactId": "backtest-report",
+          "kind": "backtest-report",
+          "uri": "runtime-backtest://backtest_trend_following_sol_usdc_pilot",
+          "contentDigest": "sha256:trend-following-sol-usdc-backtest",
+          "createdAt": "2026-03-11T00:15:00Z"
+        },
+        {
           "artifactId": "trend-following-sol-usdc-proof",
           "kind": "proof-bundle",
           "uri": "repo://docs/strategy-lab/pilots/trend-following-sol-usdc/README.md",
