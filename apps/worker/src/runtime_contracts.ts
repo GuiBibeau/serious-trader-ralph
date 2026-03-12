@@ -25,6 +25,8 @@ export type {
   RuntimeRiskVerdict,
   RuntimeRunRecord,
   RuntimeRunState,
+  RuntimeStrategyLabPromotionEvent,
+  RuntimeStrategyLabPromotionRecord,
   RuntimeStrategySpec,
   RuntimeVenueCapability,
 } from "../../../src/runtime/contracts/index.js";
@@ -50,6 +52,8 @@ export {
   parseRuntimeResearchSourceRecord,
   parseRuntimeRiskVerdict,
   parseRuntimeRunRecord,
+  parseRuntimeStrategyLabPromotionEvent,
+  parseRuntimeStrategyLabPromotionRecord,
   parseRuntimeStrategySpec,
   parseRuntimeVenueCapability,
   RUNTIME_DEPLOYMENT_STATE_TRANSITIONS,
@@ -76,6 +80,8 @@ export {
   safeParseRuntimeResearchSourceRecord,
   safeParseRuntimeRiskVerdict,
   safeParseRuntimeRunRecord,
+  safeParseRuntimeStrategyLabPromotionEvent,
+  safeParseRuntimeStrategyLabPromotionRecord,
   safeParseRuntimeStrategySpec,
   safeParseRuntimeVenueCapability,
 } from "../../../src/runtime/contracts/index.js";

@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_promotion",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "promotionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjectKind": {
+      "type": "string",
+      "enum": ["strategy", "venue", "asset"]
+    },
+    "subjectKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "currentState": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "draft",
+        "shadow",
+        "paper",
+        "limited_live",
+        "broad_live",
+        "integrated",
+        "shadow_ready",
+        "paper_ready",
+        "limited_live_ready",
+        "broad_live_ready",
+        "paused",
+        "deprecated"
+      ]
+    },
+    "targetState": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "draft",
+        "shadow",
+        "paper",
+        "limited_live",
+        "broad_live",
+        "integrated",
+        "shadow_ready",
+        "paper_ready",
+        "limited_live_ready",
+        "broad_live_ready",
+        "paused",
+        "deprecated"
+      ]
+    },
+    "transitionType": {
+      "type": "string",
+      "enum": ["promote", "demote", "pause", "resume", "archive"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "blocked", "requires_human_approval", "applied"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requestedBy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "appliedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "issueNumber": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "pullRequestNumber": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "deploymentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policyGateId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "synthesisId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "triageId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "implementationReference": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["pull_request", "issue", "commit"]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mergedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["kind", "ref"],
+      "additionalProperties": false
+    },
+    "evidenceRefs": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["kind", "ref"],
+        "additionalProperties": false
+      }
+    },
+    "checks": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "checkId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "blocked",
+              "requires_human_approval",
+              "not_applicable"
+            ]
+          },
+          "observedValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "thresholdValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["checkId", "status", "message"],
+        "additionalProperties": false
+      }
+    },
+    "actions": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "actionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "actionType": {
+            "type": "string",
+            "enum": [
+              "record_state_transition",
+              "upsert_runtime_deployment",
+              "evaluate_runtime_deployment",
+              "apply_runtime_control",
+              "record_allowlist_change"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "payload": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": ["actionId", "actionType", "summary", "required"],
+        "additionalProperties": false
+      }
+    },
+    "approvals": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "targetMode": {
+            "type": "string",
+            "enum": ["shadow", "paper", "limited_live", "broad_live"]
+          },
+          "approvedBy": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["targetMode", "approvedBy", "approvedAt"],
+        "additionalProperties": false
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "promotionId",
+    "subjectKind",
+    "subjectKey",
+    "currentState",
+    "targetState",
+    "transitionType",
+    "status",
+    "summary",
+    "requestedBy",
+    "createdAt",
+    "updatedAt",
+    "evidenceRefs",
+    "checks",
+    "actions",
+    "approvals"
+  ],
+  "additionalProperties": false
+}

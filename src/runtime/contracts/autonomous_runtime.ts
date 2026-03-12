@@ -1078,6 +1078,138 @@ export const RuntimeResearchPolicyGateArtifactSchema = VersionedSchema.extend({
   summary: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
 }).strict();
 
+export const RuntimeStrategyLabSubjectKindSchema = z.enum([
+  "strategy",
+  "venue",
+  "asset",
+]);
+
+export const RuntimeStrategyLabStrategyStateSchema = z.enum([
+  "candidate",
+  "draft",
+  "shadow",
+  "paper",
+  "limited_live",
+  "broad_live",
+  "paused",
+  "deprecated",
+]);
+
+export const RuntimeStrategyLabPromotionStateSchema = z.enum([
+  "candidate",
+  "draft",
+  "shadow",
+  "paper",
+  "limited_live",
+  "broad_live",
+  "integrated",
+  "shadow_ready",
+  "paper_ready",
+  "limited_live_ready",
+  "broad_live_ready",
+  "paused",
+  "deprecated",
+]);
+
+export const RuntimeStrategyLabTransitionTypeSchema = z.enum([
+  "promote",
+  "demote",
+  "pause",
+  "resume",
+  "archive",
+]);
+
+export const RuntimeStrategyLabPromotionStatusSchema = z.enum([
+  "pass",
+  "blocked",
+  "requires_human_approval",
+  "applied",
+]);
+
+export const RuntimeStrategyLabImplementationReferenceSchema = z
+  .object({
+    kind: z.enum(["pull_request", "issue", "commit"]),
+    ref: NON_EMPTY_STRING_SCHEMA,
+    mergedAt: ISO_DATETIME_SCHEMA.optional(),
+    revision: NON_EMPTY_STRING_SCHEMA.optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+export const RuntimeStrategyLabEvidenceRefSchema = z
+  .object({
+    kind: NON_EMPTY_STRING_SCHEMA,
+    ref: NON_EMPTY_STRING_SCHEMA,
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeStrategyLabTransitionCheckSchema = z
+  .object({
+    checkId: NON_EMPTY_STRING_SCHEMA,
+    status: RuntimeResearchPolicyGateStatusSchema,
+    observedValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    thresholdValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    message: NON_EMPTY_STRING_SCHEMA,
+  })
+  .strict();
+
+export const RuntimeStrategyLabActionSchema = z
+  .object({
+    actionId: NON_EMPTY_STRING_SCHEMA,
+    actionType: z.enum([
+      "record_state_transition",
+      "upsert_runtime_deployment",
+      "evaluate_runtime_deployment",
+      "apply_runtime_control",
+      "record_allowlist_change",
+    ]),
+    summary: NON_EMPTY_STRING_SCHEMA,
+    required: z.boolean(),
+    payload: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+export const RuntimeStrategyLabPromotionRecordSchema = VersionedSchema.extend({
+  promotionId: NON_EMPTY_STRING_SCHEMA,
+  subjectKind: RuntimeStrategyLabSubjectKindSchema,
+  subjectKey: NON_EMPTY_STRING_SCHEMA,
+  currentState: RuntimeStrategyLabPromotionStateSchema,
+  targetState: RuntimeStrategyLabPromotionStateSchema,
+  transitionType: RuntimeStrategyLabTransitionTypeSchema,
+  status: RuntimeStrategyLabPromotionStatusSchema,
+  summary: NON_EMPTY_STRING_SCHEMA,
+  requestedBy: NON_EMPTY_STRING_SCHEMA,
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  appliedAt: ISO_DATETIME_SCHEMA.optional(),
+  issueNumber: z.number().int().positive().optional(),
+  pullRequestNumber: z.number().int().positive().optional(),
+  deploymentId: NON_EMPTY_STRING_SCHEMA.optional(),
+  policyGateId: NON_EMPTY_STRING_SCHEMA.optional(),
+  synthesisId: NON_EMPTY_STRING_SCHEMA.optional(),
+  triageId: NON_EMPTY_STRING_SCHEMA.optional(),
+  implementationReference:
+    RuntimeStrategyLabImplementationReferenceSchema.optional(),
+  evidenceRefs: z.array(RuntimeStrategyLabEvidenceRefSchema).max(64),
+  checks: z.array(RuntimeStrategyLabTransitionCheckSchema).min(1),
+  actions: z.array(RuntimeStrategyLabActionSchema).min(1),
+  approvals: z.array(RuntimeResearchHumanApprovalRecordSchema).max(16),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
+export const RuntimeStrategyLabPromotionEventSchema = VersionedSchema.extend({
+  eventId: NON_EMPTY_STRING_SCHEMA,
+  promotionId: NON_EMPTY_STRING_SCHEMA,
+  eventType: z.enum(["evaluated", "applied"]),
+  actor: NON_EMPTY_STRING_SCHEMA,
+  fromState: RuntimeStrategyLabPromotionStateSchema.optional(),
+  toState: RuntimeStrategyLabPromotionStateSchema.optional(),
+  summary: NON_EMPTY_STRING_SCHEMA,
+  details: z.record(z.string(), z.unknown()).optional(),
+  createdAt: ISO_DATETIME_SCHEMA,
+}).strict();
+
 export const RuntimeExecutionCostModelStatusSchema = z.enum([
   "draft",
   "active",
@@ -1300,6 +1432,36 @@ export type RuntimeResearchHumanApprovalRecord = z.infer<
 export type RuntimeResearchPolicyGateArtifact = z.infer<
   typeof RuntimeResearchPolicyGateArtifactSchema
 >;
+export type RuntimeStrategyLabSubjectKind = z.infer<
+  typeof RuntimeStrategyLabSubjectKindSchema
+>;
+export type RuntimeStrategyLabStrategyState = z.infer<
+  typeof RuntimeStrategyLabStrategyStateSchema
+>;
+export type RuntimeStrategyLabPromotionState = z.infer<
+  typeof RuntimeStrategyLabPromotionStateSchema
+>;
+export type RuntimeStrategyLabTransitionType = z.infer<
+  typeof RuntimeStrategyLabTransitionTypeSchema
+>;
+export type RuntimeStrategyLabPromotionStatus = z.infer<
+  typeof RuntimeStrategyLabPromotionStatusSchema
+>;
+export type RuntimeStrategyLabImplementationReference = z.infer<
+  typeof RuntimeStrategyLabImplementationReferenceSchema
+>;
+export type RuntimeStrategyLabEvidenceRef = z.infer<
+  typeof RuntimeStrategyLabEvidenceRefSchema
+>;
+export type RuntimeStrategyLabAction = z.infer<
+  typeof RuntimeStrategyLabActionSchema
+>;
+export type RuntimeStrategyLabPromotionRecord = z.infer<
+  typeof RuntimeStrategyLabPromotionRecordSchema
+>;
+export type RuntimeStrategyLabPromotionEvent = z.infer<
+  typeof RuntimeStrategyLabPromotionEventSchema
+>;
 
 export const RUNTIME_DEPLOYMENT_STATE_TRANSITIONS = {
   draft: ["shadow", "paper", "live", "archived"],
@@ -1327,6 +1489,48 @@ export const RUNTIME_RUN_STATE_TRANSITIONS = {
   failed: [],
   killed: [],
 } as const satisfies Record<RuntimeRunState, readonly RuntimeRunState[]>;
+
+export const RUNTIME_STRATEGY_LAB_STRATEGY_STATE_TRANSITIONS = {
+  candidate: ["draft", "deprecated"],
+  draft: ["candidate", "shadow", "deprecated"],
+  shadow: ["draft", "paper", "paused", "deprecated"],
+  paper: ["shadow", "limited_live", "paused", "deprecated"],
+  limited_live: ["paper", "broad_live", "paused", "deprecated"],
+  broad_live: ["limited_live", "paused", "deprecated"],
+  paused: ["shadow", "paper", "limited_live", "broad_live", "deprecated"],
+  deprecated: [],
+} as const satisfies Record<
+  RuntimeStrategyLabStrategyState,
+  readonly RuntimeStrategyLabStrategyState[]
+>;
+
+export const RUNTIME_STRATEGY_LAB_READINESS_STATE_TRANSITIONS = {
+  candidate: ["integrated", "deprecated"],
+  integrated: ["candidate", "shadow_ready", "deprecated"],
+  shadow_ready: ["integrated", "paper_ready", "paused", "deprecated"],
+  paper_ready: ["shadow_ready", "limited_live_ready", "paused", "deprecated"],
+  limited_live_ready: [
+    "paper_ready",
+    "broad_live_ready",
+    "paused",
+    "deprecated",
+  ],
+  broad_live_ready: ["limited_live_ready", "paused", "deprecated"],
+  paused: [
+    "shadow_ready",
+    "paper_ready",
+    "limited_live_ready",
+    "broad_live_ready",
+    "deprecated",
+  ],
+  deprecated: [],
+} as const satisfies Record<
+  Exclude<
+    RuntimeStrategyLabPromotionState,
+    "draft" | "shadow" | "paper" | "limited_live" | "broad_live"
+  >,
+  readonly RuntimeStrategyLabPromotionState[]
+>;
 
 export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
   deployment: {
@@ -1440,6 +1644,18 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
     schemaId: "https://trader-ralph.com/schemas/runtime/v1/strategy_spec",
     outputFile: "runtime.strategy_spec.v1.schema.json",
   },
+  strategyLabPromotion: {
+    schema: RuntimeStrategyLabPromotionRecordSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_promotion",
+    outputFile: "runtime.strategy_lab_promotion.v1.schema.json",
+  },
+  strategyLabPromotionEvent: {
+    schema: RuntimeStrategyLabPromotionEventSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_promotion_event",
+    outputFile: "runtime.strategy_lab_promotion_event.v1.schema.json",
+  },
 } as const;
 
 export function canTransitionRuntimeDeploymentState(
@@ -1459,6 +1675,29 @@ export function canTransitionRuntimeRunState(
   const allowed = RUNTIME_RUN_STATE_TRANSITIONS[
     from
   ] as readonly RuntimeRunState[];
+  return allowed.includes(to);
+}
+
+export function canTransitionRuntimeStrategyLabStrategyState(
+  from: RuntimeStrategyLabStrategyState,
+  to: RuntimeStrategyLabStrategyState,
+): boolean {
+  const allowed = RUNTIME_STRATEGY_LAB_STRATEGY_STATE_TRANSITIONS[
+    from
+  ] as readonly RuntimeStrategyLabStrategyState[];
+  return allowed.includes(to);
+}
+
+export function canTransitionRuntimeStrategyLabReadinessState(
+  from: Exclude<
+    RuntimeStrategyLabPromotionState,
+    "draft" | "shadow" | "paper" | "limited_live" | "broad_live"
+  >,
+  to: RuntimeStrategyLabPromotionState,
+): boolean {
+  const allowed = RUNTIME_STRATEGY_LAB_READINESS_STATE_TRANSITIONS[
+    from
+  ] as readonly RuntimeStrategyLabPromotionState[];
   return allowed.includes(to);
 }
 
@@ -1586,6 +1825,18 @@ export function parseRuntimeResearchPolicyGateArtifact(
   return RuntimeResearchPolicyGateArtifactSchema.parse(input);
 }
 
+export function parseRuntimeStrategyLabPromotionRecord(
+  input: unknown,
+): RuntimeStrategyLabPromotionRecord {
+  return RuntimeStrategyLabPromotionRecordSchema.parse(input);
+}
+
+export function parseRuntimeStrategyLabPromotionEvent(
+  input: unknown,
+): RuntimeStrategyLabPromotionEvent {
+  return RuntimeStrategyLabPromotionEventSchema.parse(input);
+}
+
 export function safeParseRuntimeDeploymentRecord(input: unknown) {
   return RuntimeDeploymentRecordSchema.safeParse(input);
 }
@@ -1672,4 +1923,12 @@ export function safeParseRuntimeAssetRecord(input: unknown) {
 
 export function safeParseRuntimeStrategySpec(input: unknown) {
   return RuntimeStrategySpecSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategyLabPromotionRecord(input: unknown) {
+  return RuntimeStrategyLabPromotionRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategyLabPromotionEvent(input: unknown) {
+  return RuntimeStrategyLabPromotionEventSchema.safeParse(input);
 }

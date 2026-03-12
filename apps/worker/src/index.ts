@@ -1,5 +1,6 @@
 import { parseRuntimeResearchBriefRequest } from "../../../src/runtime/research/briefs.js";
 import { parseRuntimeResearchPolicyGateRequest } from "../../../src/runtime/research/policy_gate.js";
+import { parseRuntimeResearchPromotionRequest } from "../../../src/runtime/research/promotion.js";
 import { parseRuntimeResearchSynthesisRequest } from "../../../src/runtime/research/synthesis.js";
 import { parseRuntimeResearchCandidateTriageRequest } from "../../../src/runtime/research/triage.js";
 import { buildAgentQueryResponse } from "./agent_query";
@@ -156,6 +157,10 @@ import {
 } from "./runtime_internal";
 import { runRuntimeResearchBriefWorkflow } from "./runtime_research_briefs";
 import { runRuntimeResearchPolicyGateWorkflow } from "./runtime_research_policy_gate";
+import {
+  listRuntimeResearchPromotionWorkflow,
+  runRuntimeResearchPromotionWorkflow,
+} from "./runtime_research_promotion";
 import { runRuntimeResearchSynthesisWorkflow } from "./runtime_research_synthesis";
 import { runRuntimeResearchCandidateTriageWorkflow } from "./runtime_research_triage";
 import { SolanaRpc } from "./solana_rpc";
@@ -2406,6 +2411,106 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-research-policy-gate-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/research/promotions"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const promotionRequest = parseRuntimeResearchPromotionRequest(
+            await request.json(),
+          );
+          const result = await runRuntimeResearchPromotionWorkflow({
+            env,
+            request: promotionRequest,
+          });
+          return withCors(
+            json({
+              ok: true,
+              promotion: result.promotion,
+              event: result.event,
+              markdown: result.markdown,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-promotion-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/research/promotions"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeResearchPromotionWorkflow({
+            env,
+            promotionId: url.searchParams.get("promotionId") ?? undefined,
+            subjectKind:
+              url.searchParams.get("subjectKind") === "strategy" ||
+              url.searchParams.get("subjectKind") === "venue" ||
+              url.searchParams.get("subjectKind") === "asset"
+                ? (url.searchParams.get("subjectKind") as
+                    | "strategy"
+                    | "venue"
+                    | "asset")
+                : undefined,
+            subjectKey: url.searchParams.get("subjectKey") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              promotions: result.promotions,
+              ...(result.events ? { events: result.events } : {}),
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-promotion-list-failed",
               },
               { status: 400 },
             ),

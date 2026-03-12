@@ -1,0 +1,100 @@
+name: Strategy Lab Promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_file:
+        description: Repo-relative path to a checked-in strategy-lab promotion request JSON
+        required: true
+      issue_number:
+        description: Optional GitHub issue number to comment with the promotion summary
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.0"
+
+      - name: Install deps
+        run: bun install
+
+      - name: Check admin credentials
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::Missing required secret ADMIN_TOKEN for strategy-lab promotion."
+            exit 1
+          fi
+
+      - name: Build promotion artifact
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          REQUEST_FILE: ${{ inputs.request_file }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/strategy-lab-promotion
+
+          bun run strategy-lab:promote \
+            --base-url https://api.trader-ralph.com \
+            --admin-token "${ADMIN_TOKEN}" \
+            --output-dir .tmp/strategy-lab-promotion \
+            --request-file "${REQUEST_FILE}"
+
+          cat .tmp/strategy-lab-promotion/promotion.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload promotion artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: strategy-lab-promotion-${{ github.run_id }}
+          path: .tmp/strategy-lab-promotion
+          if-no-files-found: error
+
+      - name: Comment on issue
+        if: ${{ inputs.issue_number != '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          promotion_id="$(jq -r '.promotionId' .tmp/strategy-lab-promotion/promotion.json)"
+          subject_kind="$(jq -r '.subjectKind' .tmp/strategy-lab-promotion/promotion.json)"
+          subject_key="$(jq -r '.subjectKey' .tmp/strategy-lab-promotion/promotion.json)"
+          current_state="$(jq -r '.currentState' .tmp/strategy-lab-promotion/promotion.json)"
+          target_state="$(jq -r '.targetState' .tmp/strategy-lab-promotion/promotion.json)"
+          status="$(jq -r '.status' .tmp/strategy-lab-promotion/promotion.json)"
+          run_url="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+
+          body="$(cat <<EOF
+          Strategy-lab promotion evaluated.
+
+          - promotionId: \`${promotion_id}\`
+          - subject: \`${subject_kind}:${subject_key}\`
+          - transition: \`${current_state} -> ${target_state}\`
+          - status: \`${status}\`
+          - workflow run: ${run_url}
+          EOF
+          )"
+
+          payload="$(jq -n --arg body "$body" '{body:$body}')"
+          curl -fsS \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+            -d "${payload}" >/dev/null

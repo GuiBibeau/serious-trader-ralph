@@ -12,6 +12,8 @@ import {
   parseRuntimeRegimeTagRecord,
   parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchReproducibilityBundleRecord,
+  parseRuntimeStrategyLabPromotionEvent,
+  parseRuntimeStrategyLabPromotionRecord,
   parseRuntimeStrategySpec,
   parseRuntimeVenueCapability,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
@@ -46,6 +48,8 @@ describe("worker runtime contract bridge", () => {
       "venueCapability",
       "assetRecord",
       "strategySpec",
+      "strategyLabPromotion",
+      "strategyLabPromotionEvent",
     ]);
   });
 
@@ -91,6 +95,23 @@ describe("worker runtime contract bridge", () => {
 
     expect(strategySpec.strategyKey).toBe("trend_following");
     expect(strategySpec.pluginKey).toBe("builtin::trend_following");
+  });
+
+  test("worker can parse the canonical strategy-lab promotion fixtures", () => {
+    const promotion = parseRuntimeStrategyLabPromotionRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_lab_promotion.valid.v1.json",
+      ),
+    );
+    const event = parseRuntimeStrategyLabPromotionEvent(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_lab_promotion_event.valid.v1.json",
+      ),
+    );
+
+    expect(promotion.targetState).toBe("shadow");
+    expect(promotion.actions[1]?.actionType).toBe("upsert_runtime_deployment");
+    expect(event.eventType).toBe("applied");
   });
 
   test("worker can parse the canonical venue capability fixture", () => {

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "v1",
+  "eventId": "promoevt_trend_following_shadow",
+  "promotionId": "promotion_trend_following_shadow",
+  "eventType": "applied",
+  "actor": "codex",
+  "fromState": "draft",
+  "toState": "shadow",
+  "summary": "promote transition draft -> shadow was applied.",
+  "details": {
+    "status": "applied",
+    "transitionType": "promote",
+    "subjectKind": "strategy",
+    "subjectKey": "candidate_trend_following_jupiter_sol_usdc"
+  },
+  "createdAt": "2026-03-12T00:00:00.000Z"
+}

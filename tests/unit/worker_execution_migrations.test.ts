@@ -11,6 +11,7 @@ function withExecutionSchema(run: (db: Database) => void): void {
       "0025_execution_fabric.sql",
       "0026_execution_canary.sql",
       "0027_runtime_canary.sql",
+      "0028_strategy_lab_promotions.sql",
     ]) {
       const migrationPath = resolve(
         import.meta.dir,
@@ -101,7 +102,9 @@ describe("worker execution schema migration", () => {
               'execution_canary_state',
               'execution_canary_runs',
               'runtime_canary_state',
-              'runtime_canary_runs'
+              'runtime_canary_runs',
+              'strategy_lab_promotions',
+              'strategy_lab_promotion_events'
             )
           ORDER BY name
           `,
@@ -117,6 +120,8 @@ describe("worker execution schema migration", () => {
         "execution_status_events",
         "runtime_canary_runs",
         "runtime_canary_state",
+        "strategy_lab_promotion_events",
+        "strategy_lab_promotions",
       ]);
     });
   });

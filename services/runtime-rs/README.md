@@ -239,6 +239,8 @@ Operators should use the Worker as the public control plane:
 - `POST /api/admin/ops/runtime/research/synthesis`
 - `POST /api/admin/ops/runtime/research/triage`
 - `POST /api/admin/ops/runtime/research/policy-gate`
+- `GET /api/admin/ops/runtime/research/promotions`
+- `POST /api/admin/ops/runtime/research/promotions`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/pause`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/resume`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/kill`
@@ -290,6 +292,18 @@ That command writes `.tmp/strategy-lab-policy-gate/policy-gate.json` and
 `.tmp/strategy-lab-policy-gate/policy-gate.md`, including machine-readable
 shadow, paper, limited-live, and broad-live gates, unsafe-pattern detection,
 and explicit human-approval requirements before paper or real-money promotion.
+
+Promotion orchestration turns those gates into auditable transitions:
+
+```bash
+bun run strategy-lab:promote \
+  --request-file .tmp/strategy-lab-promotion/request.json
+```
+
+That command writes `.tmp/strategy-lab-promotion/promotion.json`,
+`.tmp/strategy-lab-promotion/promotion-event.json`, and
+`.tmp/strategy-lab-promotion/promotion.md`, including the transition audit
+record, orchestration actions, and explicit rollback or human-approval status.
 
 The runtime operator surface now includes allocator details for a deployment:
 

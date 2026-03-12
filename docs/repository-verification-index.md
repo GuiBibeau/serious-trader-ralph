@@ -334,6 +334,24 @@ Verify:
 - newly generated strategies cannot auto-promote straight to broad live,
 - the policy gate stays on the Worker admin boundary and consumes repo-owned runtime evidence instead of bypassing contracts.
 
+### 3m. Strategy-lab promotion orchestration verification
+
+For transition orchestration and audit persistence:
+
+```bash
+bun run lint
+bun run typecheck
+bun test tests/unit/runtime_research_promotion.test.ts tests/unit/worker_runtime_research_promotion_route.test.ts tests/unit/worker_execution_migrations.test.ts
+```
+
+Verify:
+
+- every transition persists an auditable promotion record and event,
+- strategy transitions fail closed when deployment state does not match the target mode,
+- missing evidence or approval keeps the transition blocked or approval-gated,
+- rollback and pause transitions remain explicit in the recorded actions,
+- venue and asset readiness transitions use the same route without changing the public Worker API surface.
+
 ### 4. x402 and discovery verification
 
 Portal-side discovery:
