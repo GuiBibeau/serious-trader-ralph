@@ -24,6 +24,10 @@ bun run strategy-lab:curate \
 ```bash
 bun run strategy-lab:readiness \
   --operation control \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/control.venue.request.json
+
+bun run strategy-lab:readiness \
+  --operation control \
   --request-file docs/strategy-lab/pilots/jup-onboarding/control.request.json
 ```
 

@@ -10,6 +10,7 @@ import {
   RuntimeReplayCorpusRecordSchema,
   RuntimeResearchEvidenceBundleRecordSchema,
   RuntimeResearchExperimentRecordSchema,
+  RuntimeResearchHypothesisRecordSchema,
   RuntimeResearchSourceRecordSchema,
   RuntimeVenueMarketTypeSchema,
 } from "../contracts/autonomous_runtime.js";
@@ -36,6 +37,7 @@ export const RuntimeBacktestRunRequestSchema = z
 export const RuntimeResearchCurationRequestSchema = z
   .object({
     sources: z.array(RuntimeResearchSourceRecordSchema).optional(),
+    hypotheses: z.array(RuntimeResearchHypothesisRecordSchema).optional(),
     assets: z.array(RuntimeAssetRecordSchema).optional(),
     datasetSnapshots: z
       .array(RuntimeHistoricalDatasetSnapshotRecordSchema)

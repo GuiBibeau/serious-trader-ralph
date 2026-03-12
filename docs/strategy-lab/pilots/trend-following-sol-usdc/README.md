@@ -20,14 +20,21 @@ bun run strategy-lab:curate \
 ```
 
 2. Build or refresh the policy gate and promotion request with the current
-   artifact ids, then evaluate the promotion:
+   artifact ids, then evaluate the review template:
 
 ```bash
 bun run strategy-lab:promote \
   --request-file docs/strategy-lab/pilots/trend-following-sol-usdc/promotion.request.json
 ```
 
-3. Evaluate the live deployment after operator approval:
+3. Apply the bounded limited-live promotion after explicit human approval:
+
+```bash
+bun run strategy-lab:promote \
+  --request-file docs/strategy-lab/pilots/trend-following-sol-usdc/promotion.apply.request.json
+```
+
+4. Evaluate the live deployment after operator approval:
 
 ```bash
 bun run runtime:deployment:evaluate \
@@ -37,8 +44,9 @@ bun run runtime:deployment:evaluate \
 
 ## Notes
 
-- The checked-in promotion request is a review template. Replace placeholder
-  issue or PR references and approval metadata before applying it to production.
+- `promotion.request.json` stays as the review template.
+- `promotion.apply.request.json` is the checked-in bounded live promotion record
+  tied to the merged implementation PR and owner approval for the pilot.
 - The live deployment must stay on `lane=safe`, single-slice, and tiny-notional.
 - Pair this pilot with the JUP onboarding pilot so the repo demonstrates both a
   new strategy and a newly onboarded asset path.
