@@ -1,0 +1,144 @@
+name: Strategy Lab Research
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Built-in research profile to run
+        required: false
+        default: latest_strategy_papers
+      request_file:
+        description: Optional repo-relative JSON request file for custom source acquisition requests
+        required: false
+      title:
+        description: Optional brief title override
+        required: false
+      allow_hosts:
+        description: Optional comma-separated host allowlist extensions
+        required: false
+      max_sources:
+        description: Optional maximum number of sources to include in the brief
+        required: false
+      issue_number:
+        description: Optional GitHub issue number to comment with the research brief summary
+        required: false
+  schedule:
+    - cron: "0 */12 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.0"
+
+      - name: Install deps
+        run: bun install
+
+      - name: Check admin credentials
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::Missing required secret ADMIN_TOKEN for strategy-lab research."
+            exit 1
+          fi
+
+      - name: Build research brief
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          PROFILE: ${{ inputs.profile || 'latest_strategy_papers' }}
+          REQUEST_FILE: ${{ inputs.request_file }}
+          TITLE: ${{ inputs.title }}
+          ALLOW_HOSTS: ${{ inputs.allow_hosts }}
+          MAX_SOURCES: ${{ inputs.max_sources }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/strategy-lab-research
+
+          args=(
+            --base-url https://api.trader-ralph.com
+            --admin-token "${ADMIN_TOKEN}"
+            --output-dir .tmp/strategy-lab-research
+            --profile "${PROFILE}"
+          )
+
+          if [ -n "${REQUEST_FILE:-}" ]; then
+            args+=(--request-file "${REQUEST_FILE}")
+          fi
+
+          if [ -n "${TITLE:-}" ]; then
+            args+=(--title "${TITLE}")
+          fi
+
+          if [ -n "${MAX_SOURCES:-}" ]; then
+            args+=(--max-sources "${MAX_SOURCES}")
+          fi
+
+          if [ -n "${ALLOW_HOSTS:-}" ]; then
+            IFS=',' read -ra host_values <<< "${ALLOW_HOSTS}"
+            for host in "${host_values[@]}"; do
+              trimmed="$(echo "${host}" | xargs)"
+              if [ -n "${trimmed}" ]; then
+                args+=(--allow-host "${trimmed}")
+              fi
+            done
+          fi
+
+          bun run strategy-lab:research "${args[@]}"
+
+          cat .tmp/strategy-lab-research/brief.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload research artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: strategy-lab-research-${{ github.run_id }}
+          path: .tmp/strategy-lab-research
+          if-no-files-found: error
+
+      - name: Comment on issue
+        if: ${{ inputs.issue_number != '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          summary="$(jq -r '.summary' .tmp/strategy-lab-research/brief.json)"
+          brief_id="$(jq -r '.briefId' .tmp/strategy-lab-research/brief.json)"
+          generated_at="$(jq -r '.generatedAt' .tmp/strategy-lab-research/brief.json)"
+          findings="$(jq -r '.findings[:3][]?' .tmp/strategy-lab-research/brief.json | sed 's/^/- /')"
+          run_url="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+
+          body="$(cat <<EOF
+          Strategy-lab research brief ready.
+
+          - briefId: \`${brief_id}\`
+          - generatedAt: \`${generated_at}\`
+          - workflow run: ${run_url}
+
+          ${summary}
+
+          ${findings}
+          EOF
+          )"
+
+          payload="$(jq -n --arg body "$body" '{body:$body}')"
+          curl -fsS \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+            -d "${payload}" >/dev/null

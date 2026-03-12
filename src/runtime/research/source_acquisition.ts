@@ -11,6 +11,11 @@ export type FetchLike = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export type RuntimeResearchSourceMaterial = {
+  record: RuntimeResearchSourceRecord;
+  contentMaterial: string;
+};
+
 type SourceAcquisitionBase = {
   venueKeys?: string[];
   assetKeys?: string[];
@@ -81,6 +86,14 @@ export async function acquireRuntimeResearchSources(input: {
   request: RuntimeResearchSourceAcquisitionRequest;
   fetchImpl?: FetchLike;
 }): Promise<RuntimeResearchSourceRecord[]> {
+  const materials = await acquireRuntimeResearchSourceMaterials(input);
+  return materials.map((entry) => entry.record);
+}
+
+export async function acquireRuntimeResearchSourceMaterials(input: {
+  request: RuntimeResearchSourceAcquisitionRequest;
+  fetchImpl?: FetchLike;
+}): Promise<RuntimeResearchSourceMaterial[]> {
   const fetchImpl = input.fetchImpl ?? DEFAULT_FETCH;
   const request = input.request;
   const retrievedAt = request.retrievedAt ?? new Date().toISOString();
@@ -143,7 +156,7 @@ async function acquireHtmlLikeSource(input: {
   venueKeys: string[];
   assetKeys: string[];
   tags: string[];
-}): Promise<RuntimeResearchSourceRecord> {
+}): Promise<RuntimeResearchSourceMaterial> {
   const response = await input.fetchImpl(input.url, {
     headers: {
       accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -190,7 +203,7 @@ async function acquirePaperFeedSources(input: {
   assetKeys: string[];
   tags: string[];
   maxItems: number;
-}): Promise<RuntimeResearchSourceRecord[]> {
+}): Promise<RuntimeResearchSourceMaterial[]> {
   const response = await input.fetchImpl(input.feedUrl, {
     headers: {
       accept: "application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
@@ -204,7 +217,7 @@ async function acquirePaperFeedSources(input: {
   const xml = await response.text();
   const feedPublisher =
     extractXmlText(xml, "title") ?? new URL(input.feedUrl).hostname;
-  const records = new Map<string, RuntimeResearchSourceRecord>();
+  const records = new Map<string, RuntimeResearchSourceMaterial>();
 
   for (const entryXml of matchBlocks(xml, "entry").slice(0, input.maxItems)) {
     const title = extractXmlText(entryXml, "title");
@@ -237,22 +250,23 @@ async function acquirePaperFeedSources(input: {
       tags: input.tags,
       contentMaterial: `${title}\n${summary}`,
     });
-    records.set(record.sourceId, record);
+    records.set(record.record.sourceId, record);
   }
 
   return Array.from(records.values()).sort((left, right) =>
-    right.retrievedAt.localeCompare(left.retrievedAt),
+    right.record.retrievedAt.localeCompare(left.record.retrievedAt),
   );
 }
 
 function createNormalizedResearchSource(
   input: NormalizedResearchSourceInput,
-): RuntimeResearchSourceRecord {
+): RuntimeResearchSourceMaterial {
   const normalizedTitle = collapseWhitespace(input.title);
   const canonicalUrl = normalizeResearchUrl(input.canonicalUrl);
   const publishedAt = normalizeOptionalIsoDatetime(input.publishedAt);
   const authors = normalizePeople(input.authors);
   const publisher = collapseWhitespace(input.publisher ?? "");
+  const contentMaterial = collapseWhitespace(input.contentMaterial);
   const stableIdentity = createStableSourceIdentity({
     sourceKind: input.sourceKind,
     canonicalUrl,
@@ -262,31 +276,34 @@ function createNormalizedResearchSource(
     publisher,
   });
   const sourceId = `source_${input.sourceKind}_${stableIdentity.slice(0, 20)}`;
-  return parseRuntimeResearchSourceRecord({
-    schemaVersion: "v1",
-    sourceId,
-    sourceKind: input.sourceKind,
-    title: normalizedTitle,
-    url: normalizeResearchUrl(input.url),
-    canonicalUrl,
-    authors,
-    publishedAt,
-    retrievedAt: normalizeIsoDatetime(input.retrievedAt),
-    contentDigest: `sha256:${sha256Hex(
-      `${normalizedTitle}\n${canonicalUrl}\n${collapseWhitespace(input.contentMaterial)}`,
-    )}`,
-    provenance: {
-      acquisitionKind: input.acquisitionKind,
-      collectedFrom: normalizeResearchUrl(input.collectedFrom),
-      hostname: input.hostname.toLowerCase(),
-      ...(publisher ? { publisher } : {}),
-      firstSeenAt: normalizeIsoDatetime(input.retrievedAt),
-      lastSeenAt: normalizeIsoDatetime(input.retrievedAt),
-    },
-    venueKeys: normalizeKeys(input.venueKeys),
-    assetKeys: normalizeKeys(input.assetKeys),
-    tags: normalizeTags(input.tags),
-  });
+  return {
+    record: parseRuntimeResearchSourceRecord({
+      schemaVersion: "v1",
+      sourceId,
+      sourceKind: input.sourceKind,
+      title: normalizedTitle,
+      url: normalizeResearchUrl(input.url),
+      canonicalUrl,
+      authors,
+      publishedAt,
+      retrievedAt: normalizeIsoDatetime(input.retrievedAt),
+      contentDigest: `sha256:${sha256Hex(
+        `${normalizedTitle}\n${canonicalUrl}\n${contentMaterial}`,
+      )}`,
+      provenance: {
+        acquisitionKind: input.acquisitionKind,
+        collectedFrom: normalizeResearchUrl(input.collectedFrom),
+        hostname: input.hostname.toLowerCase(),
+        ...(publisher ? { publisher } : {}),
+        firstSeenAt: normalizeIsoDatetime(input.retrievedAt),
+        lastSeenAt: normalizeIsoDatetime(input.retrievedAt),
+      },
+      venueKeys: normalizeKeys(input.venueKeys),
+      assetKeys: normalizeKeys(input.assetKeys),
+      tags: normalizeTags(input.tags),
+    }),
+    contentMaterial,
+  };
 }
 
 export function normalizeResearchUrl(url: string): string {

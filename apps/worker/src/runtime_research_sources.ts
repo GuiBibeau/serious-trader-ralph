@@ -1,7 +1,8 @@
 import {
-  acquireRuntimeResearchSources,
+  acquireRuntimeResearchSourceMaterials,
   type FetchLike,
   type RuntimeResearchSourceAcquisitionRequest,
+  type RuntimeResearchSourceMaterial,
 } from "../../../src/runtime/research/source_acquisition.js";
 import {
   parseRuntimeResearchSourceRecord,
@@ -17,6 +18,7 @@ export type RuntimeResearchSourceAcquireResult = {
   records: RuntimeResearchSourceRecord[];
   createdCount: number;
   existingCount: number;
+  sourceMaterials: RuntimeResearchSourceMaterial[];
 };
 
 export type RuntimeLatestResearchSourceQuery = {
@@ -55,7 +57,7 @@ export async function acquireAndStoreRuntimeResearchSources(input: {
     assetKey: input.request.assetKeys?.[0],
     limit: 250,
   });
-  const acquired = await acquireRuntimeResearchSources({
+  const acquired = await acquireRuntimeResearchSourceMaterials({
     request: input.request,
     fetchImpl: input.fetchImpl,
   });
@@ -69,7 +71,10 @@ export async function acquireAndStoreRuntimeResearchSources(input: {
   let createdCount = 0;
   let existingCount = 0;
 
-  for (const record of acquired) {
+  const sourceMaterials: RuntimeResearchSourceMaterial[] = [];
+
+  for (const acquiredRecord of acquired) {
+    const record = acquiredRecord.record;
     const existingRecord =
       existingBySourceId.get(record.sourceId) ??
       existingByCanonicalUrl.get(record.canonicalUrl) ??
@@ -90,7 +95,12 @@ export async function acquireAndStoreRuntimeResearchSources(input: {
     }
     const payloadRecord =
       response.payload.sourceRecord ?? response.payload.record ?? merged;
-    records.push(parseRuntimeResearchSourceRecord(payloadRecord));
+    const parsedRecord = parseRuntimeResearchSourceRecord(payloadRecord);
+    records.push(parsedRecord);
+    sourceMaterials.push({
+      record: parsedRecord,
+      contentMaterial: acquiredRecord.contentMaterial,
+    });
     if (response.payload.created === true) {
       createdCount += 1;
     } else {
@@ -102,6 +112,7 @@ export async function acquireAndStoreRuntimeResearchSources(input: {
     records,
     createdCount,
     existingCount,
+    sourceMaterials,
   };
 }
 

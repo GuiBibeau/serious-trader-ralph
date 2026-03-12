@@ -235,11 +235,24 @@ curl -fsS "http://127.0.0.1:8081/api/internal/runtime/risk?deploymentId=dep_runt
 Operators should use the Worker as the public control plane:
 
 - `GET /api/admin/ops/runtime`
+- `POST /api/admin/ops/runtime/research/briefs`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/pause`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/resume`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/kill`
 - `POST /api/admin/ops/controls` with `runtime.shadowOnly=true` to keep the
   runtime shadow-only until live rollout is explicitly enabled in a later issue
+
+Research briefs stay on the Worker-admin surface so source acquisition remains
+approved-host-only and public APIs stay unchanged. The same brief flow can run
+locally or in CI:
+
+```bash
+bun run strategy-lab:research --profile latest_strategy_papers
+```
+
+That command writes `.tmp/strategy-lab-research/brief.json` and
+`.tmp/strategy-lab-research/brief.md`, and the scheduled GitHub Actions
+workflow uploads the same artifacts every 12 hours.
 
 The runtime operator surface now includes allocator details for a deployment:
 

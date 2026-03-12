@@ -250,6 +250,28 @@ Verify:
 - later phases can retrieve latest source material with citations and dates from
   the research registry without widening the public Worker boundary.
 
+### 3f. Strategy-lab research brief verification
+
+For automated research-brief ingestion and summarization work:
+
+```bash
+bun run lint
+bun run typecheck
+bun test tests/unit/runtime_research_source_acquisition.test.ts tests/unit/worker_runtime_research_sources.test.ts tests/unit/runtime_research_briefs.test.ts tests/unit/worker_runtime_research_briefs_route.test.ts
+bun test tests/unit/runtime_protocol_contracts.test.ts tests/unit/runtime_protocol_schema_fixtures.test.ts tests/unit/worker_runtime_internal_routes.test.ts tests/unit/worker_runtime_contracts.test.ts
+```
+
+Verify:
+
+- the admin route fails closed without admin auth and rejects unapproved hosts,
+- every brief preserves citations, dates, source ids, and approved-host
+  provenance,
+- the CLI writes both `brief.json` and `brief.md`,
+- the scheduled or manual workflow uploads the same artifacts without widening
+  the public Worker boundary,
+- research ingestion stays autonomous while paper and real-money promotion
+  remain human-gated.
+
 ### 4. x402 and discovery verification
 
 Portal-side discovery:

@@ -16,6 +16,7 @@
     "harness:down": "bun run src/bin/harness.ts down",
     "harness:status": "bun run src/bin/harness.ts status",
     "harness:proof": "bun run src/bin/harness.ts proof",
+    "strategy-lab:research": "bun run src/bin/strategy_lab_research.ts",
     "runtime:fly:deploy": "node scripts/runtime_rs/fly_deploy.mjs",
     "runtime:fly:smoke": "node scripts/runtime_rs/fly_smoke.mjs",
     "runner:once": "bun run src/bin/runner.ts once",
