@@ -1,0 +1,10 @@
+{
+  "subjectKind": "asset",
+  "subjectKey": "JUP",
+  "liveAllowed": false,
+  "killSwitchEnabled": false,
+  "updatedBy": "codex",
+  "metadata": {
+    "pilot": "jup-onboarding"
+  }
+}

@@ -1188,6 +1188,52 @@ describe("worker runtime internal routes", () => {
     });
   });
 
+  test("accepts runtime backtest run requests through the private route family", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request("http://localhost/api/internal/runtime/backtests", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer runtime-service-secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          experimentId: "experiment_trend_following_shadow",
+          replayCorpusId: "replay_corpus_sol_usdc_feature_cache",
+          venueKey: "jupiter",
+          pairSymbol: "SOL/USDC",
+          marketType: "spot",
+          windowMode: "rolling",
+          trainingWindowObservations: 2,
+          testingWindowObservations: 1,
+          stepObservations: 1,
+          purgeObservations: 0,
+          baselineStrategies: ["flat_cash", "buy_and_hold"],
+        }),
+      }),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      source: "stub",
+      created: true,
+      report: {
+        experimentId: "experiment_trend_following_shadow",
+        strategyKey: "trend_following",
+        config: {
+          replayCorpusId: "replay_corpus_sol_usdc_feature_cache",
+          pairSymbol: "SOL/USDC",
+          marketType: "spot",
+          baselineStrategies: ["flat_cash", "buy_and_hold"],
+        },
+      },
+    });
+  });
+
   test("returns stubbed runtime allocator decisions", async () => {
     const env = createWorkerLiveEnv();
 

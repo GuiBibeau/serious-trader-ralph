@@ -726,4 +726,82 @@ describe("portal runtime operator route", () => {
       },
     });
   });
+
+  test("forwards deployment evaluation actions", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    let capturedBody = "";
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            user: { id: "u_1", email: "operator@example.com" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.endsWith(
+          "/api/admin/ops/runtime/deployments/deployment_live_trend/evaluate",
+        )
+      ) {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            run: { deploymentId: "deployment_live_trend", state: "completed" },
+          }),
+          {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await POST(
+      new Request("https://www.trader-ralph.com/api/runtime/operator", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer user-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "evaluate_deployment",
+          deploymentId: "deployment_live_trend",
+          body: {
+            trigger: {
+              kind: "operator",
+              source: "portal-runtime-operator",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(JSON.parse(capturedBody)).toMatchObject({
+      trigger: {
+        kind: "operator",
+        source: "portal-runtime-operator",
+      },
+    });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      run: {
+        deploymentId: "deployment_live_trend",
+      },
+    });
+  });
 });

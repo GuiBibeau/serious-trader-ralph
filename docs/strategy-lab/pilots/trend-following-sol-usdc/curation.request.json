@@ -1,0 +1,144 @@
+{
+  "sources": [
+    {
+      "schemaVersion": "v1",
+      "sourceId": "source_trend_following_sol_usdc_pilot",
+      "sourceKind": "paper",
+      "title": "Directional persistence for SOL/USDC microstructure",
+      "url": "https://example.com/papers/sol-usdc-directional-persistence",
+      "canonicalUrl": "https://example.com/papers/sol-usdc-directional-persistence",
+      "authors": ["Ada Researcher"],
+      "publishedAt": "2026-02-28T00:00:00Z",
+      "retrievedAt": "2026-03-11T00:00:00Z",
+      "contentDigest": "sha256:trend-following-sol-usdc-pilot-source",
+      "provenance": {
+        "acquisitionKind": "manual_url",
+        "collectedFrom": "https://example.com/papers/sol-usdc-directional-persistence",
+        "hostname": "example.com",
+        "publisher": "Example Research",
+        "firstSeenAt": "2026-03-11T00:00:00Z",
+        "lastSeenAt": "2026-03-11T00:00:00Z"
+      },
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["SOL", "USDC"],
+      "tags": ["pilot", "trend_following"]
+    }
+  ],
+  "experiments": [
+    {
+      "schemaVersion": "v1",
+      "experimentId": "experiment_trend_following_sol_usdc_pilot",
+      "hypothesisId": "hypothesis_trend_following_sol_usdc_pilot",
+      "strategyKey": "trend_following",
+      "status": "completed",
+      "createdAt": "2026-03-11T00:05:00Z",
+      "updatedAt": "2026-03-11T00:10:00Z",
+      "completedAt": "2026-03-11T00:10:00Z",
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["SOL", "USDC"],
+      "sourceCitations": [
+        {
+          "sourceId": "source_trend_following_sol_usdc_pilot",
+          "locator": "sec-3",
+          "materialDigest": "sha256:trend-following-sol-usdc-pilot-source"
+        }
+      ],
+      "codeRevision": {
+        "vcs": "git",
+        "repository": "github.com/GuiBibeau/serious-trader-ralph",
+        "revision": "main",
+        "treeDirty": false
+      },
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feed_replay_sol_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_seed",
+          "capturedAt": "2026-03-10T00:00:00.000Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:fixture"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "trend-following-sol-usdc-replay",
+          "kind": "replay-report",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json",
+          "contentDigest": "sha256:trend-following-sol-usdc-replay",
+          "createdAt": "2026-03-11T00:10:00Z"
+        }
+      ],
+      "summary": "Trend-following replay cleared the bounded paper gate for SOL/USDC.",
+      "tags": ["pilot", "paper"]
+    }
+  ],
+  "evidenceBundles": [
+    {
+      "schemaVersion": "v1",
+      "evidenceBundleId": "evidence_trend_following_sol_usdc_limited_live",
+      "experimentId": "experiment_trend_following_sol_usdc_pilot",
+      "strategyKey": "trend_following",
+      "status": "approved",
+      "promotionTarget": "limited_live",
+      "createdAt": "2026-03-11T00:15:00Z",
+      "updatedAt": "2026-03-11T00:15:00Z",
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["SOL", "USDC"],
+      "sourceCitations": [
+        {
+          "sourceId": "source_trend_following_sol_usdc_pilot",
+          "locator": "sec-3",
+          "materialDigest": "sha256:trend-following-sol-usdc-pilot-source"
+        }
+      ],
+      "codeRevision": {
+        "vcs": "git",
+        "repository": "github.com/GuiBibeau/serious-trader-ralph",
+        "revision": "main",
+        "treeDirty": false
+      },
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feed_replay_sol_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_seed",
+          "capturedAt": "2026-03-10T00:00:00.000Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:fixture"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "trend-following-sol-usdc-proof",
+          "kind": "proof-bundle",
+          "uri": "repo://docs/strategy-lab/pilots/trend-following-sol-usdc/README.md",
+          "contentDigest": "sha256:trend-following-sol-usdc-proof",
+          "createdAt": "2026-03-11T00:15:00Z"
+        },
+        {
+          "artifactId": "trend-following-sol-usdc-scorecard",
+          "kind": "scorecard",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json",
+          "contentDigest": "sha256:trend-following-sol-usdc-scorecard",
+          "createdAt": "2026-03-11T00:15:00Z"
+        }
+      ],
+      "summary": "Pilot evidence bundle for paper-to-limited-live review.",
+      "tags": ["pilot", "limited_live_review"]
+    }
+  ],
+  "backtests": [
+    {
+      "reportId": "backtest_trend_following_sol_usdc_pilot",
+      "experimentId": "experiment_trend_following_sol_usdc_pilot",
+      "replayCorpusId": "replay_corpus_sol_usdc_feed_gateway_seed",
+      "venueKey": "jupiter",
+      "pairSymbol": "SOL/USDC",
+      "marketType": "spot",
+      "windowMode": "rolling",
+      "trainingWindowObservations": 2,
+      "testingWindowObservations": 1,
+      "stepObservations": 1,
+      "purgeObservations": 0,
+      "baselineStrategies": ["flat_cash", "buy_and_hold"]
+    }
+  ]
+}

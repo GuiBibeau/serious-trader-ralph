@@ -1,0 +1,13 @@
+{
+  "subjectKind": "asset",
+  "subjectKey": "JUP",
+  "targetState": "limited_live_ready",
+  "requestedBy": "codex",
+  "venueKey": "jupiter",
+  "assetKey": "JUP",
+  "pairSymbol": "JUP/USDC",
+  "adapterKey": "jupiter",
+  "metadata": {
+    "pilot": "jup-onboarding"
+  }
+}

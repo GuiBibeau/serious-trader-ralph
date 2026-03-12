@@ -235,6 +235,8 @@ curl -fsS "http://127.0.0.1:8081/api/internal/runtime/risk?deploymentId=dep_runt
 Operators should use the Worker as the public control plane:
 
 - `GET /api/admin/ops/runtime`
+- `GET /api/admin/ops/runtime/research/substrate`
+- `POST /api/admin/ops/runtime/research/curation`
 - `POST /api/admin/ops/runtime/research/briefs`
 - `POST /api/admin/ops/runtime/research/synthesis`
 - `POST /api/admin/ops/runtime/research/triage`
@@ -254,6 +256,18 @@ locally or in CI:
 ```bash
 bun run strategy-lab:research --profile latest_strategy_papers
 ```
+
+Research curation seeds the runtime-owned substrate for new assets, replay
+corpora, experiments, and bounded backtests:
+
+```bash
+bun run strategy-lab:curate \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/curation.request.json
+```
+
+That command writes `.tmp/strategy-lab-curation/curation.json` and
+`.tmp/strategy-lab-curation/curation.md`, and the manual GitHub Actions
+workflow uploads the same artifact bundle for operator review.
 
 That command writes `.tmp/strategy-lab-research/brief.json` and
 `.tmp/strategy-lab-research/brief.md`, and the scheduled GitHub Actions
@@ -341,6 +355,18 @@ The runtime operator surface now includes allocator details for a deployment:
 
 Operators should treat repeated constrained or zero-grant paper runs as a
 promotion blocker until capital budgets or priorities are corrected.
+
+Operators can also trigger a bounded deployment evaluation through the Worker
+admin boundary or the matching CLI:
+
+```bash
+bun run runtime:deployment:evaluate \
+  --deployment-id dep_trend_following_sol_usdc_limited_live \
+  --body-file docs/strategy-lab/pilots/trend-following-sol-usdc/evaluate.body.json
+```
+
+That command writes `.tmp/runtime-deployment-evaluate/evaluation.json`, which
+is the canonical artifact for pilot run inspection and rollback review.
 
 The default runtime control baseline is:
 

@@ -1,4 +1,5 @@
 import { parseRuntimeResearchBriefRequest } from "../../../src/runtime/research/briefs.js";
+import { parseRuntimeResearchCurationRequest } from "../../../src/runtime/research/curation.js";
 import { parseRuntimeResearchPolicyGateRequest } from "../../../src/runtime/research/policy_gate.js";
 import { parseRuntimeResearchPromotionRequest } from "../../../src/runtime/research/promotion.js";
 import {
@@ -150,6 +151,7 @@ import {
 } from "./runtime_canary";
 import {
   applyRuntimeDeploymentControl,
+  evaluateRuntimeDeployment,
   handleRuntimeInternalRoute,
   type RuntimeControlAction,
   readRuntimeAdminSnapshot,
@@ -162,6 +164,7 @@ import {
   readRuntimeScorecard,
 } from "./runtime_internal";
 import { runRuntimeResearchBriefWorkflow } from "./runtime_research_briefs";
+import { runRuntimeResearchCurationWorkflow } from "./runtime_research_curation";
 import { runRuntimeResearchPolicyGateWorkflow } from "./runtime_research_policy_gate";
 import {
   listRuntimeResearchPromotionWorkflow,
@@ -175,6 +178,7 @@ import {
   runRuntimeResearchReadinessWorkflow,
   upsertRuntimeResearchSubjectControlWorkflow,
 } from "./runtime_research_readiness";
+import { readRuntimeResearchSubstrateSnapshot } from "./runtime_research_substrate";
 import { runRuntimeResearchSynthesisWorkflow } from "./runtime_research_synthesis";
 import { runRuntimeResearchCandidateTriageWorkflow } from "./runtime_research_triage";
 import { SolanaRpc } from "./solana_rpc";
@@ -515,6 +519,21 @@ function parseRuntimeAdminDetailPath(pathname: string): string | null {
   if (!suffix || suffix.includes("/")) return null;
   try {
     return decodeURIComponent(suffix);
+  } catch {
+    return null;
+  }
+}
+
+function parseRuntimeAdminEvaluatePath(pathname: string): string | null {
+  const prefix = "/api/admin/ops/runtime/deployments/";
+  if (!pathname.startsWith(prefix)) return null;
+  const suffix = pathname.slice(prefix.length);
+  const evaluateSuffix = "/evaluate";
+  if (!suffix.endsWith(evaluateSuffix)) return null;
+  const deploymentId = suffix.slice(0, -evaluateSuffix.length);
+  if (!deploymentId || deploymentId.includes("/")) return null;
+  try {
+    return decodeURIComponent(deploymentId);
   } catch {
     return null;
   }
@@ -2294,6 +2313,101 @@ const worker = {
       }
 
       if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/research/substrate"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const substrate = await readRuntimeResearchSubstrateSnapshot({
+            env,
+            strategyKey: url.searchParams.get("strategyKey") ?? undefined,
+            venueKey: url.searchParams.get("venueKey") ?? undefined,
+            assetKey: url.searchParams.get("assetKey") ?? undefined,
+            pairSymbol: url.searchParams.get("pairSymbol") ?? undefined,
+            marketType: url.searchParams.get("marketType") ?? undefined,
+          });
+          return withCors(
+            json({
+              ok: true,
+              filters: {
+                strategyKey: url.searchParams.get("strategyKey") ?? null,
+                venueKey: url.searchParams.get("venueKey") ?? null,
+                assetKey: url.searchParams.get("assetKey") ?? null,
+                pairSymbol: url.searchParams.get("pairSymbol") ?? null,
+                marketType: url.searchParams.get("marketType") ?? null,
+              },
+              substrate,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-substrate-read-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/research/curation"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const curationRequest = parseRuntimeResearchCurationRequest(
+            await request.json(),
+          );
+          const result = await runRuntimeResearchCurationWorkflow({
+            env,
+            request: curationRequest,
+          });
+          return withCors(
+            json({
+              ok: true,
+              summary: result.summary,
+              markdown: result.markdown,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-curation-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
         request.method === "POST" &&
         url.pathname === "/api/admin/ops/runtime/research/briefs"
       ) {
@@ -2979,6 +3093,45 @@ const worker = {
         request.method === "POST"
           ? parseRuntimeAdminControlPath(url.pathname)
           : null;
+      const runtimeEvaluateDeploymentId =
+        request.method === "POST"
+          ? parseRuntimeAdminEvaluatePath(url.pathname)
+          : null;
+      if (request.method === "POST" && runtimeEvaluateDeploymentId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const body = (await request.json().catch(() => ({}))) as Record<
+            string,
+            unknown
+          > | null;
+          const result = await evaluateRuntimeDeployment({
+            env,
+            deploymentId: runtimeEvaluateDeploymentId,
+            body: body ?? {},
+          });
+          return withCors(json(result.payload, { status: result.status }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-deployment-evaluate-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
       if (request.method === "POST" && runtimeControl) {
         const auth = authorizeAdminRoute(request, env);
         if (!auth.ok) {

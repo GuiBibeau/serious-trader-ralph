@@ -1,3 +1,4 @@
+import { parseRuntimeBacktestRunRequest } from "../../../src/runtime/research/curation.js";
 import {
   executionErrorStatus,
   normalizeExecutionErrorCode,
@@ -1118,6 +1119,51 @@ function createRuntimeBacktestFixture(
     summary:
       "Backtest cleared two walk-forward folds for dca with positive aggregate net return.",
     tags: ["backtest", "paper"],
+  });
+}
+
+function inferStrategyKeyFromExperimentId(experimentId: string): string {
+  const normalized = experimentId.trim().toLowerCase();
+  if (normalized.includes("trend")) return "trend_following";
+  if (normalized.includes("mean")) return "mean_reversion";
+  if (normalized.includes("breakout")) return "breakout";
+  if (normalized.includes("macro")) return "macro_rotation";
+  if (normalized.includes("volatility")) return "volatility_target";
+  if (normalized.includes("rebalance")) return "threshold_rebalance";
+  if (normalized.includes("twap")) return "twap";
+  return "dca";
+}
+
+function buildRuntimeBacktestFixtureFromRunRequest(payload: unknown) {
+  const request = parseRuntimeBacktestRunRequest(payload);
+  const reportId =
+    request.reportId ??
+    `backtest_${request.experimentId.replace(/[^a-z0-9]+/gi, "_")}_report`;
+  const base = createRuntimeBacktestFixture(reportId);
+  const [baseAsset = "SOL", quoteAsset = "USDC"] = request.pairSymbol
+    .split("/")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return parseRuntimeBacktestReport({
+    ...base,
+    reportId,
+    experimentId: request.experimentId,
+    strategyKey: inferStrategyKeyFromExperimentId(request.experimentId),
+    venueKeys: [request.venueKey],
+    assetKeys: [baseAsset, quoteAsset],
+    config: {
+      ...base.config,
+      replayCorpusId: request.replayCorpusId,
+      venueKey: request.venueKey,
+      pairSymbol: request.pairSymbol,
+      marketType: request.marketType,
+      windowMode: request.windowMode,
+      trainingWindowObservations: request.trainingWindowObservations,
+      testingWindowObservations: request.testingWindowObservations,
+      stepObservations: request.stepObservations,
+      purgeObservations: request.purgeObservations,
+      baselineStrategies: request.baselineStrategies,
+    },
   });
 }
 
@@ -3081,7 +3127,11 @@ export async function handleRuntimeInternalRoute(
     let report: RuntimeBacktestReport;
     try {
       const payload = await readJsonBody(request);
-      report = parseRuntimeBacktestReport(payload);
+      try {
+        report = parseRuntimeBacktestReport(payload);
+      } catch {
+        report = buildRuntimeBacktestFixtureFromRunRequest(payload);
+      }
     } catch (error) {
       return json(
         {
