@@ -281,6 +281,181 @@ describe("portal runtime operator route", () => {
           },
         );
       }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research?strategyKey=dca&venueKey=jupiter&assetKey=SOL",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            registry: {
+              hypotheses: [
+                {
+                  hypothesisId: "hyp_runtime",
+                  title: "Runtime momentum hypothesis",
+                },
+              ],
+              sources: [{ sourceId: "src_runtime", title: "Paper" }],
+              experiments: [{ experimentId: "exp_runtime" }],
+              evidenceBundles: [{ evidenceBundleId: "bundle_runtime" }],
+              reproducibilityBundles: [
+                { reproducibilityBundleId: "repro_runtime" },
+              ],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/promotions?subjectKind=strategy&subjectKey=dca&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            promotions: [{ promotionId: "promo_strategy_dca" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/promotions?subjectKind=venue&subjectKey=jupiter&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            promotions: [{ promotionId: "promo_venue_jupiter" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/promotions?subjectKind=asset&subjectKey=SOL&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            promotions: [{ promotionId: "promo_asset_sol" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/readiness?subjectKind=venue&subjectKey=jupiter&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            readinessArtifacts: [{ readinessId: "ready_venue_jupiter" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/readiness?subjectKind=asset&subjectKey=SOL&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            readinessArtifacts: [{ readinessId: "ready_asset_sol" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/subject-controls?subjectKind=venue&subjectKey=jupiter&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            controls: [{ subjectKey: "jupiter", liveAllowed: true }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/subject-controls?subjectKind=asset&subjectKey=SOL&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            controls: [{ subjectKey: "SOL", liveAllowed: true }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/readiness/canary?subjectKind=venue&subjectKey=jupiter&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            runs: [{ runId: "canary_venue_jupiter", status: "success" }],
+            state: { updatedAt: FIXTURE_TIME },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.includes(
+          "/api/admin/ops/runtime/research/readiness/canary?subjectKind=asset&subjectKey=SOL&limit=5",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            runs: [{ runId: "canary_asset_sol", status: "success" }],
+            state: { updatedAt: FIXTURE_TIME },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
       throw new Error(`unexpected fetch ${url}`);
     }) as typeof fetch;
 
@@ -325,13 +500,31 @@ describe("portal runtime operator route", () => {
             reservedUsd: "5.00",
           },
         },
+        lab: {
+          research: {
+            hypotheses: [{ hypothesisId: "hyp_runtime" }],
+          },
+          promotions: {
+            strategy: [{ promotionId: "promo_strategy_dca" }],
+          },
+          readiness: {
+            venue: {
+              subjectKey: "jupiter",
+            },
+            asset: {
+              subjectKey: "SOL",
+            },
+          },
+        },
       },
     });
-    expect(seenAuthHeaders).toEqual([
-      "Bearer user-token",
-      "Bearer operator-admin",
-      "Bearer operator-admin",
-    ]);
+    expect(seenAuthHeaders[0]).toBe("Bearer user-token");
+    expect(seenAuthHeaders.slice(1)).toHaveLength(12);
+    expect(
+      seenAuthHeaders
+        .slice(1)
+        .every((value) => value === "Bearer operator-admin"),
+    ).toBe(true);
   });
 
   test("forwards runtime deployment control actions", async () => {
@@ -390,6 +583,147 @@ describe("portal runtime operator route", () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       action: "pause",
+    });
+  });
+
+  test("forwards subject control actions with operator identity", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    let capturedBody = "";
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            user: { id: "u_1", email: "operator@example.com" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.endsWith("/api/admin/ops/runtime/research/subject-controls")) {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ ok: true, control: { subjectKey: "SOL" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await POST(
+      new Request("https://www.trader-ralph.com/api/runtime/operator", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer user-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "update_subject_control",
+          subjectKind: "asset",
+          subjectKey: "SOL",
+          liveAllowed: false,
+          disabledReason: "operator-disabled",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(capturedBody)).toMatchObject({
+      subjectKind: "asset",
+      subjectKey: "SOL",
+      liveAllowed: false,
+      disabledReason: "operator-disabled",
+      updatedBy: "operator@example.com",
+    });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      control: {
+        subjectKey: "SOL",
+      },
+    });
+  });
+
+  test("forwards readiness canary actions with operator identity", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    let capturedBody = "";
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            user: { id: "u_1", email: "operator@example.com" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.endsWith("/api/admin/ops/runtime/research/readiness/canary")) {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ ok: true, run: { runId: "readycanary_sol" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await POST(
+      new Request("https://www.trader-ralph.com/api/runtime/operator", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer user-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "run_readiness_canary",
+          subjectKind: "asset",
+          subjectKey: "SOL",
+          venueKey: "jupiter",
+          assetKey: "SOL",
+          pairSymbol: "SOL/USDC",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(capturedBody)).toMatchObject({
+      subjectKind: "asset",
+      subjectKey: "SOL",
+      venueKey: "jupiter",
+      assetKey: "SOL",
+      pairSymbol: "SOL/USDC",
+      requestedBy: "operator@example.com",
+      triggerSource: "manual",
+    });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      run: {
+        runId: "readycanary_sol",
+      },
     });
   });
 });

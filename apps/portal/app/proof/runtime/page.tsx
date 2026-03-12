@@ -2,10 +2,7 @@
 
 import { useState } from "react";
 import { RuntimeOperatorView } from "../../terminal/runtime/runtime-operator-view";
-import type {
-  RuntimeControlAction,
-  RuntimeOperatorApiPayload,
-} from "../../terminal/runtime/types";
+import type { RuntimeOperatorApiPayload } from "../../terminal/runtime/types";
 
 const FIXTURE_TIME = "2026-03-09T14:10:00.000Z";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -272,6 +269,168 @@ function buildPayload(selectedDeploymentId: string): RuntimeOperatorApiPayload {
           },
         ],
       },
+      lab: {
+        research: {
+          hypotheses: [
+            {
+              hypothesisId: "hyp_trend_following_sol",
+              strategyKey: "trend_following",
+              title: "Trend following on SOL/USDC",
+              thesis:
+                "Momentum persistence remains durable during healthy liquidity regimes.",
+              status: "candidate",
+              createdAt: FIXTURE_TIME,
+              updatedAt: FIXTURE_TIME,
+            },
+          ],
+          sources: [
+            {
+              sourceId: "src_trend_following_paper",
+              sourceKind: "paper",
+              title: "Interpretable momentum signal study",
+              canonicalUrl: "https://research.example.com/momentum",
+              retrievedAt: FIXTURE_TIME,
+              publishedAt: FIXTURE_TIME,
+            },
+          ],
+          experiments: [
+            {
+              experimentId: "exp_trend_following_sol",
+              status: "completed",
+              summary:
+                "Walk-forward replay beat flat cash and held significance across volatile windows.",
+              updatedAt: FIXTURE_TIME,
+              completedAt: FIXTURE_TIME,
+            },
+          ],
+          evidenceBundles: [
+            {
+              evidenceBundleId: "bundle_trend_following_shadow",
+              status: "approved",
+              promotionTarget: "paper",
+              summary:
+                "Shadow and paper bundle includes backtest, replay, and reconciliation artifacts.",
+            },
+          ],
+          reproducibilityBundles: [
+            {
+              reproducibilityBundleId: "repro_trend_following_shadow",
+              summary:
+                "Backtest rerun matched the stored report within configured tolerances.",
+              updatedAt: FIXTURE_TIME,
+              latestVerification: {
+                status: "pass",
+              },
+            },
+          ],
+          error: null,
+        },
+        promotions: {
+          strategy: [
+            {
+              promotionId: "promotion_strategy_shadow",
+              currentState: "draft",
+              targetState: "shadow",
+              status: "applied",
+              summary:
+                "Candidate implementation merged and activated in shadow.",
+              requestedBy: "operator@example.com",
+              updatedAt: FIXTURE_TIME,
+            },
+          ],
+          venue: [
+            {
+              promotionId: "promotion_venue_limited_live",
+              currentState: "paper_ready",
+              targetState: "limited_live_ready",
+              status: "requires_human_approval",
+              summary:
+                "Venue readiness cleared all automated checks and awaits approval.",
+              requestedBy: "operator@example.com",
+              updatedAt: FIXTURE_TIME,
+            },
+          ],
+          asset: [
+            {
+              promotionId: "promotion_asset_limited_live",
+              currentState: "paper_ready",
+              targetState: "limited_live_ready",
+              status: "pass",
+              summary:
+                "Asset controls, cost drift, and bounded canary are all within guardrails.",
+              requestedBy: "operator@example.com",
+              updatedAt: FIXTURE_TIME,
+            },
+          ],
+          error: null,
+        },
+        readiness: {
+          venue: {
+            subjectKind: "venue",
+            subjectKey: "jupiter",
+            artifacts: [
+              {
+                readinessId: "readiness_jupiter",
+                targetState: "limited_live_ready",
+                status: "pass",
+                summary:
+                  "Venue readiness checks passed with a bounded canary plan.",
+                canaryRunId: "readycanary_jupiter_sol",
+              },
+            ],
+            controls: [
+              {
+                liveAllowed: true,
+                killSwitchEnabled: false,
+                updatedAt: FIXTURE_TIME,
+              },
+            ],
+            canaryRuns: [
+              {
+                runId: "readycanary_jupiter_sol",
+                status: "success",
+                updatedAt: FIXTURE_TIME,
+              },
+            ],
+            canaryState: {
+              updatedAt: FIXTURE_TIME,
+            },
+            error: null,
+          },
+          asset: {
+            subjectKind: "asset",
+            subjectKey: "SOL",
+            artifacts: [
+              {
+                readinessId: "readiness_sol",
+                targetState: "limited_live_ready",
+                status: "pass",
+                summary:
+                  "Asset readiness checks passed with live controls staged.",
+                canaryRunId: "readycanary_sol",
+              },
+            ],
+            controls: [
+              {
+                liveAllowed: true,
+                killSwitchEnabled: false,
+                updatedAt: FIXTURE_TIME,
+              },
+            ],
+            canaryRuns: [
+              {
+                runId: "readycanary_sol",
+                status: "success",
+                updatedAt: FIXTURE_TIME,
+              },
+            ],
+            canaryState: {
+              updatedAt: FIXTURE_TIME,
+            },
+            error: null,
+          },
+        },
+      },
     },
     detailError: null,
   };
@@ -281,8 +440,7 @@ export default function RuntimeProofPage() {
   const [selectedDeploymentId, setSelectedDeploymentId] = useState<string>(
     DEPLOYMENTS[0].deploymentId,
   );
-  const [actionPending, setActionPending] =
-    useState<RuntimeControlAction | null>(null);
+  const [actionPending, setActionPending] = useState<string | null>(null);
   const [payload, setPayload] = useState<RuntimeOperatorApiPayload>(() =>
     buildPayload(DEPLOYMENTS[0].deploymentId),
   );
@@ -313,6 +471,26 @@ export default function RuntimeProofPage() {
           if (action === "pause") updateDeploymentState("paused");
           if (action === "resume") updateDeploymentState("live");
           if (action === "kill") updateDeploymentState("killed");
+          window.setTimeout(() => setActionPending(null), 50);
+        }}
+        onSubjectControl={(input) => {
+          setActionPending(
+            `subject-control:${input.subjectKind}:${input.subjectKey}:${
+              input.killSwitchEnabled === true
+                ? "kill-on"
+                : input.killSwitchEnabled === false
+                  ? "kill-off"
+                  : input.liveAllowed === true
+                    ? "live-on"
+                    : "live-off"
+            }`,
+          );
+          window.setTimeout(() => setActionPending(null), 50);
+        }}
+        onReadinessCanary={(input) => {
+          setActionPending(
+            `readiness-canary:${input.subjectKind}:${input.subjectKey}`,
+          );
           window.setTimeout(() => setActionPending(null), 50);
         }}
       />
