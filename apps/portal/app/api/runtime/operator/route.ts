@@ -78,6 +78,12 @@ function readRecordArray(value: unknown): Record<string, unknown>[] {
   );
 }
 
+function workerPayload(
+  record: Record<string, unknown>,
+): Record<string, unknown> {
+  return record;
+}
+
 function normalizeAuthHeader(value: string | null): string | null {
   const token = String(value ?? "").trim();
   if (!token) return null;
@@ -338,7 +344,7 @@ async function loadStrategyLabPromotions(
         })
       : Promise.resolve({
           status: 200,
-          payload: { ok: true, promotions: [] },
+          payload: workerPayload({ ok: true, promotions: [] }),
         }),
   ]);
 

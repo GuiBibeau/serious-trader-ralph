@@ -37,6 +37,13 @@ function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is Record<string, unknown> =>
+    isRecord(entry),
+  );
+}
+
 function statusClasses(status: string | null): string {
   switch (status) {
     case "healthy":
@@ -876,13 +883,10 @@ function renderReadinessControls(
   onReadinessCanary?: (input: RuntimeOperatorReadinessCanaryInput) => void,
 ) {
   const deployment = detail?.deployment ?? null;
-  const readiness = isRecord(detail?.lab?.readiness)
-    ? detail?.lab?.readiness
-    : null;
-  const subjects = [
-    isRecord(readiness?.venue) ? readiness.venue : null,
-    isRecord(readiness?.asset) ? readiness.asset : null,
-  ].filter((entry): entry is Record<string, unknown> => entry !== null);
+  const readiness = detail?.lab?.readiness ?? null;
+  const subjects = [readiness?.venue, readiness?.asset].filter(
+    (entry): entry is NonNullable<typeof entry> => entry !== null,
+  );
 
   if (!deployment || subjects.length === 0) {
     return (
