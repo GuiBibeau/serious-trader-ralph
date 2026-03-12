@@ -286,4 +286,53 @@ describe("worker runtime research post-live route", () => {
       sqlite.close();
     }
   });
+
+  test("accepts post-live requests under stub mode even when the deployment id is unknown", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      await seedControls(env);
+
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/post-live",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "strategy",
+              subjectKey: "candidate_trend_following_jupiter_sol_usdc",
+              requestedBy: "codex",
+              currentState: "limited_live",
+              deploymentId: "dep_missing_live_strategy",
+              venueKey: "jupiter",
+              assetKey: "SOL",
+              pairSymbol: "SOL/USDC",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        artifact: {
+          status: string;
+          recommendedAction: string;
+          postLiveId: string;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.artifact.postLiveId).toBeTruthy();
+      expect(["observe", "revalidate", "demote", "pause"]).toContain(
+        payload.artifact.recommendedAction,
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
 });
