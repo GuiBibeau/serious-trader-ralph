@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_promotion_event",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "eventId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "promotionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "eventType": {
+      "type": "string",
+      "enum": ["evaluated", "applied"]
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fromState": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "draft",
+        "shadow",
+        "paper",
+        "limited_live",
+        "broad_live",
+        "integrated",
+        "shadow_ready",
+        "paper_ready",
+        "limited_live_ready",
+        "broad_live_ready",
+        "paused",
+        "deprecated"
+      ]
+    },
+    "toState": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "draft",
+        "shadow",
+        "paper",
+        "limited_live",
+        "broad_live",
+        "integrated",
+        "shadow_ready",
+        "paper_ready",
+        "limited_live_ready",
+        "broad_live_ready",
+        "paused",
+        "deprecated"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "details": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "promotionId",
+    "eventType",
+    "actor",
+    "summary",
+    "createdAt"
+  ],
+  "additionalProperties": false
+}

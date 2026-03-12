@@ -106,6 +106,16 @@
       "name": "strategySpec",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_spec",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_spec.v1.schema.json"
+    },
+    {
+      "name": "strategyLabPromotion",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_promotion",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_lab_promotion.v1.schema.json"
+    },
+    {
+      "name": "strategyLabPromotionEvent",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_promotion_event",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_lab_promotion_event.v1.schema.json"
     }
   ],
   "rustCodegenHook": {
