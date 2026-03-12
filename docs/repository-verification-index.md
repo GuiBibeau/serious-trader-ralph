@@ -334,6 +334,45 @@ Verify:
 - newly generated strategies cannot auto-promote straight to broad live,
 - the policy gate stays on the Worker admin boundary and consumes repo-owned runtime evidence instead of bypassing contracts.
 
+### 3j. Strategy-lab readiness verification
+
+For venue and asset readiness gates, subject controls, and promotion evidence:
+
+```bash
+bun run lint
+bun run typecheck
+bun run contracts:runtime:schemas
+bun test tests/unit/runtime_research_readiness.test.ts tests/unit/worker_runtime_research_readiness_route.test.ts tests/unit/worker_runtime_contracts.test.ts tests/unit/runtime_protocol_schema_fixtures.test.ts
+```
+
+Verify:
+
+- readiness artifacts stay on the Worker admin boundary and persist even when blocked,
+- venue and asset readiness checks include capability coverage, data quality,
+  min-size rules, fee sanity, paper validation, and subject-control posture,
+- per-subject controls exist before limited-live readiness can pass,
+- readiness artifacts emit evidence refs that promotion orchestration can
+  consume directly.
+
+### 3k. Strategy-lab readiness canary verification
+
+For bounded onboarding canaries and live-path allowlist enforcement:
+
+```bash
+bun run lint
+bun run typecheck
+bun test tests/unit/worker_execution_router.test.ts tests/unit/worker_runtime_research_readiness_route.test.ts tests/unit/worker_execution_migrations.test.ts
+```
+
+Verify:
+
+- live routing fails closed when a venue or asset is not allowlisted,
+- per-subject kill switches disable only the affected venue or asset path,
+- readiness canaries stay tiny-notional and auditable,
+- readiness canaries can bypass allowlist posture only for the explicit
+  onboarding-canary path while still honoring kill switches,
+- readiness canary outputs persist as evidence refs for later promotions.
+
 ### 3m. Strategy-lab promotion orchestration verification
 
 For transition orchestration and audit persistence:

@@ -104,6 +104,13 @@ See:
 - `docs/exec-plans/active/strategy-lab-rollout.md`
 - `docs/reliability/strategy-lab-ops-runbook.md`
 
+Operator entry points for venue or asset onboarding now stay on the same
+harness-managed admin boundary:
+
+- `bun run strategy-lab:readiness --operation readiness --request-file ...`
+- `bun run strategy-lab:readiness --operation canary --request-file ...`
+- `bun run strategy-lab:readiness --operation control --request-file ...`
+
 ## Validation Requirements
 
 Always run the smallest relevant validation set and report the exact commands in

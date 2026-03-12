@@ -1,9 +1,71 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   executeSwapViaRouter,
   registerExecutionAdapter,
 } from "../../apps/worker/src/execution/router";
 import { normalizePolicy } from "../../apps/worker/src/policy";
+import { writeStrategyLabSubjectControl } from "../../apps/worker/src/strategy_lab_readiness_repository";
+import { parseRuntimeStrategyLabSubjectControl } from "../../src/runtime/contracts/autonomous_runtime.js";
+
+function createSqliteD1Adapter(db: Database): D1Database {
+  return {
+    prepare(sql: string) {
+      return {
+        bind(...params: unknown[]) {
+          return {
+            async run() {
+              const statement = db.query(sql);
+              statement.run(...(params as never[]));
+              return { meta: { changes: 1 } };
+            },
+            async first() {
+              const statement = db.query(sql);
+              return (statement.get(...(params as never[])) as unknown) ?? null;
+            },
+            async all() {
+              const statement = db.query(sql);
+              return {
+                results: (statement.all(...(params as never[])) ??
+                  []) as unknown[],
+              };
+            },
+          };
+        },
+      };
+    },
+  } as unknown as D1Database;
+}
+
+async function createLiveRouterEnv() {
+  const sqlite = new Database(":memory:");
+  sqlite.exec("PRAGMA foreign_keys = ON;");
+  for (const migrationName of [
+    "0025_execution_fabric.sql",
+    "0026_execution_canary.sql",
+    "0027_runtime_canary.sql",
+    "0028_strategy_lab_promotions.sql",
+    "0029_strategy_lab_readiness.sql",
+  ]) {
+    const migrationPath = resolve(
+      import.meta.dir,
+      "..",
+      "..",
+      "apps/worker/migrations",
+      migrationName,
+    );
+    sqlite.exec(readFileSync(migrationPath, "utf8"));
+  }
+
+  return {
+    sqlite,
+    env: {
+      WAITLIST_DB: createSqliteD1Adapter(sqlite),
+    } as never,
+  };
+}
 
 describe("worker execution router", () => {
   test("defaults to jupiter adapter and returns dry_run in dry mode", async () => {
@@ -212,5 +274,83 @@ describe("worker execution router", () => {
         log: () => {},
       }),
     ).rejects.toThrow(/runtime-venue-required/);
+  });
+
+  test("fails closed when a live venue is not allowlisted", async () => {
+    const { env, sqlite } = await createLiveRouterEnv();
+    try {
+      await writeStrategyLabSubjectControl(
+        env.WAITLIST_DB,
+        parseRuntimeStrategyLabSubjectControl({
+          schemaVersion: "v1",
+          subjectKind: "venue",
+          subjectKey: "jupiter",
+          liveAllowed: false,
+          killSwitchEnabled: false,
+          updatedAt: "2026-03-12T00:00:00.000Z",
+        }),
+      );
+
+      await expect(
+        executeSwapViaRouter({
+          env,
+          venueKey: "jupiter",
+          runtimeMode: "live",
+          execution: { adapter: "jupiter" },
+          policy: normalizePolicy({ dryRun: true }),
+          rpc: {} as never,
+          jupiter: {} as never,
+          quoteResponse: {
+            inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            outputMint: "So11111111111111111111111111111111111111112",
+            inAmount: "1",
+            outAmount: "2",
+          },
+          userPublicKey: "11111111111111111111111111111111",
+          log: () => {},
+        }),
+      ).rejects.toThrow(/runtime-venue-not-allowlisted/);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("fails closed when an asset kill switch is enabled for live routing", async () => {
+    const { env, sqlite } = await createLiveRouterEnv();
+    try {
+      await writeStrategyLabSubjectControl(
+        env.WAITLIST_DB,
+        parseRuntimeStrategyLabSubjectControl({
+          schemaVersion: "v1",
+          subjectKind: "asset",
+          subjectKey: "SOL",
+          liveAllowed: true,
+          killSwitchEnabled: true,
+          updatedAt: "2026-03-12T00:00:00.000Z",
+        }),
+      );
+
+      await expect(
+        executeSwapViaRouter({
+          env,
+          venueKey: "jupiter",
+          runtimeMode: "live",
+          execution: { adapter: "jupiter" },
+          policy: normalizePolicy({ dryRun: true }),
+          rpc: {} as never,
+          jupiter: {} as never,
+          quoteResponse: {
+            inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            outputMint: "So11111111111111111111111111111111111111112",
+            inAmount: "1",
+            outAmount: "2",
+          },
+          userPublicKey: "11111111111111111111111111111111",
+          log: () => {},
+        }),
+      ).rejects.toThrow(/runtime-asset-disabled-by-operator/);
+    } finally {
+      sqlite.close();
+    }
   });
 });

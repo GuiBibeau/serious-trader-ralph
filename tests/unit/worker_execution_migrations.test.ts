@@ -12,6 +12,7 @@ function withExecutionSchema(run: (db: Database) => void): void {
       "0026_execution_canary.sql",
       "0027_runtime_canary.sql",
       "0028_strategy_lab_promotions.sql",
+      "0029_strategy_lab_readiness.sql",
     ]) {
       const migrationPath = resolve(
         import.meta.dir,
@@ -104,7 +105,11 @@ describe("worker execution schema migration", () => {
               'runtime_canary_state',
               'runtime_canary_runs',
               'strategy_lab_promotions',
-              'strategy_lab_promotion_events'
+              'strategy_lab_promotion_events',
+              'strategy_lab_subject_controls',
+              'strategy_lab_readiness_artifacts',
+              'strategy_lab_readiness_canary_state',
+              'strategy_lab_readiness_canary_runs'
             )
           ORDER BY name
           `,
@@ -122,6 +127,10 @@ describe("worker execution schema migration", () => {
         "runtime_canary_state",
         "strategy_lab_promotion_events",
         "strategy_lab_promotions",
+        "strategy_lab_readiness_artifacts",
+        "strategy_lab_readiness_canary_runs",
+        "strategy_lab_readiness_canary_state",
+        "strategy_lab_subject_controls",
       ]);
     });
   });

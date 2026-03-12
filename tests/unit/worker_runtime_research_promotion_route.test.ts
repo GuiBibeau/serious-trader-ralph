@@ -59,6 +59,7 @@ function createOpsEnv(overrides?: Partial<Env>) {
     "0026_execution_canary.sql",
     "0027_runtime_canary.sql",
     "0028_strategy_lab_promotions.sql",
+    "0029_strategy_lab_readiness.sql",
   ]) {
     const migrationPath = resolve(
       import.meta.dir,
@@ -349,6 +350,122 @@ describe("worker runtime research promotion route", () => {
         .get() as { count: number };
       expect(promotionCount.count).toBe(1);
       expect(eventCount.count).toBe(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("hydrates venue and asset readiness evidence into promotions", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      for (const control of [
+        {
+          subjectKind: "venue",
+          subjectKey: "jupiter",
+          liveAllowed: false,
+          killSwitchEnabled: false,
+          updatedBy: "codex",
+        },
+        {
+          subjectKind: "asset",
+          subjectKey: "SOL",
+          liveAllowed: false,
+          killSwitchEnabled: false,
+          updatedBy: "codex",
+        },
+      ]) {
+        await worker.fetch(
+          new Request(
+            "http://localhost/api/admin/ops/runtime/research/subject-controls",
+            {
+              method: "POST",
+              headers: {
+                authorization: "Bearer admin-secret",
+                "content-type": "application/json",
+              },
+              body: JSON.stringify(control),
+            },
+          ),
+          env,
+          createExecutionContextStub(),
+        );
+      }
+
+      const readinessResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "asset",
+              subjectKey: "SOL",
+              targetState: "limited_live_ready",
+              requestedBy: "codex",
+              venueKey: "jupiter",
+              pairSymbol: "SOL/USDC",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      const readinessPayload = (await readinessResponse.json()) as {
+        readiness: { readinessId: string };
+      };
+
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/promotions",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "asset",
+              subjectKey: "SOL",
+              currentState: "paper_ready",
+              targetState: "limited_live_ready",
+              requestedBy: "codex",
+              readinessArtifactIds: [readinessPayload.readiness.readinessId],
+              approvals: [
+                {
+                  targetMode: "limited_live",
+                  approvedBy: "gui",
+                  approvedAt: "2026-03-12T00:00:00.000Z",
+                },
+              ],
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        promotion: {
+          status: string;
+          evidenceRefs: Array<{ kind: string }>;
+          checks: Array<{ checkId: string; status: string }>;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.promotion.status).toBe("pass");
+      expect(payload.promotion.evidenceRefs.map((ref) => ref.kind)).toContain(
+        "bounded_canary_plan",
+      );
+      expect(
+        payload.promotion.checks.find(
+          (check) => check.checkId === "human-approval",
+        )?.status,
+      ).toBe("pass");
     } finally {
       sqlite.close();
     }

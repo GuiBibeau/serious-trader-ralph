@@ -21,6 +21,7 @@
     "strategy-lab:triage": "bun run src/bin/strategy_lab_triage.ts",
     "strategy-lab:policy-gate": "bun run src/bin/strategy_lab_policy_gate.ts",
     "strategy-lab:promote": "bun run src/bin/strategy_lab_promote.ts",
+    "strategy-lab:readiness": "bun run src/bin/strategy_lab_readiness.ts",
     "runtime:fly:deploy": "node scripts/runtime_rs/fly_deploy.mjs",
     "runtime:fly:smoke": "node scripts/runtime_rs/fly_smoke.mjs",
     "runner:once": "bun run src/bin/runner.ts once",

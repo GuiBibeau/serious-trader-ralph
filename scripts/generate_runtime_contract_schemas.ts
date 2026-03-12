@@ -59,7 +59,16 @@ async function formatFiles(filePaths: string[]): Promise<void> {
   }
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("bunx", ["biome", "format", "--write", ...filePaths], {
+    const bundledBun = process.execPath?.includes("bun")
+      ? process.execPath
+      : process.env.HOME
+        ? path.join(process.env.HOME, ".bun", "bin", "bun")
+        : null;
+    const command = bundledBun ?? "bunx";
+    const args = bundledBun
+      ? ["x", "biome", "format", "--write", ...filePaths]
+      : ["biome", "format", "--write", ...filePaths];
+    const child = spawn(command, args, {
       stdio: "inherit",
     });
 

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "v1",
+  "subjectKind": "venue",
+  "subjectKey": "jupiter",
+  "liveAllowed": false,
+  "killSwitchEnabled": false,
+  "updatedAt": "2026-03-11T12:00:00.000Z",
+  "updatedBy": "codex",
+  "metadata": {
+    "scope": "strategy-lab",
+    "reason": "bounded onboarding"
+  }
+}

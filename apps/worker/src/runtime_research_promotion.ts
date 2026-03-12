@@ -20,6 +20,10 @@ import {
   listStrategyLabPromotions,
   writeStrategyLabPromotion,
 } from "./strategy_lab_promotion_repository";
+import {
+  getStrategyLabReadinessArtifact,
+  getStrategyLabReadinessCanaryRun,
+} from "./strategy_lab_readiness_repository";
 import type { Env } from "./types";
 
 export type RuntimeResearchPromotionWorkflowResult = {
@@ -103,28 +107,70 @@ async function hydratePromotionRequest(input: {
   env: Env;
   request: RuntimeResearchPromotionRequest;
 }): Promise<RuntimeResearchPromotionRequest> {
+  let nextRequest = input.request;
+
   if (
-    input.request.runtimeScorecard ||
-    !input.request.deployment ||
-    (input.request.targetState !== "paper" &&
-      input.request.targetState !== "limited_live")
+    input.request.readinessArtifactIds &&
+    input.request.readinessArtifactIds.length > 0
   ) {
-    return input.request;
+    const evidenceRefs = [...(input.request.evidenceRefs ?? [])];
+    let limitedLiveCanaryPassed = input.request.limitedLiveCanaryPassed;
+    let limitedLiveCanaryRef = input.request.limitedLiveCanaryRef;
+
+    for (const readinessArtifactId of input.request.readinessArtifactIds) {
+      const artifact = await getStrategyLabReadinessArtifact(
+        input.env.WAITLIST_DB,
+        readinessArtifactId,
+      );
+      if (!artifact) {
+        continue;
+      }
+      evidenceRefs.push(...artifact.evidenceRefs);
+      if (artifact.canaryRunId && !limitedLiveCanaryPassed) {
+        const canaryRun = await getStrategyLabReadinessCanaryRun(
+          input.env.WAITLIST_DB,
+          artifact.canaryRunId,
+        );
+        if (
+          canaryRun?.status === "success" &&
+          canaryRun.reconciliation?.status === "passed"
+        ) {
+          limitedLiveCanaryPassed = true;
+          limitedLiveCanaryRef = `readiness-canary:${canaryRun.runId}`;
+        }
+      }
+    }
+
+    nextRequest = {
+      ...nextRequest,
+      evidenceRefs,
+      ...(limitedLiveCanaryPassed ? { limitedLiveCanaryPassed } : {}),
+      ...(limitedLiveCanaryRef ? { limitedLiveCanaryRef } : {}),
+    };
+  }
+
+  if (
+    nextRequest.runtimeScorecard ||
+    !nextRequest.deployment ||
+    (nextRequest.targetState !== "paper" &&
+      nextRequest.targetState !== "limited_live")
+  ) {
+    return nextRequest;
   }
 
   const scorecardResponse = await readRuntimeScorecard(
     input.env,
-    input.request.deployment.deploymentId,
+    nextRequest.deployment.deploymentId,
   );
   if (!scorecardResponse.ok) {
-    return input.request;
+    return nextRequest;
   }
 
   const promotionGates = readScorecardPromotionGates(
     scorecardResponse.payload.report,
   );
   return {
-    ...input.request,
+    ...nextRequest,
     runtimeScorecard: {
       promotionGates,
     },
