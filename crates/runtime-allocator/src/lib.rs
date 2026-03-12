@@ -136,11 +136,13 @@ impl RuntimeAllocator {
         let transaction = connection.transaction()?;
 
         if let Some(existing) = load_decision_by_run_id(&transaction, &input.run_id)? {
+            let current_decisions =
+                load_latest_decisions_for_sleeve(&transaction, &input.deployment.sleeve_id)?;
             let effective_deployment = apply_grant(&input.deployment, &existing);
             let pressure_summary = self.summarize_pressure(&RuntimeAllocatorPressureInput {
                 sleeve_equity_usd: input.sleeve_equity_usd.clone(),
                 sleeve_deployments: input.sleeve_deployments.clone(),
-                current_decisions: vec![existing.clone()],
+                current_decisions,
                 deployment_contexts: input.deployment_contexts.clone(),
             })?;
             transaction.commit()?;
@@ -229,14 +231,14 @@ impl RuntimeAllocator {
             parse_non_negative_usd_cents("sleeveEquityUsd", &input.sleeve_equity_usd)?;
         let contexts = build_context_lookup(&input.sleeve_deployments, &input.deployment_contexts);
         let latest_decisions = latest_decisions_by_deployment(&input.current_decisions);
-        let mut grants = Vec::with_capacity(input.sleeve_deployments.len());
-        for deployment in &input.sleeve_deployments {
+        let peers = build_ranked_deployments(&input.sleeve_deployments);
+        let mut grants = Vec::with_capacity(peers.len());
+        for peer in &peers {
             grants.push(current_grant_for_deployment(
-                deployment,
-                latest_decisions.get(&deployment.deployment_id),
+                &peer.deployment,
+                latest_decisions.get(&peer.deployment.deployment_id),
             )?);
         }
-        let peers = build_ranked_deployments(&input.sleeve_deployments);
         build_pressure_summary(sleeve_equity_cents, &peers, &grants, &contexts)
     }
 
@@ -536,6 +538,24 @@ fn load_decision_by_run_id(
         )
         .optional()?;
     Ok(raw.map(|value| deserialize_json(&value)).transpose()?)
+}
+
+fn load_latest_decisions_for_sleeve(
+    connection: &Connection,
+    sleeve_id: &str,
+) -> Result<Vec<RuntimeAllocatorDecisionRecord>, RuntimeAllocatorError> {
+    let mut statement = connection.prepare(
+        "SELECT record_json
+         FROM allocator_decisions
+         WHERE sleeve_id = ?1
+         ORDER BY decided_at DESC, decision_id DESC",
+    )?;
+    let rows = statement.query_map(params![sleeve_id], |row| row.get::<_, String>(0))?;
+    let mut decisions = Vec::new();
+    for row in rows {
+        decisions.push(deserialize_json(&row?)?);
+    }
+    Ok(decisions)
 }
 
 #[derive(Debug, Clone)]
