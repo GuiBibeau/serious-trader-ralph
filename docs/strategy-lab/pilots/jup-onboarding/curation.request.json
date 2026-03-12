@@ -83,39 +83,67 @@
   "datasetSnapshots": [
     {
       "schemaVersion": "v1",
-      "datasetId": "dataset_feed_replay_jup_usdc_market_events",
-      "snapshotId": "snapshot_2026_03_07_seed",
+      "datasetId": "dataset_feature_cache_jup_usdc_market_events",
+      "snapshotId": "snapshot_2026_03_07_backtest",
       "datasetKind": "market_events",
       "normalizationKind": "replay_ready",
       "format": "fixture_json",
-      "retentionClass": "seed",
+      "retentionClass": "research",
       "capturedAt": "2026-03-11T00:00:00Z",
       "coverageStartAt": "2026-03-07T00:00:00Z",
-      "coverageEndAt": "2026-03-07T00:00:05Z",
-      "rowCount": 2,
+      "coverageEndAt": "2026-03-07T00:00:25Z",
+      "rowCount": 6,
       "venueKeys": ["jupiter"],
       "assetKeys": ["JUP", "USDC"],
       "pairSymbols": ["JUP/USDC"],
       "chainKeys": ["solana-mainnet"],
-      "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
-      "contentDigest": "sha256:jup-feed-fixture",
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
+      "contentDigest": "sha256:jup-feature-fixture",
       "provenance": {
         "acquisitionKind": "research_fixture",
-        "collectedFrom": "services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json",
+        "collectedFrom": "services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json",
         "provider": "repo-fixture",
         "collectedAt": "2026-03-11T00:00:00Z",
         "generator": "runtime-rs",
-        "generatorRevision": "jup-feed-replay-seed-v1"
+        "generatorRevision": "jup-feature-cache-seed-v1"
       },
-      "tags": ["seed", "deterministic", "replay"]
+      "tags": ["seed", "deterministic", "feature-cache"]
+    },
+    {
+      "schemaVersion": "v1",
+      "datasetId": "dataset_feature_cache_jup_usdc_slot_events",
+      "snapshotId": "snapshot_2026_03_07_backtest",
+      "datasetKind": "slot_events",
+      "normalizationKind": "replay_ready",
+      "format": "fixture_json",
+      "retentionClass": "research",
+      "capturedAt": "2026-03-11T00:00:00Z",
+      "coverageStartAt": "2026-03-07T00:00:23Z",
+      "coverageEndAt": "2026-03-07T00:00:25Z",
+      "rowCount": 3,
+      "venueKeys": ["helius"],
+      "assetKeys": ["JUP", "USDC"],
+      "pairSymbols": ["JUP/USDC"],
+      "chainKeys": ["solana-mainnet"],
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#slotEvents",
+      "contentDigest": "sha256:jup-feature-fixture",
+      "provenance": {
+        "acquisitionKind": "research_fixture",
+        "collectedFrom": "services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json",
+        "provider": "repo-fixture",
+        "collectedAt": "2026-03-11T00:00:00Z",
+        "generator": "runtime-rs",
+        "generatorRevision": "jup-feature-cache-seed-v1"
+      },
+      "tags": ["seed", "deterministic", "feature-cache"]
     }
   ],
   "replayCorpora": [
     {
       "schemaVersion": "v1",
-      "corpusId": "replay_corpus_jup_usdc_feed_gateway_seed",
-      "title": "JUP/USDC feed gateway seed replay corpus",
-      "summary": "Deterministic replay corpus for the JUP onboarding pilot.",
+      "corpusId": "replay_corpus_jup_usdc_feature_cache_seed",
+      "title": "JUP/USDC feature-cache replay corpus",
+      "summary": "Deterministic feature-cache replay corpus for the JUP onboarding pilot.",
       "replayKind": "feed_gateway_v1",
       "createdAt": "2026-03-11T00:00:00Z",
       "updatedAt": "2026-03-11T00:00:00Z",
@@ -125,17 +153,24 @@
       "chainKeys": ["solana-mainnet"],
       "datasetSnapshots": [
         {
-          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
-          "snapshotId": "snapshot_2026_03_07_seed",
+          "datasetId": "dataset_feature_cache_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
           "capturedAt": "2026-03-11T00:00:00Z",
-          "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
-          "contentDigest": "sha256:jup-feed-fixture"
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
+        },
+        {
+          "datasetId": "dataset_feature_cache_jup_usdc_slot_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#slotEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
         }
       ],
-      "fixtureUri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json",
-      "contentDigest": "sha256:jup-feed-fixture",
-      "deterministicSeed": 200,
-      "tags": ["seed", "deterministic", "jup"]
+      "fixtureUri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json",
+      "contentDigest": "sha256:jup-feature-fixture",
+      "deterministicSeed": 300,
+      "tags": ["seed", "deterministic", "jup", "feature-cache"]
     }
   ],
   "featureDefinitions": [
@@ -169,8 +204,8 @@
       },
       "datasetSnapshots": [
         {
-          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
-          "snapshotId": "snapshot_2026_03_07_seed",
+          "datasetId": "dataset_feature_cache_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
           "capturedAt": "2026-03-11T00:00:00Z",
           "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
           "contentDigest": "sha256:jup-feature-fixture"
@@ -207,8 +242,8 @@
       },
       "datasetSnapshots": [
         {
-          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
-          "snapshotId": "snapshot_2026_03_07_seed",
+          "datasetId": "dataset_feature_cache_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
           "capturedAt": "2026-03-11T00:00:00Z",
           "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
           "contentDigest": "sha256:jup-feature-fixture"
@@ -260,11 +295,18 @@
       },
       "datasetSnapshots": [
         {
-          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
-          "snapshotId": "snapshot_2026_03_07_seed",
+          "datasetId": "dataset_feature_cache_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
           "capturedAt": "2026-03-11T00:00:00Z",
-          "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
-          "contentDigest": "sha256:jup-feed-fixture"
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
+        },
+        {
+          "datasetId": "dataset_feature_cache_jup_usdc_slot_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#slotEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
         }
       ],
       "createdAt": "2026-03-11T00:00:00Z",
@@ -326,11 +368,18 @@
       },
       "datasetSnapshots": [
         {
-          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
-          "snapshotId": "snapshot_2026_03_07_seed",
+          "datasetId": "dataset_feature_cache_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
           "capturedAt": "2026-03-11T00:00:00Z",
-          "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
-          "contentDigest": "sha256:jup-feed-fixture"
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
+        },
+        {
+          "datasetId": "dataset_feature_cache_jup_usdc_slot_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#slotEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
         }
       ],
       "artifacts": [
@@ -373,11 +422,18 @@
       },
       "datasetSnapshots": [
         {
-          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
-          "snapshotId": "snapshot_2026_03_07_seed",
+          "datasetId": "dataset_feature_cache_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
           "capturedAt": "2026-03-11T00:00:00Z",
-          "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
-          "contentDigest": "sha256:jup-feed-fixture"
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
+        },
+        {
+          "datasetId": "dataset_feature_cache_jup_usdc_slot_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#slotEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
         }
       ],
       "artifacts": [
@@ -404,7 +460,7 @@
     {
       "reportId": "backtest_jup_usdc_onboarding",
       "experimentId": "experiment_jup_usdc_onboarding",
-      "replayCorpusId": "replay_corpus_jup_usdc_feed_gateway_seed",
+      "replayCorpusId": "replay_corpus_jup_usdc_feature_cache_seed",
       "venueKey": "jupiter",
       "pairSymbol": "JUP/USDC",
       "marketType": "spot",
