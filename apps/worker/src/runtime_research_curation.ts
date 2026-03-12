@@ -72,6 +72,18 @@ function createdFromResponse(response: RuntimeInternalJsonResult): boolean {
   return response.payload.created === true || response.status === 201;
 }
 
+export function resolvePersistedCollectionRecord<T>(input: {
+  payloadValue: unknown;
+  fallbackValue: T;
+  parseItem: (value: unknown) => T;
+}): T {
+  try {
+    return input.parseItem(input.payloadValue ?? input.fallbackValue);
+  } catch {
+    return input.parseItem(input.fallbackValue);
+  }
+}
+
 async function persistCollection<T>(input: {
   items: T[] | undefined;
   writeItem: (item: T) => Promise<RuntimeInternalJsonResult>;
@@ -95,7 +107,13 @@ async function persistCollection<T>(input: {
       created += 1;
     }
     const payloadValue = input.selectPayloadItem(response.payload);
-    records.push(input.parseItem(payloadValue ?? item));
+    records.push(
+      resolvePersistedCollectionRecord({
+        payloadValue,
+        fallbackValue: item,
+        parseItem: input.parseItem,
+      }),
+    );
   }
 
   return {
