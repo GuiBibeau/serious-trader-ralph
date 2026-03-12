@@ -611,9 +611,9 @@ fn fallback_context(deployment: &RuntimeDeploymentRecord) -> RuntimeAllocatorDep
     }
 }
 
-fn latest_decisions_by_deployment<'a>(
-    decisions: &'a [RuntimeAllocatorDecisionRecord],
-) -> std::collections::BTreeMap<String, &'a RuntimeAllocatorDecisionRecord> {
+fn latest_decisions_by_deployment(
+    decisions: &[RuntimeAllocatorDecisionRecord],
+) -> std::collections::BTreeMap<String, &RuntimeAllocatorDecisionRecord> {
     let mut latest = std::collections::BTreeMap::new();
     for decision in decisions {
         latest
@@ -683,39 +683,45 @@ fn build_pressure_summary(
 
         accumulate_pressure(
             &mut by_strategy,
-            peer.deployment.strategy_key.clone(),
-            strategy_limit_bps(&peer.deployment.strategy_key),
-            requested_allocated_cents,
-            granted_allocated_cents,
-            requested_reserved_cents,
-            granted_reserved_cents,
-            "shared-strategy-budget".to_string(),
+            PressureAccumulator {
+                subject_key: peer.deployment.strategy_key.clone(),
+                limit_bps: strategy_limit_bps(&peer.deployment.strategy_key),
+                requested_allocated_cents,
+                granted_allocated_cents,
+                requested_reserved_cents,
+                granted_reserved_cents,
+                subject_state: "shared-strategy-budget".to_string(),
+            },
         );
         accumulate_pressure(
             &mut by_venue,
-            context.venue_key.clone(),
-            venue_limit_bps(&context.venue_onboarding_state),
-            requested_allocated_cents,
-            granted_allocated_cents,
-            requested_reserved_cents,
-            granted_reserved_cents,
-            onboarding_state_label(&context.venue_onboarding_state),
+            PressureAccumulator {
+                subject_key: context.venue_key.clone(),
+                limit_bps: venue_limit_bps(&context.venue_onboarding_state),
+                requested_allocated_cents,
+                granted_allocated_cents,
+                requested_reserved_cents,
+                granted_reserved_cents,
+                subject_state: onboarding_state_label(&context.venue_onboarding_state),
+            },
         );
         accumulate_pressure(
             &mut by_asset,
-            context.exposure_asset_key.clone(),
-            asset_limit_bps(
-                &context.exposure_asset_risk_class,
-                &context.exposure_asset_listing_state,
-            ),
-            requested_allocated_cents,
-            granted_allocated_cents,
-            requested_reserved_cents,
-            granted_reserved_cents,
-            asset_state_label(
-                &context.exposure_asset_listing_state,
-                &context.exposure_asset_risk_class,
-            ),
+            PressureAccumulator {
+                subject_key: context.exposure_asset_key.clone(),
+                limit_bps: asset_limit_bps(
+                    &context.exposure_asset_risk_class,
+                    &context.exposure_asset_listing_state,
+                ),
+                requested_allocated_cents,
+                granted_allocated_cents,
+                requested_reserved_cents,
+                granted_reserved_cents,
+                subject_state: asset_state_label(
+                    &context.exposure_asset_listing_state,
+                    &context.exposure_asset_risk_class,
+                ),
+            },
         );
     }
 
@@ -728,29 +734,23 @@ fn build_pressure_summary(
 
 fn accumulate_pressure(
     buckets: &mut std::collections::BTreeMap<String, PressureAccumulator>,
-    subject_key: String,
-    limit_bps: u16,
-    requested_allocated_cents: i64,
-    granted_allocated_cents: i64,
-    requested_reserved_cents: i64,
-    granted_reserved_cents: i64,
-    subject_state: String,
+    input: PressureAccumulator,
 ) {
     let entry = buckets
-        .entry(subject_key.clone())
+        .entry(input.subject_key.clone())
         .or_insert_with(|| PressureAccumulator {
-            subject_key,
-            limit_bps,
+            subject_key: input.subject_key,
+            limit_bps: input.limit_bps,
             requested_allocated_cents: 0,
             granted_allocated_cents: 0,
             requested_reserved_cents: 0,
             granted_reserved_cents: 0,
-            subject_state,
+            subject_state: input.subject_state,
         });
-    entry.requested_allocated_cents += requested_allocated_cents;
-    entry.granted_allocated_cents += granted_allocated_cents;
-    entry.requested_reserved_cents += requested_reserved_cents;
-    entry.granted_reserved_cents += granted_reserved_cents;
+    entry.requested_allocated_cents += input.requested_allocated_cents;
+    entry.granted_allocated_cents += input.granted_allocated_cents;
+    entry.requested_reserved_cents += input.requested_reserved_cents;
+    entry.granted_reserved_cents += input.granted_reserved_cents;
 }
 
 fn finalize_pressure_buckets(
