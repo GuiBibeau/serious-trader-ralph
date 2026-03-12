@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    env,
     fs,
     path::{Path, PathBuf},
 };
@@ -865,7 +866,7 @@ fn load_replay_fixture(
 fn resolve_fixture_uri(uri: &str) -> Result<PathBuf, BacktestingEngineError> {
     let without_fragment = uri.split('#').next().unwrap_or(uri);
     if let Some(relative) = without_fragment.strip_prefix("repo://") {
-        return Ok(repo_root().join(relative));
+        return Ok(resolve_repo_relative_path(relative, &candidate_repo_roots()));
     }
     let candidate = PathBuf::from(without_fragment);
     if candidate.is_absolute() {
@@ -878,6 +879,30 @@ fn resolve_fixture_uri(uri: &str) -> Result<PathBuf, BacktestingEngineError> {
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn candidate_repo_roots() -> Vec<PathBuf> {
+    let mut candidates = vec![repo_root()];
+    if let Ok(current_dir) = env::current_dir() {
+        if !candidates.iter().any(|candidate| candidate == &current_dir) {
+            candidates.push(current_dir);
+        }
+    }
+    candidates
+}
+
+fn resolve_repo_relative_path(relative: &str, roots: &[PathBuf]) -> PathBuf {
+    for root in roots {
+        let candidate = root.join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    roots
+        .first()
+        .cloned()
+        .unwrap_or_else(PathBuf::new)
+        .join(relative)
 }
 
 fn default_feature_cache_config() -> FeatureCacheConfig {
@@ -1238,6 +1263,31 @@ mod tests {
     fn fixture_uri() -> String {
         "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json"
             .to_string()
+    }
+
+    #[test]
+    fn resolves_repo_fixtures_from_working_directory_when_manifest_root_is_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "backtesting-engine-resolve-{}",
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        let fixture = root.join("services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json");
+        fs::create_dir_all(
+            fixture
+                .parent()
+                .expect("fixture parent directory to exist"),
+        )
+        .expect("fixture directory");
+        fs::write(&fixture, "{}").expect("fixture file");
+
+        let resolved = resolve_repo_relative_path(
+            "services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+            &[root.join("missing-root"), root.clone()],
+        );
+
+        assert_eq!(resolved, fixture);
+
+        fs::remove_dir_all(root).expect("cleanup temp fixture directory");
     }
 
     fn experiment() -> RuntimeResearchExperimentRecord {

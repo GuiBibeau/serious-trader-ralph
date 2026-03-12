@@ -46,6 +46,99 @@
       "tags": ["pilot", "candidate", "trend_following"]
     }
   ],
+  "datasetSnapshots": [
+    {
+      "schemaVersion": "v1",
+      "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+      "snapshotId": "snapshot_2026_03_07_backtest",
+      "datasetKind": "market_events",
+      "normalizationKind": "replay_ready",
+      "format": "fixture_json",
+      "retentionClass": "research",
+      "capturedAt": "2026-03-10T00:00:00.000Z",
+      "coverageStartAt": "2026-03-07T00:00:00Z",
+      "coverageEndAt": "2026-03-07T00:00:25Z",
+      "rowCount": 6,
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["SOL", "USDC"],
+      "pairSymbols": ["SOL/USDC"],
+      "chainKeys": ["solana-mainnet"],
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+      "contentDigest": "sha256:feature-cache",
+      "provenance": {
+        "acquisitionKind": "research_fixture",
+        "collectedFrom": "services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json",
+        "provider": "repo-fixture",
+        "collectedAt": "2026-03-10T00:00:00.000Z",
+        "generator": "strategy-lab",
+        "generatorRevision": "trend-following-sol-usdc-seed"
+      },
+      "tags": ["pilot", "feature-cache"]
+    },
+    {
+      "schemaVersion": "v1",
+      "datasetId": "dataset_feature_cache_sol_usdc_slot_events",
+      "snapshotId": "snapshot_2026_03_07_backtest",
+      "datasetKind": "slot_events",
+      "normalizationKind": "replay_ready",
+      "format": "fixture_json",
+      "retentionClass": "research",
+      "capturedAt": "2026-03-10T00:00:00.000Z",
+      "coverageStartAt": "2026-03-07T00:00:23Z",
+      "coverageEndAt": "2026-03-07T00:00:25Z",
+      "rowCount": 3,
+      "venueKeys": ["helius"],
+      "assetKeys": ["SOL", "USDC"],
+      "pairSymbols": ["SOL/USDC"],
+      "chainKeys": ["solana-mainnet"],
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#slotEvents",
+      "contentDigest": "sha256:feature-cache",
+      "provenance": {
+        "acquisitionKind": "research_fixture",
+        "collectedFrom": "services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json",
+        "provider": "repo-fixture",
+        "collectedAt": "2026-03-10T00:00:00.000Z",
+        "generator": "strategy-lab",
+        "generatorRevision": "trend-following-sol-usdc-seed"
+      },
+      "tags": ["pilot", "feature-cache"]
+    }
+  ],
+  "replayCorpora": [
+    {
+      "schemaVersion": "v1",
+      "corpusId": "replay_corpus_sol_usdc_feature_cache_seed",
+      "title": "SOL/USDC feature-cache replay corpus",
+      "summary": "Deterministic feature-cache replay corpus for the trend-following pilot.",
+      "replayKind": "feed_gateway_v1",
+      "createdAt": "2026-03-10T00:00:00.000Z",
+      "updatedAt": "2026-03-10T00:00:00.000Z",
+      "venueKeys": ["jupiter", "helius"],
+      "assetKeys": ["SOL", "USDC"],
+      "pairSymbols": ["SOL/USDC"],
+      "chainKeys": ["solana-mainnet"],
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
+          "capturedAt": "2026-03-10T00:00:00.000Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:feature-cache"
+        },
+        {
+          "datasetId": "dataset_feature_cache_sol_usdc_slot_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
+          "capturedAt": "2026-03-10T00:00:00.000Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#slotEvents",
+          "contentDigest": "sha256:feature-cache"
+        }
+      ],
+      "fixtureUri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json",
+      "contentDigest": "sha256:feature-cache",
+      "deterministicSeed": 300,
+      "tags": ["pilot", "feature-cache", "deterministic"]
+    }
+  ],
   "experiments": [
     {
       "schemaVersion": "v1",
@@ -73,11 +166,18 @@
       },
       "datasetSnapshots": [
         {
-          "datasetId": "dataset_feed_replay_sol_usdc_market_events",
-          "snapshotId": "snapshot_2026_03_07_seed",
+          "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
           "capturedAt": "2026-03-10T00:00:00.000Z",
           "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
-          "contentDigest": "sha256:fixture"
+          "contentDigest": "sha256:feature-cache"
+        },
+        {
+          "datasetId": "dataset_feature_cache_sol_usdc_slot_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
+          "capturedAt": "2026-03-10T00:00:00.000Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#slotEvents",
+          "contentDigest": "sha256:feature-cache"
         }
       ],
       "artifacts": [
@@ -120,11 +220,18 @@
       },
       "datasetSnapshots": [
         {
-          "datasetId": "dataset_feed_replay_sol_usdc_market_events",
-          "snapshotId": "snapshot_2026_03_07_seed",
+          "datasetId": "dataset_feature_cache_sol_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
           "capturedAt": "2026-03-10T00:00:00.000Z",
           "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
-          "contentDigest": "sha256:fixture"
+          "contentDigest": "sha256:feature-cache"
+        },
+        {
+          "datasetId": "dataset_feature_cache_sol_usdc_slot_events",
+          "snapshotId": "snapshot_2026_03_07_backtest",
+          "capturedAt": "2026-03-10T00:00:00.000Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#slotEvents",
+          "contentDigest": "sha256:feature-cache"
         }
       ],
       "artifacts": [
@@ -158,7 +265,7 @@
     {
       "reportId": "backtest_trend_following_sol_usdc_pilot",
       "experimentId": "experiment_trend_following_sol_usdc_pilot",
-      "replayCorpusId": "replay_corpus_sol_usdc_feed_gateway_seed",
+      "replayCorpusId": "replay_corpus_sol_usdc_feature_cache_seed",
       "venueKey": "jupiter",
       "pairSymbol": "SOL/USDC",
       "marketType": "spot",
