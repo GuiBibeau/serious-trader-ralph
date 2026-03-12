@@ -3,7 +3,9 @@ import {
   runtimeVenueSupportsAdapter,
   runtimeVenueSupportsMode,
 } from "../../../../src/runtime/venues/catalog.js";
+import { TRADING_TOKEN_BY_MINT } from "../defaults";
 import type { RuntimeMode } from "../runtime_contracts";
+import { getStrategyLabSubjectControl } from "../strategy_lab_readiness_repository";
 import { executeHeliusSenderSwap } from "./helius_sender_executor";
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
 import { executeJupiterSwap } from "./jupiter_executor";
@@ -96,6 +98,47 @@ export function resolveExecutionAdapterRegistration(
   return ADAPTERS.get(String(name ?? "").trim()) ?? null;
 }
 
+async function enforceStrategyLabSubjectControls(input: {
+  db: D1Database;
+  venueKey: string;
+  inputMint?: string;
+  outputMint?: string;
+  bypassReason?: ExecuteSwapInput["subjectControlBypassReason"];
+}): Promise<void> {
+  const venueControl = await getStrategyLabSubjectControl(
+    input.db,
+    "venue",
+    input.venueKey,
+  );
+  if (venueControl?.killSwitchEnabled) {
+    throw new Error(`runtime-venue-disabled-by-operator:${input.venueKey}`);
+  }
+  if (!input.bypassReason && venueControl && !venueControl.liveAllowed) {
+    throw new Error(`runtime-venue-not-allowlisted:${input.venueKey}`);
+  }
+
+  const assetKeys = Array.from(
+    new Set(
+      [input.inputMint, input.outputMint]
+        .map((mint) => (mint ? TRADING_TOKEN_BY_MINT[mint]?.symbol : null))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  for (const assetKey of assetKeys) {
+    const assetControl = await getStrategyLabSubjectControl(
+      input.db,
+      "asset",
+      assetKey,
+    );
+    if (assetControl?.killSwitchEnabled) {
+      throw new Error(`runtime-asset-disabled-by-operator:${assetKey}`);
+    }
+    if (!input.bypassReason && assetControl && !assetControl.liveAllowed) {
+      throw new Error(`runtime-asset-not-allowlisted:${assetKey}`);
+    }
+  }
+}
+
 export async function executeSwapViaRouter(
   input: ExecuteSwapInput,
 ): Promise<ExecuteSwapResult> {
@@ -135,6 +178,15 @@ export async function executeSwapViaRouter(
       throw new Error(
         `runtime-venue-mode-not-supported:${venueKey}:${runtimeMode}`,
       );
+    }
+    if (runtimeMode === "live") {
+      await enforceStrategyLabSubjectControls({
+        db: input.env.WAITLIST_DB,
+        venueKey,
+        inputMint: input.quoteResponse?.inputMint,
+        outputMint: input.quoteResponse?.outputMint,
+        bypassReason: input.subjectControlBypassReason,
+      });
     }
   }
   if (runtimeMode && !registration.supportedModes.includes(runtimeMode)) {

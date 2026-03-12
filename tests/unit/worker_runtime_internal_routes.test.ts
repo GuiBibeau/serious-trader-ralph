@@ -59,6 +59,7 @@ function createRuntimeExecutionEnv() {
     "0023_user_experience_onboarding.sql",
     "0025_execution_fabric.sql",
     "0027_runtime_canary.sql",
+    "0029_strategy_lab_readiness.sql",
   ]) {
     const migrationPath = resolve(
       import.meta.dir,
@@ -119,6 +120,27 @@ function createRuntimeExecutionEnv() {
       "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF",
       "2026-03-08T00:00:00.000Z",
     );
+  for (const [subjectKind, subjectKey] of [
+    ["venue", "jupiter"],
+    ["asset", "SOL"],
+    ["asset", "USDC"],
+  ]) {
+    sqlite
+      .query(
+        `
+        INSERT INTO strategy_lab_subject_controls (
+          subject_kind,
+          subject_key,
+          schema_version,
+          live_allowed,
+          kill_switch_enabled,
+          updated_at,
+          updated_by
+        ) VALUES (?1, ?2, 'v1', 1, 0, ?3, 'unit-test')
+        `,
+      )
+      .run(subjectKind, subjectKey, "2026-03-08T00:00:00.000Z");
+  }
 
   const env = createWorkerLiveEnv({
     overrides: {

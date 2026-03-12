@@ -14,6 +14,9 @@ import {
   parseRuntimeResearchReproducibilityBundleRecord,
   parseRuntimeStrategyLabPromotionEvent,
   parseRuntimeStrategyLabPromotionRecord,
+  parseRuntimeStrategyLabReadinessArtifact,
+  parseRuntimeStrategyLabReadinessCanaryRun,
+  parseRuntimeStrategyLabSubjectControl,
   parseRuntimeStrategySpec,
   parseRuntimeVenueCapability,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
@@ -50,6 +53,9 @@ describe("worker runtime contract bridge", () => {
       "strategySpec",
       "strategyLabPromotion",
       "strategyLabPromotionEvent",
+      "strategyLabSubjectControl",
+      "strategyLabReadinessArtifact",
+      "strategyLabReadinessCanaryRun",
     ]);
   });
 
@@ -112,6 +118,28 @@ describe("worker runtime contract bridge", () => {
     expect(promotion.targetState).toBe("shadow");
     expect(promotion.actions[1]?.actionType).toBe("upsert_runtime_deployment");
     expect(event.eventType).toBe("applied");
+  });
+
+  test("worker can parse the canonical strategy-lab readiness fixtures", () => {
+    const control = parseRuntimeStrategyLabSubjectControl(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_lab_subject_control.valid.v1.json",
+      ),
+    );
+    const artifact = parseRuntimeStrategyLabReadinessArtifact(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_lab_readiness_artifact.valid.v1.json",
+      ),
+    );
+    const canaryRun = parseRuntimeStrategyLabReadinessCanaryRun(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_lab_readiness_canary_run.valid.v1.json",
+      ),
+    );
+
+    expect(control.subjectKind).toBe("venue");
+    expect(artifact.targetState).toBe("limited_live_ready");
+    expect(canaryRun.status).toBe("success");
   });
 
   test("worker can parse the canonical venue capability fixture", () => {

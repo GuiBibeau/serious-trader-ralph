@@ -15,6 +15,7 @@ export type ExecuteSwapInput = {
   venueKey?: string;
   runtimeMode?: RuntimeMode;
   requireVenueRouting?: boolean;
+  subjectControlBypassReason?: "strategy_lab_readiness_canary";
   execution?: ExecutionConfig;
   policy: NormalizedPolicy;
   rpc: SolanaRpc;

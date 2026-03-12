@@ -1,6 +1,11 @@
 import { parseRuntimeResearchBriefRequest } from "../../../src/runtime/research/briefs.js";
 import { parseRuntimeResearchPolicyGateRequest } from "../../../src/runtime/research/policy_gate.js";
 import { parseRuntimeResearchPromotionRequest } from "../../../src/runtime/research/promotion.js";
+import {
+  parseRuntimeResearchReadinessCanaryRequest,
+  parseRuntimeResearchReadinessRequest,
+  parseRuntimeResearchSubjectControlPatch,
+} from "../../../src/runtime/research/readiness.js";
 import { parseRuntimeResearchSynthesisRequest } from "../../../src/runtime/research/synthesis.js";
 import { parseRuntimeResearchCandidateTriageRequest } from "../../../src/runtime/research/triage.js";
 import { buildAgentQueryResponse } from "./agent_query";
@@ -161,6 +166,14 @@ import {
   listRuntimeResearchPromotionWorkflow,
   runRuntimeResearchPromotionWorkflow,
 } from "./runtime_research_promotion";
+import {
+  listRuntimeResearchReadinessCanaryWorkflow,
+  listRuntimeResearchReadinessWorkflow,
+  listRuntimeResearchSubjectControlWorkflow,
+  runRuntimeResearchReadinessCanaryWithMarkdown,
+  runRuntimeResearchReadinessWorkflow,
+  upsertRuntimeResearchSubjectControlWorkflow,
+} from "./runtime_research_readiness";
 import { runRuntimeResearchSynthesisWorkflow } from "./runtime_research_synthesis";
 import { runRuntimeResearchCandidateTriageWorkflow } from "./runtime_research_triage";
 import { SolanaRpc } from "./solana_rpc";
@@ -2511,6 +2524,290 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-research-promotion-list-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/research/readiness"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const readinessRequest = parseRuntimeResearchReadinessRequest(
+            await request.json(),
+          );
+          const result = await runRuntimeResearchReadinessWorkflow({
+            env,
+            request: readinessRequest,
+          });
+          return withCors(
+            json({
+              ok: true,
+              readiness: result.readiness,
+              markdown: result.markdown,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-readiness-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/research/readiness"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeResearchReadinessWorkflow({
+            env,
+            readinessId: url.searchParams.get("readinessId") ?? undefined,
+            subjectKind:
+              url.searchParams.get("subjectKind") === "venue" ||
+              url.searchParams.get("subjectKind") === "asset"
+                ? (url.searchParams.get("subjectKind") as "venue" | "asset")
+                : undefined,
+            subjectKey: url.searchParams.get("subjectKey") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              readinessArtifacts: result.readinessArtifacts,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-readiness-list-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/research/subject-controls"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const controlPatch = parseRuntimeResearchSubjectControlPatch(
+            await request.json(),
+          );
+          const result = await upsertRuntimeResearchSubjectControlWorkflow({
+            env,
+            controlPatch,
+          });
+          return withCors(
+            json({
+              ok: true,
+              control: result.control,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-subject-control-upsert-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/research/subject-controls"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeResearchSubjectControlWorkflow({
+            env,
+            subjectKind:
+              url.searchParams.get("subjectKind") === "venue" ||
+              url.searchParams.get("subjectKind") === "asset"
+                ? (url.searchParams.get("subjectKind") as "venue" | "asset")
+                : undefined,
+            subjectKey: url.searchParams.get("subjectKey") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              controls: result.controls,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-subject-control-list-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/research/readiness/canary"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const canaryRequest = parseRuntimeResearchReadinessCanaryRequest(
+            await request.json(),
+          );
+          const result = await runRuntimeResearchReadinessCanaryWithMarkdown({
+            env,
+            request: canaryRequest,
+          });
+          return withCors(
+            json({
+              ok: result.ok,
+              status: result.status,
+              run: result.run,
+              state: result.state,
+              markdown: result.markdown,
+              ...(result.error ? { error: result.error } : {}),
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-readiness-canary-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/research/readiness/canary"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeResearchReadinessCanaryWorkflow({
+            env,
+            runId: url.searchParams.get("runId") ?? undefined,
+            subjectKind:
+              url.searchParams.get("subjectKind") === "venue" ||
+              url.searchParams.get("subjectKind") === "asset"
+                ? (url.searchParams.get("subjectKind") as "venue" | "asset")
+                : undefined,
+            subjectKey: url.searchParams.get("subjectKey") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              runs: result.runs,
+              state: result.state,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-readiness-canary-list-failed",
               },
               { status: 400 },
             ),

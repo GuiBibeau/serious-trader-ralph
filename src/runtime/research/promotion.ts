@@ -61,6 +61,7 @@ export type RuntimeResearchPromotionRequest = {
   limitedLiveCanaryRef?: string;
   limitedLiveSoakPassed?: boolean;
   limitedLiveSoakRef?: string;
+  readinessArtifactIds?: string[];
   applyTransition?: boolean;
   activateEvaluation?: boolean;
   metadata?: Record<string, unknown>;
@@ -198,6 +199,13 @@ export function parseRuntimeResearchPromotionRequest(
     ...(typeof input.limitedLiveSoakRef === "string" &&
     input.limitedLiveSoakRef.trim()
       ? { limitedLiveSoakRef: input.limitedLiveSoakRef.trim() }
+      : {}),
+    ...(Array.isArray(input.readinessArtifactIds)
+      ? {
+          readinessArtifactIds: input.readinessArtifactIds
+            .map((value) => String(value ?? "").trim())
+            .filter((value) => value.length > 0),
+        }
       : {}),
     ...(typeof input.applyTransition === "boolean"
       ? { applyTransition: input.applyTransition }

@@ -1,0 +1,260 @@
+import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import type { Env } from "../../apps/worker/src/types";
+import {
+  createExecutionContextStub,
+  createWorkerLiveEnv,
+} from "../integration/_worker_live_test_utils";
+
+const worker = (await import("../../apps/worker/src/index")).default;
+
+function createSqliteD1Adapter(db: Database): D1Database {
+  return {
+    prepare(sql: string) {
+      return {
+        bind(...params: unknown[]) {
+          return {
+            async run() {
+              const statement = db.query(sql);
+              const result = statement.run(...(params as never[])) as {
+                changes?: number;
+              };
+              return {
+                meta: {
+                  changes:
+                    typeof result.changes === "number" ? result.changes : 0,
+                },
+              };
+            },
+            async first() {
+              const statement = db.query(sql);
+              return (statement.get(...(params as never[])) as unknown) ?? null;
+            },
+            async all() {
+              const statement = db.query(sql);
+              return {
+                results: (statement.all(...(params as never[])) ??
+                  []) as unknown[],
+              };
+            },
+          };
+        },
+      };
+    },
+  } as unknown as D1Database;
+}
+
+function createOpsEnv(overrides?: Partial<Env>) {
+  const sqlite = new Database(":memory:");
+  sqlite.exec("PRAGMA foreign_keys = ON;");
+
+  for (const migrationName of [
+    "0025_execution_fabric.sql",
+    "0026_execution_canary.sql",
+    "0027_runtime_canary.sql",
+    "0028_strategy_lab_promotions.sql",
+    "0029_strategy_lab_readiness.sql",
+  ]) {
+    const migrationPath = resolve(
+      import.meta.dir,
+      "..",
+      "..",
+      "apps/worker/migrations",
+      migrationName,
+    );
+    sqlite.exec(readFileSync(migrationPath, "utf8"));
+  }
+
+  const env = createWorkerLiveEnv({
+    overrides: {
+      WAITLIST_DB: createSqliteD1Adapter(sqlite),
+      ADMIN_TOKEN: "admin-secret",
+      RUNTIME_INTERNAL_STUB_MODE: "1",
+      RUNTIME_INTERNAL_SERVICE_TOKEN: "runtime-secret",
+      STRATEGY_LAB_READINESS_CANARY_ENABLED: "1",
+      ...overrides,
+    },
+  });
+
+  return { env, sqlite };
+}
+
+describe("worker runtime research readiness routes", () => {
+  test("requires admin auth for readiness evaluation", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness",
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "asset",
+              subjectKey: "SOL",
+              targetState: "limited_live_ready",
+              requestedBy: "codex",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "auth-required",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("persists subject controls and evaluates readiness artifacts", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      for (const control of [
+        {
+          subjectKind: "venue",
+          subjectKey: "jupiter",
+          liveAllowed: false,
+          killSwitchEnabled: false,
+          updatedBy: "codex",
+        },
+        {
+          subjectKind: "asset",
+          subjectKey: "SOL",
+          liveAllowed: false,
+          killSwitchEnabled: false,
+          updatedBy: "codex",
+        },
+      ]) {
+        const response = await worker.fetch(
+          new Request(
+            "http://localhost/api/admin/ops/runtime/research/subject-controls",
+            {
+              method: "POST",
+              headers: {
+                authorization: "Bearer admin-secret",
+                "content-type": "application/json",
+              },
+              body: JSON.stringify(control),
+            },
+          ),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(response.status).toBe(200);
+        const payload = (await response.json()) as Record<string, unknown>;
+        expect(payload.ok).toBe(true);
+      }
+
+      const readinessResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "asset",
+              subjectKey: "SOL",
+              targetState: "limited_live_ready",
+              requestedBy: "codex",
+              venueKey: "jupiter",
+              pairSymbol: "SOL/USDC",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(readinessResponse.status).toBe(200);
+      const readinessPayload = (await readinessResponse.json()) as {
+        ok: boolean;
+        readiness: {
+          status: string;
+          evidenceRefs: Array<{ kind: string }>;
+        };
+      };
+      expect(readinessPayload.ok).toBe(true);
+      expect(readinessPayload.readiness.status).toBe("pass");
+      expect(
+        readinessPayload.readiness.evidenceRefs.map((ref) => ref.kind),
+      ).toContain("bounded_canary_plan");
+
+      const listResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness?subjectKind=asset&subjectKey=SOL",
+          {
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(listResponse.status).toBe(200);
+      const listPayload = (await listResponse.json()) as {
+        ok: boolean;
+        readinessArtifacts: Array<{ subjectKey: string }>;
+      };
+      expect(listPayload.ok).toBe(true);
+      expect(listPayload.readinessArtifacts[0]?.subjectKey).toBe("SOL");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("runs a stub readiness canary and returns auditable evidence", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/canary",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "asset",
+              subjectKey: "SOL",
+              requestedBy: "codex",
+              venueKey: "jupiter",
+              pairSymbol: "SOL/USDC",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        run: {
+          evidenceRefs: Array<{ kind: string }>;
+          reconciliation: { status: string };
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.status).toBe("success");
+      expect(payload.run.reconciliation.status).toBe("passed");
+      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+    } finally {
+      sqlite.close();
+    }
+  });
+});

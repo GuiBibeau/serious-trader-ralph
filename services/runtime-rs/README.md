@@ -305,6 +305,32 @@ That command writes `.tmp/strategy-lab-promotion/promotion.json`,
 `.tmp/strategy-lab-promotion/promotion.md`, including the transition audit
 record, orchestration actions, and explicit rollback or human-approval status.
 
+Venue and asset onboarding now use the same Worker-admin pattern:
+
+```bash
+bun run strategy-lab:readiness \
+  --operation readiness \
+  --request-file .tmp/strategy-lab-readiness/request.json
+```
+
+That command writes `.tmp/strategy-lab-readiness/readiness.json` and
+`.tmp/strategy-lab-readiness/readiness.md`, including explicit readiness checks
+for capability coverage, data quality, min-size rules, fee sanity, paper
+validation, subject controls, and bounded canary planning.
+
+Bounded onboarding canaries use the same CLI with `--operation canary`:
+
+```bash
+bun run strategy-lab:readiness \
+  --operation canary \
+  --request-file .tmp/strategy-lab-readiness/canary-request.json
+```
+
+That command writes `.tmp/strategy-lab-readiness/canary.json` and
+`.tmp/strategy-lab-readiness/canary.md`, including the auditable canary run,
+reconciliation summary, and evidence refs that later promotion requests can
+consume directly via `readinessArtifactIds`.
+
 The runtime operator surface now includes allocator details for a deployment:
 
 - current grant allocated and reserved USD,

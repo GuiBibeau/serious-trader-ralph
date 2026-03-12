@@ -2376,6 +2376,9 @@ export async function handleRuntimeInternalRoute(
     url.pathname === INTERNAL_RUNTIME_BACKTESTS_PATH ||
     url.pathname === INTERNAL_RUNTIME_DATASET_SNAPSHOTS_PATH ||
     url.pathname === INTERNAL_RUNTIME_REPLAY_CORPORA_PATH ||
+    url.pathname === INTERNAL_RUNTIME_FEATURES_PATH ||
+    url.pathname === INTERNAL_RUNTIME_FEATURE_DEFINITIONS_PATH ||
+    url.pathname === INTERNAL_RUNTIME_REGIME_TAGS_PATH ||
     url.pathname === INTERNAL_RUNTIME_COST_MODELS_PATH ||
     url.pathname === INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH ||
     url.pathname === INTERNAL_RUNTIME_EXECUTION_PLANS_PATH ||
