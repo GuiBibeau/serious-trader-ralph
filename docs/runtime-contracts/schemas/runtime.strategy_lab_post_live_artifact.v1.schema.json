@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_post_live_artifact",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "postLiveId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjectKind": {
+      "type": "string",
+      "enum": ["strategy", "venue", "asset"]
+    },
+    "subjectKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "currentState": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "draft",
+        "shadow",
+        "paper",
+        "limited_live",
+        "broad_live",
+        "integrated",
+        "shadow_ready",
+        "paper_ready",
+        "limited_live_ready",
+        "broad_live_ready",
+        "paused",
+        "deprecated"
+      ]
+    },
+    "deploymentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "venueKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "assetKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pairSymbol": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "blocked", "requires_human_approval", "applied"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "recommendedAction": {
+      "type": "string",
+      "enum": ["observe", "revalidate", "demote", "pause", "disable_subject"]
+    },
+    "recommendedTargetState": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "draft",
+        "shadow",
+        "paper",
+        "limited_live",
+        "broad_live",
+        "integrated",
+        "shadow_ready",
+        "paper_ready",
+        "limited_live_ready",
+        "broad_live_ready",
+        "paused",
+        "deprecated"
+      ]
+    },
+    "appliedAction": {
+      "type": "string",
+      "enum": ["observe", "revalidate", "demote", "pause", "disable_subject"]
+    },
+    "appliedTargetState": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "draft",
+        "shadow",
+        "paper",
+        "limited_live",
+        "broad_live",
+        "integrated",
+        "shadow_ready",
+        "paper_ready",
+        "limited_live_ready",
+        "broad_live_ready",
+        "paused",
+        "deprecated"
+      ]
+    },
+    "followUpPromotionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "followUpControlRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "checks": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "checkId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "blocked",
+              "requires_human_approval",
+              "not_applicable"
+            ]
+          },
+          "observedValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "thresholdValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["checkId", "status", "message"],
+        "additionalProperties": false
+      }
+    },
+    "evidenceRefs": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["kind", "ref"],
+        "additionalProperties": false
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "appliedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "postLiveId",
+    "subjectKind",
+    "subjectKey",
+    "status",
+    "summary",
+    "recommendedAction",
+    "checks",
+    "evidenceRefs",
+    "createdAt",
+    "updatedAt"
+  ],
+  "additionalProperties": false
+}

@@ -178,6 +178,12 @@ describe("runtime protocol schema fixtures", () => {
         "docs/runtime-contracts/fixtures/runtime.strategy_lab_readiness_canary_run.valid.v1.json",
       ),
     ).toBe(true);
+    expect(
+      validate(
+        "docs/runtime-contracts/schemas/runtime.strategy_lab_post_live_artifact.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.strategy_lab_post_live_artifact.valid.v1.json",
+      ),
+    ).toBe(true);
   });
 
   test("manifest lists every runtime schema file", () => {
@@ -214,6 +220,7 @@ describe("runtime protocol schema fixtures", () => {
       "docs/runtime-contracts/schemas/runtime.strategy_lab_subject_control.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.strategy_lab_readiness_artifact.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.strategy_lab_readiness_canary_run.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.strategy_lab_post_live_artifact.v1.schema.json",
     ]);
   });
 });

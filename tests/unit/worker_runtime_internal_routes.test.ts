@@ -60,6 +60,7 @@ function createRuntimeExecutionEnv() {
     "0025_execution_fabric.sql",
     "0027_runtime_canary.sql",
     "0029_strategy_lab_readiness.sql",
+    "0030_strategy_lab_post_live.sql",
   ]) {
     const migrationPath = resolve(
       import.meta.dir,

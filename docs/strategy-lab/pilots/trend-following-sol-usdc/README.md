@@ -42,11 +42,20 @@ bun run runtime:deployment:evaluate \
   --body-file docs/strategy-lab/pilots/trend-following-sol-usdc/evaluate.body.json
 ```
 
+5. Run the post-live monitor after the bounded live pilot is active:
+
+```bash
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/trend-following-sol-usdc/post-live.request.json
+```
+
 ## Notes
 
 - `promotion.request.json` stays as the review template.
 - `promotion.apply.request.json` is the checked-in bounded live promotion record
   tied to the merged implementation PR and owner approval for the pilot.
 - The live deployment must stay on `lane=safe`, single-slice, and tiny-notional.
+- The post-live review is the recurring drift, revalidation, and rollback input
+  for the bounded live pilot.
 - Pair this pilot with the JUP onboarding pilot so the repo demonstrates both a
   new strategy and a newly onboarded asset path.

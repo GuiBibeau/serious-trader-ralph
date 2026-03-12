@@ -23,6 +23,7 @@
     "strategy-lab:policy-gate": "bun run src/bin/strategy_lab_policy_gate.ts",
     "strategy-lab:promote": "bun run src/bin/strategy_lab_promote.ts",
     "strategy-lab:readiness": "bun run src/bin/strategy_lab_readiness.ts",
+    "strategy-lab:post-live": "bun run src/bin/strategy_lab_post_live.ts",
     "runtime:deployment:evaluate": "bun run src/bin/runtime_deployment_evaluate.ts",
     "runtime:fly:deploy": "node scripts/runtime_rs/fly_deploy.mjs",
     "runtime:fly:smoke": "node scripts/runtime_rs/fly_smoke.mjs",

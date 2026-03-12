@@ -131,6 +131,11 @@
       "name": "strategyLabReadinessCanaryRun",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_readiness_canary_run",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_lab_readiness_canary_run.v1.schema.json"
+    },
+    {
+      "name": "strategyLabPostLiveArtifact",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_post_live_artifact",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_lab_post_live_artifact.v1.schema.json"
     }
   ],
   "rustCodegenHook": {

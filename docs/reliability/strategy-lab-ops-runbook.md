@@ -114,3 +114,38 @@ Expected effect:
 - demotion drill from `broad_live` to `limited_live`,
 - venue or asset-specific disable drill,
 - evidence reconstruction drill from stored manifests and scorecards.
+
+## Post-live monitoring loop
+
+Run recurring post-live checks through the Worker admin surface and the checked-in
+request files:
+
+```bash
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/trend-following-sol-usdc/post-live.request.json
+
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/post-live.asset.request.json
+
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/post-live.venue.request.json
+```
+
+Review all of the following on each run:
+
+- strategy failure, manual-review, and drift-alert rates,
+- live cost drift and latency drift against the active cost-model guard,
+- feature freshness and coverage,
+- venue and asset control state,
+- latest readiness canary status and reconciliation result,
+- any externally injected venue-health or asset-event checks.
+
+When drift is material:
+
+1. Re-run the post-live review with an explicit blocked check if you are
+   executing a drill or an external alert has already been confirmed.
+2. Apply the recommended fail-closed action.
+   Strategy drift should demote to `paper` or pause the bounded live deployment.
+   Venue or asset drift should disable live allowance and enable the kill switch.
+3. Preserve the post-live artifact, follow-up promotion record, and any control
+   changes as the canonical incident trail.

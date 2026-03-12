@@ -1,0 +1,133 @@
+name: Strategy Lab Post-Live
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_file:
+        description: Repo-relative path to a checked-in strategy-lab post-live request JSON
+        required: true
+      issue_number:
+        description: Optional GitHub issue number to comment with the post-live summary
+        required: false
+  schedule:
+    - cron: "0 */12 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  post-live:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.0"
+
+      - name: Install deps
+        run: bun install
+
+      - name: Check admin credentials
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::Missing required secret ADMIN_TOKEN for strategy-lab post-live."
+            exit 1
+          fi
+
+      - name: Run strategy-lab post-live monitors
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          REQUEST_FILE: ${{ inputs.request_file }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/strategy-lab-post-live
+
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            requests=(
+              "docs/strategy-lab/pilots/trend-following-sol-usdc/post-live.request.json"
+              "docs/strategy-lab/pilots/jup-onboarding/post-live.asset.request.json"
+              "docs/strategy-lab/pilots/jup-onboarding/post-live.venue.request.json"
+            )
+
+            index=0
+            for request_file in "${requests[@]}"; do
+              name="$(basename "${request_file}" .json)"
+              output_dir=".tmp/strategy-lab-post-live/${index}-${name}"
+              bun run strategy-lab:post-live \
+                --base-url https://api.trader-ralph.com \
+                --admin-token "${ADMIN_TOKEN}" \
+                --output-dir "${output_dir}" \
+                --request-file "${request_file}"
+
+              if [ -f "${output_dir}/post-live.md" ]; then
+                echo "## ${request_file}" >> "$GITHUB_STEP_SUMMARY"
+                cat "${output_dir}/post-live.md" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+              fi
+              index=$((index + 1))
+            done
+          else
+            bun run strategy-lab:post-live \
+              --base-url https://api.trader-ralph.com \
+              --admin-token "${ADMIN_TOKEN}" \
+              --output-dir .tmp/strategy-lab-post-live/manual \
+              --request-file "${REQUEST_FILE}"
+
+            cat .tmp/strategy-lab-post-live/manual/post-live.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload post-live artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: strategy-lab-post-live-${{ github.run_id }}
+          path: .tmp/strategy-lab-post-live
+          if-no-files-found: error
+
+      - name: Comment on issue
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.issue_number != '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          run_url="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          post_live_id="$(jq -r '.postLiveId' .tmp/strategy-lab-post-live/manual/post-live.json)"
+          subject="$(jq -r '.subjectKind + ":" + .subjectKey' .tmp/strategy-lab-post-live/manual/post-live.json)"
+          status="$(jq -r '.status' .tmp/strategy-lab-post-live/manual/post-live.json)"
+          action="$(jq -r '.recommendedAction' .tmp/strategy-lab-post-live/manual/post-live.json)"
+          target_state="$(jq -r '.recommendedTargetState // empty' .tmp/strategy-lab-post-live/manual/post-live.json)"
+
+          transition_suffix=""
+          if [ -n "${target_state}" ]; then
+            transition_suffix=" -> ${target_state}"
+          fi
+
+          body="$(cat <<EOF
+          Strategy-lab post-live review completed.
+
+          - postLiveId: \`${post_live_id}\`
+          - subject: \`${subject}\`
+          - status: \`${status}\`
+          - recommendedAction: \`${action}${transition_suffix}\`
+          - workflow run: ${run_url}
+          EOF
+          )"
+
+          payload="$(jq -n --arg body "$body" '{body:$body}')"
+          curl -fsS \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+            -d "${payload}" >/dev/null

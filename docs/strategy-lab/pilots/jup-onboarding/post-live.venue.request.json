@@ -1,0 +1,29 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "jupiter",
+  "requestedBy": "codex",
+  "issueNumber": 327,
+  "currentState": "limited_live_ready",
+  "venueKey": "jupiter",
+  "assetKey": "JUP",
+  "pairSymbol": "JUP/USDC",
+  "applyAction": false,
+  "thresholds": {
+    "maxCostDriftBps": 90,
+    "maxLatencyDriftMs": 8000
+  },
+  "evidenceRefs": [
+    {
+      "kind": "subject_control",
+      "ref": "docs/strategy-lab/pilots/jup-onboarding/control.venue.request.json"
+    },
+    {
+      "kind": "readiness_request",
+      "ref": "docs/strategy-lab/pilots/jup-onboarding/readiness.request.json"
+    }
+  ],
+  "metadata": {
+    "pilot": "jup-onboarding",
+    "subject": "venue"
+  }
+}

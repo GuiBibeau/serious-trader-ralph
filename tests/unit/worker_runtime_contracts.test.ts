@@ -12,6 +12,7 @@ import {
   parseRuntimeRegimeTagRecord,
   parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchReproducibilityBundleRecord,
+  parseRuntimeStrategyLabPostLiveArtifact,
   parseRuntimeStrategyLabPromotionEvent,
   parseRuntimeStrategyLabPromotionRecord,
   parseRuntimeStrategyLabReadinessArtifact,
@@ -56,6 +57,7 @@ describe("worker runtime contract bridge", () => {
       "strategyLabSubjectControl",
       "strategyLabReadinessArtifact",
       "strategyLabReadinessCanaryRun",
+      "strategyLabPostLiveArtifact",
     ]);
   });
 
@@ -160,6 +162,17 @@ describe("worker runtime contract bridge", () => {
     expect(control.subjectKind).toBe("venue");
     expect(artifact.targetState).toBe("limited_live_ready");
     expect(canaryRun.status).toBe("success");
+  });
+
+  test("worker can parse the canonical strategy-lab post-live fixture", () => {
+    const artifact = parseRuntimeStrategyLabPostLiveArtifact(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_lab_post_live_artifact.valid.v1.json",
+      ),
+    );
+
+    expect(artifact.recommendedAction).toBe("demote");
+    expect(artifact.appliedTargetState).toBe("paper");
   });
 
   test("worker can parse the canonical venue capability fixture", () => {

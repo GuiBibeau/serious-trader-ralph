@@ -1296,6 +1296,39 @@ export const RuntimeStrategyLabReadinessCanaryRunSchema =
     completedAt: ISO_DATETIME_SCHEMA.optional(),
   }).strict();
 
+export const RuntimeStrategyLabPostLiveActionSchema = z.enum([
+  "observe",
+  "revalidate",
+  "demote",
+  "pause",
+  "disable_subject",
+]);
+
+export const RuntimeStrategyLabPostLiveArtifactSchema = VersionedSchema.extend({
+  postLiveId: NON_EMPTY_STRING_SCHEMA,
+  subjectKind: RuntimeStrategyLabSubjectKindSchema,
+  subjectKey: NON_EMPTY_STRING_SCHEMA,
+  currentState: RuntimeStrategyLabPromotionStateSchema.optional(),
+  deploymentId: NON_EMPTY_STRING_SCHEMA.optional(),
+  venueKey: NON_EMPTY_STRING_SCHEMA.optional(),
+  assetKey: NON_EMPTY_STRING_SCHEMA.optional(),
+  pairSymbol: NON_EMPTY_STRING_SCHEMA.optional(),
+  status: RuntimeStrategyLabPromotionStatusSchema,
+  summary: NON_EMPTY_STRING_SCHEMA,
+  recommendedAction: RuntimeStrategyLabPostLiveActionSchema,
+  recommendedTargetState: RuntimeStrategyLabPromotionStateSchema.optional(),
+  appliedAction: RuntimeStrategyLabPostLiveActionSchema.optional(),
+  appliedTargetState: RuntimeStrategyLabPromotionStateSchema.optional(),
+  followUpPromotionId: NON_EMPTY_STRING_SCHEMA.optional(),
+  followUpControlRef: NON_EMPTY_STRING_SCHEMA.optional(),
+  checks: z.array(RuntimeStrategyLabCheckSchema).min(1),
+  evidenceRefs: z.array(RuntimeStrategyLabEvidenceRefSchema).max(64),
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  appliedAt: ISO_DATETIME_SCHEMA.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
 export const RuntimeExecutionCostModelStatusSchema = z.enum([
   "draft",
   "active",
@@ -1560,6 +1593,12 @@ export type RuntimeStrategyLabReadinessArtifact = z.infer<
 export type RuntimeStrategyLabReadinessCanaryRun = z.infer<
   typeof RuntimeStrategyLabReadinessCanaryRunSchema
 >;
+export type RuntimeStrategyLabPostLiveAction = z.infer<
+  typeof RuntimeStrategyLabPostLiveActionSchema
+>;
+export type RuntimeStrategyLabPostLiveArtifact = z.infer<
+  typeof RuntimeStrategyLabPostLiveArtifactSchema
+>;
 
 export const RUNTIME_DEPLOYMENT_STATE_TRANSITIONS = {
   draft: ["shadow", "paper", "live", "archived"],
@@ -1772,6 +1811,12 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
       "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_readiness_canary_run",
     outputFile: "runtime.strategy_lab_readiness_canary_run.v1.schema.json",
   },
+  strategyLabPostLiveArtifact: {
+    schema: RuntimeStrategyLabPostLiveArtifactSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_post_live_artifact",
+    outputFile: "runtime.strategy_lab_post_live_artifact.v1.schema.json",
+  },
 } as const;
 
 export function canTransitionRuntimeDeploymentState(
@@ -1971,6 +2016,12 @@ export function parseRuntimeStrategyLabReadinessCanaryRun(
   return RuntimeStrategyLabReadinessCanaryRunSchema.parse(input);
 }
 
+export function parseRuntimeStrategyLabPostLiveArtifact(
+  input: unknown,
+): RuntimeStrategyLabPostLiveArtifact {
+  return RuntimeStrategyLabPostLiveArtifactSchema.parse(input);
+}
+
 export function safeParseRuntimeDeploymentRecord(input: unknown) {
   return RuntimeDeploymentRecordSchema.safeParse(input);
 }
@@ -2077,4 +2128,8 @@ export function safeParseRuntimeStrategyLabReadinessArtifact(input: unknown) {
 
 export function safeParseRuntimeStrategyLabReadinessCanaryRun(input: unknown) {
   return RuntimeStrategyLabReadinessCanaryRunSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategyLabPostLiveArtifact(input: unknown) {
+  return RuntimeStrategyLabPostLiveArtifactSchema.safeParse(input);
 }

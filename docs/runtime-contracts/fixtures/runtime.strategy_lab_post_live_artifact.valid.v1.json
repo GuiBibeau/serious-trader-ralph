@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "v1",
+  "postLiveId": "postlive_candidate_trend_following_jupiter_sol_usdc",
+  "subjectKind": "strategy",
+  "subjectKey": "candidate_trend_following_jupiter_sol_usdc",
+  "currentState": "limited_live",
+  "deploymentId": "dep_trend_following_sol_usdc_limited_live",
+  "venueKey": "jupiter",
+  "assetKey": "SOL",
+  "pairSymbol": "SOL/USDC",
+  "status": "applied",
+  "summary": "Post-live review flagged drift for strategy:candidate_trend_following_jupiter_sol_usdc and recommends demote -> paper.",
+  "recommendedAction": "demote",
+  "recommendedTargetState": "paper",
+  "appliedAction": "demote",
+  "appliedTargetState": "paper",
+  "followUpPromotionId": "promotion_post_live_trend_following_sol_usdc",
+  "followUpControlRef": "asset:SOL",
+  "checks": [
+    {
+      "checkId": "strategy-cost-drift-bps",
+      "status": "blocked",
+      "observedValue": "125bps",
+      "thresholdValue": "90bps",
+      "message": "Observed live cost drift exceeded the active model guard."
+    },
+    {
+      "checkId": "venue-control",
+      "status": "pass",
+      "observedValue": "liveAllowed=true,killSwitchEnabled=false",
+      "thresholdValue": "liveAllowed=true,killSwitchEnabled=false",
+      "message": "venue control permits bounded live execution."
+    }
+  ],
+  "evidenceRefs": [
+    {
+      "kind": "promotion",
+      "ref": "promotion_trend_following_sol_usdc_limited_live"
+    },
+    {
+      "kind": "runtime_scorecard",
+      "ref": "dep_trend_following_sol_usdc_limited_live"
+    },
+    {
+      "kind": "post_live_review",
+      "ref": "postlive_candidate_trend_following_jupiter_sol_usdc"
+    }
+  ],
+  "createdAt": "2026-03-12T00:00:00.000Z",
+  "updatedAt": "2026-03-12T00:05:00.000Z",
+  "appliedAt": "2026-03-12T00:05:00.000Z",
+  "metadata": {
+    "source": "strategy-lab-post-live",
+    "pilot": "trend-following-sol-usdc"
+  }
+}

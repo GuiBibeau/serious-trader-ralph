@@ -265,6 +265,30 @@ Verify:
   status for pilot review,
 - any pilot-specific docs and request files remain public-safe.
 
+### 3g. Strategy-lab post-live verification
+
+For drift monitoring, revalidation, and fail-closed exercises:
+
+```bash
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/trend-following-sol-usdc/post-live.request.json
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/post-live.asset.request.json
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/post-live.venue.request.json
+```
+
+Verify:
+
+- each post-live run stores a canonical artifact with checks, evidence refs, and
+  the recommended action,
+- strategy drift can demote or pause the bounded live strategy through the
+  existing promotion state machine,
+- venue or asset drift can disable live allowance and enable a kill switch
+  through subject controls,
+- the scheduled workflow remains capable of re-running the checked-in post-live
+  monitor requests on production.
+
 Verify:
 
 - acquired source records carry `canonicalUrl`, `publishedAt`, and provenance,

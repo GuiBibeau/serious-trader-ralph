@@ -1,6 +1,7 @@
 import { parseRuntimeResearchBriefRequest } from "../../../src/runtime/research/briefs.js";
 import { parseRuntimeResearchCurationRequest } from "../../../src/runtime/research/curation.js";
 import { parseRuntimeResearchPolicyGateRequest } from "../../../src/runtime/research/policy_gate.js";
+import { parseRuntimeResearchPostLiveRequest } from "../../../src/runtime/research/post_live.js";
 import { parseRuntimeResearchPromotionRequest } from "../../../src/runtime/research/promotion.js";
 import {
   parseRuntimeResearchReadinessCanaryRequest,
@@ -166,6 +167,10 @@ import {
 import { runRuntimeResearchBriefWorkflow } from "./runtime_research_briefs";
 import { runRuntimeResearchCurationWorkflow } from "./runtime_research_curation";
 import { runRuntimeResearchPolicyGateWorkflow } from "./runtime_research_policy_gate";
+import {
+  listRuntimeResearchPostLiveWorkflow,
+  runRuntimeResearchPostLiveWorkflow,
+} from "./runtime_research_post_live";
 import {
   listRuntimeResearchPromotionWorkflow,
   runRuntimeResearchPromotionWorkflow,
@@ -2960,6 +2965,107 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-research-readiness-canary-list-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/research/post-live"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const postLiveRequest = parseRuntimeResearchPostLiveRequest(
+            await request.json(),
+          );
+          const result = await runRuntimeResearchPostLiveWorkflow({
+            env,
+            request: postLiveRequest,
+          });
+          return withCors(
+            json({
+              ok: true,
+              artifact: result.artifact,
+              markdown: result.markdown,
+              ...(result.promotion ? { promotion: result.promotion } : {}),
+              ...(result.event ? { event: result.event } : {}),
+              ...(result.control ? { control: result.control } : {}),
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-post-live-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/research/post-live"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeResearchPostLiveWorkflow({
+            env,
+            postLiveId: url.searchParams.get("postLiveId") ?? undefined,
+            subjectKind:
+              url.searchParams.get("subjectKind") === "strategy" ||
+              url.searchParams.get("subjectKind") === "venue" ||
+              url.searchParams.get("subjectKind") === "asset"
+                ? (url.searchParams.get("subjectKind") as
+                    | "strategy"
+                    | "venue"
+                    | "asset")
+                : undefined,
+            subjectKey: url.searchParams.get("subjectKey") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              artifacts: result.artifacts,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-post-live-list-failed",
               },
               { status: 400 },
             ),

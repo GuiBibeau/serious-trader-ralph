@@ -48,6 +48,7 @@ async function createLiveRouterEnv() {
     "0027_runtime_canary.sql",
     "0028_strategy_lab_promotions.sql",
     "0029_strategy_lab_readiness.sql",
+    "0030_strategy_lab_post_live.sql",
   ]) {
     const migrationPath = resolve(
       import.meta.dir,

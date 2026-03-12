@@ -74,7 +74,6 @@ function createOpsEnv(overrides?: Partial<Env>) {
       ADMIN_TOKEN: "admin-secret",
       RUNTIME_INTERNAL_STUB_MODE: "1",
       RUNTIME_INTERNAL_SERVICE_TOKEN: "runtime-secret",
-      STRATEGY_LAB_READINESS_CANARY_ENABLED: "1",
       ...overrides,
     },
   });
@@ -82,23 +81,60 @@ function createOpsEnv(overrides?: Partial<Env>) {
   return { env, sqlite };
 }
 
-describe("worker runtime research readiness routes", () => {
-  test("requires admin auth for readiness evaluation", async () => {
+async function seedControls(env: Env): Promise<void> {
+  for (const control of [
+    {
+      subjectKind: "venue",
+      subjectKey: "jupiter",
+      liveAllowed: true,
+      killSwitchEnabled: false,
+      updatedBy: "codex",
+    },
+    {
+      subjectKind: "asset",
+      subjectKey: "SOL",
+      liveAllowed: true,
+      killSwitchEnabled: false,
+      updatedBy: "codex",
+    },
+  ]) {
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/admin/ops/runtime/research/subject-controls",
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer admin-secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(control),
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+    expect(response.status).toBe(200);
+  }
+}
+
+describe("worker runtime research post-live route", () => {
+  test("requires admin auth", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
       const response = await worker.fetch(
         new Request(
-          "http://localhost/api/admin/ops/runtime/research/readiness",
+          "http://localhost/api/admin/ops/runtime/research/post-live",
           {
             method: "POST",
             headers: {
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              subjectKind: "asset",
-              subjectKey: "SOL",
-              targetState: "limited_live_ready",
+              subjectKind: "strategy",
+              subjectKey: "candidate_trend_following_jupiter_sol_usdc",
               requestedBy: "codex",
+              currentState: "limited_live",
+              deploymentId: "dep_trend_following_sol_usdc_limited_live",
             }),
           },
         ),
@@ -116,48 +152,14 @@ describe("worker runtime research readiness routes", () => {
     }
   });
 
-  test("persists subject controls and evaluates readiness artifacts", async () => {
+  test("stores a healthy post-live artifact", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
-      for (const control of [
-        {
-          subjectKind: "venue",
-          subjectKey: "jupiter",
-          liveAllowed: false,
-          killSwitchEnabled: false,
-          updatedBy: "codex",
-        },
-        {
-          subjectKind: "asset",
-          subjectKey: "SOL",
-          liveAllowed: false,
-          killSwitchEnabled: false,
-          updatedBy: "codex",
-        },
-      ]) {
-        const response = await worker.fetch(
-          new Request(
-            "http://localhost/api/admin/ops/runtime/research/subject-controls",
-            {
-              method: "POST",
-              headers: {
-                authorization: "Bearer admin-secret",
-                "content-type": "application/json",
-              },
-              body: JSON.stringify(control),
-            },
-          ),
-          env,
-          createExecutionContextStub(),
-        );
-        expect(response.status).toBe(200);
-        const payload = (await response.json()) as Record<string, unknown>;
-        expect(payload.ok).toBe(true);
-      }
+      await seedControls(env);
 
-      const readinessResponse = await worker.fetch(
+      const response = await worker.fetch(
         new Request(
-          "http://localhost/api/admin/ops/runtime/research/readiness",
+          "http://localhost/api/admin/ops/runtime/research/post-live",
           {
             method: "POST",
             headers: {
@@ -165,11 +167,13 @@ describe("worker runtime research readiness routes", () => {
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              subjectKind: "asset",
-              subjectKey: "SOL",
-              targetState: "limited_live_ready",
+              subjectKind: "strategy",
+              subjectKey: "candidate_trend_following_jupiter_sol_usdc",
               requestedBy: "codex",
+              currentState: "limited_live",
+              deploymentId: "dep_trend_following_sol_usdc_limited_live",
               venueKey: "jupiter",
+              assetKey: "SOL",
               pairSymbol: "SOL/USDC",
             }),
           },
@@ -178,23 +182,22 @@ describe("worker runtime research readiness routes", () => {
         createExecutionContextStub(),
       );
 
-      expect(readinessResponse.status).toBe(200);
-      const readinessPayload = (await readinessResponse.json()) as {
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
         ok: boolean;
-        readiness: {
+        artifact: {
           status: string;
-          evidenceRefs: Array<{ kind: string }>;
+          recommendedAction: string;
+          postLiveId: string;
         };
       };
-      expect(readinessPayload.ok).toBe(true);
-      expect(readinessPayload.readiness.status).toBe("pass");
-      expect(
-        readinessPayload.readiness.evidenceRefs.map((ref) => ref.kind),
-      ).toContain("bounded_canary_plan");
+      expect(payload.ok).toBe(true);
+      expect(payload.artifact.status).toBe("pass");
+      expect(payload.artifact.recommendedAction).toBe("observe");
 
       const listResponse = await worker.fetch(
         new Request(
-          "http://localhost/api/admin/ops/runtime/research/readiness?subjectKind=asset&subjectKey=SOL",
+          `http://localhost/api/admin/ops/runtime/research/post-live?postLiveId=${payload.artifact.postLiveId}`,
           {
             headers: {
               authorization: "Bearer admin-secret",
@@ -207,21 +210,25 @@ describe("worker runtime research readiness routes", () => {
       expect(listResponse.status).toBe(200);
       const listPayload = (await listResponse.json()) as {
         ok: boolean;
-        readinessArtifacts: Array<{ subjectKey: string }>;
+        artifacts: Array<{ postLiveId: string }>;
       };
       expect(listPayload.ok).toBe(true);
-      expect(listPayload.readinessArtifacts[0]?.subjectKey).toBe("SOL");
+      expect(listPayload.artifacts[0]?.postLiveId).toBe(
+        payload.artifact.postLiveId,
+      );
     } finally {
       sqlite.close();
     }
   });
 
-  test("runs a stub readiness canary and returns auditable evidence", async () => {
+  test("demotes a limited-live strategy when drift is applied", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
+      await seedControls(env);
+
       const response = await worker.fetch(
         new Request(
-          "http://localhost/api/admin/ops/runtime/research/readiness/canary",
+          "http://localhost/api/admin/ops/runtime/research/post-live",
           {
             method: "POST",
             headers: {
@@ -229,11 +236,22 @@ describe("worker runtime research readiness routes", () => {
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              subjectKind: "asset",
-              subjectKey: "SOL",
+              subjectKind: "strategy",
+              subjectKey: "candidate_trend_following_jupiter_sol_usdc",
               requestedBy: "codex",
+              currentState: "limited_live",
+              deploymentId: "dep_trend_following_sol_usdc_limited_live",
               venueKey: "jupiter",
+              assetKey: "SOL",
               pairSymbol: "SOL/USDC",
+              applyAction: true,
+              externalChecks: [
+                {
+                  checkId: "operator-drift-injection",
+                  status: "blocked",
+                  message: "Drift injection for rollback drill.",
+                },
+              ],
             }),
           },
         ),
@@ -244,16 +262,26 @@ describe("worker runtime research readiness routes", () => {
       expect(response.status).toBe(200);
       const payload = (await response.json()) as {
         ok: boolean;
-        status: string;
-        run: {
-          evidenceRefs: Array<{ kind: string }>;
-          reconciliation: { status: string };
+        artifact: {
+          status: string;
+          appliedAction: string;
+          appliedTargetState: string;
+          followUpPromotionId: string;
         };
+        promotion: {
+          targetState: string;
+          status: string;
+        };
+        event: { eventType: string };
       };
       expect(payload.ok).toBe(true);
-      expect(payload.status).toBe("success");
-      expect(payload.run.reconciliation.status).toBe("passed");
-      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+      expect(payload.artifact.status).toBe("applied");
+      expect(payload.artifact.appliedAction).toBe("demote");
+      expect(payload.artifact.appliedTargetState).toBe("paper");
+      expect(payload.promotion.targetState).toBe("paper");
+      expect(payload.promotion.status).toBe("applied");
+      expect(payload.event.eventType).toBe("applied");
+      expect(payload.artifact.followUpPromotionId).toBeTruthy();
     } finally {
       sqlite.close();
     }

@@ -47,11 +47,24 @@ bun run strategy-lab:readiness \
   --request-file docs/strategy-lab/pilots/jup-onboarding/canary.request.json
 ```
 
+5. Run the post-live monitors for the onboarded asset and the bounded venue
+   surface:
+
+```bash
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/post-live.asset.request.json
+
+bun run strategy-lab:post-live \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/post-live.venue.request.json
+```
+
 ## Notes
 
 - The curation request seeds deterministic JUP/USDC replay metadata backed by
   checked-in fixture files.
 - Keep the canary on the default `$5` notional until the first live soak is
   complete.
+- Use the post-live monitors to drive recurring asset and venue revalidation
+  without widening the public Worker contract.
 - Pair this pilot with the trend-following SOL/USDC strategy pilot so the repo
   demonstrates both new-strategy and new-asset promotion paths.

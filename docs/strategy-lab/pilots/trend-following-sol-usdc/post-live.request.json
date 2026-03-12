@@ -1,0 +1,35 @@
+{
+  "subjectKind": "strategy",
+  "subjectKey": "candidate_trend_following_jupiter_sol_usdc",
+  "requestedBy": "codex",
+  "issueNumber": 327,
+  "currentState": "limited_live",
+  "deploymentId": "dep_trend_following_sol_usdc_limited_live",
+  "venueKey": "jupiter",
+  "assetKey": "SOL",
+  "pairSymbol": "SOL/USDC",
+  "refreshEvaluation": true,
+  "applyAction": false,
+  "thresholds": {
+    "maxFailedRunRateBps": 2500,
+    "maxManualReviewRateBps": 1000,
+    "maxDriftAlertCount": 0,
+    "maxCostDriftBps": 90,
+    "maxLatencyDriftMs": 8000,
+    "maxFeatureAgeMs": 20000
+  },
+  "evidenceRefs": [
+    {
+      "kind": "promotion_request",
+      "ref": "docs/strategy-lab/pilots/trend-following-sol-usdc/promotion.apply.request.json"
+    },
+    {
+      "kind": "runtime_evaluation",
+      "ref": "docs/strategy-lab/pilots/trend-following-sol-usdc/evaluate.body.json"
+    }
+  ],
+  "metadata": {
+    "pilot": "trend-following-sol-usdc",
+    "monitor": "post-live"
+  }
+}
