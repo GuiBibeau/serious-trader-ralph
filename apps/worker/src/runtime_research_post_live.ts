@@ -76,6 +76,16 @@ async function requireRuntimeInternalPayload(
   return result.payload;
 }
 
+async function readOptionalRuntimeInternalPayload(
+  resultPromise: Promise<{ ok: boolean; payload: Record<string, unknown> }>,
+): Promise<Record<string, unknown> | null> {
+  const result = await resultPromise;
+  if (!result.ok) {
+    return null;
+  }
+  return result.payload;
+}
+
 function parseRuntimeAssetRecords(payload: Record<string, unknown>) {
   const raw =
     isRecord(payload.registry) && Array.isArray(payload.registry.assets)
@@ -285,17 +295,18 @@ async function hydratePostLiveContext(input: {
   let pairSymbol = input.request.pairSymbol ?? null;
 
   if (input.request.deploymentId) {
-    const deploymentPayload = await requireRuntimeInternalPayload(
+    const deploymentPayload = await readOptionalRuntimeInternalPayload(
       readRuntimeDeployment(input.env, input.request.deploymentId),
-      "runtime-research-post-live-deployment-read-failed",
     );
-    const parsedDeployment = parseRuntimeDeploymentRecord(
-      deploymentPayload.deployment,
-    );
-    deployment = parsedDeployment;
-    venueKey = venueKey ?? parsedDeployment.venueKey;
-    pairSymbol = pairSymbol ?? parsedDeployment.pair.symbol;
-    assetKey = assetKey ?? parsedDeployment.pair.symbol.split("/", 1)[0];
+    if (deploymentPayload) {
+      const parsedDeployment = parseRuntimeDeploymentRecord(
+        deploymentPayload.deployment,
+      );
+      deployment = parsedDeployment;
+      venueKey = venueKey ?? parsedDeployment.venueKey;
+      pairSymbol = pairSymbol ?? parsedDeployment.pair.symbol;
+      assetKey = assetKey ?? parsedDeployment.pair.symbol.split("/", 1)[0];
+    }
   }
 
   const latestPromotion =
@@ -368,13 +379,15 @@ async function hydratePostLiveContext(input: {
       : null;
 
   const scorecard =
-    input.request.subjectKind === "strategy" && input.request.deploymentId
+    input.request.subjectKind === "strategy" &&
+    input.request.deploymentId &&
+    deployment
       ? await (async () => {
           if (input.request.refreshEvaluation !== false) {
-            await requireRuntimeInternalPayload(
+            const evaluationPayload = await readOptionalRuntimeInternalPayload(
               evaluateRuntimeDeployment({
                 env: input.env,
-                deploymentId: input.request.deploymentId,
+                deploymentId: deployment.deploymentId,
                 body: {
                   trigger: {
                     kind: "operator",
@@ -383,13 +396,17 @@ async function hydratePostLiveContext(input: {
                   },
                 },
               }),
-              "runtime-research-post-live-evaluate-failed",
             );
+            if (!evaluationPayload) {
+              return null;
+            }
           }
-          const payload = await requireRuntimeInternalPayload(
-            readRuntimeScorecard(input.env, input.request.deploymentId),
-            "runtime-research-post-live-scorecard-read-failed",
+          const payload = await readOptionalRuntimeInternalPayload(
+            readRuntimeScorecard(input.env, deployment.deploymentId),
           );
+          if (!payload) {
+            return null;
+          }
           return parseScorecardSnapshot(payload);
         })()
       : null;

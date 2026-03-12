@@ -2,7 +2,6 @@
   "subjectKind": "strategy",
   "subjectKey": "candidate_trend_following_jupiter_sol_usdc",
   "requestedBy": "codex",
-  "issueNumber": 327,
   "currentState": "limited_live",
   "deploymentId": "dep_trend_following_sol_usdc_limited_live",
   "venueKey": "jupiter",

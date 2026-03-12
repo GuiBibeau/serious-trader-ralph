@@ -171,4 +171,46 @@ describe("runtime research post-live review", () => {
       ),
     ).toBe(true);
   });
+
+  test("fails closed when a strategy deployment is missing its runtime scorecard", () => {
+    const { artifact } = buildRuntimeResearchPostLiveReview({
+      request: {
+        subjectKind: "strategy",
+        subjectKey: "candidate_trend_following_jupiter_sol_usdc",
+        requestedBy: "codex",
+        currentState: "limited_live",
+        deploymentId: "dep_missing_live_strategy",
+        venueKey: "jupiter",
+        assetKey: "SOL",
+        pairSymbol: "SOL/USDC",
+      },
+      context: {
+        venueControl: {
+          schemaVersion: "v1",
+          subjectKind: "venue",
+          subjectKey: "jupiter",
+          liveAllowed: true,
+          killSwitchEnabled: false,
+          updatedAt: "2026-03-11T00:00:00.000Z",
+        },
+        assetControl: {
+          schemaVersion: "v1",
+          subjectKind: "asset",
+          subjectKey: "SOL",
+          liveAllowed: true,
+          killSwitchEnabled: false,
+          updatedAt: "2026-03-11T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(artifact.status).toBe("blocked");
+    expect(artifact.recommendedAction).toBe("demote");
+    expect(artifact.recommendedTargetState).toBe("paper");
+    expect(
+      artifact.checks.some(
+        (check) => check.checkId === "scorecard" && check.status === "blocked",
+      ),
+    ).toBe(true);
+  });
 });
