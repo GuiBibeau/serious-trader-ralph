@@ -238,6 +238,7 @@ Operators should use the Worker as the public control plane:
 - `POST /api/admin/ops/runtime/research/briefs`
 - `POST /api/admin/ops/runtime/research/synthesis`
 - `POST /api/admin/ops/runtime/research/triage`
+- `POST /api/admin/ops/runtime/research/policy-gate`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/pause`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/resume`
 - `POST /api/admin/ops/runtime/deployments/:deploymentId/kill`
@@ -276,6 +277,19 @@ bun run strategy-lab:triage --synthesis-file .tmp/strategy-lab-synthesis/synthes
 That command writes `.tmp/strategy-lab-triage/triage.json` and
 `.tmp/strategy-lab-triage/triage.md`, including novelty scoring, duplicate
 matches, explainable rationale, and an optional archival recommendation.
+
+Policy gating keeps candidate progression explicit and fail-closed:
+
+```bash
+bun run strategy-lab:policy-gate \
+  --synthesis-file .tmp/strategy-lab-synthesis/synthesis.json \
+  --triage-file .tmp/strategy-lab-triage/triage.json
+```
+
+That command writes `.tmp/strategy-lab-policy-gate/policy-gate.json` and
+`.tmp/strategy-lab-policy-gate/policy-gate.md`, including machine-readable
+shadow, paper, limited-live, and broad-live gates, unsafe-pattern detection,
+and explicit human-approval requirements before paper or real-money promotion.
 
 The runtime operator surface now includes allocator details for a deployment:
 

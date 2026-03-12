@@ -315,6 +315,25 @@ Verify:
   built-in strategy references,
 - triage remains internal-only on the Worker admin boundary.
 
+### 3i. Strategy-lab policy gate verification
+
+For policy and safety gates around agent-generated strategies:
+
+```bash
+bun run lint
+bun run typecheck
+bun test tests/unit/runtime_research_policy_gate.test.ts tests/unit/worker_runtime_research_policy_gate_route.test.ts
+bun test tests/unit/runtime_research_triage.test.ts tests/unit/worker_runtime_research_triage_route.test.ts tests/unit/worker_runtime_internal_routes.test.ts tests/unit/worker_runtime_contracts.test.ts
+```
+
+Verify:
+
+- shadow, paper, limited-live, and broad-live gates are explicit and machine-readable,
+- unsupported venue or asset combinations fail closed before promotion,
+- paper and money-state transitions require explicit human approval records,
+- newly generated strategies cannot auto-promote straight to broad live,
+- the policy gate stays on the Worker admin boundary and consumes repo-owned runtime evidence instead of bypassing contracts.
+
 ### 4. x402 and discovery verification
 
 Portal-side discovery:

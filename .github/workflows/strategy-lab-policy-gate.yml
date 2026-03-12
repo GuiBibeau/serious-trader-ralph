@@ -1,0 +1,125 @@
+name: Strategy Lab Policy Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      synthesis_file:
+        description: Repo-relative path to a checked-in synthesis JSON artifact
+        required: true
+      triage_file:
+        description: Repo-relative path to a checked-in triage JSON artifact
+        required: true
+      limited_live_canary_passed:
+        description: Mark the limited-live canary prerequisite as passed
+        required: false
+        default: "false"
+      limited_live_soak_passed:
+        description: Mark the limited-live soak prerequisite as passed
+        required: false
+        default: "false"
+      issue_number:
+        description: Optional GitHub issue number to comment with the policy summary
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  policy-gate:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.0"
+
+      - name: Install deps
+        run: bun install
+
+      - name: Check admin credentials
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::Missing required secret ADMIN_TOKEN for strategy-lab policy gate."
+            exit 1
+          fi
+
+      - name: Build policy gate artifact
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          SYNTHESIS_FILE: ${{ inputs.synthesis_file }}
+          TRIAGE_FILE: ${{ inputs.triage_file }}
+          LIMITED_LIVE_CANARY_PASSED: ${{ inputs.limited_live_canary_passed }}
+          LIMITED_LIVE_SOAK_PASSED: ${{ inputs.limited_live_soak_passed }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/strategy-lab-policy-gate
+
+          args=(
+            --base-url https://api.trader-ralph.com
+            --admin-token "${ADMIN_TOKEN}"
+            --output-dir .tmp/strategy-lab-policy-gate
+            --synthesis-file "${SYNTHESIS_FILE}"
+            --triage-file "${TRIAGE_FILE}"
+          )
+
+          if [ "${LIMITED_LIVE_CANARY_PASSED}" = "true" ]; then
+            args+=(--limited-live-canary-passed)
+          fi
+          if [ "${LIMITED_LIVE_SOAK_PASSED}" = "true" ]; then
+            args+=(--limited-live-soak-passed)
+          fi
+
+          bun run strategy-lab:policy-gate "${args[@]}"
+
+          cat .tmp/strategy-lab-policy-gate/policy-gate.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload policy gate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: strategy-lab-policy-gate-${{ github.run_id }}
+          path: .tmp/strategy-lab-policy-gate
+          if-no-files-found: error
+
+      - name: Comment on issue
+        if: ${{ inputs.issue_number != '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          policy_gate_id="$(jq -r '.policyGateId' .tmp/strategy-lab-policy-gate/policy-gate.json)"
+          shadow_status="$(jq -r '.gates[] | select(.targetMode=="shadow") | .status' .tmp/strategy-lab-policy-gate/policy-gate.json)"
+          paper_status="$(jq -r '.gates[] | select(.targetMode=="paper") | .status' .tmp/strategy-lab-policy-gate/policy-gate.json)"
+          limited_live_status="$(jq -r '.gates[] | select(.targetMode=="limited_live") | .status' .tmp/strategy-lab-policy-gate/policy-gate.json)"
+          broad_live_status="$(jq -r '.gates[] | select(.targetMode=="broad_live") | .status' .tmp/strategy-lab-policy-gate/policy-gate.json)"
+          run_url="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+
+          body="$(cat <<EOF
+          Strategy-lab policy gate artifact ready.
+
+          - policyGateId: \`${policy_gate_id}\`
+          - shadow: \`${shadow_status}\`
+          - paper: \`${paper_status}\`
+          - limited_live: \`${limited_live_status}\`
+          - broad_live: \`${broad_live_status}\`
+          - workflow run: ${run_url}
+          EOF
+          )"
+
+          payload="$(jq -n --arg body "$body" '{body:$body}')"
+          curl -fsS \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+            -d "${payload}" >/dev/null

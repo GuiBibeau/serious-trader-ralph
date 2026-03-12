@@ -1,4 +1,5 @@
 import { parseRuntimeResearchBriefRequest } from "../../../src/runtime/research/briefs.js";
+import { parseRuntimeResearchPolicyGateRequest } from "../../../src/runtime/research/policy_gate.js";
 import { parseRuntimeResearchSynthesisRequest } from "../../../src/runtime/research/synthesis.js";
 import { parseRuntimeResearchCandidateTriageRequest } from "../../../src/runtime/research/triage.js";
 import { buildAgentQueryResponse } from "./agent_query";
@@ -154,6 +155,7 @@ import {
   readRuntimeScorecard,
 } from "./runtime_internal";
 import { runRuntimeResearchBriefWorkflow } from "./runtime_research_briefs";
+import { runRuntimeResearchPolicyGateWorkflow } from "./runtime_research_policy_gate";
 import { runRuntimeResearchSynthesisWorkflow } from "./runtime_research_synthesis";
 import { runRuntimeResearchCandidateTriageWorkflow } from "./runtime_research_triage";
 import { SolanaRpc } from "./solana_rpc";
@@ -2360,6 +2362,50 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-research-triage-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/research/policy-gate"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const policyGateRequest = parseRuntimeResearchPolicyGateRequest(
+            await request.json(),
+          );
+          const result = await runRuntimeResearchPolicyGateWorkflow({
+            env,
+            request: policyGateRequest,
+          });
+          return withCors(
+            json({
+              ok: true,
+              policyGate: result.policyGate,
+              markdown: result.markdown,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-policy-gate-failed",
               },
               { status: 400 },
             ),

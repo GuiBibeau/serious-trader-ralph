@@ -1020,6 +1020,64 @@ export const RuntimeStrategySpecSchema = VersionedSchema.extend({
   tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
 }).strict();
 
+export const RuntimeResearchPolicyTargetModeSchema = z.enum([
+  "shadow",
+  "paper",
+  "limited_live",
+  "broad_live",
+]);
+
+export const RuntimeResearchPolicyGateStatusSchema = z.enum([
+  "pass",
+  "blocked",
+  "requires_human_approval",
+  "not_applicable",
+]);
+
+const RuntimeResearchHumanApprovalRecordSchema = z
+  .object({
+    targetMode: RuntimeResearchPolicyTargetModeSchema,
+    approvedBy: NON_EMPTY_STRING_SCHEMA,
+    approvedAt: ISO_DATETIME_SCHEMA,
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeResearchPolicyGateCheckSchema = z
+  .object({
+    checkId: NON_EMPTY_STRING_SCHEMA,
+    status: RuntimeResearchPolicyGateStatusSchema,
+    observedValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    thresholdValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    message: NON_EMPTY_STRING_SCHEMA,
+  })
+  .strict();
+
+const RuntimeResearchPolicyGateDecisionSchema = z
+  .object({
+    targetMode: RuntimeResearchPolicyTargetModeSchema,
+    automatedChecksPassed: z.boolean(),
+    requiresHumanApproval: z.boolean(),
+    eligible: z.boolean(),
+    status: RuntimeResearchPolicyGateStatusSchema,
+    summary: NON_EMPTY_STRING_SCHEMA,
+    checks: z.array(RuntimeResearchPolicyGateCheckSchema).min(1),
+    approval: RuntimeResearchHumanApprovalRecordSchema.optional(),
+  })
+  .strict();
+
+export const RuntimeResearchPolicyGateArtifactSchema = VersionedSchema.extend({
+  policyGateId: NON_EMPTY_STRING_SCHEMA,
+  generatedAt: ISO_DATETIME_SCHEMA,
+  synthesisId: NON_EMPTY_STRING_SCHEMA,
+  hypothesisId: NON_EMPTY_STRING_SCHEMA,
+  triageId: NON_EMPTY_STRING_SCHEMA,
+  candidateDisposition: NON_EMPTY_STRING_SCHEMA,
+  bannedPatterns: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+  gates: z.array(RuntimeResearchPolicyGateDecisionSchema).min(1),
+  summary: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+}).strict();
+
 export const RuntimeExecutionCostModelStatusSchema = z.enum([
   "draft",
   "active",
@@ -1230,6 +1288,18 @@ export type RuntimeVenueCapability = z.infer<
 >;
 export type RuntimeAssetRecord = z.infer<typeof RuntimeAssetRecordSchema>;
 export type RuntimeStrategySpec = z.infer<typeof RuntimeStrategySpecSchema>;
+export type RuntimeResearchPolicyTargetMode = z.infer<
+  typeof RuntimeResearchPolicyTargetModeSchema
+>;
+export type RuntimeResearchPolicyGateStatus = z.infer<
+  typeof RuntimeResearchPolicyGateStatusSchema
+>;
+export type RuntimeResearchHumanApprovalRecord = z.infer<
+  typeof RuntimeResearchHumanApprovalRecordSchema
+>;
+export type RuntimeResearchPolicyGateArtifact = z.infer<
+  typeof RuntimeResearchPolicyGateArtifactSchema
+>;
 
 export const RUNTIME_DEPLOYMENT_STATE_TRANSITIONS = {
   draft: ["shadow", "paper", "live", "archived"],
@@ -1508,6 +1578,12 @@ export function parseRuntimeAssetRecord(input: unknown): RuntimeAssetRecord {
 
 export function parseRuntimeStrategySpec(input: unknown): RuntimeStrategySpec {
   return RuntimeStrategySpecSchema.parse(input);
+}
+
+export function parseRuntimeResearchPolicyGateArtifact(
+  input: unknown,
+): RuntimeResearchPolicyGateArtifact {
+  return RuntimeResearchPolicyGateArtifactSchema.parse(input);
 }
 
 export function safeParseRuntimeDeploymentRecord(input: unknown) {
