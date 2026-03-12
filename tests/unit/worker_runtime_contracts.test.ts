@@ -11,6 +11,7 @@ import {
   parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeRegimeTagRecord,
   parseRuntimeReplayCorpusRecord,
+  parseRuntimeResearchReproducibilityBundleRecord,
   parseRuntimeStrategySpec,
   parseRuntimeVenueCapability,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
@@ -34,6 +35,7 @@ describe("worker runtime contract bridge", () => {
       "researchSource",
       "researchExperiment",
       "researchEvidenceBundle",
+      "researchReproducibilityBundle",
       "backtestReport",
       "historicalDatasetSnapshot",
       "replayCorpus",
@@ -67,6 +69,17 @@ describe("worker runtime contract bridge", () => {
 
     expect(report.reportId).toBe("backtest_alloc_dca_report");
     expect(report.promotionEligible).toBe(true);
+  });
+
+  test("worker can parse the canonical reproducibility bundle fixture", () => {
+    const bundle = parseRuntimeResearchReproducibilityBundleRecord(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.research_reproducibility_bundle.valid.v1.json",
+      ),
+    );
+
+    expect(bundle.reproducibilityBundleId).toBe("repro_alloc_dca_backtest");
+    expect(bundle.expectedResult.reportId).toBe("backtest_alloc_dca_report");
   });
 
   test("worker can parse the canonical strategy spec fixture", () => {

@@ -5,7 +5,8 @@ use std::{
 
 use protocol::{
     RuntimeResearchCitation, RuntimeResearchEvidenceBundleRecord, RuntimeResearchExperimentRecord,
-    RuntimeResearchHypothesisRecord, RuntimeResearchSourceRecord,
+    RuntimeResearchHypothesisRecord, RuntimeResearchReproducibilityBundleRecord,
+    RuntimeResearchSourceRecord,
 };
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
@@ -40,6 +41,7 @@ pub struct ResearchRegistrySnapshot {
     pub source_count: u64,
     pub experiment_count: u64,
     pub evidence_bundle_count: u64,
+    pub reproducibility_bundle_count: u64,
     pub latest_experiment_completed_at: Option<String>,
     pub last_error: Option<String>,
 }
@@ -58,7 +60,10 @@ pub struct ResearchRegistryQueryResult {
     pub sources: Vec<RuntimeResearchSourceRecord>,
     pub experiments: Vec<RuntimeResearchExperimentRecord>,
     pub evidence_bundles: Vec<RuntimeResearchEvidenceBundleRecord>,
+    pub reproducibility_bundles: Vec<RuntimeResearchReproducibilityBundleRecord>,
 }
+
+type ResearchRegistrySnapshotCounts = (u64, u64, u64, u64, u64, Option<String>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchWriteResult<T> {
@@ -108,6 +113,7 @@ impl ResearchRegistry {
                 source_count,
                 experiment_count,
                 evidence_bundle_count,
+                reproducibility_bundle_count,
                 latest_experiment_completed_at,
             )) => ResearchRegistrySnapshot {
                 status: "healthy".to_string(),
@@ -115,6 +121,7 @@ impl ResearchRegistry {
                 source_count,
                 experiment_count,
                 evidence_bundle_count,
+                reproducibility_bundle_count,
                 latest_experiment_completed_at,
                 last_error: None,
             },
@@ -124,6 +131,7 @@ impl ResearchRegistry {
                 source_count: 0,
                 experiment_count: 0,
                 evidence_bundle_count: 0,
+                reproducibility_bundle_count: 0,
                 latest_experiment_completed_at: None,
                 last_error: Some(error.to_string()),
             },
@@ -271,6 +279,45 @@ impl ResearchRegistry {
         Ok(ResearchWriteResult { record, created })
     }
 
+    pub fn upsert_reproducibility_bundle(
+        &self,
+        record: &RuntimeResearchReproducibilityBundleRecord,
+    ) -> Result<
+        ResearchWriteResult<RuntimeResearchReproducibilityBundleRecord>,
+        ResearchRegistryError,
+    > {
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        ensure_experiment_exists(&transaction, &record.experiment_id)?;
+        ensure_sources_exist(&transaction, &record.source_citations)?;
+        let identity_key = reproducibility_bundle_identity_key(record)?;
+        let source_ids = citation_source_ids(&record.source_citations);
+        let outcome = persist_record(
+            &transaction,
+            PersistSpec {
+                table: "research_reproducibility_bundles",
+                id_column: "reproducibility_bundle_id",
+                id_value: &record.reproducibility_bundle_id,
+                identity_key: &identity_key,
+                record_type: "research reproducibility bundle",
+                record_json: serialize_json(record)?,
+                order_column: "updated_at",
+                order_value: &record.updated_at,
+                venue_keys: &record.venue_keys,
+                asset_keys: &record.asset_keys,
+                source_ids: &source_ids,
+                strategy_key: Some(&record.strategy_key),
+                hypothesis_id: None,
+                completed_at: None,
+                experiment_id: Some(&record.experiment_id),
+            },
+        )?;
+        transaction.commit()?;
+        let created = persist_result_created(&outcome);
+        let record = persist_result_record(outcome, record);
+        Ok(ResearchWriteResult { record, created })
+    }
+
     pub fn query(
         &self,
         query: &ResearchRegistryQuery,
@@ -301,6 +348,12 @@ impl ResearchRegistry {
                 "evidence_bundle_id",
                 query,
             )?,
+            reproducibility_bundles: query_records::<RuntimeResearchReproducibilityBundleRecord>(
+                &connection,
+                "research_reproducibility_bundles",
+                "reproducibility_bundle_id",
+                query,
+            )?,
         })
     }
 
@@ -323,9 +376,26 @@ impl ResearchRegistry {
             .transpose()?)
     }
 
-    fn snapshot_counts(
+    pub fn get_reproducibility_bundle(
         &self,
-    ) -> Result<(u64, u64, u64, u64, Option<String>), ResearchRegistryError> {
+        reproducibility_bundle_id: &str,
+    ) -> Result<Option<RuntimeResearchReproducibilityBundleRecord>, ResearchRegistryError> {
+        let connection = self.open_connection()?;
+        Ok(connection
+            .query_row(
+                "SELECT record_json
+                 FROM research_reproducibility_bundles
+                 WHERE reproducibility_bundle_id = ?1
+                 LIMIT 1",
+                params![reproducibility_bundle_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|json| deserialize_json(&json))
+            .transpose()?)
+    }
+
+    fn snapshot_counts(&self) -> Result<ResearchRegistrySnapshotCounts, ResearchRegistryError> {
         let connection = self.open_connection()?;
         let hypothesis_count =
             connection.query_row("SELECT COUNT(*) FROM research_hypotheses", [], |row| {
@@ -341,6 +411,11 @@ impl ResearchRegistry {
             })?;
         let evidence_bundle_count = connection.query_row(
             "SELECT COUNT(*) FROM research_evidence_bundles",
+            [],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let reproducibility_bundle_count = connection.query_row(
+            "SELECT COUNT(*) FROM research_reproducibility_bundles",
             [],
             |row| row.get::<_, u64>(0),
         )?;
@@ -360,6 +435,7 @@ impl ResearchRegistry {
             source_count,
             experiment_count,
             evidence_bundle_count,
+            reproducibility_bundle_count,
             latest_experiment_completed_at,
         ))
     }
@@ -487,6 +563,34 @@ fn initialize_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
             source_id TEXT NOT NULL,
             PRIMARY KEY (evidence_bundle_id, source_id),
             FOREIGN KEY (evidence_bundle_id) REFERENCES research_evidence_bundles(evidence_bundle_id) ON DELETE CASCADE,
+            FOREIGN KEY (source_id) REFERENCES research_sources(source_id)
+        );
+        CREATE TABLE IF NOT EXISTS research_reproducibility_bundles (
+            reproducibility_bundle_id TEXT PRIMARY KEY,
+            identity_key TEXT NOT NULL UNIQUE,
+            strategy_key TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            experiment_id TEXT NOT NULL,
+            record_json TEXT NOT NULL,
+            FOREIGN KEY (experiment_id) REFERENCES research_experiments(experiment_id)
+        );
+        CREATE TABLE IF NOT EXISTS research_reproducibility_venues (
+            reproducibility_bundle_id TEXT NOT NULL,
+            venue_key TEXT NOT NULL,
+            PRIMARY KEY (reproducibility_bundle_id, venue_key),
+            FOREIGN KEY (reproducibility_bundle_id) REFERENCES research_reproducibility_bundles(reproducibility_bundle_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS research_reproducibility_assets (
+            reproducibility_bundle_id TEXT NOT NULL,
+            asset_key TEXT NOT NULL,
+            PRIMARY KEY (reproducibility_bundle_id, asset_key),
+            FOREIGN KEY (reproducibility_bundle_id) REFERENCES research_reproducibility_bundles(reproducibility_bundle_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS research_reproducibility_sources (
+            reproducibility_bundle_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            PRIMARY KEY (reproducibility_bundle_id, source_id),
+            FOREIGN KEY (reproducibility_bundle_id) REFERENCES research_reproducibility_bundles(reproducibility_bundle_id) ON DELETE CASCADE,
             FOREIGN KEY (source_id) REFERENCES research_sources(source_id)
         );",
     )
@@ -656,7 +760,10 @@ fn update_record(
         next_index += 1;
     }
 
-    if spec.table == "research_evidence_bundles" {
+    if matches!(
+        spec.table,
+        "research_evidence_bundles" | "research_reproducibility_bundles"
+    ) {
         assignments.push(format!("experiment_id = ?{}", next_index));
         values.push(match spec.experiment_id {
             Some(experiment_id) => Value::Text(experiment_id.to_string()),
@@ -972,6 +1079,9 @@ fn link_table_name(table: &str, suffix: &str) -> &'static str {
         ("research_evidence_bundles", "venue") => "research_evidence_venues",
         ("research_evidence_bundles", "asset") => "research_evidence_assets",
         ("research_evidence_bundles", "source") => "research_evidence_sources",
+        ("research_reproducibility_bundles", "venue") => "research_reproducibility_venues",
+        ("research_reproducibility_bundles", "asset") => "research_reproducibility_assets",
+        ("research_reproducibility_bundles", "source") => "research_reproducibility_sources",
         _ => panic!("unsupported link table mapping: {table}/{suffix}"),
     }
 }
@@ -1047,6 +1157,25 @@ fn evidence_bundle_identity_key(
         "codeRevision": record.code_revision,
         "datasetSnapshots": sorted_dataset_snapshots(&record.dataset_snapshots),
         "artifacts": sorted_artifacts(&record.artifacts),
+    }))
+}
+
+fn reproducibility_bundle_identity_key(
+    record: &RuntimeResearchReproducibilityBundleRecord,
+) -> Result<String, serde_json::Error> {
+    identity_key(&serde_json::json!({
+        "experimentId": record.experiment_id,
+        "strategyKey": record.strategy_key,
+        "venueKeys": sorted_slice(&record.venue_keys),
+        "assetKeys": sorted_slice(&record.asset_keys),
+        "sourceCitations": sorted_citations(&record.source_citations),
+        "codeRevision": record.code_revision,
+        "datasetSnapshots": sorted_dataset_snapshots(&record.dataset_snapshots),
+        "manifest": record.manifest,
+        "expectedResult": record.expected_result,
+        "artifacts": sorted_artifacts(&record.artifacts),
+        "linkedEvidenceBundleIds": sorted_slice(&record.linked_evidence_bundle_ids),
+        "verificationTolerance": record.verification_tolerance,
     }))
 }
 
@@ -1153,9 +1282,11 @@ mod tests {
 
     use protocol::{
         RuntimeArtifactRef, RuntimeCodeRevisionRef, RuntimeDatasetSnapshotRef,
+        RuntimeExperimentCatalogVersionRef, RuntimeExperimentExpectedResult,
+        RuntimeExperimentManifest, RuntimeExperimentVerificationTolerance,
         RuntimeResearchEvidenceStatus, RuntimeResearchExperimentStatus,
-        RuntimeResearchHypothesisStatus, RuntimeResearchSourceKind,
-        RUNTIME_PROTOCOL_SCHEMA_VERSION,
+        RuntimeResearchHypothesisStatus, RuntimeResearchReproducibilityBundleRecord,
+        RuntimeResearchSourceKind, RuntimeVenueMarketType, RUNTIME_PROTOCOL_SCHEMA_VERSION,
     };
 
     use super::*;
@@ -1305,6 +1436,97 @@ mod tests {
         }
     }
 
+    fn reproducibility_bundle_record() -> RuntimeResearchReproducibilityBundleRecord {
+        RuntimeResearchReproducibilityBundleRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            reproducibility_bundle_id: "repro_signal_trend_shadow".to_string(),
+            experiment_id: "experiment_signal_trend_shadow".to_string(),
+            strategy_key: "trend_following".to_string(),
+            created_at: "2026-03-10T14:22:00Z".to_string(),
+            updated_at: "2026-03-10T14:22:00Z".to_string(),
+            venue_keys: vec!["jupiter".to_string()],
+            asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+            source_citations: vec![citation("source_paper_microstructure")],
+            code_revision: code_revision(),
+            dataset_snapshots: vec![dataset_snapshot()],
+            manifest: RuntimeExperimentManifest {
+                manifest_id: "manifest_signal_trend_shadow".to_string(),
+                generated_at: "2026-03-10T14:22:00Z".to_string(),
+                code_revision: code_revision(),
+                dataset_snapshots: vec![dataset_snapshot()],
+                replay_corpus_id: Some("replay_corpus_sol_usdc_feed_gateway_seed".to_string()),
+                venue_key: Some("jupiter".to_string()),
+                pair_symbol: Some("SOL/USDC".to_string()),
+                market_type: Some(RuntimeVenueMarketType::Spot),
+                strategy_spec_digest: Some("sha256:strategy".to_string()),
+                feature_versions: vec![RuntimeExperimentCatalogVersionRef {
+                    record_id: "feature_short_return".to_string(),
+                    key: "short_return_bps".to_string(),
+                    version: "v1".to_string(),
+                    updated_at: "2026-03-10T14:00:00Z".to_string(),
+                }],
+                regime_versions: vec![RuntimeExperimentCatalogVersionRef {
+                    record_id: "regime_long_trend".to_string(),
+                    key: "long_trend".to_string(),
+                    version: "v1".to_string(),
+                    updated_at: "2026-03-10T14:00:00Z".to_string(),
+                }],
+                cost_model: Some(protocol::RuntimeExperimentCostModelRef {
+                    model_id: "cost_model_jupiter_sol_usdc_spot".to_string(),
+                    calibration_id: "calibration_seed".to_string(),
+                    updated_at: "2026-03-10T14:00:00Z".to_string(),
+                }),
+                backtest_config: Some(protocol::RuntimeBacktestConfig {
+                    replay_corpus_id: "replay_corpus_sol_usdc_feed_gateway_seed".to_string(),
+                    venue_key: "jupiter".to_string(),
+                    pair_symbol: "SOL/USDC".to_string(),
+                    market_type: RuntimeVenueMarketType::Spot,
+                    window_mode: protocol::RuntimeBacktestWindowMode::Rolling,
+                    training_window_observations: 32,
+                    testing_window_observations: 8,
+                    step_observations: 4,
+                    purge_observations: 2,
+                    baseline_strategies: vec![
+                        protocol::RuntimeBacktestBaseline::FlatCash,
+                        protocol::RuntimeBacktestBaseline::BuyAndHold,
+                    ],
+                }),
+            },
+            expected_result: RuntimeExperimentExpectedResult {
+                report_id: Some("backtest_signal_trend_shadow".to_string()),
+                status: Some(protocol::RuntimeBacktestStatus::Completed),
+                promotion_eligible: true,
+                aggregate_metrics: Some(protocol::RuntimeBacktestMetrics {
+                    observation_count: 8,
+                    trade_count: 3,
+                    gross_return_bps: "42.1500".to_string(),
+                    net_return_bps: "39.4000".to_string(),
+                    total_cost_bps: "2.7500".to_string(),
+                    win_rate_bps: 6667,
+                    max_drawdown_bps: "8.1000".to_string(),
+                }),
+                aggregate_baseline_comparisons: vec![],
+                aggregate_regime_metrics: vec![],
+                blocking_reasons: vec![],
+            },
+            artifacts: vec![
+                artifact("repro-manifest", "reproducibility-manifest"),
+                artifact("repro-plot", "plot"),
+            ],
+            linked_evidence_bundle_ids: vec!["evidence_signal_trend_shadow".to_string()],
+            verification_tolerance: RuntimeExperimentVerificationTolerance {
+                max_net_return_delta_bps: "0.1000".to_string(),
+                max_total_cost_delta_bps: "0.1000".to_string(),
+                max_drawdown_delta_bps: "0.1000".to_string(),
+                max_win_rate_delta_bps: 1,
+                max_trade_count_delta: 0,
+            },
+            latest_verification: None,
+            summary: "Reproducibility bundle for the trend-following backtest.".to_string(),
+            tags: vec!["reproducible".to_string()],
+        }
+    }
+
     #[test]
     fn stores_and_queries_research_records() {
         let registry = registry("query");
@@ -1332,6 +1554,12 @@ mod tests {
                 .expect("evidence")
                 .created
         );
+        assert!(
+            registry
+                .upsert_reproducibility_bundle(&reproducibility_bundle_record())
+                .expect("reproducibility")
+                .created
+        );
 
         let result = registry
             .query(&ResearchRegistryQuery {
@@ -1346,6 +1574,7 @@ mod tests {
         assert_eq!(result.sources.len(), 1);
         assert_eq!(result.experiments.len(), 1);
         assert_eq!(result.evidence_bundles.len(), 1);
+        assert_eq!(result.reproducibility_bundles.len(), 1);
         assert_eq!(
             result.experiments[0].code_revision.revision,
             code_revision().revision
@@ -1356,9 +1585,36 @@ mod tests {
         assert_eq!(snapshot.source_count, 1);
         assert_eq!(snapshot.experiment_count, 1);
         assert_eq!(snapshot.evidence_bundle_count, 1);
+        assert_eq!(snapshot.reproducibility_bundle_count, 1);
         assert_eq!(
             snapshot.latest_experiment_completed_at,
             Some("2026-03-10T14:20:00Z".to_string())
+        );
+    }
+
+    #[test]
+    fn fetches_reproducibility_bundle_by_id() {
+        let registry = registry("reproducibility-get");
+        registry.upsert_source(&source_record()).expect("source");
+        registry
+            .upsert_hypothesis(&hypothesis_record())
+            .expect("hypothesis");
+        registry
+            .upsert_experiment(&experiment_record())
+            .expect("experiment");
+        registry
+            .upsert_reproducibility_bundle(&reproducibility_bundle_record())
+            .expect("reproducibility");
+
+        let bundle = registry
+            .get_reproducibility_bundle("repro_signal_trend_shadow")
+            .expect("bundle lookup")
+            .expect("bundle to exist");
+
+        assert_eq!(bundle.strategy_key, "trend_following");
+        assert_eq!(
+            bundle.expected_result.report_id.as_deref(),
+            Some("backtest_signal_trend_shadow")
         );
     }
 

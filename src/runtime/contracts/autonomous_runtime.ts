@@ -632,6 +632,108 @@ export const RuntimeBacktestReportSchema = VersionedSchema.extend({
   tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
 }).strict();
 
+export const RuntimeExperimentVerificationModeSchema = z.enum([
+  "exact",
+  "bounded_tolerance",
+]);
+
+const RuntimeExperimentCatalogVersionRefSchema = z
+  .object({
+    recordId: NON_EMPTY_STRING_SCHEMA,
+    key: NON_EMPTY_STRING_SCHEMA,
+    version: NON_EMPTY_STRING_SCHEMA,
+    updatedAt: ISO_DATETIME_SCHEMA,
+  })
+  .strict();
+
+const RuntimeExperimentCostModelRefSchema = z
+  .object({
+    modelId: NON_EMPTY_STRING_SCHEMA,
+    calibrationId: NON_EMPTY_STRING_SCHEMA,
+    updatedAt: ISO_DATETIME_SCHEMA,
+  })
+  .strict();
+
+const RuntimeExperimentManifestSchema = z
+  .object({
+    manifestId: NON_EMPTY_STRING_SCHEMA,
+    generatedAt: ISO_DATETIME_SCHEMA,
+    codeRevision: RuntimeCodeRevisionRefSchema,
+    datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
+    replayCorpusId: NON_EMPTY_STRING_SCHEMA.optional(),
+    venueKey: NON_EMPTY_STRING_SCHEMA.optional(),
+    pairSymbol: NON_EMPTY_STRING_SCHEMA.optional(),
+    marketType: RuntimeVenueMarketTypeSchema.optional(),
+    strategySpecDigest: NON_EMPTY_STRING_SCHEMA.optional(),
+    featureVersions: z.array(RuntimeExperimentCatalogVersionRefSchema),
+    regimeVersions: z.array(RuntimeExperimentCatalogVersionRefSchema),
+    costModel: RuntimeExperimentCostModelRefSchema.optional(),
+    backtestConfig: RuntimeBacktestConfigSchema.optional(),
+  })
+  .strict();
+
+const RuntimeExperimentExpectedResultSchema = z
+  .object({
+    reportId: NON_EMPTY_STRING_SCHEMA.optional(),
+    status: RuntimeBacktestStatusSchema.optional(),
+    promotionEligible: z.boolean(),
+    aggregateMetrics: RuntimeBacktestMetricsSchema.optional(),
+    aggregateBaselineComparisons: z.array(
+      RuntimeBacktestBaselineComparisonSchema,
+    ),
+    aggregateRegimeMetrics: z.array(RuntimeBacktestRegimeMetricsSchema),
+    blockingReasons: z.array(NON_EMPTY_STRING_SCHEMA),
+  })
+  .strict();
+
+const RuntimeExperimentVerificationToleranceSchema = z
+  .object({
+    maxNetReturnDeltaBps: NUMERIC_STRING_SCHEMA,
+    maxTotalCostDeltaBps: NUMERIC_STRING_SCHEMA,
+    maxDrawdownDeltaBps: NUMERIC_STRING_SCHEMA,
+    maxWinRateDeltaBps: BPS_SCHEMA,
+    maxTradeCountDelta: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const RuntimeExperimentVerificationResultSchema = z
+  .object({
+    verifiedAt: ISO_DATETIME_SCHEMA,
+    verificationMode: RuntimeExperimentVerificationModeSchema,
+    passed: z.boolean(),
+    reportId: NON_EMPTY_STRING_SCHEMA.optional(),
+    rerunReportId: NON_EMPTY_STRING_SCHEMA.optional(),
+    netReturnDeltaBps: NUMERIC_STRING_SCHEMA,
+    totalCostDeltaBps: NUMERIC_STRING_SCHEMA,
+    maxDrawdownDeltaBps: NUMERIC_STRING_SCHEMA,
+    winRateDeltaBps: BPS_SCHEMA,
+    tradeCountDelta: z.number().int().nonnegative(),
+    blockingReasons: z.array(NON_EMPTY_STRING_SCHEMA),
+  })
+  .strict();
+
+export const RuntimeResearchReproducibilityBundleRecordSchema =
+  VersionedSchema.extend({
+    reproducibilityBundleId: NON_EMPTY_STRING_SCHEMA,
+    experimentId: NON_EMPTY_STRING_SCHEMA,
+    strategyKey: NON_EMPTY_STRING_SCHEMA,
+    createdAt: ISO_DATETIME_SCHEMA,
+    updatedAt: ISO_DATETIME_SCHEMA,
+    venueKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+    assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
+    sourceCitations: z.array(RuntimeResearchCitationSchema),
+    codeRevision: RuntimeCodeRevisionRefSchema,
+    datasetSnapshots: z.array(RuntimeDatasetSnapshotRefSchema).min(1),
+    manifest: RuntimeExperimentManifestSchema,
+    expectedResult: RuntimeExperimentExpectedResultSchema,
+    artifacts: z.array(RuntimeArtifactRefSchema),
+    linkedEvidenceBundleIds: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+    verificationTolerance: RuntimeExperimentVerificationToleranceSchema,
+    latestVerification: RuntimeExperimentVerificationResultSchema.optional(),
+    summary: NON_EMPTY_STRING_SCHEMA,
+    tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+  }).strict();
+
 export const RuntimeStrategyCategorySchema = z.enum([
   "allocation",
   "signal",
@@ -1092,6 +1194,9 @@ export type RuntimeResearchExperimentRecord = z.infer<
 export type RuntimeResearchEvidenceBundleRecord = z.infer<
   typeof RuntimeResearchEvidenceBundleRecordSchema
 >;
+export type RuntimeExperimentVerificationMode = z.infer<
+  typeof RuntimeExperimentVerificationModeSchema
+>;
 export type RuntimeBacktestStatus = z.infer<typeof RuntimeBacktestStatusSchema>;
 export type RuntimeBacktestWindowMode = z.infer<
   typeof RuntimeBacktestWindowModeSchema
@@ -1100,6 +1205,9 @@ export type RuntimeBacktestBaseline = z.infer<
   typeof RuntimeBacktestBaselineSchema
 >;
 export type RuntimeBacktestReport = z.infer<typeof RuntimeBacktestReportSchema>;
+export type RuntimeResearchReproducibilityBundleRecord = z.infer<
+  typeof RuntimeResearchReproducibilityBundleRecordSchema
+>;
 export type RuntimeOnboardingState = z.infer<
   typeof RuntimeOnboardingStateSchema
 >;
@@ -1202,6 +1310,12 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
     schemaId:
       "https://trader-ralph.com/schemas/runtime/v1/research_evidence_bundle",
     outputFile: "runtime.research_evidence_bundle.v1.schema.json",
+  },
+  researchReproducibilityBundle: {
+    schema: RuntimeResearchReproducibilityBundleRecordSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/research_reproducibility_bundle",
+    outputFile: "runtime.research_reproducibility_bundle.v1.schema.json",
   },
   backtestReport: {
     schema: RuntimeBacktestReportSchema,
@@ -1370,6 +1484,12 @@ export function parseRuntimeResearchEvidenceBundleRecord(
   return RuntimeResearchEvidenceBundleRecordSchema.parse(input);
 }
 
+export function parseRuntimeResearchReproducibilityBundleRecord(
+  input: unknown,
+): RuntimeResearchReproducibilityBundleRecord {
+  return RuntimeResearchReproducibilityBundleRecordSchema.parse(input);
+}
+
 export function parseRuntimeBacktestReport(
   input: unknown,
 ): RuntimeBacktestReport {
@@ -1454,6 +1574,12 @@ export function safeParseRuntimeResearchExperimentRecord(input: unknown) {
 
 export function safeParseRuntimeResearchEvidenceBundleRecord(input: unknown) {
   return RuntimeResearchEvidenceBundleRecordSchema.safeParse(input);
+}
+
+export function safeParseRuntimeResearchReproducibilityBundleRecord(
+  input: unknown,
+) {
+  return RuntimeResearchReproducibilityBundleRecordSchema.safeParse(input);
 }
 
 export function safeParseRuntimeBacktestReport(input: unknown) {

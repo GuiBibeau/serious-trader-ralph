@@ -10,9 +10,9 @@ use protocol::{
     RuntimeMode, RuntimePlanQualityScorecard, RuntimePnlScorecard, RuntimePromotionGateCheck,
     RuntimePromotionGateDecision, RuntimePromotionGateStatus, RuntimePromotionReadinessReport,
     RuntimeReconciliationResult, RuntimeReconciliationStatus, RuntimeRegimeTagRecord,
-    RuntimeResearchScorecard, RuntimeRiskDecision, RuntimeRiskScorecard, RuntimeRiskVerdict,
-    RuntimeRunRecord, RuntimeRunState, RuntimeScorecard, RuntimeStrategySpec,
-    RuntimeTriggerQualityScorecard, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeResearchReproducibilityBundleRecord, RuntimeResearchScorecard, RuntimeRiskDecision,
+    RuntimeRiskScorecard, RuntimeRiskVerdict, RuntimeRunRecord, RuntimeRunState, RuntimeScorecard,
+    RuntimeStrategySpec, RuntimeTriggerQualityScorecard, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -85,6 +85,7 @@ pub struct RuntimeScorecardInput {
     pub deployment: RuntimeDeploymentRecord,
     pub strategy_spec: RuntimeStrategySpec,
     pub backtest_report: Option<RuntimeBacktestReport>,
+    pub reproducibility_bundle: Option<RuntimeResearchReproducibilityBundleRecord>,
     pub runs: Vec<RuntimeRunRecord>,
     pub verdicts: Vec<RuntimeRiskVerdict>,
     pub plans: Vec<RuntimeExecutionPlan>,
@@ -644,16 +645,23 @@ fn build_feature_catalog_scorecard(
 fn build_research_scorecard(
     input: &RuntimeScorecardInput,
 ) -> Result<RuntimeResearchScorecard, RuntimeScorecardError> {
-    build_research_scorecard_from_backtest(input.backtest_report.as_ref())
+    build_research_scorecard_from_backtest(
+        input.backtest_report.as_ref(),
+        input.reproducibility_bundle.as_ref(),
+    )
 }
 
 pub fn build_research_scorecard_from_backtest(
     report: Option<&RuntimeBacktestReport>,
+    reproducibility_bundle: Option<&RuntimeResearchReproducibilityBundleRecord>,
 ) -> Result<RuntimeResearchScorecard, RuntimeScorecardError> {
     let Some(report) = report else {
         return Ok(RuntimeResearchScorecard {
             backtest_report_id: None,
             backtest_status: None,
+            reproducibility_bundle_id: None,
+            reproducibility_verified_at: None,
+            reproducibility_passed: false,
             promotion_eligible: false,
             fold_count: 0,
             positive_fold_count: 0,
@@ -740,6 +748,14 @@ pub fn build_research_scorecard_from_backtest(
     Ok(RuntimeResearchScorecard {
         backtest_report_id: Some(report.report_id.clone()),
         backtest_status: Some(report.status.clone()),
+        reproducibility_bundle_id: reproducibility_bundle
+            .map(|bundle| bundle.reproducibility_bundle_id.clone()),
+        reproducibility_verified_at: reproducibility_bundle
+            .and_then(|bundle| bundle.latest_verification.as_ref())
+            .map(|verification| verification.verified_at.clone()),
+        reproducibility_passed: reproducibility_bundle
+            .and_then(|bundle| bundle.latest_verification.as_ref())
+            .is_some_and(|verification| verification.passed),
         promotion_eligible: report.promotion_eligible,
         fold_count,
         positive_fold_count,
@@ -1489,6 +1505,20 @@ fn build_proof_artifact_markdown(
         scorecard.research.regime_count,
         format_bps(scorecard.research.regime_stability_bps),
     ));
+    markdown.push_str(&format!(
+        "- Reproducibility: bundle `{}`, verified at `{}`, passed `{}`\n",
+        scorecard
+            .research
+            .reproducibility_bundle_id
+            .as_deref()
+            .unwrap_or("missing"),
+        scorecard
+            .research
+            .reproducibility_verified_at
+            .as_deref()
+            .unwrap_or("not-yet-verified"),
+        scorecard.research.reproducibility_passed,
+    ));
     markdown.push_str("\n### Promotion Gates\n");
     for gate in promotion_gates {
         markdown.push_str(&format!(
@@ -1904,6 +1934,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2002,6 +2033,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2070,6 +2102,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs,
                 verdicts,
                 plans,
@@ -2170,6 +2203,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2262,6 +2296,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2351,6 +2386,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2434,6 +2470,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2523,6 +2560,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2606,6 +2644,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, true)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),
@@ -2680,6 +2719,7 @@ mod tests {
                 deployment: deployment.clone(),
                 strategy_spec: strategy_spec(&deployment),
                 backtest_report: Some(backtest_report(&deployment, false)),
+                reproducibility_bundle: None,
                 runs: runs.clone(),
                 verdicts,
                 plans: plans.clone(),

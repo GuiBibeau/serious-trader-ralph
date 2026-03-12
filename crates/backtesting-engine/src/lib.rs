@@ -130,123 +130,24 @@ impl BacktestingEngine {
         &self,
         input: &BacktestRunRequest,
     ) -> Result<BacktestRunResult, BacktestingEngineError> {
-        validate_config(&input.config)?;
-        let fixture = load_replay_fixture(&input.replay_corpus)?;
-        let observations = build_observations(&fixture, &input.regime_tags)?;
-        let required_observations = input.config.training_window_observations as usize
-            + input.config.purge_observations as usize
-            + input.config.testing_window_observations as usize;
-        if observations.len() < required_observations + 1 {
-            return Err(BacktestingEngineError::InsufficientObservations {
-                required: required_observations + 1,
-                available: observations.len(),
-            });
-        }
-
-        let strategy_digest = strategy_spec_digest(&input.strategy_spec)?;
-        let generated_at = now_rfc3339();
-        let report_id = match input.report_id.clone() {
-            Some(report_id) => report_id,
-            None => default_report_id(
-                &input.experiment.experiment_id,
-                &strategy_digest,
-                &input.config,
-            )?,
-        };
-        let missing_feature_keys =
-            missing_required_feature_keys(&input.strategy_spec, &input.feature_definitions);
-        let missing_regime_keys =
-            missing_required_regime_keys(&input.strategy_spec, &input.regime_tags);
-        let evaluations = evaluate_walk_forward_folds(
-            &observations,
-            &input.strategy_spec,
-            input.cost_model.as_ref(),
-            &input.config,
-        )?;
-        let mut blocking_reasons = Vec::new();
-        if !missing_feature_keys.is_empty() {
-            blocking_reasons.push(format!(
-                "missing required feature definitions: {}",
-                missing_feature_keys.join(", ")
-            ));
-        }
-        if !missing_regime_keys.is_empty() {
-            blocking_reasons.push(format!(
-                "missing required regime tags: {}",
-                missing_regime_keys.join(", ")
-            ));
-        }
-        if evaluations.len() < 2 {
-            blocking_reasons
-                .push("walk-forward evaluation requires at least two folds".to_string());
-        }
-
-        let fold_reports = evaluations
-            .iter()
-            .map(|evaluation| evaluation.fold_report.clone())
-            .collect::<Vec<_>>();
-        let aggregate = aggregate_evaluations(
-            &evaluations,
-            &input.config.baseline_strategies,
-            &input.strategy_spec,
-            &mut blocking_reasons,
-        );
-        let promotion_eligible = blocking_reasons.is_empty();
-        let status = if promotion_eligible {
-            RuntimeBacktestStatus::Completed
-        } else {
-            RuntimeBacktestStatus::Blocked
-        };
-        let summary = if promotion_eligible {
-            format!(
-                "Backtest cleared {} walk-forward folds for {} with net return {} bps.",
-                fold_reports.len(),
-                input.strategy_spec.strategy_key,
-                aggregate.metrics.net_return_bps
-            )
-        } else {
-            format!(
-                "Backtest blocked for {}: {}.",
-                input.strategy_spec.strategy_key,
-                blocking_reasons.join("; ")
-            )
-        };
-        let mut tags = input.experiment.tags.clone();
-        if !tags.iter().any(|tag| tag == "backtest") {
-            tags.push("backtest".to_string());
-        }
-        let report = RuntimeBacktestReport {
-            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
-            report_id: report_id.clone(),
-            experiment_id: input.experiment.experiment_id.clone(),
-            strategy_key: input.strategy_spec.strategy_key.clone(),
-            status,
-            generated_at: generated_at.clone(),
-            venue_keys: input.experiment.venue_keys.clone(),
-            asset_keys: input.experiment.asset_keys.clone(),
-            code_revision: input.experiment.code_revision.clone(),
-            dataset_snapshots: input.experiment.dataset_snapshots.clone(),
-            strategy_spec_digest: strategy_digest,
-            config: input.config.clone(),
-            fold_reports,
-            aggregate_metrics: aggregate.metrics,
-            aggregate_baseline_comparisons: aggregate.baselines,
-            aggregate_regime_metrics: aggregate.regimes,
-            promotion_eligible,
-            blocking_reasons,
-            summary,
-            tags,
-        };
+        let report = build_report(input)?;
 
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction()?;
-        let existing = load_report(&transaction, &report_id)?;
+        let existing = load_report(&transaction, &report.report_id)?;
         persist_report(&transaction, &report)?;
         transaction.commit()?;
         Ok(BacktestRunResult {
             report,
             created: existing.is_none(),
         })
+    }
+
+    pub fn preview(
+        &self,
+        input: &BacktestRunRequest,
+    ) -> Result<RuntimeBacktestReport, BacktestingEngineError> {
+        build_report(input)
     }
 
     pub fn query(
@@ -989,6 +890,117 @@ fn default_feature_cache_config() -> FeatureCacheConfig {
         VOLATILITY_WINDOW_SIZE,
         MAX_SAMPLES_PER_STREAM,
     )
+}
+
+fn build_report(
+    input: &BacktestRunRequest,
+) -> Result<RuntimeBacktestReport, BacktestingEngineError> {
+    validate_config(&input.config)?;
+    let fixture = load_replay_fixture(&input.replay_corpus)?;
+    let observations = build_observations(&fixture, &input.regime_tags)?;
+    let required_observations = input.config.training_window_observations as usize
+        + input.config.purge_observations as usize
+        + input.config.testing_window_observations as usize;
+    if observations.len() < required_observations + 1 {
+        return Err(BacktestingEngineError::InsufficientObservations {
+            required: required_observations + 1,
+            available: observations.len(),
+        });
+    }
+
+    let strategy_digest = strategy_spec_digest(&input.strategy_spec)?;
+    let generated_at = now_rfc3339();
+    let report_id = match input.report_id.clone() {
+        Some(report_id) => report_id,
+        None => default_report_id(
+            &input.experiment.experiment_id,
+            &strategy_digest,
+            &input.config,
+        )?,
+    };
+    let missing_feature_keys =
+        missing_required_feature_keys(&input.strategy_spec, &input.feature_definitions);
+    let missing_regime_keys =
+        missing_required_regime_keys(&input.strategy_spec, &input.regime_tags);
+    let evaluations = evaluate_walk_forward_folds(
+        &observations,
+        &input.strategy_spec,
+        input.cost_model.as_ref(),
+        &input.config,
+    )?;
+    let mut blocking_reasons = Vec::new();
+    if !missing_feature_keys.is_empty() {
+        blocking_reasons.push(format!(
+            "missing required feature definitions: {}",
+            missing_feature_keys.join(", ")
+        ));
+    }
+    if !missing_regime_keys.is_empty() {
+        blocking_reasons.push(format!(
+            "missing required regime tags: {}",
+            missing_regime_keys.join(", ")
+        ));
+    }
+    if evaluations.len() < 2 {
+        blocking_reasons.push("walk-forward evaluation requires at least two folds".to_string());
+    }
+
+    let fold_reports = evaluations
+        .iter()
+        .map(|evaluation| evaluation.fold_report.clone())
+        .collect::<Vec<_>>();
+    let aggregate = aggregate_evaluations(
+        &evaluations,
+        &input.config.baseline_strategies,
+        &input.strategy_spec,
+        &mut blocking_reasons,
+    );
+    let promotion_eligible = blocking_reasons.is_empty();
+    let status = if promotion_eligible {
+        RuntimeBacktestStatus::Completed
+    } else {
+        RuntimeBacktestStatus::Blocked
+    };
+    let summary = if promotion_eligible {
+        format!(
+            "Backtest cleared {} walk-forward folds for {} with net return {} bps.",
+            fold_reports.len(),
+            input.strategy_spec.strategy_key,
+            aggregate.metrics.net_return_bps
+        )
+    } else {
+        format!(
+            "Backtest blocked for {}: {}.",
+            input.strategy_spec.strategy_key,
+            blocking_reasons.join("; ")
+        )
+    };
+    let mut tags = input.experiment.tags.clone();
+    if !tags.iter().any(|tag| tag == "backtest") {
+        tags.push("backtest".to_string());
+    }
+    Ok(RuntimeBacktestReport {
+        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+        report_id,
+        experiment_id: input.experiment.experiment_id.clone(),
+        strategy_key: input.strategy_spec.strategy_key.clone(),
+        status,
+        generated_at,
+        venue_keys: input.experiment.venue_keys.clone(),
+        asset_keys: input.experiment.asset_keys.clone(),
+        code_revision: input.experiment.code_revision.clone(),
+        dataset_snapshots: input.experiment.dataset_snapshots.clone(),
+        strategy_spec_digest: strategy_digest,
+        config: input.config.clone(),
+        fold_reports,
+        aggregate_metrics: aggregate.metrics,
+        aggregate_baseline_comparisons: aggregate.baselines,
+        aggregate_regime_metrics: aggregate.regimes,
+        promotion_eligible,
+        blocking_reasons,
+        summary,
+        tags,
+    })
 }
 
 fn default_report_id(
