@@ -81,6 +81,26 @@ describe("worker runtime contract bridge", () => {
     expect(report.promotionEligible).toBe(true);
   });
 
+  test("worker accepts runtime backtest reports with null comparedTo revisions", () => {
+    const fixture = readJson(
+      "docs/runtime-contracts/fixtures/runtime.backtest_report.valid.v1.json",
+    ) as Record<string, unknown>;
+    const codeRevision =
+      typeof fixture.codeRevision === "object" && fixture.codeRevision !== null
+        ? (fixture.codeRevision as Record<string, unknown>)
+        : {};
+
+    const report = parseRuntimeBacktestReport({
+      ...fixture,
+      codeRevision: {
+        ...codeRevision,
+        comparedTo: null,
+      },
+    });
+
+    expect(report.codeRevision.comparedTo).toBeUndefined();
+  });
+
   test("worker can parse the canonical reproducibility bundle fixture", () => {
     const bundle = parseRuntimeResearchReproducibilityBundleRecord(
       readJson(

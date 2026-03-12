@@ -6,6 +6,10 @@ export const DEFAULT_RUNTIME_VENUE_KEY = "jupiter" as const;
 
 const ISO_DATETIME_SCHEMA = z.string().datetime({ offset: true });
 const NON_EMPTY_STRING_SCHEMA = z.string().min(1);
+const NULLABLE_OPTIONAL_NON_EMPTY_STRING_SCHEMA = z.preprocess(
+  (value) => (value === null ? undefined : value),
+  NON_EMPTY_STRING_SCHEMA.optional(),
+);
 const PUBKEY_SCHEMA = z.string().min(32).max(64);
 const DECIMAL_STRING_SCHEMA = z
   .string()
@@ -310,7 +314,7 @@ const RuntimeCodeRevisionRefSchema = z
     vcs: NON_EMPTY_STRING_SCHEMA,
     repository: NON_EMPTY_STRING_SCHEMA,
     revision: NON_EMPTY_STRING_SCHEMA,
-    comparedTo: NON_EMPTY_STRING_SCHEMA.optional(),
+    comparedTo: NULLABLE_OPTIONAL_NON_EMPTY_STRING_SCHEMA,
     treeDirty: z.boolean(),
   })
   .strict();
