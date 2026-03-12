@@ -9,6 +9,7 @@ import {
   parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchEvidenceBundleRecord,
   parseRuntimeResearchExperimentRecord,
+  parseRuntimeResearchHypothesisRecord,
   parseRuntimeResearchSourceRecord,
   type RuntimeAssetRecord,
   type RuntimeBacktestReport,
@@ -20,6 +21,7 @@ import {
   type RuntimeReplayCorpusRecord,
   type RuntimeResearchEvidenceBundleRecord,
   type RuntimeResearchExperimentRecord,
+  type RuntimeResearchHypothesisRecord,
   type RuntimeResearchSourceRecord,
 } from "../../../src/runtime/contracts/autonomous_runtime.js";
 import type { RuntimeResearchCurationRequest } from "../../../src/runtime/research/curation.js";
@@ -35,6 +37,7 @@ import {
   writeRuntimeReplayCorpus,
   writeRuntimeResearchEvidenceBundle,
   writeRuntimeResearchExperiment,
+  writeRuntimeResearchHypothesis,
   writeRuntimeResearchSource,
 } from "./runtime_internal";
 import type { Env } from "./types";
@@ -47,6 +50,7 @@ type RuntimeResearchCurationWriteSummary<T> = {
 
 export type RuntimeResearchCurationSummary = {
   sources: RuntimeResearchCurationWriteSummary<RuntimeResearchSourceRecord>;
+  hypotheses: RuntimeResearchCurationWriteSummary<RuntimeResearchHypothesisRecord>;
   assets: RuntimeResearchCurationWriteSummary<RuntimeAssetRecord>;
   datasetSnapshots: RuntimeResearchCurationWriteSummary<RuntimeHistoricalDatasetSnapshotRecord>;
   replayCorpora: RuntimeResearchCurationWriteSummary<RuntimeReplayCorpusRecord>;
@@ -125,6 +129,11 @@ export function buildRuntimeResearchCurationMarkdown(
 
   for (const section of [
     buildSection("Sources", summary.sources, (record) => record.sourceId),
+    buildSection(
+      "Hypotheses",
+      summary.hypotheses,
+      (record) => record.hypothesisId,
+    ),
     buildSection("Assets", summary.assets, (record) => record.assetKey),
     buildSection(
       "Dataset Snapshots",
@@ -182,6 +191,13 @@ export async function runRuntimeResearchCurationWorkflow(input: {
         await writeRuntimeResearchSource({ env: input.env, sourceRecord }),
       parseItem: parseRuntimeResearchSourceRecord,
       selectPayloadItem: (payload) => payload.sourceRecord ?? payload.record,
+    }),
+    hypotheses: await persistCollection({
+      items: input.request.hypotheses,
+      writeItem: async (hypothesis) =>
+        await writeRuntimeResearchHypothesis({ env: input.env, hypothesis }),
+      parseItem: parseRuntimeResearchHypothesisRecord,
+      selectPayloadItem: (payload) => payload.hypothesis ?? payload.record,
     }),
     assets: await persistCollection({
       items: input.request.assets,

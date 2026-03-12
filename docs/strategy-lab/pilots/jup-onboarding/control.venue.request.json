@@ -1,0 +1,10 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "jupiter",
+  "liveAllowed": false,
+  "killSwitchEnabled": false,
+  "updatedBy": "codex",
+  "metadata": {
+    "pilot": "jup-onboarding"
+  }
+}

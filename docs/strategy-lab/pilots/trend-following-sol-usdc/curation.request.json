@@ -24,6 +24,28 @@
       "tags": ["pilot", "trend_following"]
     }
   ],
+  "hypotheses": [
+    {
+      "schemaVersion": "v1",
+      "hypothesisId": "hypothesis_trend_following_sol_usdc_pilot",
+      "strategyKey": "trend_following",
+      "title": "SOL/USDC directional persistence after liquidity shocks",
+      "thesis": "Short-horizon momentum on SOL/USDC persists long enough after strong liquidity shocks to support a bounded trend-following sleeve on Jupiter.",
+      "status": "candidate",
+      "createdAt": "2026-03-11T00:02:00Z",
+      "updatedAt": "2026-03-11T00:02:00Z",
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["SOL", "USDC"],
+      "sourceCitations": [
+        {
+          "sourceId": "source_trend_following_sol_usdc_pilot",
+          "locator": "sec-3",
+          "materialDigest": "sha256:trend-following-sol-usdc-pilot-source"
+        }
+      ],
+      "tags": ["pilot", "candidate", "trend_following"]
+    }
+  ],
   "experiments": [
     {
       "schemaVersion": "v1",

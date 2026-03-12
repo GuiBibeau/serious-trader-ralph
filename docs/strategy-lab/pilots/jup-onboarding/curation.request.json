@@ -8,9 +8,10 @@
       "chainKey": "solana-mainnet",
       "canonicalId": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
       "assetKind": "token",
-      "riskClass": "satellite",
+      "riskClass": "volatile",
       "listingState": "paper",
       "decimals": 6,
+      "aliases": ["Jupiter"],
       "quoteAssetKeys": ["USDC"],
       "venueMappings": [
         {

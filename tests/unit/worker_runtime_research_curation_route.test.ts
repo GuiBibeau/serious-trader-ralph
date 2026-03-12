@@ -139,6 +139,9 @@ describe("worker runtime research curation routes", () => {
             },
             body: JSON.stringify({
               sources: [loadFixture("runtime.research_source.valid.v1.json")],
+              hypotheses: [
+                loadFixture("runtime.research_hypothesis.valid.v1.json"),
+              ],
               assets: [loadFixture("runtime.asset_record.valid.v1.json")],
               datasetSnapshots: [
                 loadFixture(
@@ -194,6 +197,11 @@ describe("worker runtime research curation routes", () => {
             attempted: 1,
             created: 1,
             records: [{ sourceId: expect.any(String) }],
+          },
+          hypotheses: {
+            attempted: 1,
+            created: 1,
+            records: [{ hypothesisId: expect.any(String) }],
           },
           assets: {
             attempted: 1,

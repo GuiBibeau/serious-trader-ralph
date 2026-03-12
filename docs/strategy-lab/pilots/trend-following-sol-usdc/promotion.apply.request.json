@@ -25,7 +25,8 @@
   ],
   "implementationReference": {
     "kind": "pull_request",
-    "ref": "#REPLACE_WITH_IMPLEMENTATION_PR"
+    "ref": "#301",
+    "notes": "Managed template pack 2 merged the trend-following runtime implementation."
   },
   "policyGate": {
     "schemaVersion": "v1",
@@ -40,7 +41,7 @@
       "Trend-following stays on the safe live lane.",
       "Paper scorecards passed the bounded live gate.",
       "Broad live remains gated on soak evidence.",
-      "Human review remains mandatory for money-state changes."
+      "Owner approval is recorded for the bounded pilot."
     ],
     "gates": [
       {
@@ -108,9 +109,9 @@
   "approvals": [
     {
       "targetMode": "limited_live",
-      "approvedBy": "operator@example.com",
-      "approvedAt": "2026-03-11T00:25:00Z",
-      "notes": "Template approval record. Replace with the production operator sign-off."
+      "approvedBy": "GuiBibeau",
+      "approvedAt": "2026-03-12T17:35:00Z",
+      "notes": "Repo owner approved the bounded limited-live pilot through the harness execution session."
     }
   ],
   "deployment": {
@@ -130,7 +131,7 @@
     "state": "live",
     "lane": "safe",
     "createdAt": "2026-03-11T00:25:00Z",
-    "updatedAt": "2026-03-11T00:25:00Z",
+    "updatedAt": "2026-03-12T17:35:00Z",
     "policy": {
       "maxNotionalUsd": "25",
       "dailyLossLimitUsd": "10",
@@ -154,8 +155,9 @@
       }
     ]
   },
-  "applyTransition": false,
+  "applyTransition": true,
   "metadata": {
-    "source": "strategy-lab-pilot-template"
+    "source": "strategy-lab-pilot-apply",
+    "approver": "GuiBibeau"
   }
 }
