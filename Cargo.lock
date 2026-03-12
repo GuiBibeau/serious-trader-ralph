@@ -1019,6 +1019,7 @@ version = "0.1.0"
 dependencies = [
  "feature-cache",
  "protocol",
+ "runtime-allocator",
  "rusqlite",
  "serde",
  "serde_json",

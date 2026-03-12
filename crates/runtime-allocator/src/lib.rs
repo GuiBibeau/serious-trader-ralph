@@ -4,8 +4,9 @@ use std::{
 };
 
 use protocol::{
-    RuntimeAllocatorDecisionRecord, RuntimeAllocatorPeerGrant, RuntimeDeploymentRecord,
-    RuntimeDeploymentState, RuntimeLane, RuntimeMode, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeAllocatorDecisionRecord, RuntimeAllocatorPeerGrant, RuntimeAssetListingState,
+    RuntimeAssetRiskClass, RuntimeDeploymentRecord, RuntimeDeploymentState, RuntimeLane,
+    RuntimeMode, RuntimeOnboardingState, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -38,13 +39,57 @@ pub struct RuntimeAllocatorInput {
     pub deployment: RuntimeDeploymentRecord,
     pub sleeve_equity_usd: String,
     pub sleeve_deployments: Vec<RuntimeDeploymentRecord>,
+    pub deployment_contexts: Vec<RuntimeAllocatorDeploymentContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAllocatorResult {
     pub decision: RuntimeAllocatorDecisionRecord,
     pub effective_deployment: RuntimeDeploymentRecord,
+    pub pressure_summary: RuntimeAllocatorPressureSummary,
     pub created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAllocatorPressureInput {
+    pub sleeve_equity_usd: String,
+    pub sleeve_deployments: Vec<RuntimeDeploymentRecord>,
+    pub current_decisions: Vec<RuntimeAllocatorDecisionRecord>,
+    pub deployment_contexts: Vec<RuntimeAllocatorDeploymentContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAllocatorDeploymentContext {
+    pub deployment_id: String,
+    pub venue_key: String,
+    pub venue_onboarding_state: RuntimeOnboardingState,
+    pub exposure_asset_key: String,
+    pub exposure_asset_listing_state: RuntimeAssetListingState,
+    pub exposure_asset_risk_class: RuntimeAssetRiskClass,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAllocatorPressureBucket {
+    pub subject_key: String,
+    pub limit_bps: u16,
+    pub requested_allocated_usd: String,
+    pub granted_allocated_usd: String,
+    pub requested_reserved_usd: String,
+    pub granted_reserved_usd: String,
+    pub max_allocated_usd: String,
+    pub utilization_bps: u16,
+    pub constrained: bool,
+    pub subject_state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAllocatorPressureSummary {
+    pub by_strategy: Vec<RuntimeAllocatorPressureBucket>,
+    pub by_venue: Vec<RuntimeAllocatorPressureBucket>,
+    pub by_asset: Vec<RuntimeAllocatorPressureBucket>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,22 +136,32 @@ impl RuntimeAllocator {
         let transaction = connection.transaction()?;
 
         if let Some(existing) = load_decision_by_run_id(&transaction, &input.run_id)? {
+            let current_decisions =
+                load_latest_decisions_for_sleeve(&transaction, &input.deployment.sleeve_id)?;
             let effective_deployment = apply_grant(&input.deployment, &existing);
+            let pressure_summary = self.summarize_pressure(&RuntimeAllocatorPressureInput {
+                sleeve_equity_usd: input.sleeve_equity_usd.clone(),
+                sleeve_deployments: input.sleeve_deployments.clone(),
+                current_decisions,
+                deployment_contexts: input.deployment_contexts.clone(),
+            })?;
             transaction.commit()?;
             return Ok(RuntimeAllocatorResult {
                 decision: existing,
                 effective_deployment,
+                pressure_summary,
                 created: false,
             });
         }
 
-        let decision = build_decision(input)?;
+        let (decision, pressure_summary) = build_decision(input)?;
         persist_decision(&transaction, &decision)?;
         transaction.commit()?;
 
         Ok(RuntimeAllocatorResult {
             effective_deployment: apply_grant(&input.deployment, &decision),
             decision,
+            pressure_summary,
             created: true,
         })
     }
@@ -166,6 +221,25 @@ impl RuntimeAllocator {
             )
             .optional()?;
         Ok(raw.map(|value| deserialize_json(&value)).transpose()?)
+    }
+
+    pub fn summarize_pressure(
+        &self,
+        input: &RuntimeAllocatorPressureInput,
+    ) -> Result<RuntimeAllocatorPressureSummary, RuntimeAllocatorError> {
+        let sleeve_equity_cents =
+            parse_non_negative_usd_cents("sleeveEquityUsd", &input.sleeve_equity_usd)?;
+        let contexts = build_context_lookup(&input.sleeve_deployments, &input.deployment_contexts);
+        let latest_decisions = latest_decisions_by_deployment(&input.current_decisions);
+        let peers = build_ranked_deployments(&input.sleeve_deployments);
+        let mut grants = Vec::with_capacity(peers.len());
+        for peer in &peers {
+            grants.push(current_grant_for_deployment(
+                &peer.deployment,
+                latest_decisions.get(&peer.deployment.deployment_id),
+            )?);
+        }
+        build_pressure_summary(sleeve_equity_cents, &peers, &grants, &contexts)
     }
 
     #[must_use]
@@ -261,27 +335,17 @@ fn initialize_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
 
 fn build_decision(
     input: &RuntimeAllocatorInput,
-) -> Result<RuntimeAllocatorDecisionRecord, RuntimeAllocatorError> {
+) -> Result<
+    (
+        RuntimeAllocatorDecisionRecord,
+        RuntimeAllocatorPressureSummary,
+    ),
+    RuntimeAllocatorError,
+> {
     let sleeve_equity_cents =
         parse_non_negative_usd_cents("sleeveEquityUsd", &input.sleeve_equity_usd)?;
-    let mut peers = input
-        .sleeve_deployments
-        .iter()
-        .map(|deployment| RankedDeployment {
-            deployment: deployment.clone(),
-            priority_score: allocator_priority_score(deployment),
-        })
-        .collect::<Vec<_>>();
-    peers.sort_by(|left, right| {
-        right
-            .priority_score
-            .cmp(&left.priority_score)
-            .then_with(|| {
-                left.deployment
-                    .deployment_id
-                    .cmp(&right.deployment.deployment_id)
-            })
-    });
+    let peers = build_ranked_deployments(&input.sleeve_deployments);
+    let contexts = build_context_lookup(&input.sleeve_deployments, &input.deployment_contexts);
 
     let mut total_requested_allocated_cents = 0_i64;
     let mut total_requested_reserved_cents = 0_i64;
@@ -294,6 +358,9 @@ fn build_decision(
     }
 
     let mut remaining_cents = sleeve_equity_cents;
+    let mut granted_by_strategy = std::collections::BTreeMap::new();
+    let mut granted_by_venue = std::collections::BTreeMap::new();
+    let mut granted_by_asset = std::collections::BTreeMap::new();
     let mut peer_grants = Vec::with_capacity(peers.len());
     for (index, peer) in peers.iter().enumerate() {
         let requested_allocated_cents = parse_non_negative_usd_cents(
@@ -301,13 +368,57 @@ fn build_decision(
             &peer.deployment.capital.allocated_usd,
         )?;
         let requested_reserved_cents = effective_reserved_cents(&peer.deployment)?;
+        let context = contexts
+            .get(&peer.deployment.deployment_id)
+            .cloned()
+            .unwrap_or_else(|| fallback_context(&peer.deployment));
         let granted_allocated_cents = if deployment_is_eligible_for_grant(&peer.deployment) {
-            requested_allocated_cents.min(remaining_cents)
+            let strategy_remaining = remaining_subject_capacity(
+                strategy_limit_bps(&peer.deployment.strategy_key),
+                sleeve_equity_cents,
+                granted_by_strategy
+                    .get(&peer.deployment.strategy_key)
+                    .copied()
+                    .unwrap_or_default(),
+            );
+            let venue_remaining = remaining_subject_capacity(
+                venue_limit_bps(&context.venue_onboarding_state),
+                sleeve_equity_cents,
+                granted_by_venue
+                    .get(&context.venue_key)
+                    .copied()
+                    .unwrap_or_default(),
+            );
+            let asset_remaining = remaining_subject_capacity(
+                asset_limit_bps(
+                    &context.exposure_asset_risk_class,
+                    &context.exposure_asset_listing_state,
+                ),
+                sleeve_equity_cents,
+                granted_by_asset
+                    .get(&context.exposure_asset_key)
+                    .copied()
+                    .unwrap_or_default(),
+            );
+            requested_allocated_cents
+                .min(remaining_cents)
+                .min(strategy_remaining)
+                .min(venue_remaining)
+                .min(asset_remaining)
         } else {
             0
         };
         remaining_cents = remaining_cents.saturating_sub(granted_allocated_cents);
         let granted_reserved_cents = requested_reserved_cents.min(granted_allocated_cents);
+        *granted_by_strategy
+            .entry(peer.deployment.strategy_key.clone())
+            .or_insert(0) += granted_allocated_cents;
+        *granted_by_venue
+            .entry(context.venue_key.clone())
+            .or_insert(0) += granted_allocated_cents;
+        *granted_by_asset
+            .entry(context.exposure_asset_key.clone())
+            .or_insert(0) += granted_allocated_cents;
         peer_grants.push(RuntimeAllocatorPeerGrant {
             deployment_id: peer.deployment.deployment_id.clone(),
             strategy_key: peer.deployment.strategy_key.clone(),
@@ -343,31 +454,36 @@ fn build_decision(
         parse_non_negative_usd_cents("grantedAllocatedUsd", &target_grant.granted_allocated_usd)?;
     let target_granted_reserved_cents =
         parse_non_negative_usd_cents("grantedReservedUsd", &target_grant.granted_reserved_usd)?;
+    let pressure_summary =
+        build_pressure_summary(sleeve_equity_cents, &peers, &peer_grants, &contexts)?;
 
-    Ok(RuntimeAllocatorDecisionRecord {
-        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
-        decision_id: build_decision_id(&input.run_id),
-        run_id: input.run_id.clone(),
-        deployment_id: input.deployment.deployment_id.clone(),
-        sleeve_id: input.deployment.sleeve_id.clone(),
-        decided_at: now_rfc3339(),
-        sleeve_equity_usd: format_usd_cents(sleeve_equity_cents),
-        total_requested_allocated_usd: format_usd_cents(total_requested_allocated_cents),
-        total_granted_allocated_usd: format_usd_cents(total_granted_allocated_cents),
-        total_requested_reserved_usd: format_usd_cents(total_requested_reserved_cents),
-        total_granted_reserved_usd: format_usd_cents(total_granted_reserved_cents),
-        requested_allocated_usd: target_grant.requested_allocated_usd.clone(),
-        granted_allocated_usd: target_grant.granted_allocated_usd.clone(),
-        requested_reserved_usd: target_grant.requested_reserved_usd.clone(),
-        granted_reserved_usd: target_grant.granted_reserved_usd.clone(),
-        granted_available_usd: format_usd_cents(
-            target_granted_allocated_cents.saturating_sub(target_granted_reserved_cents),
-        ),
-        priority_rank: target_grant.priority_rank,
-        priority_score: target_grant.priority_score,
-        constrained: target_grant.constrained,
-        peer_grants,
-    })
+    Ok((
+        RuntimeAllocatorDecisionRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            decision_id: build_decision_id(&input.run_id),
+            run_id: input.run_id.clone(),
+            deployment_id: input.deployment.deployment_id.clone(),
+            sleeve_id: input.deployment.sleeve_id.clone(),
+            decided_at: now_rfc3339(),
+            sleeve_equity_usd: format_usd_cents(sleeve_equity_cents),
+            total_requested_allocated_usd: format_usd_cents(total_requested_allocated_cents),
+            total_granted_allocated_usd: format_usd_cents(total_granted_allocated_cents),
+            total_requested_reserved_usd: format_usd_cents(total_requested_reserved_cents),
+            total_granted_reserved_usd: format_usd_cents(total_granted_reserved_cents),
+            requested_allocated_usd: target_grant.requested_allocated_usd.clone(),
+            granted_allocated_usd: target_grant.granted_allocated_usd.clone(),
+            requested_reserved_usd: target_grant.requested_reserved_usd.clone(),
+            granted_reserved_usd: target_grant.granted_reserved_usd.clone(),
+            granted_available_usd: format_usd_cents(
+                target_granted_allocated_cents.saturating_sub(target_granted_reserved_cents),
+            ),
+            priority_rank: target_grant.priority_rank,
+            priority_score: target_grant.priority_score,
+            constrained: target_grant.constrained,
+            peer_grants,
+        },
+        pressure_summary,
+    ))
 }
 
 fn apply_grant(
@@ -424,10 +540,351 @@ fn load_decision_by_run_id(
     Ok(raw.map(|value| deserialize_json(&value)).transpose()?)
 }
 
+fn load_latest_decisions_for_sleeve(
+    connection: &Connection,
+    sleeve_id: &str,
+) -> Result<Vec<RuntimeAllocatorDecisionRecord>, RuntimeAllocatorError> {
+    let mut statement = connection.prepare(
+        "SELECT record_json
+         FROM allocator_decisions
+         WHERE sleeve_id = ?1
+         ORDER BY decided_at DESC, decision_id DESC",
+    )?;
+    let rows = statement.query_map(params![sleeve_id], |row| row.get::<_, String>(0))?;
+    let mut decisions = Vec::new();
+    for row in rows {
+        decisions.push(deserialize_json(&row?)?);
+    }
+    Ok(decisions)
+}
+
 #[derive(Debug, Clone)]
 struct RankedDeployment {
     deployment: RuntimeDeploymentRecord,
     priority_score: i64,
+}
+
+#[derive(Debug, Clone)]
+struct PressureAccumulator {
+    subject_key: String,
+    limit_bps: u16,
+    requested_allocated_cents: i64,
+    granted_allocated_cents: i64,
+    requested_reserved_cents: i64,
+    granted_reserved_cents: i64,
+    subject_state: String,
+}
+
+fn build_ranked_deployments(deployments: &[RuntimeDeploymentRecord]) -> Vec<RankedDeployment> {
+    let mut peers = deployments
+        .iter()
+        .map(|deployment| RankedDeployment {
+            deployment: deployment.clone(),
+            priority_score: allocator_priority_score(deployment),
+        })
+        .collect::<Vec<_>>();
+    peers.sort_by(|left, right| {
+        right
+            .priority_score
+            .cmp(&left.priority_score)
+            .then_with(|| {
+                left.deployment
+                    .deployment_id
+                    .cmp(&right.deployment.deployment_id)
+            })
+    });
+    peers
+}
+
+fn build_context_lookup(
+    deployments: &[RuntimeDeploymentRecord],
+    contexts: &[RuntimeAllocatorDeploymentContext],
+) -> std::collections::BTreeMap<String, RuntimeAllocatorDeploymentContext> {
+    let mut lookup = contexts
+        .iter()
+        .map(|context| (context.deployment_id.clone(), context.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for deployment in deployments {
+        lookup
+            .entry(deployment.deployment_id.clone())
+            .or_insert_with(|| fallback_context(deployment));
+    }
+    lookup
+}
+
+fn fallback_context(deployment: &RuntimeDeploymentRecord) -> RuntimeAllocatorDeploymentContext {
+    RuntimeAllocatorDeploymentContext {
+        deployment_id: deployment.deployment_id.clone(),
+        venue_key: deployment.venue_key.clone(),
+        // Missing venue or asset context should not silently tighten grants.
+        venue_onboarding_state: RuntimeOnboardingState::BroadLiveReady,
+        exposure_asset_key: deployment
+            .pair
+            .symbol
+            .split('/')
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&deployment.pair.base_mint)
+            .to_string(),
+        exposure_asset_listing_state: RuntimeAssetListingState::Live,
+        exposure_asset_risk_class: RuntimeAssetRiskClass::Core,
+    }
+}
+
+fn latest_decisions_by_deployment(
+    decisions: &[RuntimeAllocatorDecisionRecord],
+) -> std::collections::BTreeMap<String, &RuntimeAllocatorDecisionRecord> {
+    let mut latest = std::collections::BTreeMap::new();
+    for decision in decisions {
+        latest
+            .entry(decision.deployment_id.clone())
+            .or_insert(decision);
+    }
+    latest
+}
+
+fn current_grant_for_deployment(
+    deployment: &RuntimeDeploymentRecord,
+    decision: Option<&&RuntimeAllocatorDecisionRecord>,
+) -> Result<RuntimeAllocatorPeerGrant, RuntimeAllocatorError> {
+    let requested_allocated_cents =
+        parse_non_negative_usd_cents("capital.allocatedUsd", &deployment.capital.allocated_usd)?;
+    let requested_reserved_cents = effective_reserved_cents(deployment)?;
+    let granted_allocated_usd = decision
+        .map(|record| record.granted_allocated_usd.clone())
+        .unwrap_or_else(|| deployment.capital.allocated_usd.clone());
+    let granted_reserved_usd = decision
+        .map(|record| record.granted_reserved_usd.clone())
+        .unwrap_or_else(|| deployment.capital.reserved_usd.clone());
+    let granted_allocated_cents =
+        parse_non_negative_usd_cents("grantedAllocatedUsd", &granted_allocated_usd)?;
+    let granted_reserved_cents =
+        parse_non_negative_usd_cents("grantedReservedUsd", &granted_reserved_usd)?;
+
+    Ok(RuntimeAllocatorPeerGrant {
+        deployment_id: deployment.deployment_id.clone(),
+        strategy_key: deployment.strategy_key.clone(),
+        mode: deployment.mode.clone(),
+        state: deployment.state.clone(),
+        priority_rank: 0,
+        priority_score: allocator_priority_score(deployment),
+        requested_allocated_usd: format_usd_cents(requested_allocated_cents),
+        granted_allocated_usd: format_usd_cents(granted_allocated_cents),
+        requested_reserved_usd: format_usd_cents(requested_reserved_cents),
+        granted_reserved_usd: format_usd_cents(granted_reserved_cents),
+        constrained: granted_allocated_cents < requested_allocated_cents
+            || granted_reserved_cents < requested_reserved_cents,
+    })
+}
+
+fn build_pressure_summary(
+    sleeve_equity_cents: i64,
+    peers: &[RankedDeployment],
+    grants: &[RuntimeAllocatorPeerGrant],
+    contexts: &std::collections::BTreeMap<String, RuntimeAllocatorDeploymentContext>,
+) -> Result<RuntimeAllocatorPressureSummary, RuntimeAllocatorError> {
+    let mut by_strategy = std::collections::BTreeMap::new();
+    let mut by_venue = std::collections::BTreeMap::new();
+    let mut by_asset = std::collections::BTreeMap::new();
+
+    for (peer, grant) in peers.iter().zip(grants.iter()) {
+        let requested_allocated_cents =
+            parse_non_negative_usd_cents("requestedAllocatedUsd", &grant.requested_allocated_usd)?;
+        let granted_allocated_cents =
+            parse_non_negative_usd_cents("grantedAllocatedUsd", &grant.granted_allocated_usd)?;
+        let requested_reserved_cents =
+            parse_non_negative_usd_cents("requestedReservedUsd", &grant.requested_reserved_usd)?;
+        let granted_reserved_cents =
+            parse_non_negative_usd_cents("grantedReservedUsd", &grant.granted_reserved_usd)?;
+        let context = contexts
+            .get(&peer.deployment.deployment_id)
+            .cloned()
+            .unwrap_or_else(|| fallback_context(&peer.deployment));
+
+        accumulate_pressure(
+            &mut by_strategy,
+            PressureAccumulator {
+                subject_key: peer.deployment.strategy_key.clone(),
+                limit_bps: strategy_limit_bps(&peer.deployment.strategy_key),
+                requested_allocated_cents,
+                granted_allocated_cents,
+                requested_reserved_cents,
+                granted_reserved_cents,
+                subject_state: "shared-strategy-budget".to_string(),
+            },
+        );
+        accumulate_pressure(
+            &mut by_venue,
+            PressureAccumulator {
+                subject_key: context.venue_key.clone(),
+                limit_bps: venue_limit_bps(&context.venue_onboarding_state),
+                requested_allocated_cents,
+                granted_allocated_cents,
+                requested_reserved_cents,
+                granted_reserved_cents,
+                subject_state: onboarding_state_label(&context.venue_onboarding_state),
+            },
+        );
+        accumulate_pressure(
+            &mut by_asset,
+            PressureAccumulator {
+                subject_key: context.exposure_asset_key.clone(),
+                limit_bps: asset_limit_bps(
+                    &context.exposure_asset_risk_class,
+                    &context.exposure_asset_listing_state,
+                ),
+                requested_allocated_cents,
+                granted_allocated_cents,
+                requested_reserved_cents,
+                granted_reserved_cents,
+                subject_state: asset_state_label(
+                    &context.exposure_asset_listing_state,
+                    &context.exposure_asset_risk_class,
+                ),
+            },
+        );
+    }
+
+    Ok(RuntimeAllocatorPressureSummary {
+        by_strategy: finalize_pressure_buckets(by_strategy, sleeve_equity_cents),
+        by_venue: finalize_pressure_buckets(by_venue, sleeve_equity_cents),
+        by_asset: finalize_pressure_buckets(by_asset, sleeve_equity_cents),
+    })
+}
+
+fn accumulate_pressure(
+    buckets: &mut std::collections::BTreeMap<String, PressureAccumulator>,
+    input: PressureAccumulator,
+) {
+    let entry = buckets
+        .entry(input.subject_key.clone())
+        .or_insert_with(|| PressureAccumulator {
+            subject_key: input.subject_key,
+            limit_bps: input.limit_bps,
+            requested_allocated_cents: 0,
+            granted_allocated_cents: 0,
+            requested_reserved_cents: 0,
+            granted_reserved_cents: 0,
+            subject_state: input.subject_state,
+        });
+    entry.requested_allocated_cents += input.requested_allocated_cents;
+    entry.granted_allocated_cents += input.granted_allocated_cents;
+    entry.requested_reserved_cents += input.requested_reserved_cents;
+    entry.granted_reserved_cents += input.granted_reserved_cents;
+}
+
+fn finalize_pressure_buckets(
+    buckets: std::collections::BTreeMap<String, PressureAccumulator>,
+    sleeve_equity_cents: i64,
+) -> Vec<RuntimeAllocatorPressureBucket> {
+    let mut values = buckets
+        .into_values()
+        .map(|entry| {
+            let max_allocated_cents = subject_limit_cents(entry.limit_bps, sleeve_equity_cents);
+            RuntimeAllocatorPressureBucket {
+                subject_key: entry.subject_key,
+                limit_bps: entry.limit_bps,
+                requested_allocated_usd: format_usd_cents(entry.requested_allocated_cents),
+                granted_allocated_usd: format_usd_cents(entry.granted_allocated_cents),
+                requested_reserved_usd: format_usd_cents(entry.requested_reserved_cents),
+                granted_reserved_usd: format_usd_cents(entry.granted_reserved_cents),
+                max_allocated_usd: format_usd_cents(max_allocated_cents),
+                utilization_bps: utilization_bps(
+                    entry.granted_allocated_cents,
+                    max_allocated_cents,
+                ),
+                constrained: entry.granted_allocated_cents < entry.requested_allocated_cents
+                    || entry.granted_reserved_cents < entry.requested_reserved_cents,
+                subject_state: entry.subject_state,
+            }
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        right
+            .utilization_bps
+            .cmp(&left.utilization_bps)
+            .then_with(|| left.subject_key.cmp(&right.subject_key))
+    });
+    values
+}
+
+fn remaining_subject_capacity(limit_bps: u16, sleeve_equity_cents: i64, granted_cents: i64) -> i64 {
+    subject_limit_cents(limit_bps, sleeve_equity_cents)
+        .saturating_sub(granted_cents)
+        .max(0)
+}
+
+fn subject_limit_cents(limit_bps: u16, sleeve_equity_cents: i64) -> i64 {
+    ((sleeve_equity_cents * i64::from(limit_bps)) / 10_000).max(0)
+}
+
+fn utilization_bps(granted_cents: i64, max_allocated_cents: i64) -> u16 {
+    if max_allocated_cents <= 0 {
+        return if granted_cents > 0 { 10_000 } else { 0 };
+    }
+    (((granted_cents * 10_000) + (max_allocated_cents / 2)) / max_allocated_cents).clamp(0, 10_000)
+        as u16
+}
+
+fn strategy_limit_bps(strategy_key: &str) -> u16 {
+    match strategy_key {
+        "restricted" => 0,
+        "experimental" => 8_500,
+        _ => 10_000,
+    }
+}
+
+fn venue_limit_bps(state: &RuntimeOnboardingState) -> u16 {
+    match state {
+        RuntimeOnboardingState::BroadLiveReady => 10_000,
+        RuntimeOnboardingState::LimitedLiveReady => 8_500,
+        RuntimeOnboardingState::PaperReady => 6_000,
+        RuntimeOnboardingState::ShadowReady => 4_500,
+        RuntimeOnboardingState::Integrated => 3_500,
+        RuntimeOnboardingState::Candidate => 2_500,
+        RuntimeOnboardingState::Paused | RuntimeOnboardingState::Deprecated => 0,
+    }
+}
+
+fn asset_limit_bps(
+    risk_class: &RuntimeAssetRiskClass,
+    listing_state: &RuntimeAssetListingState,
+) -> u16 {
+    let base: u16 = match risk_class {
+        RuntimeAssetRiskClass::Core => 10_000,
+        RuntimeAssetRiskClass::Standard => 8_500,
+        RuntimeAssetRiskClass::Volatile => 5_000,
+        RuntimeAssetRiskClass::Experimental => 3_000,
+        RuntimeAssetRiskClass::Restricted => 0,
+    };
+    let multiplier: u32 = match listing_state {
+        RuntimeAssetListingState::Live => 100,
+        RuntimeAssetListingState::Paper => 75,
+        RuntimeAssetListingState::Shadow => 55,
+        RuntimeAssetListingState::Candidate => 35,
+        RuntimeAssetListingState::Paused | RuntimeAssetListingState::Deprecated => 0,
+    };
+    ((u32::from(base) * multiplier) / 100) as u16
+}
+
+fn onboarding_state_label(state: &RuntimeOnboardingState) -> String {
+    match state {
+        RuntimeOnboardingState::Candidate => "candidate".to_string(),
+        RuntimeOnboardingState::Integrated => "integrated".to_string(),
+        RuntimeOnboardingState::ShadowReady => "shadow_ready".to_string(),
+        RuntimeOnboardingState::PaperReady => "paper_ready".to_string(),
+        RuntimeOnboardingState::LimitedLiveReady => "limited_live_ready".to_string(),
+        RuntimeOnboardingState::BroadLiveReady => "broad_live_ready".to_string(),
+        RuntimeOnboardingState::Paused => "paused".to_string(),
+        RuntimeOnboardingState::Deprecated => "deprecated".to_string(),
+    }
+}
+
+fn asset_state_label(
+    listing_state: &RuntimeAssetListingState,
+    risk_class: &RuntimeAssetRiskClass,
+) -> String {
+    format!("{:?}:{:?}", listing_state, risk_class).to_ascii_lowercase()
 }
 
 fn deployment_is_eligible_for_grant(deployment: &RuntimeDeploymentRecord) -> bool {
@@ -763,6 +1220,7 @@ mod tests {
                 deployment: alpha.clone(),
                 sleeve_equity_usd: "100.00".to_string(),
                 sleeve_deployments: vec![alpha, beta],
+                deployment_contexts: vec![],
             })
             .expect("decision to store");
 
@@ -800,6 +1258,7 @@ mod tests {
                 deployment: low.clone(),
                 sleeve_equity_usd: "80.00".to_string(),
                 sleeve_deployments: vec![low, high],
+                deployment_contexts: vec![],
             })
             .expect("decision to store");
 
@@ -843,11 +1302,86 @@ mod tests {
                 deployment: boosted.clone(),
                 sleeve_equity_usd: "60.00".to_string(),
                 sleeve_deployments: vec![normal, boosted],
+                deployment_contexts: vec![],
             })
             .expect("decision to store");
 
         assert_eq!(result.decision.priority_rank, 1);
         assert_eq!(result.decision.granted_allocated_usd, "55.00");
         assert!(!result.decision.constrained);
+    }
+
+    #[test]
+    fn constrains_deployments_when_venue_budget_is_degraded() {
+        let allocator = allocator("venue-degraded");
+        let live = deployment(
+            "deployment_live_jupiter",
+            "dca",
+            RuntimeMode::Live,
+            RuntimeLane::Safe,
+            "80.00",
+            "25.00",
+            &[],
+        );
+
+        let result = allocator
+            .allocate_and_store(&RuntimeAllocatorInput {
+                run_id: "run_live_jupiter".to_string(),
+                deployment: live.clone(),
+                sleeve_equity_usd: "100.00".to_string(),
+                sleeve_deployments: vec![live.clone()],
+                deployment_contexts: vec![RuntimeAllocatorDeploymentContext {
+                    deployment_id: live.deployment_id.clone(),
+                    venue_key: live.venue_key.clone(),
+                    venue_onboarding_state: RuntimeOnboardingState::PaperReady,
+                    exposure_asset_key: "SOL".to_string(),
+                    exposure_asset_listing_state: RuntimeAssetListingState::Live,
+                    exposure_asset_risk_class: RuntimeAssetRiskClass::Core,
+                }],
+            })
+            .expect("decision to store");
+
+        assert_eq!(result.decision.granted_allocated_usd, "60.00");
+        assert!(result.decision.constrained);
+        assert_eq!(result.pressure_summary.by_venue[0].subject_key, "jupiter");
+        assert_eq!(result.pressure_summary.by_venue[0].limit_bps, 6_000);
+        assert!(result.pressure_summary.by_venue[0].constrained);
+    }
+
+    #[test]
+    fn constrains_deployments_when_asset_budget_is_experimental() {
+        let allocator = allocator("asset-experimental");
+        let candidate = deployment(
+            "deployment_asset_candidate",
+            "trend_following",
+            RuntimeMode::Paper,
+            RuntimeLane::Safe,
+            "50.00",
+            "20.00",
+            &[],
+        );
+
+        let result = allocator
+            .allocate_and_store(&RuntimeAllocatorInput {
+                run_id: "run_asset_candidate".to_string(),
+                deployment: candidate.clone(),
+                sleeve_equity_usd: "100.00".to_string(),
+                sleeve_deployments: vec![candidate.clone()],
+                deployment_contexts: vec![RuntimeAllocatorDeploymentContext {
+                    deployment_id: candidate.deployment_id.clone(),
+                    venue_key: candidate.venue_key.clone(),
+                    venue_onboarding_state: RuntimeOnboardingState::BroadLiveReady,
+                    exposure_asset_key: "BONK".to_string(),
+                    exposure_asset_listing_state: RuntimeAssetListingState::Candidate,
+                    exposure_asset_risk_class: RuntimeAssetRiskClass::Experimental,
+                }],
+            })
+            .expect("decision to store");
+
+        assert_eq!(result.decision.granted_allocated_usd, "10.50");
+        assert!(result.decision.constrained);
+        assert_eq!(result.pressure_summary.by_asset[0].subject_key, "BONK");
+        assert_eq!(result.pressure_summary.by_asset[0].limit_bps, 1_050);
+        assert!(result.pressure_summary.by_asset[0].constrained);
     }
 }

@@ -2913,6 +2913,11 @@ const worker = {
                   sleeve: isRecord(allocatorResult.payload.sleeve)
                     ? allocatorResult.payload.sleeve
                     : null,
+                  pressureSummary: isRecord(
+                    allocatorResult.payload.pressureSummary,
+                  )
+                    ? allocatorResult.payload.pressureSummary
+                    : null,
                 }
               : null,
             positions: isRecord(positionsResult.payload.snapshot)
