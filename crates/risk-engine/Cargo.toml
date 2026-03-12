@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 feature-cache = { path = "../feature-cache" }
 protocol = { path = "../protocol" }
+runtime-allocator = { path = "../runtime-allocator" }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true

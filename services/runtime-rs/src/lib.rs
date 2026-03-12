@@ -70,7 +70,9 @@ use risk_engine::{
     RiskEngineSnapshot,
 };
 use runtime_allocator::{
-    RuntimeAllocator, RuntimeAllocatorConfig, RuntimeAllocatorError, RuntimeAllocatorSnapshot,
+    RuntimeAllocator, RuntimeAllocatorConfig, RuntimeAllocatorDeploymentContext,
+    RuntimeAllocatorError, RuntimeAllocatorPressureInput, RuntimeAllocatorPressureSummary,
+    RuntimeAllocatorSnapshot,
 };
 use runtime_ops::{health_snapshot, RuntimeConfig};
 use runtime_scorecards::{
@@ -80,7 +82,7 @@ use runtime_scorecards::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
-use strategy_core::StrategyCatalog;
+use strategy_core::{StrategyCatalog, VenueCatalog, VenueCatalogError};
 use strategy_registry::{
     ShadowEvaluationTrigger, StrategyRegistry, StrategyRegistryConfig, StrategyRegistryError,
     StrategyRegistrySnapshot,
@@ -103,6 +105,57 @@ fn plan_has_actionable_slices(plan: &protocol::RuntimeExecutionPlan) -> bool {
             .ok()
             .is_some_and(|value| value > 0)
     })
+}
+
+fn build_allocator_context(
+    state: &RuntimeAppState,
+    deployment: &RuntimeDeploymentRecord,
+) -> Result<RuntimeAllocatorDeploymentContext, JsonPayload> {
+    let supported_pair = state
+        .asset_registry
+        .ensure_pair_supported(deployment)
+        .map_err(map_asset_registry_error)?;
+    let venue_catalog = VenueCatalog::builtin().expect("builtin venue catalog");
+    let capability = venue_catalog
+        .require(&deployment.venue_key)
+        .map_err(map_venue_catalog_error)?;
+
+    Ok(RuntimeAllocatorDeploymentContext {
+        deployment_id: deployment.deployment_id.clone(),
+        venue_key: deployment.venue_key.clone(),
+        venue_onboarding_state: capability.onboarding_state.clone(),
+        exposure_asset_key: supported_pair.base_asset.asset_key,
+        exposure_asset_listing_state: supported_pair.base_asset.listing_state,
+        exposure_asset_risk_class: supported_pair.base_asset.risk_class,
+    })
+}
+
+fn build_allocator_contexts(
+    state: &RuntimeAppState,
+    deployments: &[RuntimeDeploymentRecord],
+) -> Result<Vec<RuntimeAllocatorDeploymentContext>, JsonPayload> {
+    deployments
+        .iter()
+        .map(|deployment| build_allocator_context(state, deployment))
+        .collect()
+}
+
+fn summarize_allocator_pressure(
+    state: &RuntimeAppState,
+    sleeve_equity_usd: String,
+    sleeve_deployments: Vec<RuntimeDeploymentRecord>,
+    current_decisions: Vec<protocol::RuntimeAllocatorDecisionRecord>,
+) -> Result<RuntimeAllocatorPressureSummary, JsonPayload> {
+    let deployment_contexts = build_allocator_contexts(state, &sleeve_deployments)?;
+    state
+        .runtime_allocator
+        .summarize_pressure(&RuntimeAllocatorPressureInput {
+            sleeve_equity_usd,
+            sleeve_deployments,
+            current_decisions,
+            deployment_contexts,
+        })
+        .map_err(map_allocator_error)
 }
 
 #[derive(Debug, Clone)]
@@ -726,10 +779,7 @@ async fn create_deployment_handler(
 ) -> HandlerResult {
     authorize_internal_request(&headers, &state)?;
     let deployment: RuntimeDeploymentRecord = parse_json_body(&body, "invalid-runtime-deployment")?;
-    state
-        .asset_registry
-        .ensure_pair_supported(&deployment)
-        .map_err(map_asset_registry_error)?;
+    let _deployment_context = build_allocator_context(&state, &deployment)?;
     let previous = state
         .strategy_registry
         .get_deployment(&deployment.deployment_id)
@@ -914,10 +964,7 @@ async fn evaluate_deployment_handler(
                 json!({ "deploymentId": deployment_id }),
             )
         })?;
-    state
-        .asset_registry
-        .ensure_pair_supported(&deployment)
-        .map_err(map_asset_registry_error)?;
+    let deployment_context = build_allocator_context(&state, &deployment)?;
     let result = state
         .strategy_registry
         .evaluate_deployment_trigger(
@@ -948,6 +995,7 @@ async fn evaluate_deployment_handler(
         .into_iter()
         .filter(|deployment| deployment.sleeve_id == result.deployment.sleeve_id)
         .collect::<Vec<_>>();
+    let deployment_contexts = build_allocator_contexts(&state, &sleeve_deployments)?;
     let allocation = state
         .runtime_allocator
         .allocate_and_store(&runtime_allocator::RuntimeAllocatorInput {
@@ -955,10 +1003,12 @@ async fn evaluate_deployment_handler(
             deployment: result.deployment.clone(),
             sleeve_equity_usd: sleeve_snapshot.equity_usd.clone(),
             sleeve_deployments,
+            deployment_contexts,
         })
         .map_err(map_allocator_error)?;
     let coordinated_deployment = allocation.effective_deployment.clone();
     let allocator_decision = Some(allocation.decision.clone());
+    let allocator_pressure_summary = Some(allocation.pressure_summary.clone());
     let assessment = state
         .risk_engine
         .assess_and_store(&RiskAssessmentInput {
@@ -967,6 +1017,9 @@ async fn evaluate_deployment_handler(
             feature_snapshot: result.feature_snapshot.clone(),
             ledger_snapshot: ledger_snapshot.clone(),
             kill_switch_active: deployment_has_kill_switch(&result.deployment),
+            allocator_decision: allocator_decision.clone(),
+            allocator_pressure_summary,
+            deployment_context: Some(deployment_context),
         })
         .map_err(map_risk_error)?;
     let run = state
@@ -1736,10 +1789,30 @@ async fn allocator_handler(
             .runtime_allocator
             .list_decisions_for_deployment(&deployment_id)
             .map_err(map_allocator_error)?;
+        let sleeve_decisions = state
+            .runtime_allocator
+            .list_decisions_for_sleeve(&deployment.sleeve_id)
+            .map_err(map_allocator_error)?;
         let sleeve = state
             .portfolio_ledger
             .sleeve_snapshot(&deployment.sleeve_id)
             .map_err(map_ledger_error)?;
+        let sleeve_deployments = state
+            .strategy_registry
+            .list_deployments()
+            .map_err(map_registry_error)?
+            .into_iter()
+            .filter(|candidate| candidate.sleeve_id == deployment.sleeve_id)
+            .collect::<Vec<_>>();
+        let pressure_summary = summarize_allocator_pressure(
+            &state,
+            sleeve
+                .as_ref()
+                .map(|snapshot| snapshot.equity_usd.clone())
+                .unwrap_or_else(|| "0.00".to_string()),
+            sleeve_deployments,
+            sleeve_decisions,
+        )?;
         return Ok(OkJson::with_status(
             StatusCode::OK,
             json!({
@@ -1750,6 +1823,7 @@ async fn allocator_handler(
                 "currentDecision": decisions.first(),
                 "decisions": decisions,
                 "sleeve": sleeve,
+                "pressureSummary": pressure_summary,
             }),
         ));
     }
@@ -1763,6 +1837,22 @@ async fn allocator_handler(
             .portfolio_ledger
             .sleeve_snapshot(&sleeve_id)
             .map_err(map_ledger_error)?;
+        let sleeve_deployments = state
+            .strategy_registry
+            .list_deployments()
+            .map_err(map_registry_error)?
+            .into_iter()
+            .filter(|candidate| candidate.sleeve_id == sleeve_id)
+            .collect::<Vec<_>>();
+        let pressure_summary = summarize_allocator_pressure(
+            &state,
+            sleeve
+                .as_ref()
+                .map(|snapshot| snapshot.equity_usd.clone())
+                .unwrap_or_else(|| "0.00".to_string()),
+            sleeve_deployments,
+            decisions.clone(),
+        )?;
         return Ok(OkJson::with_status(
             StatusCode::OK,
             json!({
@@ -1772,6 +1862,7 @@ async fn allocator_handler(
                 "currentDecision": decisions.first(),
                 "decisions": decisions,
                 "sleeve": sleeve,
+                "pressureSummary": pressure_summary,
             }),
         ));
     }
@@ -3835,6 +3926,36 @@ fn map_asset_registry_error(error: AssetRegistryError) -> JsonPayload {
     }
 }
 
+fn map_venue_catalog_error(error: VenueCatalogError) -> JsonPayload {
+    match error {
+        VenueCatalogError::UnsupportedVenue(venue_key) => error_json(
+            StatusCode::BAD_REQUEST,
+            "unsupported-venue",
+            json!({ "venueKey": venue_key }),
+        ),
+        VenueCatalogError::UnsupportedMode { venue_key, mode } => error_json(
+            StatusCode::BAD_REQUEST,
+            "unsupported-venue-mode",
+            json!({ "venueKey": venue_key, "mode": format!("{mode:?}").to_ascii_lowercase() }),
+        ),
+        VenueCatalogError::UnsupportedAdapter {
+            venue_key,
+            adapter_key,
+        } => error_json(
+            StatusCode::BAD_REQUEST,
+            "unsupported-venue-adapter",
+            json!({ "venueKey": venue_key, "adapterKey": adapter_key }),
+        ),
+        VenueCatalogError::DuplicateVenue(_) | VenueCatalogError::InvalidCapability { .. } => {
+            error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "runtime-venue-catalog-error",
+                json!({ "reason": error.to_string() }),
+            )
+        }
+    }
+}
+
 fn map_historical_data_lake_error(error: HistoricalDataLakeError) -> JsonPayload {
     match error {
         HistoricalDataLakeError::DatasetSnapshotNotFound {
@@ -4868,6 +4989,14 @@ mod tests {
             json!("deployment_123")
         );
         assert_eq!(allocator_payload["sleeve"]["availableUsd"], json!("875.00"));
+        assert_eq!(
+            allocator_payload["pressureSummary"]["byVenue"][0]["subjectKey"],
+            json!("jupiter")
+        );
+        assert_eq!(
+            allocator_payload["pressureSummary"]["byAsset"][0]["subjectKey"],
+            json!("SOL")
+        );
     }
 
     #[tokio::test]

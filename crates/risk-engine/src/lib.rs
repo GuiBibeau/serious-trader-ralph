@@ -5,9 +5,13 @@ use std::{
 
 use feature_cache::DerivedMarketFeatureSnapshot;
 use protocol::{
-    RuntimeDeploymentRecord, RuntimeLane, RuntimeLedgerSnapshot, RuntimeRiskDecision,
-    RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason, RuntimeRiskSeverity,
-    RuntimeRiskVerdict, RuntimeRunRecord, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeAllocatorDecisionRecord, RuntimeDeploymentRecord, RuntimeLane, RuntimeLedgerSnapshot,
+    RuntimeRiskDecision, RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason,
+    RuntimeRiskSeverity, RuntimeRiskVerdict, RuntimeRunRecord, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+};
+use runtime_allocator::{
+    RuntimeAllocatorDeploymentContext, RuntimeAllocatorPressureBucket,
+    RuntimeAllocatorPressureSummary,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -54,6 +58,9 @@ pub struct RiskAssessmentInput {
     pub feature_snapshot: DerivedMarketFeatureSnapshot,
     pub ledger_snapshot: RuntimeLedgerSnapshot,
     pub kill_switch_active: bool,
+    pub allocator_decision: Option<RuntimeAllocatorDecisionRecord>,
+    pub allocator_pressure_summary: Option<RuntimeAllocatorPressureSummary>,
+    pub deployment_context: Option<RuntimeAllocatorDeploymentContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,6 +412,62 @@ fn build_verdict(
         }
     }
 
+    if let Some(context) = input.deployment_context.as_ref() {
+        if matches!(
+            context.venue_onboarding_state,
+            protocol::RuntimeOnboardingState::Paused | protocol::RuntimeOnboardingState::Deprecated
+        ) {
+            reasons.push(RuntimeRiskReason {
+                code: "venue_unavailable".to_string(),
+                message: format!(
+                    "Venue {} is {} and is not eligible for runtime execution.",
+                    context.venue_key,
+                    onboarding_state_key(&context.venue_onboarding_state)
+                ),
+                severity: RuntimeRiskSeverity::Error,
+            });
+            verdict = RuntimeRiskDecision::Pause;
+        }
+
+        if matches!(
+            context.exposure_asset_listing_state,
+            protocol::RuntimeAssetListingState::Paused
+                | protocol::RuntimeAssetListingState::Deprecated
+        ) || matches!(
+            context.exposure_asset_risk_class,
+            protocol::RuntimeAssetRiskClass::Restricted
+        ) {
+            reasons.push(RuntimeRiskReason {
+                code: "asset_unavailable".to_string(),
+                message: format!(
+                    "Asset {} is {} / {} and is not eligible for runtime execution.",
+                    context.exposure_asset_key,
+                    asset_listing_state_key(&context.exposure_asset_listing_state),
+                    asset_risk_class_key(&context.exposure_asset_risk_class)
+                ),
+                severity: RuntimeRiskSeverity::Error,
+            });
+            if verdict != RuntimeRiskDecision::Pause {
+                verdict = RuntimeRiskDecision::Reject;
+            }
+        }
+    }
+
+    if let (Some(decision), Some(pressure_summary), Some(context)) = (
+        input.allocator_decision.as_ref(),
+        input.allocator_pressure_summary.as_ref(),
+        input.deployment_context.as_ref(),
+    ) {
+        append_allocator_budget_reasons(
+            &mut reasons,
+            &mut verdict,
+            decision,
+            pressure_summary,
+            context,
+            &input.deployment.strategy_key,
+        )?;
+    }
+
     if reasons.is_empty() {
         reasons.push(RuntimeRiskReason {
             code: "within_limits".to_string(),
@@ -630,6 +693,153 @@ fn stale_reason_message(feature_snapshot: &DerivedMarketFeatureSnapshot) -> Stri
         "feature_age_exceeded".to_string()
     } else {
         feature_snapshot.stale_reasons.join(",")
+    }
+}
+
+fn append_allocator_budget_reasons(
+    reasons: &mut Vec<RuntimeRiskReason>,
+    verdict: &mut RuntimeRiskDecision,
+    decision: &RuntimeAllocatorDecisionRecord,
+    pressure_summary: &RuntimeAllocatorPressureSummary,
+    context: &RuntimeAllocatorDeploymentContext,
+    strategy_key: &str,
+) -> Result<(), RiskEngineError> {
+    let granted_allocated_cents = parse_non_negative_usd_cents(
+        "allocator.grantedAllocatedUsd",
+        &decision.granted_allocated_usd,
+    )?;
+    let requested_allocated_cents = parse_non_negative_usd_cents(
+        "allocator.requestedAllocatedUsd",
+        &decision.requested_allocated_usd,
+    )?;
+
+    let venue_bucket = find_pressure_bucket(&pressure_summary.by_venue, &context.venue_key);
+    let asset_bucket =
+        find_pressure_bucket(&pressure_summary.by_asset, &context.exposure_asset_key);
+    let strategy_bucket = find_pressure_bucket(&pressure_summary.by_strategy, strategy_key);
+
+    if let Some(bucket) = venue_bucket {
+        append_pressure_bucket_reason(
+            reasons,
+            verdict,
+            "venue",
+            &context.venue_key,
+            bucket,
+            granted_allocated_cents,
+            requested_allocated_cents,
+        )?;
+    }
+    if let Some(bucket) = asset_bucket {
+        append_pressure_bucket_reason(
+            reasons,
+            verdict,
+            "asset",
+            &context.exposure_asset_key,
+            bucket,
+            granted_allocated_cents,
+            requested_allocated_cents,
+        )?;
+    }
+    if let Some(bucket) = strategy_bucket {
+        append_pressure_bucket_reason(
+            reasons,
+            verdict,
+            "strategy",
+            strategy_key,
+            bucket,
+            granted_allocated_cents,
+            requested_allocated_cents,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn append_pressure_bucket_reason(
+    reasons: &mut Vec<RuntimeRiskReason>,
+    verdict: &mut RuntimeRiskDecision,
+    subject_kind: &str,
+    subject_key: &str,
+    bucket: &RuntimeAllocatorPressureBucket,
+    granted_allocated_cents: i64,
+    requested_allocated_cents: i64,
+) -> Result<(), RiskEngineError> {
+    if !bucket.constrained || requested_allocated_cents <= granted_allocated_cents {
+        return Ok(());
+    }
+
+    let code_prefix = format!("{subject_kind}_budget");
+    let message = format!(
+        "{} {} is constrained at {}bps utilization={}bps (state={}). Requested {} but granted {}.",
+        subject_kind,
+        subject_key,
+        bucket.limit_bps,
+        bucket.utilization_bps,
+        bucket.subject_state,
+        bucket.requested_allocated_usd,
+        bucket.granted_allocated_usd
+    );
+
+    if granted_allocated_cents == 0 {
+        reasons.push(RuntimeRiskReason {
+            code: format!("{code_prefix}_blocked"),
+            message,
+            severity: RuntimeRiskSeverity::Error,
+        });
+        if *verdict != RuntimeRiskDecision::Pause {
+            *verdict = RuntimeRiskDecision::Reject;
+        }
+        return Ok(());
+    }
+
+    reasons.push(RuntimeRiskReason {
+        code: format!("{code_prefix}_throttled"),
+        message,
+        severity: RuntimeRiskSeverity::Warn,
+    });
+    Ok(())
+}
+
+fn find_pressure_bucket<'a>(
+    buckets: &'a [RuntimeAllocatorPressureBucket],
+    subject_key: &str,
+) -> Option<&'a RuntimeAllocatorPressureBucket> {
+    buckets
+        .iter()
+        .find(|bucket| bucket.subject_key == subject_key)
+}
+
+fn onboarding_state_key(state: &protocol::RuntimeOnboardingState) -> &'static str {
+    match state {
+        protocol::RuntimeOnboardingState::Candidate => "candidate",
+        protocol::RuntimeOnboardingState::Integrated => "integrated",
+        protocol::RuntimeOnboardingState::ShadowReady => "shadow_ready",
+        protocol::RuntimeOnboardingState::PaperReady => "paper_ready",
+        protocol::RuntimeOnboardingState::LimitedLiveReady => "limited_live_ready",
+        protocol::RuntimeOnboardingState::BroadLiveReady => "broad_live_ready",
+        protocol::RuntimeOnboardingState::Paused => "paused",
+        protocol::RuntimeOnboardingState::Deprecated => "deprecated",
+    }
+}
+
+fn asset_listing_state_key(state: &protocol::RuntimeAssetListingState) -> &'static str {
+    match state {
+        protocol::RuntimeAssetListingState::Candidate => "candidate",
+        protocol::RuntimeAssetListingState::Shadow => "shadow",
+        protocol::RuntimeAssetListingState::Paper => "paper",
+        protocol::RuntimeAssetListingState::Live => "live",
+        protocol::RuntimeAssetListingState::Paused => "paused",
+        protocol::RuntimeAssetListingState::Deprecated => "deprecated",
+    }
+}
+
+fn asset_risk_class_key(risk_class: &protocol::RuntimeAssetRiskClass) -> &'static str {
+    match risk_class {
+        protocol::RuntimeAssetRiskClass::Core => "core",
+        protocol::RuntimeAssetRiskClass::Standard => "standard",
+        protocol::RuntimeAssetRiskClass::Volatile => "volatile",
+        protocol::RuntimeAssetRiskClass::Experimental => "experimental",
+        protocol::RuntimeAssetRiskClass::Restricted => "restricted",
     }
 }
 
@@ -906,6 +1116,9 @@ mod tests {
             feature_snapshot: feature_snapshot(observed_at, 850, false, Some("15")),
             ledger_snapshot: ledger_snapshot("100", "5"),
             kill_switch_active: false,
+            allocator_decision: None,
+            allocator_pressure_summary: None,
+            deployment_context: None,
         }
     }
 
@@ -1052,5 +1265,140 @@ mod tests {
         assert!(first.created);
         assert!(!second.created);
         assert_eq!(first.verdict.verdict_id, second.verdict.verdict_id);
+    }
+
+    #[test]
+    fn pauses_when_venue_context_is_unavailable() {
+        let engine = engine("venue-unavailable");
+        let mut input = input("run_venue_paused", "2026-03-07T18:05:00Z");
+        input.deployment_context = Some(RuntimeAllocatorDeploymentContext {
+            deployment_id: input.deployment.deployment_id.clone(),
+            venue_key: input.deployment.venue_key.clone(),
+            venue_onboarding_state: protocol::RuntimeOnboardingState::Paused,
+            exposure_asset_key: "SOL".to_string(),
+            exposure_asset_listing_state: protocol::RuntimeAssetListingState::Live,
+            exposure_asset_risk_class: protocol::RuntimeAssetRiskClass::Core,
+        });
+
+        let verdict = engine
+            .assess_and_store(&input)
+            .expect("verdict to store")
+            .verdict;
+
+        assert_eq!(verdict.verdict, RuntimeRiskDecision::Pause);
+        assert!(verdict
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "venue_unavailable"));
+    }
+
+    #[test]
+    fn rejects_when_asset_context_is_restricted() {
+        let engine = engine("asset-restricted");
+        let mut input = input("run_asset_restricted", "2026-03-07T18:05:00Z");
+        input.deployment_context = Some(RuntimeAllocatorDeploymentContext {
+            deployment_id: input.deployment.deployment_id.clone(),
+            venue_key: input.deployment.venue_key.clone(),
+            venue_onboarding_state: protocol::RuntimeOnboardingState::BroadLiveReady,
+            exposure_asset_key: "BONK".to_string(),
+            exposure_asset_listing_state: protocol::RuntimeAssetListingState::Live,
+            exposure_asset_risk_class: protocol::RuntimeAssetRiskClass::Restricted,
+        });
+
+        let verdict = engine
+            .assess_and_store(&input)
+            .expect("verdict to store")
+            .verdict;
+
+        assert_eq!(verdict.verdict, RuntimeRiskDecision::Reject);
+        assert!(verdict
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "asset_unavailable"));
+    }
+
+    #[test]
+    fn rejects_when_asset_budget_is_fully_blocked() {
+        let engine = engine("asset-blocked");
+        let mut input = input("run_asset_blocked", "2026-03-07T18:05:00Z");
+        input.deployment_context = Some(RuntimeAllocatorDeploymentContext {
+            deployment_id: input.deployment.deployment_id.clone(),
+            venue_key: input.deployment.venue_key.clone(),
+            venue_onboarding_state: protocol::RuntimeOnboardingState::BroadLiveReady,
+            exposure_asset_key: "BONK".to_string(),
+            exposure_asset_listing_state: protocol::RuntimeAssetListingState::Candidate,
+            exposure_asset_risk_class: protocol::RuntimeAssetRiskClass::Experimental,
+        });
+        input.allocator_decision = Some(RuntimeAllocatorDecisionRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            decision_id: "alloc_blocked".to_string(),
+            run_id: input.run.run_id.clone(),
+            deployment_id: input.deployment.deployment_id.clone(),
+            sleeve_id: input.deployment.sleeve_id.clone(),
+            decided_at: "2026-03-07T18:05:00Z".to_string(),
+            sleeve_equity_usd: "100.00".to_string(),
+            total_requested_allocated_usd: "60.00".to_string(),
+            total_granted_allocated_usd: "0.00".to_string(),
+            total_requested_reserved_usd: "5.00".to_string(),
+            total_granted_reserved_usd: "0.00".to_string(),
+            requested_allocated_usd: "60.00".to_string(),
+            granted_allocated_usd: "0.00".to_string(),
+            requested_reserved_usd: "5.00".to_string(),
+            granted_reserved_usd: "0.00".to_string(),
+            granted_available_usd: "0.00".to_string(),
+            priority_rank: 1,
+            priority_score: 999,
+            constrained: true,
+            peer_grants: Vec::new(),
+        });
+        input.allocator_pressure_summary = Some(RuntimeAllocatorPressureSummary {
+            by_strategy: vec![RuntimeAllocatorPressureBucket {
+                subject_key: input.deployment.strategy_key.clone(),
+                limit_bps: 10_000,
+                requested_allocated_usd: "60.00".to_string(),
+                granted_allocated_usd: "0.00".to_string(),
+                requested_reserved_usd: "5.00".to_string(),
+                granted_reserved_usd: "0.00".to_string(),
+                max_allocated_usd: "100.00".to_string(),
+                utilization_bps: 0,
+                constrained: false,
+                subject_state: "shared-strategy-budget".to_string(),
+            }],
+            by_venue: vec![RuntimeAllocatorPressureBucket {
+                subject_key: input.deployment.venue_key.clone(),
+                limit_bps: 10_000,
+                requested_allocated_usd: "60.00".to_string(),
+                granted_allocated_usd: "0.00".to_string(),
+                requested_reserved_usd: "5.00".to_string(),
+                granted_reserved_usd: "0.00".to_string(),
+                max_allocated_usd: "100.00".to_string(),
+                utilization_bps: 0,
+                constrained: false,
+                subject_state: "broad_live_ready".to_string(),
+            }],
+            by_asset: vec![RuntimeAllocatorPressureBucket {
+                subject_key: "BONK".to_string(),
+                limit_bps: 1_050,
+                requested_allocated_usd: "60.00".to_string(),
+                granted_allocated_usd: "0.00".to_string(),
+                requested_reserved_usd: "5.00".to_string(),
+                granted_reserved_usd: "0.00".to_string(),
+                max_allocated_usd: "10.50".to_string(),
+                utilization_bps: 10_000,
+                constrained: true,
+                subject_state: "candidate:experimental".to_string(),
+            }],
+        });
+
+        let verdict = engine
+            .assess_and_store(&input)
+            .expect("verdict to store")
+            .verdict;
+
+        assert_eq!(verdict.verdict, RuntimeRiskDecision::Reject);
+        assert!(verdict
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "asset_budget_blocked"));
     }
 }

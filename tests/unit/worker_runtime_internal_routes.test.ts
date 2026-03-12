@@ -1214,6 +1214,10 @@ describe("worker runtime internal routes", () => {
         deploymentId: "deployment_123",
         grantedReservedUsd: "125.00",
       },
+      pressureSummary: {
+        byVenue: [{ subjectKey: "jupiter" }],
+        byAsset: [{ subjectKey: "SOL" }],
+      },
       sleeve: {
         sleeveId: "sleeve_alpha",
         availableUsd: "875.00",
