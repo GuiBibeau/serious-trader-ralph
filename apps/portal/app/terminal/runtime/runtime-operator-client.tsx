@@ -3,7 +3,12 @@
 import { usePrivy } from "@privy-io/react-auth";
 import { useEffect, useState, useTransition } from "react";
 import { RuntimeOperatorView } from "./runtime-operator-view";
-import type { RuntimeControlAction, RuntimeOperatorApiPayload } from "./types";
+import type {
+  RuntimeControlAction,
+  RuntimeOperatorApiPayload,
+  RuntimeOperatorReadinessCanaryInput,
+  RuntimeOperatorSubjectControlInput,
+} from "./types";
 
 async function readJson<T>(response: Response): Promise<T | null> {
   return (await response.json().catch(() => null)) as T | null;
@@ -37,8 +42,7 @@ export function RuntimeOperatorClient() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
-  const [actionPending, setActionPending] =
-    useState<RuntimeControlAction | null>(null);
+  const [actionPending, setActionPending] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   async function loadOperatorView(deploymentId?: string) {
@@ -56,17 +60,17 @@ export function RuntimeOperatorClient() {
     setError(null);
   }
 
-  async function runControl(action: RuntimeControlAction) {
-    const deploymentId = payload?.selectedDeploymentId;
-    if (!deploymentId) return;
-
+  async function runOperatorAction(
+    requestBody: Record<string, unknown>,
+    actionKey: string,
+  ) {
     const token = await getAccessToken();
     if (!token) {
       setError("operator-auth-token-unavailable");
       return;
     }
 
-    setActionPending(action);
+    setActionPending(actionKey);
     try {
       const response = await fetch("/api/runtime/operator", {
         method: "POST",
@@ -74,20 +78,62 @@ export function RuntimeOperatorClient() {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          deploymentId,
-          action,
-        }),
+        body: JSON.stringify(requestBody),
       });
-      const body = await readJson<{ ok?: boolean; error?: string }>(response);
-      if (!response.ok || body?.ok === false) {
-        setError(body?.error ?? `http-${response.status}`);
+      const responseBody = await readJson<{ ok?: boolean; error?: string }>(
+        response,
+      );
+      if (!response.ok || responseBody?.ok === false) {
+        setError(responseBody?.error ?? `http-${response.status}`);
         return;
       }
-      await loadOperatorView(deploymentId);
+      await loadOperatorView(payload?.selectedDeploymentId ?? undefined);
     } finally {
       setActionPending(null);
     }
+  }
+
+  async function runControl(action: RuntimeControlAction) {
+    const deploymentId = payload?.selectedDeploymentId;
+    if (!deploymentId) return;
+    await runOperatorAction(
+      {
+        deploymentId,
+        action,
+      },
+      action,
+    );
+  }
+
+  async function runSubjectControl(input: RuntimeOperatorSubjectControlInput) {
+    const actionKey = `subject-control:${input.subjectKind}:${input.subjectKey}:${
+      input.killSwitchEnabled === true
+        ? "kill-on"
+        : input.killSwitchEnabled === false
+          ? "kill-off"
+          : input.liveAllowed === true
+            ? "live-on"
+            : "live-off"
+    }`;
+    await runOperatorAction(
+      {
+        action: "update_subject_control",
+        ...input,
+      },
+      actionKey,
+    );
+  }
+
+  async function runReadinessCanary(
+    input: RuntimeOperatorReadinessCanaryInput,
+  ) {
+    await runOperatorAction(
+      {
+        action: "run_readiness_canary",
+        ...input,
+      },
+      `readiness-canary:${input.subjectKind}:${input.subjectKey}`,
+    );
   }
 
   useEffect(() => {
@@ -166,6 +212,28 @@ export function RuntimeOperatorClient() {
               cause instanceof Error
                 ? cause.message
                 : "runtime-operator-control-failed",
+            );
+          });
+        });
+      }}
+      onSubjectControl={(input) => {
+        startTransition(() => {
+          void runSubjectControl(input).catch((cause) => {
+            setError(
+              cause instanceof Error
+                ? cause.message
+                : "runtime-operator-subject-control-failed",
+            );
+          });
+        });
+      }}
+      onReadinessCanary={(input) => {
+        startTransition(() => {
+          void runReadinessCanary(input).catch((cause) => {
+            setError(
+              cause instanceof Error
+                ? cause.message
+                : "runtime-operator-readiness-canary-failed",
             );
           });
         });

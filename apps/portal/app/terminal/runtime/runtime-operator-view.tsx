@@ -6,7 +6,9 @@ import type {
   RuntimeControlAction,
   RuntimeOperatorApiPayload,
   RuntimeOperatorDetail,
+  RuntimeOperatorReadinessCanaryInput,
   RuntimeOperatorSnapshot,
+  RuntimeOperatorSubjectControlInput,
 } from "./types";
 
 type RuntimeOperatorViewProps = {
@@ -14,10 +16,12 @@ type RuntimeOperatorViewProps = {
   loading: boolean;
   error: string | null;
   payload: RuntimeOperatorApiPayload | null;
-  actionPending: RuntimeControlAction | null;
+  actionPending: string | null;
   onRefresh?: () => void;
   onSelectDeployment?: (deploymentId: string) => void;
   onControl?: (action: RuntimeControlAction) => void;
+  onSubjectControl?: (input: RuntimeOperatorSubjectControlInput) => void;
+  onReadinessCanary?: (input: RuntimeOperatorReadinessCanaryInput) => void;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,6 +66,38 @@ function summaryItem(label: string, value: string) {
       </p>
       <p className="mt-2 text-sm font-medium text-ink">{value}</p>
     </div>
+  );
+}
+
+function buildSubjectActionKey(
+  input: RuntimeOperatorSubjectControlInput,
+): string {
+  return `subject-control:${input.subjectKind}:${input.subjectKey}:${
+    input.killSwitchEnabled === true
+      ? "kill-on"
+      : input.killSwitchEnabled === false
+        ? "kill-off"
+        : input.liveAllowed === true
+          ? "live-on"
+          : "live-off"
+  }`;
+}
+
+function buildReadinessCanaryActionKey(
+  input: RuntimeOperatorReadinessCanaryInput,
+): string {
+  return `readiness-canary:${input.subjectKind}:${input.subjectKey}`;
+}
+
+function renderBadge(status: string, label?: string) {
+  return (
+    <span
+      className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] ${statusClasses(
+        status,
+      )}`}
+    >
+      {(label ?? status).replaceAll("_", " ")}
+    </span>
   );
 }
 
@@ -522,6 +558,504 @@ function renderAllocator(detail: RuntimeOperatorDetail | null) {
   );
 }
 
+function renderResearchProvenance(detail: RuntimeOperatorDetail | null) {
+  const research = isRecord(detail?.lab?.research)
+    ? detail?.lab?.research
+    : null;
+  if (!research) {
+    return (
+      <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
+        Research provenance is not available yet.
+      </div>
+    );
+  }
+
+  const hypotheses = readRecordArray(research.hypotheses);
+  const sources = readRecordArray(research.sources);
+  const experiments = readRecordArray(research.experiments);
+  const evidenceBundles = readRecordArray(research.evidenceBundles);
+  const reproducibilityBundles = readRecordArray(
+    research.reproducibilityBundles,
+  );
+  const hypothesis = hypotheses[0] ?? null;
+  const source = sources[0] ?? null;
+  const experiment = experiments[0] ?? null;
+  const evidenceBundle = evidenceBundles[0] ?? null;
+  const reproducibilityBundle = reproducibilityBundles[0] ?? null;
+  const latestVerification = isRecord(reproducibilityBundle?.latestVerification)
+    ? reproducibilityBundle.latestVerification
+    : null;
+
+  return (
+    <div className="space-y-4">
+      {research.error ? (
+        <div className="rounded border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+          {readString(research.error)}
+        </div>
+      ) : null}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {summaryItem("Hypotheses", String(hypotheses.length))}
+        {summaryItem("Sources", String(sources.length))}
+        {summaryItem("Experiments", String(experiments.length))}
+        {summaryItem("Evidence bundles", String(evidenceBundles.length))}
+        {summaryItem("Repro bundles", String(reproducibilityBundles.length))}
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+        <article className="rounded border border-border bg-surface/80 p-4">
+          <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+            Latest hypothesis
+          </p>
+          {hypothesis ? (
+            <>
+              <h3 className="mt-2 text-sm font-medium text-ink">
+                {readString(hypothesis.title) ??
+                  readString(hypothesis.hypothesisId) ??
+                  "untitled hypothesis"}
+              </h3>
+              <p className="mt-2 text-sm text-muted">
+                {readString(hypothesis.thesis) ?? "No thesis captured."}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {renderBadge(readString(hypothesis.status) ?? "candidate")}
+                <span className="text-xs text-muted">
+                  {readString(hypothesis.updatedAt) ??
+                    readString(hypothesis.createdAt) ??
+                    "n/a"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-muted">No hypotheses recorded.</p>
+          )}
+        </article>
+        <article className="rounded border border-border bg-surface/80 p-4">
+          <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+            Latest source
+          </p>
+          {source ? (
+            <>
+              <h3 className="mt-2 text-sm font-medium text-ink">
+                {readString(source.title) ??
+                  readString(source.sourceId) ??
+                  "untitled source"}
+              </h3>
+              <p className="mt-2 text-sm text-muted">
+                {readString(source.sourceKind) ?? "unknown"} ·{" "}
+                {readString(source.canonicalUrl) ??
+                  readString(source.url) ??
+                  "no url"}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {renderBadge("pass", readString(source.sourceKind) ?? "source")}
+                <span className="text-xs text-muted">
+                  {readString(source.publishedAt) ??
+                    readString(source.retrievedAt) ??
+                    "n/a"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-muted">
+              No research sources recorded.
+            </p>
+          )}
+        </article>
+        <article className="rounded border border-border bg-surface/80 p-4">
+          <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+            Latest experiment
+          </p>
+          {experiment ? (
+            <>
+              <h3 className="mt-2 text-sm font-medium text-ink">
+                {readString(experiment.experimentId) ?? "experiment"}
+              </h3>
+              <p className="mt-2 text-sm text-muted">
+                {readString(experiment.summary) ??
+                  "No experiment summary available."}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {renderBadge(readString(experiment.status) ?? "candidate")}
+                <span className="text-xs text-muted">
+                  {readString(experiment.completedAt) ??
+                    readString(experiment.updatedAt) ??
+                    "n/a"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-muted">No experiments recorded.</p>
+          )}
+        </article>
+        <article className="rounded border border-border bg-surface/80 p-4">
+          <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+            Evidence bundle
+          </p>
+          {evidenceBundle ? (
+            <>
+              <h3 className="mt-2 text-sm font-medium text-ink">
+                {readString(evidenceBundle.evidenceBundleId) ??
+                  "evidence bundle"}
+              </h3>
+              <p className="mt-2 text-sm text-muted">
+                {readString(evidenceBundle.summary) ??
+                  "No evidence summary available."}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {renderBadge(readString(evidenceBundle.status) ?? "candidate")}
+                <span className="text-xs text-muted">
+                  {readString(evidenceBundle.promotionTarget) ?? "n/a"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-muted">
+              No evidence bundles recorded.
+            </p>
+          )}
+        </article>
+        <article className="rounded border border-border bg-surface/80 p-4">
+          <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+            Reproducibility
+          </p>
+          {reproducibilityBundle ? (
+            <>
+              <h3 className="mt-2 text-sm font-medium text-ink">
+                {readString(reproducibilityBundle.reproducibilityBundleId) ??
+                  "reproducibility bundle"}
+              </h3>
+              <p className="mt-2 text-sm text-muted">
+                {readString(reproducibilityBundle.summary) ??
+                  "No reproducibility summary available."}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {renderBadge(
+                  readString(latestVerification?.status) ?? "pass",
+                  readString(latestVerification?.status) ?? "verified",
+                )}
+                <span className="text-xs text-muted">
+                  {readString(reproducibilityBundle.updatedAt) ?? "n/a"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-muted">
+              No reproducibility bundles recorded.
+            </p>
+          )}
+        </article>
+      </div>
+    </div>
+  );
+}
+
+function renderPromotionTimeline(detail: RuntimeOperatorDetail | null) {
+  const promotions = isRecord(detail?.lab?.promotions)
+    ? detail?.lab?.promotions
+    : null;
+  const scorecard = isRecord(detail?.scorecard) ? detail.scorecard : null;
+  const strategyPromotions = promotions
+    ? readRecordArray(promotions.strategy)
+    : [];
+  const venuePromotions = promotions ? readRecordArray(promotions.venue) : [];
+  const assetPromotions = promotions ? readRecordArray(promotions.asset) : [];
+  const promotionGates = Array.isArray(scorecard?.promotionGates)
+    ? scorecard.promotionGates
+    : [];
+  if (!promotions && promotionGates.length === 0) {
+    return (
+      <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
+        Promotion evidence not available yet.
+      </div>
+    );
+  }
+
+  const groups = [
+    { label: "Strategy lifecycle", items: strategyPromotions },
+    { label: "Venue readiness", items: venuePromotions },
+    { label: "Asset readiness", items: assetPromotions },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {promotions?.error ? (
+        <div className="rounded border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+          {readString(promotions.error)}
+        </div>
+      ) : null}
+      {promotionGates.length > 0 ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          {promotionGates.map((gate) => {
+            const record = isRecord(gate) ? gate : {};
+            const targetMode = readString(record.targetMode) ?? "unknown";
+            const status = readString(record.status) ?? "unknown";
+            const summary =
+              readString(record.summary) ?? "No gate summary available.";
+            return (
+              <article
+                key={`${targetMode}:${status}:${summary}`}
+                className="rounded border border-border bg-surface/80 p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                      Runtime gate
+                    </p>
+                    <h3 className="mt-2 text-sm font-medium text-ink">
+                      target {targetMode}
+                    </h3>
+                  </div>
+                  {renderBadge(status)}
+                </div>
+                <p className="mt-3 text-sm text-muted">{summary}</p>
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
+      <div className="grid gap-3 lg:grid-cols-3">
+        {groups.map((group) => (
+          <article
+            key={group.label}
+            className="rounded border border-border bg-surface/80 p-4"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  {group.label}
+                </p>
+                <h3 className="mt-2 text-sm font-medium text-ink">
+                  {group.items.length} records
+                </h3>
+              </div>
+            </div>
+            <div className="mt-3 space-y-3">
+              {group.items.length === 0 ? (
+                <p className="text-sm text-muted">No promotion records yet.</p>
+              ) : (
+                group.items.slice(0, 3).map((promotion, index) => {
+                  const record = isRecord(promotion) ? promotion : {};
+                  const status = readString(record.status) ?? "candidate";
+                  return (
+                    <div
+                      key={`${readString(record.promotionId) ?? group.label}:${index}`}
+                      className="rounded border border-border bg-paper/70 p-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-ink">
+                          {readString(record.currentState) ?? "current"} to{" "}
+                          {readString(record.targetState) ?? "target"}
+                        </p>
+                        {renderBadge(status)}
+                      </div>
+                      <p className="mt-2 text-xs text-muted">
+                        {readString(record.summary) ??
+                          "No promotion summary available."}
+                      </p>
+                      <p className="mt-2 text-xs text-muted">
+                        {readString(record.requestedBy) ?? "n/a"} ·{" "}
+                        {readString(record.updatedAt) ??
+                          readString(record.createdAt) ??
+                          "n/a"}
+                      </p>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function renderReadinessControls(
+  detail: RuntimeOperatorDetail | null,
+  actionPending: string | null,
+  onSubjectControl?: (input: RuntimeOperatorSubjectControlInput) => void,
+  onReadinessCanary?: (input: RuntimeOperatorReadinessCanaryInput) => void,
+) {
+  const deployment = detail?.deployment ?? null;
+  const readiness = isRecord(detail?.lab?.readiness)
+    ? detail?.lab?.readiness
+    : null;
+  const subjects = [
+    isRecord(readiness?.venue) ? readiness.venue : null,
+    isRecord(readiness?.asset) ? readiness.asset : null,
+  ].filter((entry): entry is Record<string, unknown> => entry !== null);
+
+  if (!deployment || subjects.length === 0) {
+    return (
+      <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
+        Venue and asset readiness controls are not available yet.
+      </div>
+    );
+  }
+
+  const assetKey =
+    deployment.pair.symbol.split("/")[0] ?? deployment.pair.baseMint;
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      {subjects.map((subject) => {
+        const subjectKind =
+          readString(subject.subjectKind) === "asset" ? "asset" : "venue";
+        const subjectKey = readString(subject.subjectKey) ?? "unknown";
+        const controls = readRecordArray(subject.controls);
+        const artifacts = readRecordArray(subject.artifacts);
+        const canaryRuns = readRecordArray(subject.canaryRuns);
+        const canaryState = isRecord(subject.canaryState)
+          ? subject.canaryState
+          : null;
+        const control = controls[0] ?? null;
+        const latestArtifact = artifacts[0] ?? null;
+        const latestCanary = canaryRuns[0] ?? null;
+        const liveAllowed = readBoolean(control?.liveAllowed, false);
+        const killSwitchEnabled = readBoolean(
+          control?.killSwitchEnabled,
+          false,
+        );
+        const liveToggleInput: RuntimeOperatorSubjectControlInput = {
+          subjectKind,
+          subjectKey,
+          liveAllowed: !liveAllowed,
+          disabledReason: liveAllowed ? "operator-disabled" : null,
+        };
+        const killToggleInput: RuntimeOperatorSubjectControlInput = {
+          subjectKind,
+          subjectKey,
+          killSwitchEnabled: !killSwitchEnabled,
+          disabledReason: killSwitchEnabled ? null : "operator-kill-switch",
+        };
+        const canaryInput: RuntimeOperatorReadinessCanaryInput = {
+          subjectKind,
+          subjectKey,
+          venueKey: deployment.venueKey,
+          assetKey,
+          pairSymbol: deployment.pair.symbol,
+          targetNotionalUsd: "5.00",
+        };
+        const liveTogglePending =
+          actionPending === buildSubjectActionKey(liveToggleInput);
+        const killTogglePending =
+          actionPending === buildSubjectActionKey(killToggleInput);
+        const canaryPending =
+          actionPending === buildReadinessCanaryActionKey(canaryInput);
+
+        return (
+          <article
+            key={`${subjectKind}:${subjectKey}`}
+            className="rounded border border-border bg-surface/80 p-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  {subjectKind} readiness
+                </p>
+                <h3 className="mt-2 text-sm font-medium text-ink">
+                  {subjectKey}
+                </h3>
+              </div>
+              {renderBadge(
+                readString(latestArtifact?.status) ??
+                  readString(latestCanary?.status) ??
+                  "candidate",
+              )}
+            </div>
+            {readString(subject.error) ? (
+              <div className="mt-3 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200">
+                {readString(subject.error)}
+              </div>
+            ) : null}
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {summaryItem(
+                "Live allowed",
+                liveAllowed ? "enabled" : "disabled",
+              )}
+              {summaryItem(
+                "Kill switch",
+                killSwitchEnabled ? "engaged" : "clear",
+              )}
+              {summaryItem(
+                "Readiness",
+                readString(latestArtifact?.targetState) ?? "n/a",
+              )}
+              {summaryItem(
+                "Latest canary",
+                readString(latestCanary?.status) ?? "not run",
+              )}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-[1.1fr_0.9fr]">
+              <div className="rounded border border-border bg-paper/70 p-3">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  Evidence
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  {readString(latestArtifact?.summary) ??
+                    "No readiness artifact summary available."}
+                </p>
+                <div className="mt-3 grid gap-2 text-xs text-muted">
+                  <p>
+                    canary{" "}
+                    {readString(latestArtifact?.canaryRunId) ??
+                      readString(latestCanary?.runId) ??
+                      "n/a"}
+                  </p>
+                  <p>
+                    control{" "}
+                    {readString(control?.updatedAt) ??
+                      readString(canaryState?.updatedAt) ??
+                      "n/a"}
+                  </p>
+                </div>
+              </div>
+              <div className="rounded border border-border bg-paper/70 p-3">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  Controls
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className={BTN_SECONDARY}
+                    type="button"
+                    onClick={() => onSubjectControl?.(liveToggleInput)}
+                    disabled={!onSubjectControl}
+                  >
+                    {liveTogglePending
+                      ? "Updating..."
+                      : liveAllowed
+                        ? "Disable live"
+                        : "Allow live"}
+                  </button>
+                  <button
+                    className={BTN_SECONDARY}
+                    type="button"
+                    onClick={() => onSubjectControl?.(killToggleInput)}
+                    disabled={!onSubjectControl}
+                  >
+                    {killTogglePending
+                      ? "Updating..."
+                      : killSwitchEnabled
+                        ? "Clear kill switch"
+                        : "Engage kill switch"}
+                  </button>
+                  <button
+                    className={BTN_PRIMARY}
+                    type="button"
+                    onClick={() => onReadinessCanary?.(canaryInput)}
+                    disabled={!onReadinessCanary}
+                  >
+                    {canaryPending ? "Running canary..." : "Run canary"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 export function RuntimeOperatorView({
   authenticated,
   loading,
@@ -531,6 +1065,8 @@ export function RuntimeOperatorView({
   onRefresh,
   onSelectDeployment,
   onControl,
+  onSubjectControl,
+  onReadinessCanary,
 }: RuntimeOperatorViewProps) {
   const runtime = payload?.runtime ?? null;
   const detail = payload?.detail ?? null;
@@ -571,11 +1107,11 @@ export function RuntimeOperatorView({
               Runtime operator
             </p>
             <h1 className="mt-3 text-2xl font-semibold tracking-tight text-ink">
-              Runtime deployments, runs, and live controls
+              Runtime deployments, research evidence, and promotion control
             </h1>
             <p className="mt-3 text-sm text-muted">
-              Auth-gated view of runtime health, rollout state, scorecards,
-              positions, and deployment controls.
+              Auth-gated view of runtime health, research provenance, readiness,
+              scorecards, and bounded live controls.
             </p>
           </div>
           <div className="flex gap-3">
@@ -696,6 +1232,18 @@ export function RuntimeOperatorView({
           </section>
 
           <section className="card p-5">
+            <div className="mb-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                Research provenance
+              </p>
+              <h2 className="mt-2 text-lg font-semibold text-ink">
+                Latest hypotheses, sources, experiments, and evidence bundles
+              </h2>
+            </div>
+            {renderResearchProvenance(detail)}
+          </section>
+
+          <section className="card p-5">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
@@ -746,6 +1294,23 @@ export function RuntimeOperatorView({
           <section className="card p-5">
             <div className="mb-4">
               <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                Readiness controls
+              </p>
+              <h2 className="mt-2 text-lg font-semibold text-ink">
+                Venue and asset promotion guardrails
+              </h2>
+            </div>
+            {renderReadinessControls(
+              detail,
+              actionPending,
+              onSubjectControl,
+              onReadinessCanary,
+            )}
+          </section>
+
+          <section className="card p-5">
+            <div className="mb-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
                 Capital coordination
               </p>
               <h2 className="mt-2 text-lg font-semibold text-ink">
@@ -782,7 +1347,19 @@ export function RuntimeOperatorView({
           <section className="card p-5">
             <div className="mb-4">
               <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
-                Promotion evidence
+                Strategy-lab promotion state
+              </p>
+              <h2 className="mt-2 text-lg font-semibold text-ink">
+                Lifecycle transitions, approvals, and rollout status
+              </h2>
+            </div>
+            {renderPromotionTimeline(detail)}
+          </section>
+
+          <section className="card p-5">
+            <div className="mb-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                Runtime scorecards
               </p>
               <h2 className="mt-2 text-lg font-semibold text-ink">
                 Scorecards and rollout gates

@@ -23,6 +23,32 @@ type RuntimeControls = {
   shadowOnlyReason: string | null;
 };
 
+type StrategyLabResearchSnapshot = {
+  hypotheses: Record<string, unknown>[];
+  sources: Record<string, unknown>[];
+  experiments: Record<string, unknown>[];
+  evidenceBundles: Record<string, unknown>[];
+  reproducibilityBundles: Record<string, unknown>[];
+  error: string | null;
+};
+
+type StrategyLabPromotionSnapshot = {
+  strategy: Record<string, unknown>[];
+  venue: Record<string, unknown>[];
+  asset: Record<string, unknown>[];
+  error: string | null;
+};
+
+type StrategyLabSubjectSnapshot = {
+  subjectKind: "venue" | "asset";
+  subjectKey: string;
+  artifacts: Record<string, unknown>[];
+  controls: Record<string, unknown>[];
+  canaryRuns: Record<string, unknown>[];
+  canaryState: Record<string, unknown> | null;
+  error: string | null;
+};
+
 function parseCsvSet(value: string | undefined): Set<string> {
   return new Set(
     String(value ?? "")
@@ -43,6 +69,13 @@ function readString(value: unknown): string | null {
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is Record<string, unknown> =>
+    isRecord(entry),
+  );
 }
 
 function normalizeAuthHeader(value: string | null): string | null {
@@ -204,6 +237,201 @@ function normalizeRuntimeSnapshot(payload: Record<string, unknown>) {
   };
 }
 
+function buildQueryPath(
+  path: string,
+  params: Record<string, string | number | null | undefined>,
+): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    const normalized = String(value ?? "").trim();
+    if (!normalized) continue;
+    search.set(key, normalized);
+  }
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+function inferAssetKey(
+  deployment: RuntimeDeploymentRecord | null,
+): string | null {
+  if (!deployment) return null;
+  const [baseSymbol] = deployment.pair.symbol.split("/");
+  return readString(baseSymbol) ?? null;
+}
+
+function resolveOperatorActor(payload: Record<string, unknown>): string {
+  const user = isRecord(payload.user) ? payload.user : {};
+  return (
+    readString(user.email) ??
+    readString(user.id) ??
+    readString(user.privyUserId) ??
+    "runtime-operator"
+  );
+}
+
+async function loadStrategyLabResearch(
+  deployment: RuntimeDeploymentRecord,
+  adminAuthHeader: string,
+): Promise<StrategyLabResearchSnapshot> {
+  const assetKey = inferAssetKey(deployment);
+  const result = await requestWorkerJson({
+    path: buildQueryPath("/api/admin/ops/runtime/research", {
+      strategyKey: deployment.strategyKey,
+      venueKey: deployment.venueKey,
+      assetKey,
+    }),
+    authHeader: adminAuthHeader,
+  });
+  if (result.status < 200 || result.status >= 300) {
+    return {
+      hypotheses: [],
+      sources: [],
+      experiments: [],
+      evidenceBundles: [],
+      reproducibilityBundles: [],
+      error: readString(result.payload.error) ?? `http-${result.status}`,
+    };
+  }
+  const registry = isRecord(result.payload.registry)
+    ? result.payload.registry
+    : {};
+  return {
+    hypotheses: readRecordArray(registry.hypotheses),
+    sources: readRecordArray(registry.sources),
+    experiments: readRecordArray(registry.experiments),
+    evidenceBundles: readRecordArray(registry.evidenceBundles),
+    reproducibilityBundles: readRecordArray(registry.reproducibilityBundles),
+    error: null,
+  };
+}
+
+async function loadStrategyLabPromotions(
+  deployment: RuntimeDeploymentRecord,
+  adminAuthHeader: string,
+): Promise<StrategyLabPromotionSnapshot> {
+  const assetKey = inferAssetKey(deployment);
+  const [strategyResult, venueResult, assetResult] = await Promise.all([
+    requestWorkerJson({
+      path: buildQueryPath("/api/admin/ops/runtime/research/promotions", {
+        subjectKind: "strategy",
+        subjectKey: deployment.strategyKey,
+        limit: 5,
+      }),
+      authHeader: adminAuthHeader,
+    }),
+    requestWorkerJson({
+      path: buildQueryPath("/api/admin/ops/runtime/research/promotions", {
+        subjectKind: "venue",
+        subjectKey: deployment.venueKey,
+        limit: 5,
+      }),
+      authHeader: adminAuthHeader,
+    }),
+    assetKey
+      ? requestWorkerJson({
+          path: buildQueryPath("/api/admin/ops/runtime/research/promotions", {
+            subjectKind: "asset",
+            subjectKey: assetKey,
+            limit: 5,
+          }),
+          authHeader: adminAuthHeader,
+        })
+      : Promise.resolve({
+          status: 200,
+          payload: { ok: true, promotions: [] },
+        }),
+  ]);
+
+  const errors = [strategyResult, venueResult, assetResult]
+    .filter((result) => result.status < 200 || result.status >= 300)
+    .map(
+      (result) => readString(result.payload.error) ?? `http-${result.status}`,
+    )
+    .filter(Boolean);
+
+  return {
+    strategy:
+      strategyResult.status >= 200 && strategyResult.status < 300
+        ? readRecordArray(strategyResult.payload.promotions)
+        : [],
+    venue:
+      venueResult.status >= 200 && venueResult.status < 300
+        ? readRecordArray(venueResult.payload.promotions)
+        : [],
+    asset:
+      assetResult.status >= 200 && assetResult.status < 300
+        ? readRecordArray(assetResult.payload.promotions)
+        : [],
+    error: errors.length > 0 ? errors.join("; ") : null,
+  };
+}
+
+async function loadStrategyLabSubject(
+  subjectKind: "venue" | "asset",
+  subjectKey: string | null,
+  adminAuthHeader: string,
+): Promise<StrategyLabSubjectSnapshot | null> {
+  if (!subjectKey) return null;
+
+  const [readinessResult, controlsResult, canaryResult] = await Promise.all([
+    requestWorkerJson({
+      path: buildQueryPath("/api/admin/ops/runtime/research/readiness", {
+        subjectKind,
+        subjectKey,
+        limit: 5,
+      }),
+      authHeader: adminAuthHeader,
+    }),
+    requestWorkerJson({
+      path: buildQueryPath("/api/admin/ops/runtime/research/subject-controls", {
+        subjectKind,
+        subjectKey,
+        limit: 5,
+      }),
+      authHeader: adminAuthHeader,
+    }),
+    requestWorkerJson({
+      path: buildQueryPath("/api/admin/ops/runtime/research/readiness/canary", {
+        subjectKind,
+        subjectKey,
+        limit: 5,
+      }),
+      authHeader: adminAuthHeader,
+    }),
+  ]);
+
+  const errors = [readinessResult, controlsResult, canaryResult]
+    .filter((result) => result.status < 200 || result.status >= 300)
+    .map(
+      (result) => readString(result.payload.error) ?? `http-${result.status}`,
+    )
+    .filter(Boolean);
+
+  return {
+    subjectKind,
+    subjectKey,
+    artifacts:
+      readinessResult.status >= 200 && readinessResult.status < 300
+        ? readRecordArray(readinessResult.payload.readinessArtifacts)
+        : [],
+    controls:
+      controlsResult.status >= 200 && controlsResult.status < 300
+        ? readRecordArray(controlsResult.payload.controls)
+        : [],
+    canaryRuns:
+      canaryResult.status >= 200 && canaryResult.status < 300
+        ? readRecordArray(canaryResult.payload.runs)
+        : [],
+    canaryState:
+      canaryResult.status >= 200 &&
+      canaryResult.status < 300 &&
+      isRecord(canaryResult.payload.state)
+        ? canaryResult.payload.state
+        : null,
+    error: errors.length > 0 ? errors.join("; ") : null,
+  };
+}
+
 function firstDeploymentId(
   deployments: RuntimeDeploymentRecord[],
 ): string | null {
@@ -225,6 +453,14 @@ async function loadRuntimeDetail(
       totals: RuntimeLedgerSnapshot["totals"];
     } | null;
     scorecard: Record<string, unknown> | null;
+    lab: {
+      research: StrategyLabResearchSnapshot;
+      promotions: StrategyLabPromotionSnapshot;
+      readiness: {
+        venue: StrategyLabSubjectSnapshot | null;
+        asset: StrategyLabSubjectSnapshot | null;
+      };
+    } | null;
   } | null;
   error: string | null;
 }> {
@@ -241,11 +477,41 @@ async function loadRuntimeDetail(
   const parsedDeployment = isRecord(result.payload.deployment)
     ? safeParseRuntimeDeploymentRecord(result.payload.deployment)
     : null;
+  const deployment = parsedDeployment?.success ? parsedDeployment.data : null;
+  const [research, promotions, venueReadiness, assetReadiness] = deployment
+    ? await Promise.all([
+        loadStrategyLabResearch(deployment, adminAuthHeader),
+        loadStrategyLabPromotions(deployment, adminAuthHeader),
+        loadStrategyLabSubject("venue", deployment.venueKey, adminAuthHeader),
+        loadStrategyLabSubject(
+          "asset",
+          inferAssetKey(deployment),
+          adminAuthHeader,
+        ),
+      ])
+    : await Promise.all([
+        Promise.resolve({
+          hypotheses: [],
+          sources: [],
+          experiments: [],
+          evidenceBundles: [],
+          reproducibilityBundles: [],
+          error: "missing-selected-deployment",
+        }),
+        Promise.resolve({
+          strategy: [],
+          venue: [],
+          asset: [],
+          error: "missing-selected-deployment",
+        }),
+        Promise.resolve(null),
+        Promise.resolve(null),
+      ]);
 
   return {
     detail: {
       deploymentId,
-      deployment: parsedDeployment?.success ? parsedDeployment.data : null,
+      deployment,
       runs: parseRuns(result.payload.runs),
       allocator: isRecord(result.payload.allocator)
         ? result.payload.allocator
@@ -255,6 +521,14 @@ async function loadRuntimeDetail(
       scorecard: isRecord(result.payload.scorecard)
         ? result.payload.scorecard
         : null,
+      lab: {
+        research,
+        promotions,
+        readiness: {
+          venue: venueReadiness,
+          asset: assetReadiness,
+        },
+      },
     },
     error: null,
   };
@@ -352,6 +626,8 @@ export async function POST(request: Request) {
     );
   }
 
+  const operatorActor = resolveOperatorActor(sessionResult.payload);
+
   const adminToken = resolveAdminToken();
   if (!adminToken) {
     return NextResponse.json(
@@ -364,25 +640,102 @@ export async function POST(request: Request) {
   const payload = isRecord(payloadRaw) ? payloadRaw : {};
   const deploymentId = readString(payload.deploymentId);
   const action = readString(payload.action);
-  if (!deploymentId || !action) {
-    return NextResponse.json(
-      { ok: false, error: "invalid-runtime-operator-action" },
-      { status: 400 },
-    );
-  }
-  if (action !== "pause" && action !== "resume" && action !== "kill") {
-    return NextResponse.json(
-      { ok: false, error: "invalid-runtime-operator-action" },
-      { status: 400 },
-    );
+  if (action === "pause" || action === "resume" || action === "kill") {
+    if (!deploymentId) {
+      return NextResponse.json(
+        { ok: false, error: "invalid-runtime-operator-action" },
+        { status: 400 },
+      );
+    }
+
+    const result = await requestWorkerJson({
+      path: `/api/admin/ops/runtime/deployments/${encodeURIComponent(
+        deploymentId,
+      )}/${action}`,
+      method: "POST",
+      authHeader: `Bearer ${adminToken}`,
+    });
+    return NextResponse.json(result.payload, { status: result.status });
   }
 
-  const result = await requestWorkerJson({
-    path: `/api/admin/ops/runtime/deployments/${encodeURIComponent(
-      deploymentId,
-    )}/${action}`,
-    method: "POST",
-    authHeader: `Bearer ${adminToken}`,
-  });
-  return NextResponse.json(result.payload, { status: result.status });
+  if (action === "update_subject_control") {
+    const subjectKind =
+      payload.subjectKind === "venue" || payload.subjectKind === "asset"
+        ? payload.subjectKind
+        : null;
+    const subjectKey = readString(payload.subjectKey);
+    if (!subjectKind || !subjectKey) {
+      return NextResponse.json(
+        { ok: false, error: "invalid-runtime-operator-action" },
+        { status: 400 },
+      );
+    }
+    const result = await requestWorkerJson({
+      path: "/api/admin/ops/runtime/research/subject-controls",
+      method: "POST",
+      authHeader: `Bearer ${adminToken}`,
+      body: {
+        subjectKind,
+        subjectKey,
+        ...(typeof payload.liveAllowed === "boolean"
+          ? { liveAllowed: payload.liveAllowed }
+          : {}),
+        ...(typeof payload.killSwitchEnabled === "boolean"
+          ? { killSwitchEnabled: payload.killSwitchEnabled }
+          : {}),
+        ...(payload.disabledReason === null ||
+        typeof payload.disabledReason === "string"
+          ? { disabledReason: payload.disabledReason ?? null }
+          : {}),
+        updatedBy: operatorActor,
+      },
+    });
+    return NextResponse.json(result.payload, { status: result.status });
+  }
+
+  if (action === "run_readiness_canary") {
+    const subjectKind =
+      payload.subjectKind === "venue" || payload.subjectKind === "asset"
+        ? payload.subjectKind
+        : null;
+    const subjectKey = readString(payload.subjectKey);
+    if (!subjectKind || !subjectKey) {
+      return NextResponse.json(
+        { ok: false, error: "invalid-runtime-operator-action" },
+        { status: 400 },
+      );
+    }
+    const result = await requestWorkerJson({
+      path: "/api/admin/ops/runtime/research/readiness/canary",
+      method: "POST",
+      authHeader: `Bearer ${adminToken}`,
+      body: {
+        subjectKind,
+        subjectKey,
+        requestedBy: operatorActor,
+        triggerSource: "manual",
+        ...(readString(payload.venueKey)
+          ? { venueKey: readString(payload.venueKey) }
+          : {}),
+        ...(readString(payload.assetKey)
+          ? { assetKey: readString(payload.assetKey) }
+          : {}),
+        ...(readString(payload.pairSymbol)
+          ? { pairSymbol: readString(payload.pairSymbol) }
+          : {}),
+        ...(readString(payload.adapterKey)
+          ? { adapterKey: readString(payload.adapterKey) }
+          : {}),
+        ...(readString(payload.targetNotionalUsd)
+          ? { targetNotionalUsd: readString(payload.targetNotionalUsd) }
+          : {}),
+      },
+    });
+    return NextResponse.json(result.payload, { status: result.status });
+  }
+
+  return NextResponse.json(
+    { ok: false, error: "invalid-runtime-operator-action" },
+    { status: 400 },
+  );
 }

@@ -176,6 +176,11 @@ test("runtime operator proof shows deployment detail and control affordances", a
   await expect(
     page.getByRole("heading", { name: /Runtime deployments/i }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: /Latest hypotheses, sources, experiments, and evidence bundles/i,
+    }),
+  ).toBeVisible();
   await captureCheckpoint(page, "runtime-operator-home.png");
 
   await page.getByRole("button", { name: /mean_reversion/i }).click();
@@ -183,6 +188,9 @@ test("runtime operator proof shows deployment detail and control affordances", a
     page.getByRole("heading", {
       name: "deployment_mean_reversion_paper",
     }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Run canary" }).first(),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Pause" }).click();

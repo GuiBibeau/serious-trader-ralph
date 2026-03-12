@@ -5,6 +5,25 @@ import type {
 } from "../../../lib/runtime-contracts";
 
 export type RuntimeControlAction = "pause" | "resume" | "kill";
+export type RuntimeSubjectKind = "venue" | "asset";
+
+export type RuntimeOperatorSubjectControlInput = {
+  subjectKind: RuntimeSubjectKind;
+  subjectKey: string;
+  liveAllowed?: boolean;
+  killSwitchEnabled?: boolean;
+  disabledReason?: string | null;
+};
+
+export type RuntimeOperatorReadinessCanaryInput = {
+  subjectKind: RuntimeSubjectKind;
+  subjectKey: string;
+  venueKey?: string;
+  assetKey?: string;
+  pairSymbol?: string;
+  adapterKey?: string;
+  targetNotionalUsd?: string;
+};
 
 export type RuntimeOperatorControls = {
   enabled: boolean;
@@ -36,6 +55,42 @@ export type RuntimeOperatorDetail = {
     totals: RuntimeLedgerSnapshot["totals"];
   } | null;
   scorecard: Record<string, unknown> | null;
+  lab: {
+    research: {
+      hypotheses: Record<string, unknown>[];
+      sources: Record<string, unknown>[];
+      experiments: Record<string, unknown>[];
+      evidenceBundles: Record<string, unknown>[];
+      reproducibilityBundles: Record<string, unknown>[];
+      error: string | null;
+    };
+    promotions: {
+      strategy: Record<string, unknown>[];
+      venue: Record<string, unknown>[];
+      asset: Record<string, unknown>[];
+      error: string | null;
+    };
+    readiness: {
+      venue: {
+        subjectKind: RuntimeSubjectKind;
+        subjectKey: string;
+        artifacts: Record<string, unknown>[];
+        controls: Record<string, unknown>[];
+        canaryRuns: Record<string, unknown>[];
+        canaryState: Record<string, unknown> | null;
+        error: string | null;
+      } | null;
+      asset: {
+        subjectKind: RuntimeSubjectKind;
+        subjectKey: string;
+        artifacts: Record<string, unknown>[];
+        controls: Record<string, unknown>[];
+        canaryRuns: Record<string, unknown>[];
+        canaryState: Record<string, unknown> | null;
+        error: string | null;
+      } | null;
+    };
+  } | null;
 };
 
 export type RuntimeOperatorApiPayload = {
