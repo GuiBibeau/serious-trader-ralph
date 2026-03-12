@@ -1,0 +1,118 @@
+{
+  "subjectKind": "strategy",
+  "subjectKey": "candidate_trend_following_jupiter_sol_usdc",
+  "currentState": "paper",
+  "targetState": "limited_live",
+  "requestedBy": "codex",
+  "issueNumber": 326,
+  "evidenceRefs": [
+    {
+      "kind": "evidence_bundle",
+      "ref": "evidence_trend_following_sol_usdc_limited_live"
+    },
+    {
+      "kind": "backtest-report",
+      "ref": "backtest_trend_following_sol_usdc_pilot"
+    },
+    {
+      "kind": "allocator_review",
+      "ref": "allocator_review_trend_following_sol_usdc"
+    },
+    {
+      "kind": "limited_live_canary_plan",
+      "ref": "canary_plan_trend_following_sol_usdc"
+    }
+  ],
+  "implementationReference": {
+    "kind": "pull_request",
+    "ref": "#REPLACE_WITH_IMPLEMENTATION_PR"
+  },
+  "policyGate": {
+    "schemaVersion": "v1",
+    "policyGateId": "policygate_candidate_trend_following_jupiter_sol_usdc",
+    "strategyKey": "trend_following",
+    "generatedAt": "2026-03-11T00:20:00Z",
+    "summary": "Trend-following stays on the safe live lane and requires human approval.",
+    "gates": [
+      {
+        "targetMode": "shadow",
+        "status": "pass",
+        "summary": "Shadow gate passed."
+      },
+      {
+        "targetMode": "paper",
+        "status": "pass",
+        "summary": "Paper gate passed."
+      },
+      {
+        "targetMode": "limited_live",
+        "status": "pass",
+        "summary": "Limited-live gate passed."
+      },
+      {
+        "targetMode": "broad_live",
+        "status": "requires_human_approval",
+        "summary": "Broad live remains gated behind soak evidence."
+      }
+    ],
+    "checks": [],
+    "unsafePatterns": [],
+    "recommendedActions": [
+      "keep the deployment on lane=safe",
+      "limit the live bridge to a single slice"
+    ]
+  },
+  "approvals": [
+    {
+      "targetMode": "limited_live",
+      "approvedBy": "operator@example.com",
+      "approvedAt": "2026-03-11T00:25:00Z",
+      "notes": "Template approval record. Replace with the production operator sign-off."
+    }
+  ],
+  "deployment": {
+    "schemaVersion": "v1",
+    "deploymentId": "dep_trend_following_sol_usdc_limited_live",
+    "strategyKey": "trend_following",
+    "sleeveId": "sleeve_alpha",
+    "ownerUserId": "user_runtime_fixture",
+    "venueKey": "jupiter",
+    "pair": {
+      "symbol": "SOL/USDC",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "marketType": "spot"
+    },
+    "mode": "live",
+    "state": "live",
+    "lane": "safe",
+    "createdAt": "2026-03-11T00:25:00Z",
+    "updatedAt": "2026-03-11T00:25:00Z",
+    "policy": {
+      "maxNotionalUsd": "25",
+      "dailyLossLimitUsd": "10",
+      "maxSlippageBps": 50,
+      "maxConcurrentRuns": 1,
+      "rebalanceToleranceBps": 100
+    },
+    "capital": {
+      "allocatedUsd": "100",
+      "reservedUsd": "5",
+      "availableUsd": "95"
+    },
+    "tags": ["strategy-lab", "limited-live", "pilot"]
+  },
+  "runtimeScorecard": {
+    "promotionGates": [
+      {
+        "sourceMode": "paper",
+        "targetMode": "live",
+        "status": "pass"
+      }
+    ]
+  },
+  "applyTransition": false,
+  "metadata": {
+    "source": "strategy-lab-pilot-template"
+  }
+}

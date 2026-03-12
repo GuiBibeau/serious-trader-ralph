@@ -664,6 +664,26 @@ export async function POST(request: Request) {
     return NextResponse.json(result.payload, { status: result.status });
   }
 
+  if (action === "evaluate_deployment") {
+    if (!deploymentId) {
+      return NextResponse.json(
+        { ok: false, error: "invalid-runtime-operator-action" },
+        { status: 400 },
+      );
+    }
+
+    const evaluationBody = isRecord(payload.body) ? payload.body : {};
+    const result = await requestWorkerJson({
+      path: `/api/admin/ops/runtime/deployments/${encodeURIComponent(
+        deploymentId,
+      )}/evaluate`,
+      method: "POST",
+      authHeader: `Bearer ${adminToken}`,
+      body: evaluationBody,
+    });
+    return NextResponse.json(result.payload, { status: result.status });
+  }
+
   if (action === "update_subject_control") {
     const subjectKind =
       payload.subjectKind === "venue" || payload.subjectKind === "asset"

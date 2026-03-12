@@ -84,6 +84,8 @@ Current workflow files:
   - `.github/workflows/rollback-production.yml`
   - `.github/workflows/deploy-runtime-rs.yml`
   - `.github/workflows/rollback-runtime-rs.yml`
+  - `.github/workflows/strategy-lab-curation.yml`
+  - `.github/workflows/runtime-deployment-evaluate.yml`
 
 Current required secret names:
 
@@ -239,6 +241,29 @@ cargo test -p protocol --lib
 cargo test -p research-registry --lib
 cargo test -p runtime-rs --lib
 ```
+
+### 3f. Strategy-lab curation and pilot verification
+
+For substrate curation, readiness, and bounded pilot work:
+
+```bash
+bun run strategy-lab:curate \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/curation.request.json
+bun run strategy-lab:readiness \
+  --operation readiness \
+  --request-file docs/strategy-lab/pilots/jup-onboarding/readiness.request.json
+bun run runtime:deployment:evaluate \
+  --deployment-id dep_trend_following_sol_usdc_limited_live \
+  --body-file docs/strategy-lab/pilots/trend-following-sol-usdc/evaluate.body.json
+```
+
+Verify:
+
+- curation writes auditable substrate summaries and backtest artifacts,
+- readiness evaluates the onboarded subject with bounded controls intact,
+- deployment evaluation writes a canonical run artifact with reconciliation
+  status for pilot review,
+- any pilot-specific docs and request files remain public-safe.
 
 Verify:
 

@@ -1,0 +1,7 @@
+{
+  "trigger": {
+    "kind": "operator",
+    "source": "strategy-lab-pilot",
+    "reason": "limited-live-validation"
+  }
+}

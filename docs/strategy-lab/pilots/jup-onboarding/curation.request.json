@@ -1,0 +1,352 @@
+{
+  "assets": [
+    {
+      "schemaVersion": "v1",
+      "assetKey": "JUP",
+      "displayName": "Jupiter",
+      "symbol": "JUP",
+      "chainKey": "solana-mainnet",
+      "canonicalId": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+      "assetKind": "token",
+      "riskClass": "satellite",
+      "listingState": "paper",
+      "decimals": 6,
+      "quoteAssetKeys": ["USDC"],
+      "venueMappings": [
+        {
+          "venueKey": "jupiter",
+          "nativeId": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+          "venueSymbol": "JUP",
+          "decimals": 6,
+          "listingState": "paper",
+          "quoteAssetKeys": ["USDC"],
+          "priceDecimals": 6,
+          "sizeDecimals": 6,
+          "minNotionalUsd": "0.50",
+          "notes": "Pilot asset mapping for bounded JUP onboarding."
+        }
+      ],
+      "createdAt": "2026-03-11T00:00:00Z",
+      "updatedAt": "2026-03-11T00:00:00Z",
+      "tags": ["pilot", "asset-onboarding"],
+      "notes": "Strategy-lab pilot asset record for JUP."
+    }
+  ],
+  "datasetSnapshots": [
+    {
+      "schemaVersion": "v1",
+      "datasetId": "dataset_feed_replay_jup_usdc_market_events",
+      "snapshotId": "snapshot_2026_03_07_seed",
+      "datasetKind": "market_events",
+      "normalizationKind": "replay_ready",
+      "format": "fixture_json",
+      "retentionClass": "seed",
+      "capturedAt": "2026-03-11T00:00:00Z",
+      "coverageStartAt": "2026-03-07T00:00:00Z",
+      "coverageEndAt": "2026-03-07T00:00:05Z",
+      "rowCount": 2,
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["JUP", "USDC"],
+      "pairSymbols": ["JUP/USDC"],
+      "chainKeys": ["solana-mainnet"],
+      "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
+      "contentDigest": "sha256:jup-feed-fixture",
+      "provenance": {
+        "acquisitionKind": "research_fixture",
+        "collectedFrom": "services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json",
+        "provider": "repo-fixture",
+        "collectedAt": "2026-03-11T00:00:00Z",
+        "generator": "runtime-rs",
+        "generatorRevision": "jup-feed-replay-seed-v1"
+      },
+      "tags": ["seed", "deterministic", "replay"]
+    }
+  ],
+  "replayCorpora": [
+    {
+      "schemaVersion": "v1",
+      "corpusId": "replay_corpus_jup_usdc_feed_gateway_seed",
+      "title": "JUP/USDC feed gateway seed replay corpus",
+      "summary": "Deterministic replay corpus for the JUP onboarding pilot.",
+      "replayKind": "feed_gateway_v1",
+      "createdAt": "2026-03-11T00:00:00Z",
+      "updatedAt": "2026-03-11T00:00:00Z",
+      "venueKeys": ["jupiter", "helius"],
+      "assetKeys": ["JUP", "USDC"],
+      "pairSymbols": ["JUP/USDC"],
+      "chainKeys": ["solana-mainnet"],
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_seed",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feed-fixture"
+        }
+      ],
+      "fixtureUri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json",
+      "contentDigest": "sha256:jup-feed-fixture",
+      "deterministicSeed": 200,
+      "tags": ["seed", "deterministic", "jup"]
+    }
+  ],
+  "featureDefinitions": [
+    {
+      "schemaVersion": "v1",
+      "featureId": "feature_jup_short_return_bps_v1",
+      "featureKey": "short_return_bps",
+      "version": "1.0.0",
+      "title": "JUP short-window return",
+      "summary": "Short-window signed return for the JUP onboarding pilot.",
+      "status": "active",
+      "marketType": "spot",
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["JUP", "USDC"],
+      "pairSymbols": ["JUP/USDC"],
+      "inputRequirements": [
+        {
+          "inputKey": "mid_price_usd",
+          "required": true,
+          "freshnessMs": 20000
+        }
+      ],
+      "derivedFromFeatureKeys": [],
+      "freshnessSloMs": 20000,
+      "maxAllowedDriftBps": 50,
+      "minCoverageBps": 10000,
+      "provenance": {
+        "generatedBy": "strategy-lab::feature-catalog",
+        "generatedRevision": "jup-seed",
+        "generatedAt": "2026-03-11T00:00:00Z"
+      },
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_seed",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
+        }
+      ],
+      "createdAt": "2026-03-11T00:00:00Z",
+      "updatedAt": "2026-03-11T00:00:00Z",
+      "tags": ["pilot", "feature"]
+    }
+  ],
+  "regimeTags": [
+    {
+      "schemaVersion": "v1",
+      "regimeTagId": "regime_jup_trend_confirmed_v1",
+      "regimeKey": "long_trend",
+      "version": "1.0.0",
+      "title": "JUP trend regime",
+      "summary": "Trend confirmation for JUP/USDC onboarding.",
+      "status": "active",
+      "dimension": "trend",
+      "value": "confirmed",
+      "marketType": "spot",
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["JUP", "USDC"],
+      "pairSymbols": ["JUP/USDC"],
+      "sourceFeatureKeys": ["short_return_bps"],
+      "freshnessSloMs": 20000,
+      "maxAllowedDriftBps": 50,
+      "minConfidenceBps": 8000,
+      "provenance": {
+        "generatedBy": "strategy-lab::regime-catalog",
+        "generatedRevision": "jup-seed",
+        "generatedAt": "2026-03-11T00:00:00Z"
+      },
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_seed",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feature-fixture"
+        }
+      ],
+      "createdAt": "2026-03-11T00:00:00Z",
+      "updatedAt": "2026-03-11T00:00:00Z",
+      "tags": ["pilot", "regime"]
+    }
+  ],
+  "costModels": [
+    {
+      "schemaVersion": "v1",
+      "modelId": "cost_model_jupiter_jup_usdc_spot",
+      "venueKey": "jupiter",
+      "marketType": "spot",
+      "pairSymbol": "JUP/USDC",
+      "instrumentId": "JUP/USDC",
+      "assetKeys": ["JUP", "USDC"],
+      "modeCoverage": ["shadow", "paper", "live"],
+      "status": "active",
+      "assumptions": {
+        "feeBps": 12,
+        "slippageBps": 35,
+        "marketImpactBps": 18,
+        "partialFillRateBps": 75,
+        "partialFillPenaltyBps": 15,
+        "financingCostBpsPerDay": "0"
+      },
+      "calibration": {
+        "calibrationId": "calibration_jupiter_jup_usdc_spot_seed",
+        "methodology": "seed_replay_bootstrap",
+        "sampleStartAt": "2026-03-07T00:00:00Z",
+        "sampleEndAt": "2026-03-11T00:00:00Z",
+        "sampleCount": 120,
+        "confidenceBps": 8400,
+        "referenceNotionalUsd": "5.00",
+        "tags": ["pilot", "bootstrap"]
+      },
+      "driftGuard": {
+        "maxCostDriftBps": 120,
+        "maxLatencyDriftMs": 8000,
+        "maxReconciliationDriftUsd": "1.50"
+      },
+      "latencyProfile": {
+        "expectedQuoteMs": 300,
+        "expectedSubmitMs": 900,
+        "expectedSettlementMs": 6000
+      },
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_seed",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feed-fixture"
+        }
+      ],
+      "createdAt": "2026-03-11T00:00:00Z",
+      "updatedAt": "2026-03-11T00:00:00Z",
+      "tags": ["pilot", "spot"]
+    }
+  ],
+  "costObservations": [
+    {
+      "schemaVersion": "v1",
+      "observationId": "costobs_jupiter_jup_usdc_paper_1",
+      "modelId": "cost_model_jupiter_jup_usdc_spot",
+      "deploymentId": "deployment_jup_usdc_paper_fixture",
+      "runId": "deployment_jup_usdc_paper_fixture_run_1",
+      "receiptId": "receipt_jup_usdc_paper_fixture_run_1",
+      "venueKey": "jupiter",
+      "marketType": "spot",
+      "pairSymbol": "JUP/USDC",
+      "assetKeys": ["JUP", "USDC"],
+      "mode": "paper",
+      "observedAt": "2026-03-11T00:00:00Z",
+      "evaluatedNotionalUsd": "5.00",
+      "modeledTotalCostUsd": "0.06",
+      "observedTotalCostUsd": "0.07",
+      "costDriftUsd": "0.01",
+      "costDriftBps": 90,
+      "expectedEndToEndLatencyMs": 6500,
+      "observedEndToEndLatencyMs": 6900,
+      "latencyDriftMs": 400,
+      "reconciliationStatus": "passed",
+      "reconciliationDriftUsd": "0.01",
+      "tags": ["pilot", "paper"]
+    }
+  ],
+  "experiments": [
+    {
+      "schemaVersion": "v1",
+      "experimentId": "experiment_jup_usdc_onboarding",
+      "hypothesisId": "hypothesis_jup_usdc_onboarding",
+      "strategyKey": "dca",
+      "status": "completed",
+      "createdAt": "2026-03-11T00:10:00Z",
+      "updatedAt": "2026-03-11T00:15:00Z",
+      "completedAt": "2026-03-11T00:15:00Z",
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["JUP", "USDC"],
+      "sourceCitations": [],
+      "codeRevision": {
+        "vcs": "git",
+        "repository": "github.com/GuiBibeau/serious-trader-ralph",
+        "revision": "main",
+        "treeDirty": false
+      },
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_seed",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feed-fixture"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "jup-usdc-replay",
+          "kind": "replay-report",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.jup_usdc.v1.json",
+          "contentDigest": "sha256:jup-feature-fixture",
+          "createdAt": "2026-03-11T00:15:00Z"
+        }
+      ],
+      "summary": "JUP/USDC onboarding replay covered the bounded paper path.",
+      "tags": ["pilot", "asset-onboarding"]
+    }
+  ],
+  "evidenceBundles": [
+    {
+      "schemaVersion": "v1",
+      "evidenceBundleId": "evidence_jup_usdc_onboarding",
+      "experimentId": "experiment_jup_usdc_onboarding",
+      "strategyKey": "dca",
+      "status": "approved",
+      "promotionTarget": "paper",
+      "createdAt": "2026-03-11T00:20:00Z",
+      "updatedAt": "2026-03-11T00:20:00Z",
+      "venueKeys": ["jupiter"],
+      "assetKeys": ["JUP", "USDC"],
+      "sourceCitations": [],
+      "codeRevision": {
+        "vcs": "git",
+        "repository": "github.com/GuiBibeau/serious-trader-ralph",
+        "revision": "main",
+        "treeDirty": false
+      },
+      "datasetSnapshots": [
+        {
+          "datasetId": "dataset_feed_replay_jup_usdc_market_events",
+          "snapshotId": "snapshot_2026_03_07_seed",
+          "capturedAt": "2026-03-11T00:00:00Z",
+          "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.jup_usdc.v1.json#marketEvents",
+          "contentDigest": "sha256:jup-feed-fixture"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "jup-onboarding-proof",
+          "kind": "proof-bundle",
+          "uri": "repo://docs/strategy-lab/pilots/jup-onboarding/README.md",
+          "contentDigest": "sha256:jup-onboarding-proof",
+          "createdAt": "2026-03-11T00:20:00Z"
+        }
+      ],
+      "summary": "JUP onboarding evidence bundle for readiness review.",
+      "tags": ["pilot", "asset-onboarding"]
+    }
+  ],
+  "backtests": [
+    {
+      "reportId": "backtest_jup_usdc_onboarding",
+      "experimentId": "experiment_jup_usdc_onboarding",
+      "replayCorpusId": "replay_corpus_jup_usdc_feed_gateway_seed",
+      "venueKey": "jupiter",
+      "pairSymbol": "JUP/USDC",
+      "marketType": "spot",
+      "windowMode": "rolling",
+      "trainingWindowObservations": 2,
+      "testingWindowObservations": 1,
+      "stepObservations": 1,
+      "purgeObservations": 0,
+      "baselineStrategies": ["flat_cash", "buy_and_hold"]
+    }
+  ]
+}
