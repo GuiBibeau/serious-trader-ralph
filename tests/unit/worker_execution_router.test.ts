@@ -192,28 +192,34 @@ describe("worker execution router", () => {
     ).rejects.toThrow(/execution-intent-family-not-implemented/);
   });
 
-  test("fails closed when a venue advertises an intent family but the adapter does not implement it", async () => {
-    await expect(
-      executeIntentViaRouter({
-        env: {} as never,
+  test("routes Jupiter conditional spot orders through the Trigger executor in non-live modes", async () => {
+    const result = await executeIntentViaRouter({
+      env: {} as never,
+      venueKey: "jupiter",
+      runtimeMode: "paper",
+      execution: { adapter: "jupiter" },
+      policy: normalizePolicy({}),
+      rpc: {} as never,
+      jupiter: {} as never,
+      intent: {
+        family: "conditional_spot_order",
+        wallet: "11111111111111111111111111111111",
         venueKey: "jupiter",
-        runtimeMode: "paper",
-        execution: { adapter: "jupiter" },
-        policy: normalizePolicy({}),
-        rpc: {} as never,
-        jupiter: {} as never,
-        intent: {
-          family: "conditional_spot_order",
-          wallet: "11111111111111111111111111111111",
-          venueKey: "jupiter",
-          marketType: "spot",
-          instrumentId: "SOL/USDC",
-          side: "buy",
-          quantityAtomic: "1",
+        marketType: "spot",
+        instrumentId: "SOL/USDC",
+        side: "buy",
+        quantityAtomic: "1000000",
+        params: {
+          orderType: "limit",
+          limitPriceAtomic: "150000000",
         },
-        log: () => {},
-      }),
-    ).rejects.toThrow(/execution-adapter-intent-not-supported/);
+      },
+      log: () => {},
+    });
+
+    expect(result.status).toBe("simulated");
+    expect(result.executionMeta?.route).toBe("jupiter");
+    expect(result.executionMeta?.lifecycle?.orderState).toBe("open");
   });
 
   test("fails closed when the runtime venue does not support the requested intent family", async () => {

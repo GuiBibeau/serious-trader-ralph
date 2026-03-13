@@ -1,3 +1,4 @@
+import { resolveJupiterConditionalSpotOrder } from "./jupiter_trigger";
 import type { ExecutionLane, ExecutionMode, JsonObject } from "./repository";
 import type { ExecutionIntentFamily } from "./types";
 
@@ -1004,19 +1005,61 @@ export function toExecSubmitRequestV1Compat(
   }
 
   const spotSwap = resolveExecSubmitSpotSwap(value);
-  if (!spotSwap) return null;
-  return {
-    schemaVersion: SCHEMA_VERSION_V1,
-    mode: "privy_execute",
-    lane: value.lane,
-    ...(value.metadata ? { metadata: { ...value.metadata } } : {}),
-    privyExecute: {
-      intentType: "swap",
-      wallet: spotSwap.wallet,
-      swap: { ...spotSwap.swap },
-      ...(spotSwap.options ? { options: { ...spotSwap.options } } : {}),
-    },
-  };
+  if (spotSwap) {
+    return {
+      schemaVersion: SCHEMA_VERSION_V1,
+      mode: "privy_execute",
+      lane: value.lane,
+      ...(value.metadata ? { metadata: { ...value.metadata } } : {}),
+      privyExecute: {
+        intentType: "swap",
+        wallet: spotSwap.wallet,
+        swap: { ...spotSwap.swap },
+        ...(spotSwap.options ? { options: { ...spotSwap.options } } : {}),
+      },
+    };
+  }
+
+  if (
+    value.mode !== "privy_execute" ||
+    value.schemaVersion !== SCHEMA_VERSION_V2 ||
+    value.privyExecute?.intent.family !== "conditional_spot_order"
+  ) {
+    return null;
+  }
+  try {
+    const resolved = resolveJupiterConditionalSpotOrder({
+      family: "conditional_spot_order",
+      wallet: value.privyExecute.wallet,
+      venueKey: value.privyExecute.intent.venueKey,
+      marketType: "spot",
+      instrumentId: value.privyExecute.intent.instrumentId,
+      side: value.privyExecute.intent.side,
+      quantityAtomic: value.privyExecute.intent.quantityAtomic,
+      params: value.privyExecute.options ?? null,
+    });
+    return {
+      schemaVersion: SCHEMA_VERSION_V1,
+      mode: "privy_execute",
+      lane: value.lane,
+      ...(value.metadata ? { metadata: { ...value.metadata } } : {}),
+      privyExecute: {
+        intentType: "swap",
+        wallet: value.privyExecute.wallet,
+        swap: {
+          inputMint: resolved.inputMint,
+          outputMint: resolved.outputMint,
+          amountAtomic: resolved.makingAmount,
+          slippageBps: 50,
+        },
+        ...(value.privyExecute.options
+          ? { options: { ...value.privyExecute.options } }
+          : {}),
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function buildExecSubmitIntentSummary(

@@ -787,6 +787,171 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("accepts v2 conditional spot orders on the safe Jupiter lane", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-v2-trigger-1",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: "safe",
+            metadata: {
+              source: "TERMINAL",
+              reason: "Limit order coverage",
+            },
+            privyExecute: {
+              wallet: "11111111111111111111111111111111",
+              intent: {
+                family: "conditional_spot_order",
+                venueKey: "jupiter",
+                marketType: "spot",
+                instrumentId: "SOL/USDC",
+                side: "buy",
+                quantityAtomic: "1000000",
+              },
+              options: {
+                orderType: "limit",
+                timeInForce: "gtc",
+                limitPriceAtomic: "150000000",
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        ok?: boolean;
+        requestId?: string;
+        status?: { state?: string; terminal?: boolean };
+      };
+      expect(body.ok).toBe(true);
+      expect(body.requestId).toBeString();
+      expect(body.status?.state).toBe("validated");
+      expect(body.status?.terminal).toBe(false);
+
+      const row = sqlite
+        .query(
+          "SELECT lane, metadata_json as metadataJson FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(String(body.requestId)) as
+        | { lane?: string; metadataJson?: string }
+        | undefined;
+      expect(row?.lane).toBe("safe");
+      const metadata = JSON.parse(String(row?.metadataJson ?? "{}")) as {
+        intent?: { family?: string; instrumentId?: string; venueKey?: string };
+        laneResolution?: { adapter?: string };
+      };
+      expect(metadata.intent?.family).toBe("conditional_spot_order");
+      expect(metadata.intent?.instrumentId).toBe("SOL/USDC");
+      expect(metadata.intent?.venueKey).toBe("jupiter");
+      expect(metadata.laneResolution?.adapter).toBe("jupiter");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("rejects v2 conditional spot orders that request a non-Jupiter venue", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-v2-trigger-venue-1",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: "safe",
+            privyExecute: {
+              wallet: "11111111111111111111111111111111",
+              intent: {
+                family: "conditional_spot_order",
+                venueKey: "phoenix",
+                marketType: "spot",
+                instrumentId: "SOL/USDC",
+                side: "buy",
+                quantityAtomic: "1000000",
+              },
+              options: {
+                orderType: "limit",
+                limitPriceAtomic: "150000000",
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("invalid-request");
+      expect(execErrorReason(body)).toBe("unsupported-venue-key:phoenix");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("rejects v2 conditional spot orders on non-safe lanes", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-v2-trigger-lane-1",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: "protected",
+            privyExecute: {
+              wallet: "11111111111111111111111111111111",
+              intent: {
+                family: "conditional_spot_order",
+                venueKey: "jupiter",
+                marketType: "spot",
+                instrumentId: "SOL/USDC",
+                side: "buy",
+                quantityAtomic: "1000000",
+              },
+              options: {
+                orderType: "limit",
+                limitPriceAtomic: "150000000",
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("unsupported-lane");
+      expect(execErrorReason(body)).toBe(
+        "conditional-orders-require-safe-lane:jito_bundle",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("rejects v2 spot swaps that request an unsupported venue key on the public submit path", async () => {
     const { env, sqlite } = createExecSubmitEnv();
     try {

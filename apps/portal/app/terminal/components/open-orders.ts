@@ -1,17 +1,80 @@
+import { type PairId, SUPPORTED_PAIRS, TOKEN_BY_MINT } from "./trade-pairs";
 import type { QueuedTerminalOrder } from "./trade-ticket-modal";
 
 export type OpenOrderStatus =
   | "pending"
   | "working"
   | "partial"
+  | "filled"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "expired";
+
+export type TerminalOpenOrderSnapshot = {
+  requestId: string;
+  requestStatus: string;
+  terminal: boolean;
+  receivedAt: string | null;
+  updatedAt: string | null;
+  terminalAt: string | null;
+  pairId: string | null;
+  direction: "buy" | "sell" | null;
+  source: string | null;
+  reason: string | null;
+  orderType: "limit" | "trigger" | null;
+  timeInForce: "gtc" | "ioc" | "fok" | null;
+  lane: "fast" | "protected" | "safe" | null;
+  simulationPreference: "auto" | "always" | "never" | null;
+  priorityLevel: "normal" | "high" | "urgent" | null;
+  priorityMicroLamports: number | null;
+  slippageBps: number | null;
+  inputMint: string | null;
+  outputMint: string | null;
+  amountAtomic: string | null;
+  remainingAmountAtomic: string | null;
+  takingAmountAtomic: string | null;
+  filledInputAtomic: string | null;
+  filledOutputAtomic: string | null;
+  limitPriceAtomic: string | null;
+  triggerPriceAtomic: string | null;
+  provider: string | null;
+  signature: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  status: string | null;
+  lifecycle: {
+    orderState?: string;
+    fillState?: string;
+    settlementState?: string;
+    notes?: string[];
+  } | null;
+};
 
 export type OpenOrderRow = QueuedTerminalOrder & {
+  requestId?: string | null;
   status: OpenOrderStatus;
   initialAmountUi: string;
   lastError: string | null;
+  terminal?: boolean;
+  provider?: string | null;
+  signature?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  receivedAtIso?: string | null;
+  updatedAtIso?: string | null;
+  terminalAtIso?: string | null;
+  inputMint?: string | null;
+  outputMint?: string | null;
+  amountAtomic?: string | null;
+  remainingAmountAtomic?: string | null;
+  takingAmountAtomic?: string | null;
+  filledInputAtomic?: string | null;
+  filledOutputAtomic?: string | null;
+  lifecycle?: TerminalOpenOrderSnapshot["lifecycle"];
 };
+
+const ORDER_PRICE_DECIMALS = 6;
+const SUPPORTED_PAIR_SET = new Set(SUPPORTED_PAIRS.map((pair) => pair.id));
 
 export function formatOrderAmountUi(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "";
@@ -22,6 +85,122 @@ export function parseOrderAmountUi(value: string): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return parsed;
+}
+
+function formatAtomicUi(
+  atomicRaw: string | null,
+  decimals: number,
+  maxFractionDigits = 6,
+): string {
+  if (!atomicRaw || !/^\d+$/.test(atomicRaw)) return "";
+  try {
+    const amount = BigInt(atomicRaw);
+    const scale = BigInt(10) ** BigInt(Math.max(0, decimals));
+    const whole = amount / scale;
+    const fraction = (amount % scale).toString().padStart(decimals, "0");
+    if (decimals === 0) return whole.toString();
+    const shown = fraction.slice(0, Math.min(decimals, maxFractionDigits));
+    const trimmed = shown.replace(/0+$/, "");
+    return trimmed ? `${whole.toString()}.${trimmed}` : whole.toString();
+  } catch {
+    return "";
+  }
+}
+
+function parseTimestampMs(value: string | null): number {
+  if (!value) return Date.now();
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function normalizeOpenOrderStatus(value: string | null): OpenOrderStatus {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "pending":
+      return "pending";
+    case "working":
+      return "working";
+    case "partial":
+      return "partial";
+    case "filled":
+      return "filled";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "expired":
+      return "expired";
+    default:
+      return "working";
+  }
+}
+
+export function mapTerminalOpenOrderSnapshot(
+  snapshot: TerminalOpenOrderSnapshot,
+): OpenOrderRow | null {
+  const pairId =
+    snapshot.pairId && SUPPORTED_PAIR_SET.has(snapshot.pairId)
+      ? (snapshot.pairId as PairId)
+      : null;
+  if (!pairId || !snapshot.direction || !snapshot.orderType || !snapshot.lane) {
+    return null;
+  }
+  const inputToken = snapshot.inputMint
+    ? TOKEN_BY_MINT[snapshot.inputMint]
+    : null;
+  const amountUi = formatAtomicUi(
+    snapshot.amountAtomic,
+    inputToken?.decimals ?? 0,
+  );
+  const remainingAmountUi =
+    formatAtomicUi(snapshot.remainingAmountAtomic, inputToken?.decimals ?? 0) ||
+    amountUi;
+  const createdAt = parseTimestampMs(snapshot.receivedAt);
+  const updatedAt = parseTimestampMs(snapshot.updatedAt ?? snapshot.receivedAt);
+  return {
+    id: snapshot.requestId,
+    requestId: snapshot.requestId,
+    createdAt,
+    updatedAt,
+    pairId,
+    direction: snapshot.direction,
+    source: snapshot.source ?? "TERMINAL",
+    reason: snapshot.reason ?? "Conditional order",
+    orderType: snapshot.orderType,
+    timeInForce: snapshot.timeInForce ?? "gtc",
+    amountUi,
+    remainingAmountUi,
+    slippageBps: snapshot.slippageBps ?? 50,
+    lane: snapshot.lane,
+    simulationPreference: snapshot.simulationPreference ?? "auto",
+    priorityLevel: snapshot.priorityLevel ?? "normal",
+    limitPriceUi:
+      snapshot.orderType === "limit"
+        ? formatAtomicUi(snapshot.limitPriceAtomic, ORDER_PRICE_DECIMALS)
+        : null,
+    triggerPriceUi:
+      snapshot.orderType === "trigger"
+        ? formatAtomicUi(snapshot.triggerPriceAtomic, ORDER_PRICE_DECIMALS)
+        : null,
+    status: normalizeOpenOrderStatus(snapshot.status),
+    initialAmountUi: amountUi,
+    lastError: snapshot.errorMessage ?? null,
+    terminal: snapshot.terminal,
+    provider: snapshot.provider,
+    signature: snapshot.signature,
+    errorCode: snapshot.errorCode,
+    errorMessage: snapshot.errorMessage,
+    receivedAtIso: snapshot.receivedAt,
+    updatedAtIso: snapshot.updatedAt,
+    terminalAtIso: snapshot.terminalAt,
+    inputMint: snapshot.inputMint,
+    outputMint: snapshot.outputMint,
+    amountAtomic: snapshot.amountAtomic,
+    remainingAmountAtomic: snapshot.remainingAmountAtomic,
+    takingAmountAtomic: snapshot.takingAmountAtomic,
+    filledInputAtomic: snapshot.filledInputAtomic,
+    filledOutputAtomic: snapshot.filledOutputAtomic,
+    lifecycle: snapshot.lifecycle,
+  };
 }
 
 export function queueOpenOrder(

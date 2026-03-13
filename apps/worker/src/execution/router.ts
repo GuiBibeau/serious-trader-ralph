@@ -10,6 +10,7 @@ import { getStrategyLabSubjectControl } from "../strategy_lab_readiness_reposito
 import { executeHeliusSenderSwap } from "./helius_sender_executor";
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
 import { executeJupiterSwap } from "./jupiter_executor";
+import { executeJupiterConditionalSpotOrder } from "./jupiter_trigger_executor";
 import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
 import type {
   ExecuteIntentInput,
@@ -48,7 +49,7 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       adapterKey: "jupiter",
       venueKey: "jupiter",
       supportedModes: ["shadow", "paper", "live"],
-      supportedIntentFamilies: ["spot_swap"],
+      supportedIntentFamilies: ["spot_swap", "conditional_spot_order"],
       adapter: executeJupiterSwap,
     },
   ],
@@ -252,6 +253,12 @@ export async function executeIntentViaRouter(
   });
 
   if (input.intent.family !== "spot_swap") {
+    if (
+      input.intent.family === "conditional_spot_order" &&
+      registration.adapterKey === "jupiter"
+    ) {
+      return await executeJupiterConditionalSpotOrder(input);
+    }
     throw new Error(
       `execution-intent-family-not-implemented:${input.intent.family}:${registration.adapterKey}`,
     );
