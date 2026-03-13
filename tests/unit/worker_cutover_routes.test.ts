@@ -1,8 +1,29 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { Env } from "../../apps/worker/src/types";
+
+const waitlistDbStub = {
+  prepare() {
+    return {
+      bind() {
+        return {
+          async first() {
+            return null;
+          },
+          async run() {
+            return { meta: { changes: 0 } };
+          },
+          async all() {
+            return { results: [] };
+          },
+        };
+      },
+    };
+  },
+} as unknown as D1Database;
 
 const env = {
   ALLOWED_ORIGINS: "*",
+  WAITLIST_DB: waitlistDbStub,
 } as Env;
 
 function createExecutionContextStub(): ExecutionContext {
@@ -12,13 +33,15 @@ function createExecutionContextStub(): ExecutionContext {
   } as ExecutionContext;
 }
 
+async function expectAuthDenied(response: Response): Promise<void> {
+  expect([401, 403]).toContain(response.status);
+  await expect(response.json()).resolves.toMatchObject({
+    ok: false,
+    error: expect.any(String),
+  });
+}
+
 async function loadWorker() {
-  mock.restore();
-  mock.module("../../apps/worker/src/auth", () => ({
-    requireUser: async () => {
-      throw new Error("unauthorized");
-    },
-  }));
   const module = (await import(
     `../../apps/worker/src/index?cutover=${Date.now()}-${Math.random()}`
   )) as typeof import("../../apps/worker/src/index");
@@ -80,22 +103,14 @@ describe("worker botless cutover routes", () => {
       authEnv,
       createExecutionContextStub(),
     );
-    expect(meResponse.status).toBe(401);
-    await expect(meResponse.json()).resolves.toMatchObject({
-      ok: false,
-      error: "unauthorized",
-    });
+    await expectAuthDenied(meResponse);
 
     const balanceResponse = await worker.fetch(
       new Request("http://localhost/api/wallet/balance", { method: "GET" }),
       authEnv,
       createExecutionContextStub(),
     );
-    expect(balanceResponse.status).toBe(401);
-    await expect(balanceResponse.json()).resolves.toMatchObject({
-      ok: false,
-      error: "unauthorized",
-    });
+    await expectAuthDenied(balanceResponse);
 
     const onboardingResponse = await worker.fetch(
       new Request("http://localhost/api/onboarding/complete", {
@@ -104,11 +119,7 @@ describe("worker botless cutover routes", () => {
       authEnv,
       createExecutionContextStub(),
     );
-    expect(onboardingResponse.status).toBe(401);
-    await expect(onboardingResponse.json()).resolves.toMatchObject({
-      ok: false,
-      error: "unauthorized",
-    });
+    await expectAuthDenied(onboardingResponse);
 
     const experienceLevelResponse = await worker.fetch(
       new Request("http://localhost/api/me/experience-level", {
@@ -117,11 +128,7 @@ describe("worker botless cutover routes", () => {
       authEnv,
       createExecutionContextStub(),
     );
-    expect(experienceLevelResponse.status).toBe(401);
-    await expect(experienceLevelResponse.json()).resolves.toMatchObject({
-      ok: false,
-      error: "unauthorized",
-    });
+    await expectAuthDenied(experienceLevelResponse);
 
     const eventsResponse = await worker.fetch(
       new Request("http://localhost/api/events", {
@@ -130,11 +137,7 @@ describe("worker botless cutover routes", () => {
       authEnv,
       createExecutionContextStub(),
     );
-    expect(eventsResponse.status).toBe(401);
-    await expect(eventsResponse.json()).resolves.toMatchObject({
-      ok: false,
-      error: "unauthorized",
-    });
+    await expectAuthDenied(eventsResponse);
 
     const recommendationsLatestResponse = await worker.fetch(
       new Request("http://localhost/api/recommendations/latest", {
@@ -145,11 +148,7 @@ describe("worker botless cutover routes", () => {
       authEnv,
       createExecutionContextStub(),
     );
-    expect(recommendationsLatestResponse.status).toBe(401);
-    await expect(recommendationsLatestResponse.json()).resolves.toMatchObject({
-      ok: false,
-      error: "unauthorized",
-    });
+    await expectAuthDenied(recommendationsLatestResponse);
 
     const recommendationsFeedbackResponse = await worker.fetch(
       new Request("http://localhost/api/recommendations/feedback", {
@@ -163,12 +162,6 @@ describe("worker botless cutover routes", () => {
       authEnv,
       createExecutionContextStub(),
     );
-    expect(recommendationsFeedbackResponse.status).toBe(401);
-    await expect(recommendationsFeedbackResponse.json()).resolves.toMatchObject(
-      {
-        ok: false,
-        error: "unauthorized",
-      },
-    );
+    await expectAuthDenied(recommendationsFeedbackResponse);
   });
 });

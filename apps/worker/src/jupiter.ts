@@ -40,6 +40,93 @@ export type JupiterPriceV3Record = {
   [k: string]: unknown;
 };
 
+export type JupiterTriggerCondition = "above" | "below";
+
+export type JupiterTriggerOrderStatusRequest = "active" | "history";
+
+export type JupiterTriggerOrderTrade = {
+  inputAmount?: string;
+  outputAmount?: string;
+  tx?: string | null;
+  txUrl?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  [k: string]: unknown;
+};
+
+export type JupiterTriggerOrderRecord = {
+  order: string;
+  maker?: string | null;
+  payer?: string | null;
+  inputMint?: string | null;
+  outputMint?: string | null;
+  makingAmount?: string | null;
+  takingAmount?: string | null;
+  remainingMakingAmount?: string | null;
+  remainingTakingAmount?: string | null;
+  status?: string | null;
+  openTx?: string | null;
+  closeTx?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  expiredAt?: string | number | null;
+  feeBps?: number | null;
+  triggerCondition?: string | null;
+  trades?: JupiterTriggerOrderTrade[];
+  [k: string]: unknown;
+};
+
+export type JupiterTriggerOrdersResponse = {
+  orders: JupiterTriggerOrderRecord[];
+  totalOrders: number;
+  page: number;
+  [k: string]: unknown;
+};
+
+export type JupiterTriggerCreateOrderRequest = {
+  inputMint: string;
+  outputMint: string;
+  maker: string;
+  payer?: string;
+  params: {
+    makingAmount: string;
+    takingAmount: string;
+    triggerCondition: JupiterTriggerCondition;
+    slippageBps?: number;
+    expiredAt?: number;
+    feeBps?: number;
+  };
+};
+
+export type JupiterTriggerCreateOrderResponse = {
+  transaction: string;
+  requestId: string;
+  order: string;
+  [k: string]: unknown;
+};
+
+export type JupiterTriggerCancelOrderRequest = {
+  maker: string;
+  payer?: string;
+  order: string;
+};
+
+export type JupiterTriggerCancelOrderResponse = {
+  transaction: string;
+  requestId: string;
+  order: string;
+  [k: string]: unknown;
+};
+
+export type JupiterGetTriggerOrdersRequest = {
+  maker: string;
+  orderStatus: JupiterTriggerOrderStatusRequest;
+  inputMint?: string;
+  outputMint?: string;
+  page?: number;
+  includeFailedTx?: boolean;
+};
+
 export type QuoteRequest = {
   inputMint: string;
   outputMint: string;
@@ -57,6 +144,14 @@ export class JupiterClient {
     private readonly baseUrl: string,
     private readonly apiKey?: string,
   ) {}
+
+  private buildAuthHeaders(
+    extra?: Record<string, string>,
+  ): Record<string, string> {
+    const headers = extra ? { ...extra } : {};
+    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    return headers;
+  }
 
   async quote(request: QuoteRequest): Promise<JupiterQuoteResponse> {
     const url = new URL("/swap/v1/quote", this.baseUrl);
@@ -83,8 +178,7 @@ export class JupiterClient {
       );
     }
 
-    const headers: Record<string, string> = {};
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const headers = this.buildAuthHeaders();
     const response = await fetch(url.toString(), { method: "GET", headers });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -104,10 +198,9 @@ export class JupiterClient {
     userPublicKey: string;
   }): Promise<JupiterSwapResponse> {
     const url = new URL("/swap/v1/swap", this.baseUrl);
-    const headers: Record<string, string> = {
+    const headers = this.buildAuthHeaders({
       "content-type": "application/json",
-    };
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    });
     const response = await fetch(url.toString(), {
       method: "POST",
       headers,
@@ -146,8 +239,7 @@ export class JupiterClient {
 
   async programIdToLabel(): Promise<Record<string, string>> {
     const url = new URL("/swap/v1/program-id-to-label", this.baseUrl);
-    const headers: Record<string, string> = {};
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const headers = this.buildAuthHeaders();
     const response = await fetch(url.toString(), { method: "GET", headers });
     if (!response.ok) {
       throw new Error(`Jupiter program-id-to-label failed: ${response.status}`);
@@ -173,8 +265,7 @@ export class JupiterClient {
     if (!q) return [];
     const url = new URL("/tokens/v2/search", this.baseUrl);
     url.searchParams.set("query", q);
-    const headers: Record<string, string> = {};
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const headers = this.buildAuthHeaders();
     const response = await fetch(url.toString(), { method: "GET", headers });
     if (!response.ok) {
       throw new Error(`Jupiter token search failed: ${response.status}`);
@@ -219,8 +310,7 @@ export class JupiterClient {
     }
     const url = new URL("/price/v3", this.baseUrl);
     url.searchParams.set("ids", uniqueIds.join(","));
-    const headers: Record<string, string> = {};
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const headers = this.buildAuthHeaders();
     const response = await fetch(url.toString(), { method: "GET", headers });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -269,5 +359,134 @@ export class JupiterClient {
       };
     }
     return output;
+  }
+
+  async createTriggerOrder(
+    request: JupiterTriggerCreateOrderRequest,
+  ): Promise<JupiterTriggerCreateOrderResponse> {
+    const url = new URL("/trigger/v1/createOrder", this.baseUrl);
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: this.buildAuthHeaders({
+        "content-type": "application/json",
+      }),
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Jupiter trigger createOrder failed: ${response.status}${text ? ` ${text}` : ""}`,
+      );
+    }
+    const payload = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Jupiter trigger createOrder invalid response");
+    }
+    const transaction = String(payload.transaction ?? "").trim();
+    const requestId = String(payload.requestId ?? "").trim();
+    const order = String(payload.order ?? "").trim();
+    if (!transaction || !requestId || !order) {
+      throw new Error("Jupiter trigger createOrder missing fields");
+    }
+    return {
+      transaction,
+      requestId,
+      order,
+      ...payload,
+    };
+  }
+
+  async cancelTriggerOrder(
+    request: JupiterTriggerCancelOrderRequest,
+  ): Promise<JupiterTriggerCancelOrderResponse> {
+    const url = new URL("/trigger/v1/cancelOrder", this.baseUrl);
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: this.buildAuthHeaders({
+        "content-type": "application/json",
+      }),
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Jupiter trigger cancelOrder failed: ${response.status}${text ? ` ${text}` : ""}`,
+      );
+    }
+    const payload = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Jupiter trigger cancelOrder invalid response");
+    }
+    const transaction = String(payload.transaction ?? "").trim();
+    const requestId = String(payload.requestId ?? "").trim();
+    const order = String(payload.order ?? "").trim();
+    if (!transaction || !requestId || !order) {
+      throw new Error("Jupiter trigger cancelOrder missing fields");
+    }
+    return {
+      transaction,
+      requestId,
+      order,
+      ...payload,
+    };
+  }
+
+  async getTriggerOrders(
+    request: JupiterGetTriggerOrdersRequest,
+  ): Promise<JupiterTriggerOrdersResponse> {
+    const url = new URL("/trigger/v1/getTriggerOrders", this.baseUrl);
+    url.searchParams.set("maker", request.maker);
+    url.searchParams.set("orderStatus", request.orderStatus);
+    if (request.inputMint) url.searchParams.set("inputMint", request.inputMint);
+    if (request.outputMint) {
+      url.searchParams.set("outputMint", request.outputMint);
+    }
+    if (Number.isFinite(request.page) && (request.page as number) >= 1) {
+      url.searchParams.set("page", String(Math.floor(request.page as number)));
+    }
+    if (request.includeFailedTx !== undefined) {
+      url.searchParams.set(
+        "includeFailedTx",
+        request.includeFailedTx ? "true" : "false",
+      );
+    }
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: this.buildAuthHeaders(),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Jupiter trigger getTriggerOrders failed: ${response.status}${text ? ` ${text}` : ""}`,
+      );
+    }
+    const payload = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Jupiter trigger getTriggerOrders invalid response");
+    }
+    const orders = Array.isArray(payload.orders)
+      ? payload.orders.filter(
+          (value): value is JupiterTriggerOrderRecord =>
+            Boolean(value) &&
+            typeof value === "object" &&
+            !Array.isArray(value),
+        )
+      : [];
+    return {
+      orders,
+      totalOrders:
+        Number(payload.totalOrders ?? orders.length) || orders.length,
+      page: Number(payload.page ?? request.page ?? 1) || 1,
+      ...payload,
+    };
   }
 }

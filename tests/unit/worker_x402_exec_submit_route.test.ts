@@ -32,6 +32,27 @@ const findUserByPrivyUserIdMock = mock(async () => ({
   degenAcknowledgedAt: null,
   createdAt: "2026-03-03T00:00:00.000Z",
 }));
+const findUserByIdMock = mock(async (_env: unknown, id: string) => ({
+  id,
+  privyUserId: `did:privy:${id}`,
+  onboardingStatus: "active",
+  profile: null,
+  signerType: "privy",
+  privyWalletId:
+    id === "user_runtime_managed" ? "wallet_runtime_managed" : "wallet_1",
+  walletAddress:
+    id === "user_runtime_managed"
+      ? "6F6A1zpGpRGmqrXpqgBFYGjC9WFo6iovrRVYoJNBHZqF"
+      : "11111111111111111111111111111111",
+  walletMigratedAt: "2026-03-03T00:00:00.000Z",
+  experienceLevel: "beginner",
+  levelSource: "auto",
+  onboardingCompletedAt: "2026-03-03T00:00:00.000Z",
+  onboardingVersion: 1,
+  feedSeedVersion: 1,
+  degenAcknowledgedAt: null,
+  createdAt: "2026-03-03T00:00:00.000Z",
+}));
 const upsertUserMock = mock(async () =>
   findUserByPrivyUserIdMock("did:privy:user_1"),
 );
@@ -59,6 +80,7 @@ mock.module("../../apps/worker/src/auth", () => ({
   requireUser: requireUserMock,
 }));
 mock.module("../../apps/worker/src/users_db", () => ({
+  findUserById: findUserByIdMock,
   findUserByPrivyUserId: findUserByPrivyUserIdMock,
   upsertUser: upsertUserMock,
   setUserWallet: setUserWalletMock,
@@ -213,6 +235,7 @@ function execErrorDetails(payload: unknown): Record<string, unknown> | null {
 describe("worker x402 exec submit scaffold route", () => {
   beforeEach(() => {
     requireUserMock.mockClear();
+    findUserByIdMock.mockClear();
     findUserByPrivyUserIdMock.mockClear();
     upsertUserMock.mockClear();
     setUserWalletMock.mockClear();
@@ -781,6 +804,171 @@ describe("worker x402 exec submit scaffold route", () => {
       expect(execErrorCode(body)).toBe("invalid-request");
       expect(execErrorReason(body)).toBe(
         "unsupported-intent-family:perp_order",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("accepts v2 conditional spot orders on the safe Jupiter lane", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-v2-trigger-1",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: "safe",
+            metadata: {
+              source: "TERMINAL",
+              reason: "Limit order coverage",
+            },
+            privyExecute: {
+              wallet: "11111111111111111111111111111111",
+              intent: {
+                family: "conditional_spot_order",
+                venueKey: "jupiter",
+                marketType: "spot",
+                instrumentId: "SOL/USDC",
+                side: "buy",
+                quantityAtomic: "1000000",
+              },
+              options: {
+                orderType: "limit",
+                timeInForce: "gtc",
+                limitPriceAtomic: "150000000",
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        ok?: boolean;
+        requestId?: string;
+        status?: { state?: string; terminal?: boolean };
+      };
+      expect(body.ok).toBe(true);
+      expect(body.requestId).toBeString();
+      expect(body.status?.state).toBe("validated");
+      expect(body.status?.terminal).toBe(false);
+
+      const row = sqlite
+        .query(
+          "SELECT lane, metadata_json as metadataJson FROM execution_requests WHERE request_id = ?1 LIMIT 1",
+        )
+        .get(String(body.requestId)) as
+        | { lane?: string; metadataJson?: string }
+        | undefined;
+      expect(row?.lane).toBe("safe");
+      const metadata = JSON.parse(String(row?.metadataJson ?? "{}")) as {
+        intent?: { family?: string; instrumentId?: string; venueKey?: string };
+        laneResolution?: { adapter?: string };
+      };
+      expect(metadata.intent?.family).toBe("conditional_spot_order");
+      expect(metadata.intent?.instrumentId).toBe("SOL/USDC");
+      expect(metadata.intent?.venueKey).toBe("jupiter");
+      expect(metadata.laneResolution?.adapter).toBe("jupiter");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("rejects v2 conditional spot orders that request a non-Jupiter venue", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-v2-trigger-venue-1",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: "safe",
+            privyExecute: {
+              wallet: "11111111111111111111111111111111",
+              intent: {
+                family: "conditional_spot_order",
+                venueKey: "phoenix",
+                marketType: "spot",
+                instrumentId: "SOL/USDC",
+                side: "buy",
+                quantityAtomic: "1000000",
+              },
+              options: {
+                orderType: "limit",
+                limitPriceAtomic: "150000000",
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("invalid-request");
+      expect(execErrorReason(body)).toBe("unsupported-venue-key:phoenix");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("rejects v2 conditional spot orders on non-safe lanes", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-v2-trigger-lane-1",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: "protected",
+            privyExecute: {
+              wallet: "11111111111111111111111111111111",
+              intent: {
+                family: "conditional_spot_order",
+                venueKey: "jupiter",
+                marketType: "spot",
+                instrumentId: "SOL/USDC",
+                side: "buy",
+                quantityAtomic: "1000000",
+              },
+              options: {
+                orderType: "limit",
+                limitPriceAtomic: "150000000",
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("unsupported-lane");
+      expect(execErrorReason(body)).toBe(
+        "conditional-orders-require-safe-lane:jito_bundle",
       );
     } finally {
       sqlite.close();

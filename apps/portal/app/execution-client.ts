@@ -32,42 +32,76 @@ export type ExecutionErrorCode =
   | "not-ready"
   | "unknown";
 
-export type ExecutionSubmitPayload = {
-  schemaVersion: "v1";
-  mode: "relay_signed" | "privy_execute";
-  lane: "fast" | "protected" | "safe";
-  metadata?: Record<string, unknown>;
-  relaySigned?: {
-    signedTransaction: string;
-    encoding?: string;
-  };
-  privyExecute?: {
-    intentType: "swap";
-    wallet: string;
-    swap: {
-      inputMint: string;
-      outputMint: string;
-      amountAtomic: string;
-      slippageBps: number;
+export type ExecutionSubmitPayload =
+  | {
+      schemaVersion: "v1";
+      mode: "relay_signed" | "privy_execute";
+      lane: "fast" | "protected" | "safe";
+      metadata?: Record<string, unknown>;
+      relaySigned?: {
+        signedTransaction: string;
+        encoding?: string;
+      };
+      privyExecute?: {
+        intentType: "swap";
+        wallet: string;
+        swap: {
+          inputMint: string;
+          outputMint: string;
+          amountAtomic: string;
+          slippageBps: number;
+        };
+        options?: {
+          commitment?: "processed" | "confirmed" | "finalized";
+          simulateOnly?: boolean;
+          requireSimulation?: boolean;
+          dryRun?: boolean;
+          priorityMicroLamports?: number;
+          orderType?: "market" | "limit" | "trigger";
+          timeInForce?: "gtc" | "ioc" | "fok";
+          reduceOnly?: boolean;
+          postOnly?: boolean;
+          quantityMode?: "base" | "quote" | "notional";
+          limitPriceAtomic?: string;
+          triggerPriceAtomic?: string;
+          takeProfitPriceAtomic?: string;
+          stopLossPriceAtomic?: string;
+        };
+      };
+    }
+  | {
+      schemaVersion: "v2";
+      mode: "privy_execute";
+      lane: "fast" | "protected" | "safe";
+      metadata?: Record<string, unknown>;
+      privyExecute: {
+        wallet: string;
+        intent: {
+          family: "conditional_spot_order";
+          venueKey: "jupiter";
+          marketType: "spot";
+          instrumentId: string;
+          side: "buy" | "sell";
+          quantityAtomic: string;
+        };
+        options?: {
+          commitment?: "processed" | "confirmed" | "finalized";
+          simulateOnly?: boolean;
+          requireSimulation?: boolean;
+          dryRun?: boolean;
+          priorityMicroLamports?: number;
+          orderType?: "market" | "limit" | "trigger";
+          timeInForce?: "gtc" | "ioc" | "fok";
+          reduceOnly?: boolean;
+          postOnly?: boolean;
+          quantityMode?: "base" | "quote" | "notional";
+          limitPriceAtomic?: string;
+          triggerPriceAtomic?: string;
+          takeProfitPriceAtomic?: string;
+          stopLossPriceAtomic?: string;
+        };
+      };
     };
-    options?: {
-      commitment?: "processed" | "confirmed" | "finalized";
-      simulateOnly?: boolean;
-      requireSimulation?: boolean;
-      dryRun?: boolean;
-      priorityMicroLamports?: number;
-      orderType?: "market" | "limit" | "trigger";
-      timeInForce?: "gtc" | "ioc" | "fok";
-      reduceOnly?: boolean;
-      postOnly?: boolean;
-      quantityMode?: "base" | "quote" | "notional";
-      limitPriceAtomic?: string;
-      triggerPriceAtomic?: string;
-      takeProfitPriceAtomic?: string;
-      stopLossPriceAtomic?: string;
-    };
-  };
-};
 
 export type ExecutionSubmitAck = {
   requestId: string;
@@ -103,6 +137,46 @@ export type ExecutionTerminalResult = {
   receiptId: string | null;
   provider: string | null;
   networkFeeLamports: string | null;
+};
+
+export type ExecutionOpenOrderSnapshot = {
+  requestId: string;
+  requestStatus: string;
+  terminal: boolean;
+  receivedAt: string | null;
+  updatedAt: string | null;
+  terminalAt: string | null;
+  pairId: string | null;
+  direction: "buy" | "sell" | null;
+  source: string | null;
+  reason: string | null;
+  orderType: "limit" | "trigger" | null;
+  timeInForce: "gtc" | "ioc" | "fok" | null;
+  lane: "fast" | "protected" | "safe" | null;
+  simulationPreference: "auto" | "always" | "never" | null;
+  priorityLevel: "normal" | "high" | "urgent" | null;
+  priorityMicroLamports: number | null;
+  slippageBps: number | null;
+  inputMint: string | null;
+  outputMint: string | null;
+  amountAtomic: string | null;
+  remainingAmountAtomic: string | null;
+  takingAmountAtomic: string | null;
+  filledInputAtomic: string | null;
+  filledOutputAtomic: string | null;
+  limitPriceAtomic: string | null;
+  triggerPriceAtomic: string | null;
+  provider: string | null;
+  signature: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  status: string | null;
+  lifecycle: {
+    orderState?: string;
+    fillState?: string;
+    settlementState?: string;
+    notes?: string[];
+  } | null;
 };
 
 export type ExecutionTransportRequest = {
@@ -401,6 +475,126 @@ function parseReceiptSnapshot(payload: unknown): ExecutionReceiptSnapshot {
   };
 }
 
+function parseStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value
+    .map((entry) => parseOptionalString(entry))
+    .filter((entry): entry is string => entry !== null);
+  return normalized.length > 0 ? normalized : null;
+}
+
+function parseOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function parseOptionalInt(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.floor(parsed);
+}
+
+function parseOpenOrderSnapshot(
+  value: unknown,
+): ExecutionOpenOrderSnapshot | null {
+  if (!isRecord(value)) return null;
+  const requestId = parseOptionalString(value.requestId);
+  const requestStatus = parseOptionalString(value.requestStatus);
+  if (!requestId || !requestStatus) return null;
+  const lifecycleRaw = isRecord(value.lifecycle) ? value.lifecycle : null;
+  return {
+    requestId,
+    requestStatus,
+    terminal: value.terminal === true,
+    receivedAt: parseOptionalString(value.receivedAt),
+    updatedAt: parseOptionalString(value.updatedAt),
+    terminalAt: parseOptionalString(value.terminalAt),
+    pairId: parseOptionalString(value.pairId),
+    direction:
+      value.direction === "buy" || value.direction === "sell"
+        ? value.direction
+        : null,
+    source: parseOptionalString(value.source),
+    reason: parseOptionalString(value.reason),
+    orderType:
+      value.orderType === "limit" || value.orderType === "trigger"
+        ? value.orderType
+        : null,
+    timeInForce:
+      value.timeInForce === "gtc" ||
+      value.timeInForce === "ioc" ||
+      value.timeInForce === "fok"
+        ? value.timeInForce
+        : null,
+    lane:
+      value.lane === "fast" ||
+      value.lane === "protected" ||
+      value.lane === "safe"
+        ? value.lane
+        : null,
+    simulationPreference:
+      value.simulationPreference === "auto" ||
+      value.simulationPreference === "always" ||
+      value.simulationPreference === "never"
+        ? value.simulationPreference
+        : null,
+    priorityLevel:
+      value.priorityLevel === "normal" ||
+      value.priorityLevel === "high" ||
+      value.priorityLevel === "urgent"
+        ? value.priorityLevel
+        : null,
+    priorityMicroLamports: parseOptionalInt(value.priorityMicroLamports),
+    slippageBps: parseOptionalInt(value.slippageBps),
+    inputMint: parseOptionalString(value.inputMint),
+    outputMint: parseOptionalString(value.outputMint),
+    amountAtomic: parseOptionalAtomicString(value.amountAtomic),
+    remainingAmountAtomic: parseOptionalAtomicString(
+      value.remainingAmountAtomic,
+    ),
+    takingAmountAtomic: parseOptionalAtomicString(value.takingAmountAtomic),
+    filledInputAtomic: parseOptionalAtomicString(value.filledInputAtomic),
+    filledOutputAtomic: parseOptionalAtomicString(value.filledOutputAtomic),
+    limitPriceAtomic: parseOptionalAtomicString(value.limitPriceAtomic),
+    triggerPriceAtomic: parseOptionalAtomicString(value.triggerPriceAtomic),
+    provider: parseOptionalString(value.provider),
+    signature: parseOptionalString(value.signature),
+    errorCode: parseOptionalString(value.errorCode),
+    errorMessage: parseOptionalString(value.errorMessage),
+    status: parseOptionalString(value.status),
+    lifecycle: lifecycleRaw
+      ? {
+          orderState: parseOptionalString(lifecycleRaw.orderState) ?? undefined,
+          fillState: parseOptionalString(lifecycleRaw.fillState) ?? undefined,
+          settlementState:
+            parseOptionalString(lifecycleRaw.settlementState) ?? undefined,
+          notes: parseStringArray(lifecycleRaw.notes) ?? undefined,
+        }
+      : null,
+  };
+}
+
+function parseOpenOrdersSnapshot(
+  payload: unknown,
+): ExecutionOpenOrderSnapshot[] {
+  if (!isRecord(payload) || payload.ok !== true) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-open-orders-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  const orders = Array.isArray(payload.orders)
+    ? payload.orders
+        .map((entry) => parseOpenOrderSnapshot(entry))
+        .filter((entry): entry is ExecutionOpenOrderSnapshot => entry !== null)
+    : [];
+  return orders;
+}
+
 function isExecutionSuccessStatus(status: string | null): boolean {
   if (!status) return false;
   const normalized = status.trim().toLowerCase();
@@ -627,6 +821,31 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     return parseReceiptSnapshot(response);
   }
 
+  async function listOpenOrders(
+    options?: RequestOptions,
+  ): Promise<ExecutionOpenOrderSnapshot[]> {
+    const response = await requestJson({
+      path: "/api/terminal/open-orders",
+      method: "GET",
+      signal: options?.signal,
+      headers: options?.headers,
+    });
+    return parseOpenOrdersSnapshot(response);
+  }
+
+  async function cancelOpenOrder(
+    requestId: string,
+    options?: RequestOptions,
+  ): Promise<ExecutionStatusSnapshot> {
+    const response = await requestJson({
+      path: `/api/terminal/open-orders/${encodeURIComponent(requestId)}/cancel`,
+      method: "POST",
+      signal: options?.signal,
+      headers: options?.headers,
+    });
+    return parseStatusSnapshot(response);
+  }
+
   async function waitForTerminalReceipt(input: {
     requestId: string;
     signal?: AbortSignal;
@@ -721,6 +940,8 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     submit,
     status,
     receipt,
+    listOpenOrders,
+    cancelOpenOrder,
     waitForTerminalReceipt,
   };
 }

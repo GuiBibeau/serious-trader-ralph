@@ -23,6 +23,7 @@ export type ExecutionIntentLifecycleSnapshot = {
   orderState?:
     | "accepted"
     | "open"
+    | "triggered"
     | "partially_filled"
     | "filled"
     | "cancel_requested"
@@ -150,6 +151,7 @@ export type ExecuteSwapResult = {
     intentId?: string | null;
     venueSessionId?: string | null;
     settlementRef?: string | null;
+    lifecycle?: ExecutionIntentLifecycleSnapshot;
     lowLatency?: LowLatencyExecutionMeta;
     trace?: {
       txBuiltAt?: string;

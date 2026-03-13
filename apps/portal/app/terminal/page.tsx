@@ -6,6 +6,11 @@ import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../cn";
 import {
+  createExecutionClient,
+  describeExecutionClientError,
+  type ExecutionOpenOrderSnapshot,
+} from "../execution-client";
+import {
   type AccountWallet,
   apiFetchJson,
   type BalanceResponse,
@@ -49,14 +54,9 @@ import { MacroOilWidget } from "./components/macro-oil-widget";
 import { MacroRadarWidget } from "./components/macro-radar-widget";
 import { MacroStablecoinWidget } from "./components/macro-stablecoin-widget";
 import {
-  amendOpenOrder as applyAmendOpenOrder,
-  cancelAllOpenOrders as applyCancelAllOpenOrders,
-  cancelOpenOrder as applyCancelOpenOrder,
-  executeOpenOrderSlice,
+  mapTerminalOpenOrderSnapshot,
   type OpenOrderRow,
   type OpenOrderStatus,
-  promotePendingOrders,
-  queueOpenOrder,
 } from "./components/open-orders";
 import { buildOrderbookLadder } from "./components/orderbook-ladder";
 import {
@@ -95,12 +95,10 @@ import {
   getPairConfig,
   type PairId,
   SUPPORTED_PAIRS,
+  TOKEN_BY_MINT,
   TOKEN_CONFIGS,
 } from "./components/trade-pairs";
-import type {
-  QueuedTerminalOrder,
-  TradeTicketCompletion,
-} from "./components/trade-ticket-modal";
+import type { TradeTicketCompletion } from "./components/trade-ticket-modal";
 import {
   countMissingTradeTicks,
   filterTradeTicks,
@@ -306,6 +304,107 @@ function formatAtomicTokenBalance(
   }
 }
 
+function isSupportedPairId(value: string): value is PairId {
+  return SUPPORTED_PAIRS.some((pair) => pair.id === value);
+}
+
+function buildConditionalOrderExecutionEntry(
+  snapshot: ExecutionOpenOrderSnapshot,
+): ExecutionActivityRow | null {
+  if (
+    !snapshot.requestId ||
+    !snapshot.pairId ||
+    !isSupportedPairId(snapshot.pairId)
+  ) {
+    return null;
+  }
+  if (snapshot.direction !== "buy" && snapshot.direction !== "sell") {
+    return null;
+  }
+  const pair = getPairConfig(snapshot.pairId);
+  const fallbackInputToken =
+    snapshot.direction === "buy"
+      ? TOKEN_CONFIGS[pair.quoteSymbol]
+      : TOKEN_CONFIGS[pair.baseSymbol];
+  const fallbackOutputToken =
+    snapshot.direction === "buy"
+      ? TOKEN_CONFIGS[pair.baseSymbol]
+      : TOKEN_CONFIGS[pair.quoteSymbol];
+  const inputToken =
+    (snapshot.inputMint ? TOKEN_BY_MINT[snapshot.inputMint] : null) ??
+    fallbackInputToken;
+  const outputToken =
+    (snapshot.outputMint ? TOKEN_BY_MINT[snapshot.outputMint] : null) ??
+    fallbackOutputToken;
+  const inputFilledUi = Number(
+    formatAtomicTokenBalance(
+      snapshot.filledInputAtomic,
+      inputToken.decimals,
+      9,
+    ),
+  );
+  const outputFilledUi = Number(
+    formatAtomicTokenBalance(
+      snapshot.filledOutputAtomic,
+      outputToken.decimals,
+      9,
+    ),
+  );
+  const baseFilledUi =
+    snapshot.direction === "buy" ? outputFilledUi : inputFilledUi;
+  const quoteFilledUi =
+    snapshot.direction === "buy" ? inputFilledUi : outputFilledUi;
+  if (
+    (!Number.isFinite(baseFilledUi) || baseFilledUi <= 0) &&
+    (!Number.isFinite(quoteFilledUi) || quoteFilledUi <= 0)
+  ) {
+    return null;
+  }
+  const fillPrice =
+    Number.isFinite(baseFilledUi) && baseFilledUi > 0
+      ? quoteFilledUi / baseFilledUi
+      : null;
+  const tsRaw = Date.parse(
+    snapshot.terminalAt ?? snapshot.updatedAt ?? snapshot.receivedAt ?? "",
+  );
+  return {
+    id: `conditional-${snapshot.requestId}`,
+    ts: Number.isFinite(tsRaw) ? tsRaw : Date.now(),
+    requestId: snapshot.requestId,
+    receiptId: null,
+    pairId: snapshot.pairId,
+    direction: snapshot.direction,
+    leg: `${inputToken.symbol} -> ${outputToken.symbol}`,
+    lane: snapshot.lane ?? "safe",
+    baseFilledUi,
+    quoteFilledUi,
+    fillPrice,
+    feeUi: null,
+    feeSymbol: null,
+    status: snapshot.status ?? snapshot.requestStatus,
+    provider: snapshot.provider,
+    signature: snapshot.signature,
+    qualitySummary: `lane ${snapshot.lane ?? "safe"} • sim ${snapshot.simulationPreference ?? "auto"} • slip ${snapshot.slippageBps ?? 50} bps • prio ${snapshot.priorityLevel ?? "normal"}`,
+  };
+}
+
+function mergeExecutionActivityRows(
+  current: readonly ExecutionActivityRow[],
+  incoming: readonly ExecutionActivityRow[],
+): ExecutionActivityRow[] {
+  if (incoming.length === 0) return [...current];
+  const byRequestId = new Map<string, ExecutionActivityRow>();
+  for (const entry of current) {
+    byRequestId.set(entry.requestId, entry);
+  }
+  for (const entry of incoming) {
+    byRequestId.set(entry.requestId, entry);
+  }
+  return Array.from(byRequestId.values())
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 250);
+}
+
 function parseAccountWallet(payload: unknown): AccountWallet | null {
   if (!isRecord(payload)) return null;
   const signerType = String(payload.signerType ?? "").trim();
@@ -353,18 +452,6 @@ function isTypingTarget(target: EventTarget | null): boolean {
   if (target.isContentEditable) return true;
   const tag = target.tagName;
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-}
-
-function parseOpenOrderExecutionMarker(reason: string): {
-  orderId: string;
-  fraction: 0.5 | 1;
-} | null {
-  const match = reason.match(/\[order:([A-Za-z0-9_-]+);fraction:(0\.5|1)\]/);
-  if (!match) return null;
-  const orderId = match[1] ?? "";
-  const fraction = match[2] === "0.5" ? 0.5 : 1;
-  if (!orderId) return null;
-  return { orderId, fraction };
 }
 
 const ACCOUNT_RISK_THRESHOLDS = resolveAccountRiskThresholds();
@@ -1029,6 +1116,46 @@ function ControlRoom() {
     setLadderPrefill(null);
   }, []);
 
+  const refreshOpenOrders = useCallback(async (): Promise<void> => {
+    if (!authenticated) {
+      setOpenOrders([]);
+      return;
+    }
+    const token = await getAccessToken();
+    if (!token) {
+      setOpenOrders([]);
+      return;
+    }
+    try {
+      const executionClient = createExecutionClient({
+        authToken: token,
+      });
+      const snapshots = await executionClient.listOpenOrders();
+      const rows = snapshots
+        .map((snapshot) => mapTerminalOpenOrderSnapshot(snapshot))
+        .filter((row): row is OpenOrderRow => row !== null)
+        .filter((row) => row.terminal !== true);
+      setOpenOrders(rows);
+
+      const terminalEntries = snapshots
+        .filter((snapshot) => snapshot.terminal)
+        .map((snapshot) => buildConditionalOrderExecutionEntry(snapshot))
+        .filter((entry): entry is ExecutionActivityRow => entry !== null);
+      if (terminalEntries.length > 0) {
+        setRecentExecutions((current) =>
+          mergeExecutionActivityRows(current, terminalEntries),
+        );
+      }
+    } catch (error) {
+      setMessage(
+        describeExecutionClientError(
+          error,
+          "conditional-orders-refresh-failed",
+        ),
+      );
+    }
+  }, [authenticated, getAccessToken]);
+
   const openTradeTicket = useCallback(
     (intent: TradeIntent): void => {
       if (!hasWallet) {
@@ -1041,103 +1168,61 @@ function ControlRoom() {
     [hasWallet],
   );
 
-  const handleOrderQueued = useCallback((order: QueuedTerminalOrder): void => {
-    setOpenOrders((current) => queueOpenOrder(current, order));
-  }, []);
+  const handleOrderQueued = useCallback(
+    (_requestId: string): void => {
+      void refreshOpenOrders();
+    },
+    [refreshOpenOrders],
+  );
 
-  const cancelOpenOrder = useCallback((orderId: string): void => {
-    setOpenOrders((current) =>
-      applyCancelOpenOrder(current, orderId, Date.now()),
-    );
-  }, []);
+  const cancelOpenOrder = useCallback(
+    (requestId: string): void => {
+      void (async () => {
+        try {
+          const token = await getAccessToken();
+          if (!token) throw new Error("missing-access-token");
+          const executionClient = createExecutionClient({
+            authToken: token,
+          });
+          await executionClient.cancelOpenOrder(requestId);
+          await refreshOpenOrders();
+        } catch (error) {
+          setMessage(
+            describeExecutionClientError(
+              error,
+              "conditional-order-cancel-failed",
+            ),
+          );
+        }
+      })();
+    },
+    [getAccessToken, refreshOpenOrders],
+  );
 
   const cancelAllOpenOrders = useCallback((): void => {
     if (openOrders.length === 0) return;
-    setOpenOrders((current) => applyCancelAllOpenOrders(current, Date.now()));
-  }, [openOrders.length]);
-
-  const amendOpenOrder = useCallback(
-    (orderId: string): void => {
-      const target = openOrders.find((order) => order.id === orderId);
-      if (!target) return;
-
-      const amountRaw = window.prompt(
-        "Amend remaining amount",
-        target.remainingAmountUi,
-      );
-      if (amountRaw === null) return;
-      const nextPriceRaw =
-        target.orderType === "limit"
-          ? window.prompt("Amend limit price", target.limitPriceUi ?? "")
-          : window.prompt("Amend trigger price", target.triggerPriceUi ?? "");
-      if (nextPriceRaw === null) return;
-      setOpenOrders(
-        (current) =>
-          applyAmendOpenOrder({
-            current,
-            orderId,
-            amountUi: amountRaw,
-            priceUi: nextPriceRaw,
-            now: Date.now(),
-          }).next,
-      );
-    },
-    [openOrders],
-  );
-
-  const executeOpenOrder = useCallback(
-    (input: { orderId: string; fraction: 0.5 | 1 }): void => {
-      const target = openOrders.find((order) => order.id === input.orderId);
-      if (!target) return;
-      const execution = executeOpenOrderSlice({
-        current: openOrders,
-        orderId: input.orderId,
-        fraction: input.fraction,
-        now: Date.now(),
-      });
-      if (!execution.ok) {
-        setOpenOrders(execution.next);
-        return;
+    void (async () => {
+      try {
+        const token = await getAccessToken();
+        if (!token) throw new Error("missing-access-token");
+        const executionClient = createExecutionClient({
+          authToken: token,
+        });
+        for (const order of openOrders) {
+          const requestId = order.requestId ?? order.id;
+          await executionClient.cancelOpenOrder(requestId);
+        }
+        await refreshOpenOrders();
+      } catch (error) {
+        setMessage(
+          describeExecutionClientError(
+            error,
+            "conditional-order-cancel-failed",
+          ),
+        );
       }
-
-      const now = Date.now();
-      openTradeTicket(
-        createTradeIntent(
-          target.direction,
-          "OPEN_ORDERS_PANEL",
-          target.pairId,
-          {
-            reason: `${target.orderType.toUpperCase()} order manual execution [order:${target.id};fraction:${input.fraction}]`,
-            amountUi: execution.executeAmountUi,
-            slippageBps: target.slippageBps,
-          },
-        ),
-      );
-
-      setOpenOrders((current) =>
-        current.map((order) =>
-          order.id === input.orderId
-            ? {
-                ...order,
-                status: "working",
-                updatedAt: now,
-                lastError: null,
-              }
-            : order,
-        ),
-      );
-    },
-    [openOrders, openTradeTicket],
-  );
-
-  useEffect(() => {
-    if (openOrders.length === 0) return;
-    const timer = window.setInterval(() => {
-      const now = Date.now();
-      setOpenOrders((current) => promotePendingOrders(current, now));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [openOrders.length]);
+    })();
+  }, [getAccessToken, openOrders, refreshOpenOrders]);
 
   const handleLadderPrefill = useCallback((nextPrefill: LadderPrefill) => {
     setLadderPrefill((current) => {
@@ -1239,7 +1324,8 @@ function ControlRoom() {
 
   const triggerRefresh = useCallback(() => {
     void refresh();
-  }, [refresh]);
+    void refreshOpenOrders();
+  }, [refresh, refreshOpenOrders]);
 
   useEffect(() => {
     const focusHotkeyActions: Array<{
@@ -1373,18 +1459,6 @@ function ControlRoom() {
   const handleTradeComplete = useCallback(
     (trade: TradeTicketCompletion): void => {
       applyOptimisticTradeBalances(trade);
-      const openOrderExecution = parseOpenOrderExecutionMarker(trade.reason);
-      if (openOrderExecution) {
-        setOpenOrders(
-          (current) =>
-            executeOpenOrderSlice({
-              current,
-              orderId: openOrderExecution.orderId,
-              fraction: openOrderExecution.fraction,
-              now: Date.now(),
-            }).next,
-        );
-      }
       setRecentExecutions((current) => {
         const entry: ExecutionActivityRow = {
           id: crypto.randomUUID(),
@@ -1419,6 +1493,18 @@ function ControlRoom() {
     }, 15_000);
     return () => window.clearInterval(timer);
   }, [wallet, refreshWalletBalances]);
+
+  useEffect(() => {
+    if (!authenticated || !wallet) {
+      setOpenOrders([]);
+      return;
+    }
+    void refreshOpenOrders();
+    const timer = window.setInterval(() => {
+      void refreshOpenOrders();
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [authenticated, refreshOpenOrders, wallet]);
 
   const {
     setWalletBalances: setGlobalWalletBalances,
@@ -1899,8 +1985,6 @@ function ControlRoom() {
                         onQuickAction={openTradeTicket}
                         onCancelOrder={cancelOpenOrder}
                         onCancelAllOrders={cancelAllOpenOrders}
-                        onAmendOrder={amendOpenOrder}
-                        onExecuteOrder={executeOpenOrder}
                       />
                     </div>
                   ) : null}
@@ -2761,8 +2845,6 @@ const PositionsOrdersFillsPanel = memo(
     onQuickAction: (intent: TradeIntent) => void;
     onCancelOrder: (orderId: string) => void;
     onCancelAllOrders: () => void;
-    onAmendOrder: (orderId: string) => void;
-    onExecuteOrder: (input: { orderId: string; fraction: 0.5 | 1 }) => void;
   }) {
     const {
       entries,
@@ -2774,8 +2856,6 @@ const PositionsOrdersFillsPanel = memo(
       onQuickAction,
       onCancelOrder,
       onCancelAllOrders,
-      onAmendOrder,
-      onExecuteOrder,
     } = props;
     const markByPair = useMemo(
       () =>
@@ -2885,6 +2965,12 @@ const PositionsOrdersFillsPanel = memo(
         return "border-emerald-500/40 bg-emerald-500/10 text-emerald-300";
       }
       if (status === "partial") {
+        return "border-amber-500/40 bg-amber-500/10 text-amber-300";
+      }
+      if (status === "filled") {
+        return "border-emerald-500/40 bg-emerald-500/10 text-emerald-300";
+      }
+      if (status === "expired") {
         return "border-amber-500/40 bg-amber-500/10 text-amber-300";
       }
       if (status === "cancelled") {
@@ -3036,6 +3122,11 @@ const PositionsOrdersFillsPanel = memo(
                           : `TRG ${order.triggerPriceUi ?? "--"}`}{" "}
                         • {order.timeInForce.toUpperCase()}
                       </p>
+                      {order.requestId ? (
+                        <p className="text-[10px] text-muted">
+                          Request {shortExecutionId(order.requestId)}
+                        </p>
+                      ) : null}
                     </div>
                     <span
                       className={cn(
@@ -3056,61 +3147,38 @@ const PositionsOrdersFillsPanel = memo(
                       className={cn(
                         BTN_SECONDARY,
                         "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
-                        (!tradingEnabled ||
-                          order.status === "cancelled" ||
-                          order.status === "failed") &&
-                          "opacity-60 pointer-events-none",
+                        !order.requestId && "opacity-60 pointer-events-none",
                       )}
                       onClick={() =>
-                        onExecuteOrder({ orderId: order.id, fraction: 0.5 })
+                        order.requestId ? openInspector(order.requestId) : null
                       }
                       type="button"
-                      disabled={
-                        !tradingEnabled ||
-                        order.status === "cancelled" ||
-                        order.status === "failed"
-                      }
+                      disabled={!order.requestId}
                     >
-                      Exec 50%
+                      Inspect
                     </button>
                     <button
                       className={cn(
                         BTN_SECONDARY,
                         "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
                         (!tradingEnabled ||
+                          order.terminal === true ||
                           order.status === "cancelled" ||
-                          order.status === "failed") &&
+                          order.status === "failed" ||
+                          order.status === "filled" ||
+                          order.status === "expired") &&
                           "opacity-60 pointer-events-none",
                       )}
-                      onClick={() =>
-                        onExecuteOrder({ orderId: order.id, fraction: 1 })
-                      }
+                      onClick={() => onCancelOrder(order.requestId ?? order.id)}
                       type="button"
                       disabled={
                         !tradingEnabled ||
+                        order.terminal === true ||
                         order.status === "cancelled" ||
-                        order.status === "failed"
+                        order.status === "failed" ||
+                        order.status === "filled" ||
+                        order.status === "expired"
                       }
-                    >
-                      Execute all
-                    </button>
-                    <button
-                      className={cn(
-                        BTN_SECONDARY,
-                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
-                      )}
-                      onClick={() => onAmendOrder(order.id)}
-                      type="button"
-                    >
-                      Amend
-                    </button>
-                    <button
-                      className={cn(
-                        BTN_SECONDARY,
-                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
-                      )}
-                      onClick={() => onCancelOrder(order.id)}
-                      type="button"
                     >
                       Cancel
                     </button>

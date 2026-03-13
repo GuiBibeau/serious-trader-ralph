@@ -45,6 +45,15 @@ import {
   reserveExecutionSubmitRequest,
 } from "./execution/idempotency";
 import {
+  type readTrackedJupiterTriggerOrder,
+  resolveJupiterConditionalSpotOrder,
+  summarizeJupiterTriggerOrder,
+} from "./execution/jupiter_trigger";
+import {
+  buildTerminalJupiterTriggerReceipt,
+  reconcileJupiterConditionalOrder,
+} from "./execution/jupiter_trigger_reconciliation";
+import {
   readExecutionLaneRoutingConfig,
   resolveExecutionLane,
 } from "./execution/lane_resolver";
@@ -69,19 +78,23 @@ import {
 import {
   appendExecutionStatusEvent,
   createExecutionAttemptIdempotent,
+  type ExecutionRequestRecord,
   finalizeExecutionAttempt,
   getExecutionLatestStatus,
   listExecutionAttempts,
   listExecutionStatusEvents,
+  listOpenExecutionRequestsByActorAndIntentFamily,
   terminalizeExecutionRequest,
   updateExecutionRequestStatus,
   upsertExecutionReceiptIdempotent,
 } from "./execution/repository";
 import { evaluateExecutionRolloutGate } from "./execution/rollout_gate";
 import {
+  executeIntentViaRouter,
   executeSwapViaRouter,
   resolveExecutionAdapterRegistration,
 } from "./execution/router";
+import { evaluateSafeLaneTransaction } from "./execution/safe_lane_policy";
 import {
   buildExecSubmitIntentSummary,
   parseExecSubmitPayload,
@@ -150,7 +163,7 @@ import {
   SUPPORTED_PERPS_VENUES,
 } from "./perps_sources";
 import { enforcePolicy, normalizePolicy } from "./policy";
-import { createPrivySolanaWallet } from "./privy";
+import { createPrivySolanaWallet, signTransactionWithPrivyById } from "./privy";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
 import {
@@ -637,9 +650,10 @@ function policyDeniedReason(value: unknown): string | null {
   return null;
 }
 
-function resolveTerminalFailureFromExecuteResult(
+export function resolveTerminalFailureFromExecuteResult(
   status: string,
   err: unknown,
+  signature?: string | null,
 ): {
   terminalStatus: "failed" | "rejected";
   errorCode: string;
@@ -659,6 +673,13 @@ function resolveTerminalFailureFromExecuteResult(
       errorCode: "policy-denied",
       statusReason: `policy-denied:${deniedReason}`,
     };
+  }
+  if (
+    status === "error" &&
+    typeof signature === "string" &&
+    signature.trim().length > 0
+  ) {
+    return null;
   }
   const canonicalErrorCode = normalizeExecutionErrorCode({
     statusHint: status,
@@ -1110,6 +1131,12 @@ const worker = {
         const compatRequest = toExecSubmitRequestV1Compat(parsed.value);
         const intentFamily = resolveExecSubmitIntentFamily(parsed.value);
         const spotSwap = resolveExecSubmitSpotSwap(parsed.value);
+        const conditionalSpotOrder =
+          parsed.value.mode === "privy_execute" &&
+          parsed.value.schemaVersion === "v2" &&
+          parsed.value.privyExecute?.intent.family === "conditional_spot_order"
+            ? parsed.value.privyExecute
+            : null;
         const intentSummary = buildExecSubmitIntentSummary(parsed.value);
 
         const idempotencyKey = readIdempotencyKey(request);
@@ -1374,7 +1401,48 @@ const worker = {
           };
         }
 
+        if (
+          parsed.value.schemaVersion === "v2" &&
+          spotSwap?.venueKey &&
+          spotSwap.venueKey !== "jupiter"
+        ) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: `unsupported-venue-key:${spotSwap.venueKey}`,
+              },
+            }),
+            env,
+          );
+        }
         if (parsed.value.mode === "privy_execute" && !compatRequest) {
+          if (
+            parsed.value.schemaVersion === "v2" &&
+            conditionalSpotOrder &&
+            conditionalSpotOrder.intent.venueKey !== "jupiter"
+          ) {
+            return withCors(
+              execErrorResponse({
+                code: "invalid-request",
+                details: {
+                  reason: `unsupported-venue-key:${conditionalSpotOrder.intent.venueKey}`,
+                },
+              }),
+              env,
+            );
+          }
+          if (parsed.value.schemaVersion === "v2" && conditionalSpotOrder) {
+            return withCors(
+              execErrorResponse({
+                code: "invalid-request",
+                details: {
+                  reason: "unsupported-conditional-order-compat",
+                },
+              }),
+              env,
+            );
+          }
           return withCors(
             execErrorResponse({
               code: "invalid-request",
@@ -1389,14 +1457,14 @@ const worker = {
         }
         if (
           parsed.value.schemaVersion === "v2" &&
-          spotSwap?.venueKey &&
-          spotSwap.venueKey !== "jupiter"
+          conditionalSpotOrder &&
+          conditionalSpotOrder.intent.venueKey !== "jupiter"
         ) {
           return withCors(
             execErrorResponse({
               code: "invalid-request",
               details: {
-                reason: `unsupported-venue-key:${spotSwap.venueKey}`,
+                reason: `unsupported-venue-key:${conditionalSpotOrder.intent.venueKey}`,
               },
             }),
             env,
@@ -1436,6 +1504,21 @@ const worker = {
               details: {
                 reason: submitPolicy.reason,
                 policy: submitPolicy.metadata,
+              },
+            }),
+            env,
+          );
+        }
+        if (
+          parsed.value.schemaVersion === "v2" &&
+          conditionalSpotOrder &&
+          laneResolution.adapter !== "jupiter"
+        ) {
+          return withCors(
+            execErrorResponse({
+              code: "unsupported-lane",
+              details: {
+                reason: `conditional-orders-require-safe-lane:${laneResolution.adapter}`,
               },
             }),
             env,
@@ -1581,335 +1664,722 @@ const worker = {
           shouldSyncExecutePrivySubmit(env) &&
           privyActorContext
         ) {
-          if (!spotSwap) {
-            return withCors(
-              execErrorResponse({
-                code: "invalid-request",
-                details: {
-                  reason: intentFamily
-                    ? `unsupported-intent-family:${intentFamily}`
-                    : "unsupported-intent-family",
-                },
-              }),
-              env,
-            );
-          }
-          const swap = spotSwap.swap;
-          const options = spotSwap.options ?? {};
-          const requestedRequireSimulation =
-            typeof options.requireSimulation === "boolean"
-              ? options.requireSimulation
-              : null;
-          const effectiveRequireSimulation =
-            submitPolicyRuntime?.requireSimulation === true ||
-            requestedRequireSimulation === true;
-          const executionParams: Record<string, unknown> = {
-            lane: laneResolution.lane,
-          };
-          if (requestedRequireSimulation === false) {
-            executionParams.requireSimulation = false;
-          }
-          if (effectiveRequireSimulation) {
-            executionParams.requireSimulation = true;
-          }
-          if (typeof options.priorityMicroLamports === "number") {
-            executionParams.priorityMicroLamports =
-              options.priorityMicroLamports;
-          }
-          const execution = {
-            adapter: laneResolution.adapter,
-            params: executionParams,
-          };
-          const policy = normalizePolicy({
-            allowedMints: SUPPORTED_TRADING_MINTS,
-            slippageBps: swap.slippageBps,
-            maxPriceImpactPct: 0.05,
-            minSolReserveLamports: "50000000",
-            simulateOnly: Boolean(options.simulateOnly),
-            dryRun: Boolean(options.dryRun),
-            commitment: options.commitment ?? "confirmed",
-          });
-
-          const attemptId = newExecutionAttemptId();
-          const attemptStartedAt = new Date().toISOString();
-          const qualityMetadata = {
-            lane: laneResolution.lane,
-            slippageBps: swap.slippageBps,
-            requestedRequireSimulation,
-            effectiveRequireSimulation,
-            priorityMicroLamports:
-              typeof options.priorityMicroLamports === "number"
-                ? options.priorityMicroLamports
-                : null,
-          };
-          let providerResponse: Record<string, unknown> | null = {
-            route: laneResolution.adapter,
-            lane: laneResolution.lane,
-            mode: parsed.value.mode,
-            quality: qualityMetadata,
-          };
-
-          try {
-            const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
-            if (!rpcEndpoint) {
-              throw new Error("rpc-endpoint-missing");
-            }
-            const rpc = new SolanaRpc(rpcEndpoint);
-            const jupiter = new JupiterClient(
-              String(env.JUPITER_BASE_URL ?? "").trim() ||
-                X402_READ_JUPITER_BASE_URL,
-              env.JUPITER_API_KEY,
-            );
-
-            const runtimeBalancePolicy =
-              await evaluatePrivyRuntimeBalancePolicy({
+          if (conditionalSpotOrder) {
+            const options = conditionalSpotOrder.options ?? {};
+            const compatSwap = compatRequest?.privyExecute?.swap ?? null;
+            if (!compatSwap) {
+              return withCors(
+                execErrorResponse({
+                  code: "invalid-request",
+                  details: {
+                    reason: "unsupported-conditional-order-compat",
+                  },
+                }),
                 env,
-                lane: laneResolution.lane,
-                walletAddress: privyActorContext.walletAddress,
-                inputMint: swap.inputMint,
-                amountAtomic: swap.amountAtomic,
-                minSolReserveLamports: policy.minSolReserveLamports,
-                rpc,
-                runtimeDefaults: submitPolicyRuntime,
-              });
-            providerResponse = {
-              ...(providerResponse ?? {}),
-              runtimePolicy: runtimeBalancePolicy.metadata,
-            };
-            if (!runtimeBalancePolicy.ok) {
-              throw asPolicyDeniedError(runtimeBalancePolicy.reason);
-            }
-
-            const quoteResponse = await jupiter.quote({
-              inputMint: swap.inputMint,
-              outputMint: swap.outputMint,
-              amount: swap.amountAtomic,
-              slippageBps: policy.slippageBps,
-              swapMode: "ExactIn",
-            });
-            try {
-              enforcePolicy(policy, quoteResponse);
-            } catch (error) {
-              throw asPolicyDeniedError(
-                `privy-quote-${normalizePolicyReason(error, "policy-violation")}`,
               );
             }
-            const referenceGuard = await evaluateOracleReferencePriceGuard({
-              env,
-              mode: "live",
-              inputMint: swap.inputMint,
-              outputMint: swap.outputMint,
-              inputAmountAtomic: swap.amountAtomic,
-              expectedOutputAmountAtomic: String(quoteResponse.outAmount ?? ""),
-              jupiter,
-            });
-            providerResponse = {
-              ...(providerResponse ?? {}),
-              ...(referenceGuard.enabled
-                ? {
-                    referencePrice: {
-                      verdict: referenceGuard.verdict,
-                      reason: referenceGuard.reason,
-                      executionPrice: referenceGuard.executionPrice,
-                      executionDivergenceBps:
-                        referenceGuard.executionDivergenceBps,
-                      snapshot: referenceGuard.snapshot,
-                    },
-                  }
-                : {}),
-            };
-            if (referenceGuard.enabled && referenceGuard.verdict !== "allow") {
-              throw asPolicyDeniedError(
-                referenceGuard.reason ?? "reference-price-policy-denied",
-              );
-            }
-
-            await updateExecutionRequestStatus(env.WAITLIST_DB, {
-              requestId: reservation.request.requestId,
-              status: "dispatched",
-              statusReason: null,
-            });
-            await appendExecutionStatusEvent(env.WAITLIST_DB, {
-              requestId: reservation.request.requestId,
-              status: "dispatched",
-              reason: null,
-              details: {
-                provider: laneResolution.adapter,
-                attempt: 1,
+            const resolvedConditionalOrder = resolveJupiterConditionalSpotOrder(
+              {
+                family: "conditional_spot_order",
+                wallet: conditionalSpotOrder.wallet,
+                venueKey: conditionalSpotOrder.intent.venueKey,
+                marketType: "spot",
+                instrumentId: conditionalSpotOrder.intent.instrumentId,
+                side: conditionalSpotOrder.intent.side,
+                quantityAtomic: conditionalSpotOrder.intent.quantityAtomic,
+                params: conditionalSpotOrder.options ?? null,
               },
-              createdAt: attemptStartedAt,
-            });
-            await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
-              attemptId,
-              requestId: reservation.request.requestId,
-              attemptNo: 1,
-              lane: laneResolution.lane,
-              provider: laneResolution.adapter,
-              status: "dispatched",
-              providerResponse,
-              startedAt: attemptStartedAt,
-            });
-
-            const result = await executeSwapViaRouter({
-              env,
-              venueKey: spotSwap?.venueKey,
-              execution,
-              policy,
-              rpc,
-              jupiter,
-              quoteResponse,
-              userPublicKey: privyActorContext.walletAddress,
-              privyWalletId: privyActorContext.privyWalletId,
-              log(level, message, meta) {
-                console[level]("exec.submit", {
-                  requestId: reservation.request.requestId,
-                  userId: privyActorContext.userId,
-                  message,
-                  ...(meta ?? {}),
-                });
-              },
-            });
-            const settledAt = new Date().toISOString();
-            const failure = resolveTerminalFailureFromExecuteResult(
-              result.status,
-              result.err,
             );
-            const terminalStatus = failure ? failure.terminalStatus : "landed";
-            const errorMessage = executionErrorMessage(result.err);
-            providerResponse = {
-              ...(providerResponse ?? {}),
-              executionStatus: result.status,
-              refreshed: result.refreshed,
-              lastValidBlockHeight: result.lastValidBlockHeight,
-              executionMeta:
-                result.executionMeta &&
-                typeof result.executionMeta === "object" &&
-                !Array.isArray(result.executionMeta)
-                  ? result.executionMeta
+            const requestedRequireSimulation =
+              typeof options.requireSimulation === "boolean"
+                ? options.requireSimulation
+                : null;
+            const effectiveRequireSimulation =
+              submitPolicyRuntime?.requireSimulation === true ||
+              requestedRequireSimulation === true;
+            const executionParams: Record<string, unknown> = {
+              lane: laneResolution.lane,
+            };
+            if (requestedRequireSimulation === false) {
+              executionParams.requireSimulation = false;
+            }
+            if (effectiveRequireSimulation) {
+              executionParams.requireSimulation = true;
+            }
+            if (typeof options.priorityMicroLamports === "number") {
+              executionParams.priorityMicroLamports =
+                options.priorityMicroLamports;
+            }
+            const execution = {
+              adapter: laneResolution.adapter,
+              params: executionParams,
+            };
+            const policy = normalizePolicy({
+              allowedMints: SUPPORTED_TRADING_MINTS,
+              slippageBps: compatSwap.slippageBps,
+              maxPriceImpactPct: 0.05,
+              minSolReserveLamports: "50000000",
+              simulateOnly: Boolean(options.simulateOnly),
+              dryRun: Boolean(options.dryRun),
+              commitment: options.commitment ?? "confirmed",
+            });
+
+            const attemptId = newExecutionAttemptId();
+            const attemptStartedAt = new Date().toISOString();
+            const qualityMetadata = {
+              lane: laneResolution.lane,
+              orderType: options.orderType ?? null,
+              timeInForce: options.timeInForce ?? "gtc",
+              requestedRequireSimulation,
+              effectiveRequireSimulation,
+              priorityMicroLamports:
+                typeof options.priorityMicroLamports === "number"
+                  ? options.priorityMicroLamports
+                  : null,
+              limitPriceAtomic:
+                typeof options.limitPriceAtomic === "string"
+                  ? options.limitPriceAtomic
+                  : null,
+              triggerPriceAtomic:
+                typeof options.triggerPriceAtomic === "string"
+                  ? options.triggerPriceAtomic
                   : null,
             };
+            let providerResponse: Record<string, unknown> | null = {
+              route: laneResolution.adapter,
+              lane: laneResolution.lane,
+              mode: parsed.value.mode,
+              quality: qualityMetadata,
+            };
 
-            await finalizeExecutionAttempt(env.WAITLIST_DB, {
-              attemptId,
-              status: result.status,
-              providerResponse,
-              errorCode: failure ? failure.errorCode : null,
-              errorMessage,
-              completedAt: settledAt,
-            });
-            await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
-              requestId: reservation.request.requestId,
-              receiptId: newExecutionReceiptId(),
-              finalizedStatus: terminalStatus,
-              lane: laneResolution.lane,
-              provider: laneResolution.adapter,
-              signature: result.signature,
-              slot: null,
-              errorCode: failure ? failure.errorCode : null,
-              errorMessage,
-              receipt: {
-                mode: parsed.value.mode,
-                route: laneResolution.adapter,
-                resultStatus: result.status,
-                outcome: terminalStatus,
-                lifecycle: {
-                  settlementState:
-                    result.status === "finalized"
-                      ? "finalized"
-                      : result.status === "confirmed"
-                        ? "confirmed"
-                        : "landed",
-                  notes: ["spot_swap"],
-                },
-                quality: qualityMetadata,
-                quote: {
-                  inputMint: swap.inputMint,
-                  outputMint: swap.outputMint,
-                  inAmount: swap.amountAtomic,
-                  outAmount: String(result.usedQuote?.outAmount ?? ""),
-                },
-              },
-              readyAt: settledAt,
-            });
-            await terminalizeExecutionRequest(env.WAITLIST_DB, {
-              requestId: reservation.request.requestId,
-              status: terminalStatus,
-              statusReason: failure ? failure.statusReason : null,
-              details: {
-                provider: laneResolution.adapter,
-                attempt: 1,
-                ...(result.signature ? { signature: result.signature } : {}),
-              },
-              nowIso: settledAt,
-            });
-          } catch (error) {
-            const failedAt = new Date().toISOString();
-            const deniedReason = policyDeniedReason(error);
-            const terminalStatus = deniedReason ? "rejected" : "failed";
-            const errorCode = deniedReason
-              ? "policy-denied"
-              : normalizeExecutionErrorCode({
-                  error,
-                  fallback: "submission-failed",
+            try {
+              const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
+              if (!rpcEndpoint) {
+                throw new Error("rpc-endpoint-missing");
+              }
+              const rpc = new SolanaRpc(rpcEndpoint);
+              const jupiter = new JupiterClient(
+                String(env.JUPITER_BASE_URL ?? "").trim() ||
+                  X402_READ_JUPITER_BASE_URL,
+                env.JUPITER_API_KEY,
+              );
+
+              const runtimeBalancePolicy =
+                await evaluatePrivyRuntimeBalancePolicy({
+                  env,
+                  lane: laneResolution.lane,
+                  walletAddress: privyActorContext.walletAddress,
+                  inputMint: compatSwap.inputMint,
+                  amountAtomic: compatSwap.amountAtomic,
+                  minSolReserveLamports: policy.minSolReserveLamports,
+                  rpc,
+                  runtimeDefaults: submitPolicyRuntime,
                 });
-            const statusReason = deniedReason
-              ? `policy-denied:${deniedReason}`
-              : errorCode;
-            const errorMessage =
-              executionErrorMessage(error) ?? "execution-submit-failed";
-            await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
-              attemptId,
-              requestId: reservation.request.requestId,
-              attemptNo: 1,
-              lane: laneResolution.lane,
-              provider: laneResolution.adapter,
-              status: terminalStatus,
-              providerResponse,
-              errorCode,
-              errorMessage,
-              startedAt: attemptStartedAt,
-            });
-            await finalizeExecutionAttempt(env.WAITLIST_DB, {
-              attemptId,
-              status: terminalStatus,
-              providerResponse,
-              errorCode,
-              errorMessage,
-              completedAt: failedAt,
-            });
-            await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
-              requestId: reservation.request.requestId,
-              receiptId: newExecutionReceiptId(),
-              finalizedStatus: terminalStatus,
-              lane: laneResolution.lane,
-              provider: laneResolution.adapter,
-              signature: null,
-              slot: null,
-              errorCode,
-              errorMessage,
-              receipt: {
-                mode: parsed.value.mode,
-                route: laneResolution.adapter,
-                outcome: terminalStatus,
-                lifecycle: {
-                  settlementState: "failed",
-                  notes: [statusReason],
+              providerResponse = {
+                ...(providerResponse ?? {}),
+                runtimePolicy: runtimeBalancePolicy.metadata,
+              };
+              if (!runtimeBalancePolicy.ok) {
+                throw asPolicyDeniedError(runtimeBalancePolicy.reason);
+              }
+
+              const referenceGuard = await evaluateOracleReferencePriceGuard({
+                env,
+                mode: "live",
+                inputMint: compatSwap.inputMint,
+                outputMint: compatSwap.outputMint,
+                inputAmountAtomic: compatSwap.amountAtomic,
+                expectedOutputAmountAtomic:
+                  resolvedConditionalOrder.takingAmount,
+                jupiter,
+              });
+              providerResponse = {
+                ...(providerResponse ?? {}),
+                ...(referenceGuard.enabled
+                  ? {
+                      referencePrice: {
+                        verdict: referenceGuard.verdict,
+                        reason: referenceGuard.reason,
+                        executionPrice: referenceGuard.executionPrice,
+                        executionDivergenceBps:
+                          referenceGuard.executionDivergenceBps,
+                        snapshot: referenceGuard.snapshot,
+                      },
+                    }
+                  : {}),
+              };
+              if (
+                referenceGuard.enabled &&
+                referenceGuard.verdict !== "allow"
+              ) {
+                throw asPolicyDeniedError(
+                  referenceGuard.reason ?? "reference-price-policy-denied",
+                );
+              }
+
+              await updateExecutionRequestStatus(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                status: "dispatched",
+                statusReason: null,
+              });
+              await appendExecutionStatusEvent(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                status: "dispatched",
+                reason: null,
+                details: {
+                  provider: laneResolution.adapter,
+                  attempt: 1,
                 },
-                quality: qualityMetadata,
-              },
-              readyAt: failedAt,
-            });
-            await terminalizeExecutionRequest(env.WAITLIST_DB, {
-              requestId: reservation.request.requestId,
-              status: terminalStatus,
-              statusReason,
-              details: {
+                createdAt: attemptStartedAt,
+              });
+              await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
+                attemptId,
+                requestId: reservation.request.requestId,
+                attemptNo: 1,
+                lane: laneResolution.lane,
                 provider: laneResolution.adapter,
-                attempt: 1,
+                status: "dispatched",
+                providerResponse,
+                startedAt: attemptStartedAt,
+              });
+
+              const result = await executeIntentViaRouter({
+                env,
+                venueKey: conditionalSpotOrder.intent.venueKey,
+                runtimeMode: "live",
+                requireVenueRouting: true,
+                subjectControlBypassReason: undefined,
+                execution,
+                policy,
+                rpc,
+                jupiter,
+                intent: {
+                  family: "conditional_spot_order",
+                  wallet: conditionalSpotOrder.wallet,
+                  venueKey: conditionalSpotOrder.intent.venueKey,
+                  marketType: "spot",
+                  instrumentId: conditionalSpotOrder.intent.instrumentId,
+                  side: conditionalSpotOrder.intent.side,
+                  quantityAtomic: conditionalSpotOrder.intent.quantityAtomic,
+                  params: conditionalSpotOrder.options ?? null,
+                },
+                privyWalletId: privyActorContext.privyWalletId,
+                log(level, message, meta) {
+                  console[level]("exec.submit", {
+                    requestId: reservation.request.requestId,
+                    userId: privyActorContext.userId,
+                    message,
+                    ...(meta ?? {}),
+                  });
+                },
+              });
+              const settledAt = new Date().toISOString();
+              const failure = resolveTerminalFailureFromExecuteResult(
+                result.status,
+                result.err,
+                result.signature,
+              );
+              const errorMessage = executionErrorMessage(result.err);
+              providerResponse = {
+                ...(providerResponse ?? {}),
+                triggerOrder: {
+                  maker: conditionalSpotOrder.wallet,
+                  instrumentId: conditionalSpotOrder.intent.instrumentId,
+                  side: conditionalSpotOrder.intent.side,
+                  orderType:
+                    typeof options.orderType === "string"
+                      ? options.orderType
+                      : null,
+                  inputMint: compatSwap.inputMint,
+                  outputMint: compatSwap.outputMint,
+                  makingAmount: compatSwap.amountAtomic,
+                  takingAmount:
+                    String(result.usedQuote?.outAmount ?? "").trim() ||
+                    resolvedConditionalOrder.takingAmount,
+                  requestId: result.executionMeta?.intentId ?? null,
+                  order:
+                    result.executionMeta?.venueSessionId ??
+                    result.executionMeta?.intentId ??
+                    null,
+                },
+                executionStatus: result.status,
+                refreshed: result.refreshed,
+                lastValidBlockHeight: result.lastValidBlockHeight,
+                executionMeta:
+                  result.executionMeta &&
+                  typeof result.executionMeta === "object" &&
+                  !Array.isArray(result.executionMeta)
+                    ? result.executionMeta
+                    : null,
+              };
+
+              await finalizeExecutionAttempt(env.WAITLIST_DB, {
+                attemptId,
+                status: result.status,
+                providerResponse,
+                errorCode: failure ? failure.errorCode : null,
                 errorMessage,
-              },
-              nowIso: failedAt,
+                completedAt: settledAt,
+              });
+
+              if (failure) {
+                await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+                  requestId: reservation.request.requestId,
+                  receiptId: newExecutionReceiptId(),
+                  finalizedStatus: failure.terminalStatus,
+                  lane: laneResolution.lane,
+                  provider: laneResolution.adapter,
+                  signature: result.signature,
+                  slot: null,
+                  errorCode: failure.errorCode,
+                  errorMessage,
+                  receipt: {
+                    mode: parsed.value.mode,
+                    route: laneResolution.adapter,
+                    resultStatus: result.status,
+                    outcome: failure.terminalStatus,
+                    lifecycle: result.executionMeta?.lifecycle ?? {
+                      settlementState: "failed",
+                      notes: ["conditional_spot_order"],
+                    },
+                    quality: qualityMetadata,
+                    quote: {
+                      inputMint: compatSwap.inputMint,
+                      outputMint: compatSwap.outputMint,
+                      inAmount: compatSwap.amountAtomic,
+                      outAmount: String(result.usedQuote?.outAmount ?? ""),
+                    },
+                  },
+                  readyAt: settledAt,
+                });
+                await terminalizeExecutionRequest(env.WAITLIST_DB, {
+                  requestId: reservation.request.requestId,
+                  status: failure.terminalStatus,
+                  statusReason: failure.statusReason,
+                  details: {
+                    provider: laneResolution.adapter,
+                    attempt: 1,
+                    ...(result.signature
+                      ? { signature: result.signature }
+                      : {}),
+                  },
+                  nowIso: settledAt,
+                });
+              } else {
+                await updateExecutionRequestStatus(env.WAITLIST_DB, {
+                  requestId: reservation.request.requestId,
+                  status: "dispatched",
+                  statusReason: null,
+                });
+              }
+            } catch (error) {
+              const failedAt = new Date().toISOString();
+              const deniedReason = policyDeniedReason(error);
+              const terminalStatus = deniedReason ? "rejected" : "failed";
+              const errorCode = deniedReason
+                ? "policy-denied"
+                : normalizeExecutionErrorCode({
+                    error,
+                    fallback: "submission-failed",
+                  });
+              const statusReason = deniedReason
+                ? `policy-denied:${deniedReason}`
+                : errorCode;
+              const errorMessage =
+                executionErrorMessage(error) ?? "execution-submit-failed";
+              await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
+                attemptId,
+                requestId: reservation.request.requestId,
+                attemptNo: 1,
+                lane: laneResolution.lane,
+                provider: laneResolution.adapter,
+                status: terminalStatus,
+                providerResponse,
+                errorCode,
+                errorMessage,
+                startedAt: attemptStartedAt,
+              });
+              await finalizeExecutionAttempt(env.WAITLIST_DB, {
+                attemptId,
+                status: terminalStatus,
+                providerResponse,
+                errorCode,
+                errorMessage,
+                completedAt: failedAt,
+              });
+              await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                receiptId: newExecutionReceiptId(),
+                finalizedStatus: terminalStatus,
+                lane: laneResolution.lane,
+                provider: laneResolution.adapter,
+                signature: null,
+                slot: null,
+                errorCode,
+                errorMessage,
+                receipt: {
+                  mode: parsed.value.mode,
+                  route: laneResolution.adapter,
+                  outcome: terminalStatus,
+                  lifecycle: {
+                    settlementState: "failed",
+                    notes: [statusReason],
+                  },
+                  quality: qualityMetadata,
+                },
+                readyAt: failedAt,
+              });
+              await terminalizeExecutionRequest(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                status: terminalStatus,
+                statusReason,
+                details: {
+                  provider: laneResolution.adapter,
+                  attempt: 1,
+                  errorMessage,
+                },
+                nowIso: failedAt,
+              });
+            }
+          } else {
+            if (!spotSwap) {
+              return withCors(
+                execErrorResponse({
+                  code: "invalid-request",
+                  details: {
+                    reason: intentFamily
+                      ? `unsupported-intent-family:${intentFamily}`
+                      : "unsupported-intent-family",
+                  },
+                }),
+                env,
+              );
+            }
+            const swap = spotSwap.swap;
+            const options = spotSwap.options ?? {};
+            const requestedRequireSimulation =
+              typeof options.requireSimulation === "boolean"
+                ? options.requireSimulation
+                : null;
+            const effectiveRequireSimulation =
+              submitPolicyRuntime?.requireSimulation === true ||
+              requestedRequireSimulation === true;
+            const executionParams: Record<string, unknown> = {
+              lane: laneResolution.lane,
+            };
+            if (requestedRequireSimulation === false) {
+              executionParams.requireSimulation = false;
+            }
+            if (effectiveRequireSimulation) {
+              executionParams.requireSimulation = true;
+            }
+            if (typeof options.priorityMicroLamports === "number") {
+              executionParams.priorityMicroLamports =
+                options.priorityMicroLamports;
+            }
+            const execution = {
+              adapter: laneResolution.adapter,
+              params: executionParams,
+            };
+            const policy = normalizePolicy({
+              allowedMints: SUPPORTED_TRADING_MINTS,
+              slippageBps: swap.slippageBps,
+              maxPriceImpactPct: 0.05,
+              minSolReserveLamports: "50000000",
+              simulateOnly: Boolean(options.simulateOnly),
+              dryRun: Boolean(options.dryRun),
+              commitment: options.commitment ?? "confirmed",
             });
+
+            const attemptId = newExecutionAttemptId();
+            const attemptStartedAt = new Date().toISOString();
+            const qualityMetadata = {
+              lane: laneResolution.lane,
+              slippageBps: swap.slippageBps,
+              requestedRequireSimulation,
+              effectiveRequireSimulation,
+              priorityMicroLamports:
+                typeof options.priorityMicroLamports === "number"
+                  ? options.priorityMicroLamports
+                  : null,
+            };
+            let providerResponse: Record<string, unknown> | null = {
+              route: laneResolution.adapter,
+              lane: laneResolution.lane,
+              mode: parsed.value.mode,
+              quality: qualityMetadata,
+            };
+
+            try {
+              const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
+              if (!rpcEndpoint) {
+                throw new Error("rpc-endpoint-missing");
+              }
+              const rpc = new SolanaRpc(rpcEndpoint);
+              const jupiter = new JupiterClient(
+                String(env.JUPITER_BASE_URL ?? "").trim() ||
+                  X402_READ_JUPITER_BASE_URL,
+                env.JUPITER_API_KEY,
+              );
+
+              const runtimeBalancePolicy =
+                await evaluatePrivyRuntimeBalancePolicy({
+                  env,
+                  lane: laneResolution.lane,
+                  walletAddress: privyActorContext.walletAddress,
+                  inputMint: swap.inputMint,
+                  amountAtomic: swap.amountAtomic,
+                  minSolReserveLamports: policy.minSolReserveLamports,
+                  rpc,
+                  runtimeDefaults: submitPolicyRuntime,
+                });
+              providerResponse = {
+                ...(providerResponse ?? {}),
+                runtimePolicy: runtimeBalancePolicy.metadata,
+              };
+              if (!runtimeBalancePolicy.ok) {
+                throw asPolicyDeniedError(runtimeBalancePolicy.reason);
+              }
+
+              const quoteResponse = await jupiter.quote({
+                inputMint: swap.inputMint,
+                outputMint: swap.outputMint,
+                amount: swap.amountAtomic,
+                slippageBps: policy.slippageBps,
+                swapMode: "ExactIn",
+              });
+              try {
+                enforcePolicy(policy, quoteResponse);
+              } catch (error) {
+                throw asPolicyDeniedError(
+                  `privy-quote-${normalizePolicyReason(error, "policy-violation")}`,
+                );
+              }
+              const referenceGuard = await evaluateOracleReferencePriceGuard({
+                env,
+                mode: "live",
+                inputMint: swap.inputMint,
+                outputMint: swap.outputMint,
+                inputAmountAtomic: swap.amountAtomic,
+                expectedOutputAmountAtomic: String(
+                  quoteResponse.outAmount ?? "",
+                ),
+                jupiter,
+              });
+              providerResponse = {
+                ...(providerResponse ?? {}),
+                ...(referenceGuard.enabled
+                  ? {
+                      referencePrice: {
+                        verdict: referenceGuard.verdict,
+                        reason: referenceGuard.reason,
+                        executionPrice: referenceGuard.executionPrice,
+                        executionDivergenceBps:
+                          referenceGuard.executionDivergenceBps,
+                        snapshot: referenceGuard.snapshot,
+                      },
+                    }
+                  : {}),
+              };
+              if (
+                referenceGuard.enabled &&
+                referenceGuard.verdict !== "allow"
+              ) {
+                throw asPolicyDeniedError(
+                  referenceGuard.reason ?? "reference-price-policy-denied",
+                );
+              }
+
+              await updateExecutionRequestStatus(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                status: "dispatched",
+                statusReason: null,
+              });
+              await appendExecutionStatusEvent(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                status: "dispatched",
+                reason: null,
+                details: {
+                  provider: laneResolution.adapter,
+                  attempt: 1,
+                },
+                createdAt: attemptStartedAt,
+              });
+              await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
+                attemptId,
+                requestId: reservation.request.requestId,
+                attemptNo: 1,
+                lane: laneResolution.lane,
+                provider: laneResolution.adapter,
+                status: "dispatched",
+                providerResponse,
+                startedAt: attemptStartedAt,
+              });
+
+              const result = await executeSwapViaRouter({
+                env,
+                venueKey: spotSwap?.venueKey,
+                execution,
+                policy,
+                rpc,
+                jupiter,
+                quoteResponse,
+                userPublicKey: privyActorContext.walletAddress,
+                privyWalletId: privyActorContext.privyWalletId,
+                log(level, message, meta) {
+                  console[level]("exec.submit", {
+                    requestId: reservation.request.requestId,
+                    userId: privyActorContext.userId,
+                    message,
+                    ...(meta ?? {}),
+                  });
+                },
+              });
+              const settledAt = new Date().toISOString();
+              const failure = resolveTerminalFailureFromExecuteResult(
+                result.status,
+                result.err,
+                result.signature,
+              );
+              const terminalStatus = failure
+                ? failure.terminalStatus
+                : "landed";
+              const errorMessage = executionErrorMessage(result.err);
+              providerResponse = {
+                ...(providerResponse ?? {}),
+                executionStatus: result.status,
+                refreshed: result.refreshed,
+                lastValidBlockHeight: result.lastValidBlockHeight,
+                executionMeta:
+                  result.executionMeta &&
+                  typeof result.executionMeta === "object" &&
+                  !Array.isArray(result.executionMeta)
+                    ? result.executionMeta
+                    : null,
+              };
+
+              await finalizeExecutionAttempt(env.WAITLIST_DB, {
+                attemptId,
+                status: result.status,
+                providerResponse,
+                errorCode: failure ? failure.errorCode : null,
+                errorMessage,
+                completedAt: settledAt,
+              });
+              await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                receiptId: newExecutionReceiptId(),
+                finalizedStatus: terminalStatus,
+                lane: laneResolution.lane,
+                provider: laneResolution.adapter,
+                signature: result.signature,
+                slot: null,
+                errorCode: failure ? failure.errorCode : null,
+                errorMessage,
+                receipt: {
+                  mode: parsed.value.mode,
+                  route: laneResolution.adapter,
+                  resultStatus: result.status,
+                  outcome: terminalStatus,
+                  lifecycle: {
+                    settlementState:
+                      result.status === "finalized"
+                        ? "finalized"
+                        : result.status === "confirmed"
+                          ? "confirmed"
+                          : "landed",
+                    notes: ["spot_swap"],
+                  },
+                  quality: qualityMetadata,
+                  quote: {
+                    inputMint: swap.inputMint,
+                    outputMint: swap.outputMint,
+                    inAmount: swap.amountAtomic,
+                    outAmount: String(result.usedQuote?.outAmount ?? ""),
+                  },
+                },
+                readyAt: settledAt,
+              });
+              await terminalizeExecutionRequest(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                status: terminalStatus,
+                statusReason: failure ? failure.statusReason : null,
+                details: {
+                  provider: laneResolution.adapter,
+                  attempt: 1,
+                  ...(result.signature ? { signature: result.signature } : {}),
+                },
+                nowIso: settledAt,
+              });
+            } catch (error) {
+              const failedAt = new Date().toISOString();
+              const deniedReason = policyDeniedReason(error);
+              const terminalStatus = deniedReason ? "rejected" : "failed";
+              const errorCode = deniedReason
+                ? "policy-denied"
+                : normalizeExecutionErrorCode({
+                    error,
+                    fallback: "submission-failed",
+                  });
+              const statusReason = deniedReason
+                ? `policy-denied:${deniedReason}`
+                : errorCode;
+              const errorMessage =
+                executionErrorMessage(error) ?? "execution-submit-failed";
+              await createExecutionAttemptIdempotent(env.WAITLIST_DB, {
+                attemptId,
+                requestId: reservation.request.requestId,
+                attemptNo: 1,
+                lane: laneResolution.lane,
+                provider: laneResolution.adapter,
+                status: terminalStatus,
+                providerResponse,
+                errorCode,
+                errorMessage,
+                startedAt: attemptStartedAt,
+              });
+              await finalizeExecutionAttempt(env.WAITLIST_DB, {
+                attemptId,
+                status: terminalStatus,
+                providerResponse,
+                errorCode,
+                errorMessage,
+                completedAt: failedAt,
+              });
+              await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                receiptId: newExecutionReceiptId(),
+                finalizedStatus: terminalStatus,
+                lane: laneResolution.lane,
+                provider: laneResolution.adapter,
+                signature: null,
+                slot: null,
+                errorCode,
+                errorMessage,
+                receipt: {
+                  mode: parsed.value.mode,
+                  route: laneResolution.adapter,
+                  outcome: terminalStatus,
+                  lifecycle: {
+                    settlementState: "failed",
+                    notes: [statusReason],
+                  },
+                  quality: qualityMetadata,
+                },
+                readyAt: failedAt,
+              });
+              await terminalizeExecutionRequest(env.WAITLIST_DB, {
+                requestId: reservation.request.requestId,
+                status: terminalStatus,
+                statusReason,
+                details: {
+                  provider: laneResolution.adapter,
+                  attempt: 1,
+                  errorMessage,
+                },
+                nowIso: failedAt,
+              });
+            }
           }
         }
 
@@ -1974,6 +2444,11 @@ const worker = {
             env,
           );
         }
+        const reconciled = await reconcileJupiterConditionalOrder({
+          env,
+          latest,
+        });
+        const current = reconciled.latest;
 
         const [events, attempts] = await Promise.all([
           listExecutionStatusEvents(env.WAITLIST_DB, requestId, 500),
@@ -1987,10 +2462,10 @@ const worker = {
                   eventId: "synthetic",
                   requestId,
                   seq: 1,
-                  status: latest.request.status,
-                  reason: latest.request.statusReason,
+                  status: current.request.status,
+                  reason: current.request.statusReason,
                   details: null,
-                  createdAt: latest.request.updatedAt,
+                  createdAt: current.request.updatedAt,
                 },
               ];
         const attemptsByState = new Map<string, (typeof attempts)[number]>();
@@ -2000,18 +2475,22 @@ const worker = {
           }
         }
 
-        const state = toExecSubmitState(latest.request.status);
-        const queueDepthRaw = Number(latest.request.metadata?.queueDepth);
-        const queuePositionRaw = Number(latest.request.metadata?.queuePosition);
-        const relayImmutability = readRelayImmutabilitySnapshot(
-          latest.request.metadata,
+        const state = toExecSubmitState(current.request.status);
+        const queueDepthRaw = Number(current.request.metadata?.queueDepth);
+        const queuePositionRaw = Number(
+          current.request.metadata?.queuePosition,
         );
-        const intentSummary = isRecord(latest.request.metadata?.intent)
-          ? latest.request.metadata.intent
+        const relayImmutability = readRelayImmutabilitySnapshot(
+          current.request.metadata,
+        );
+        const intentSummary = isRecord(current.request.metadata?.intent)
+          ? current.request.metadata.intent
           : null;
-        const lifecycleSummary = isRecord(latest.receipt?.receipt?.lifecycle)
-          ? latest.receipt?.receipt?.lifecycle
-          : null;
+        const lifecycleSummary = isRecord(current.receipt?.receipt?.lifecycle)
+          ? current.receipt?.receipt?.lifecycle
+          : reconciled.lifecycle
+            ? reconciled.lifecycle
+            : null;
         return withCors(
           json({
             ok: true,
@@ -2019,12 +2498,12 @@ const worker = {
             status: {
               state,
               terminal: isExecSubmitTerminalState(state),
-              mode: latest.request.mode,
-              lane: latest.request.lane,
-              actorType: latest.request.actorType,
-              receivedAt: latest.request.receivedAt,
-              updatedAt: latest.request.updatedAt,
-              terminalAt: latest.request.terminalAt,
+              mode: current.request.mode,
+              lane: current.request.lane,
+              actorType: current.request.actorType,
+              receivedAt: current.request.receivedAt,
+              updatedAt: current.request.updatedAt,
+              terminalAt: current.request.terminalAt,
               ...(Number.isFinite(queueDepthRaw) && queueDepthRaw >= 0
                 ? { queueDepth: Math.floor(queueDepthRaw) }
                 : {}),
@@ -2087,13 +2566,18 @@ const worker = {
             env,
           );
         }
+        const reconciled = await reconcileJupiterConditionalOrder({
+          env,
+          latest,
+        });
+        const current = reconciled.latest;
 
-        const state = toExecSubmitState(latest.request.status);
+        const state = toExecSubmitState(current.request.status);
         const terminal = isExecSubmitTerminalState(state);
         const relayImmutability = readRelayImmutabilitySnapshot(
-          latest.request.metadata,
+          current.request.metadata,
         );
-        if (!latest.receipt) {
+        if (!current.receipt) {
           return withCors(
             json({
               ok: true,
@@ -2102,11 +2586,14 @@ const worker = {
               status: {
                 state,
                 terminal,
-                updatedAt: latest.request.updatedAt,
+                updatedAt: current.request.updatedAt,
                 ...(relayImmutability
                   ? { immutability: relayImmutability }
                   : {}),
               },
+              ...(reconciled.lifecycle
+                ? { lifecycle: reconciled.lifecycle }
+                : {}),
             }),
             env,
           );
@@ -2117,8 +2604,8 @@ const worker = {
           requestId,
         );
         const canonicalReceipt = assembleCanonicalExecutionReceiptV1({
-          request: latest.request,
-          receipt: latest.receipt,
+          request: current.request,
+          receipt: current.receipt,
           attempts,
           immutability: relayImmutability,
         });
@@ -4974,6 +5461,353 @@ const worker = {
         );
       }
 
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/terminal/open-orders"
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        const pageSize = 80;
+        const conditionalRequests: ExecutionRequestRecord[] = [];
+        for (let offset = 0; ; offset += pageSize) {
+          const page = await listOpenExecutionRequestsByActorAndIntentFamily(
+            env.WAITLIST_DB,
+            {
+              actorId: user.id,
+              mode: "privy_execute",
+              intentFamily: "conditional_spot_order",
+              limit: pageSize,
+              offset,
+            },
+          );
+          conditionalRequests.push(...page);
+          if (page.length < pageSize) break;
+        }
+        const orders: Record<string, unknown>[] = [];
+        for (const entry of conditionalRequests) {
+          const latest = await getExecutionLatestStatus(
+            env.WAITLIST_DB,
+            entry.requestId,
+          );
+          if (!latest) continue;
+          const reconciled = await reconcileJupiterConditionalOrder({
+            env,
+            latest,
+          });
+          const lifecycle = isRecord(reconciled.lifecycle)
+            ? reconciled.lifecycle
+            : null;
+          const order = buildTerminalConditionalOrderView({
+            latest: reconciled.latest,
+            lifecycle,
+            trackedOrder: reconciled.trackedOrder,
+            summary: reconciled.summary
+              ? {
+                  filledInputAtomic: reconciled.summary.filledInputAtomic,
+                  filledOutputAtomic: reconciled.summary.filledOutputAtomic,
+                  signature: reconciled.summary.signature,
+                }
+              : null,
+          });
+          if (order) orders.push(order);
+        }
+        orders.sort((a, b) =>
+          String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")),
+        );
+        return withCors(
+          json({
+            ok: true,
+            orders,
+          }),
+          env,
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname.startsWith("/api/terminal/open-orders/") &&
+        url.pathname.endsWith("/cancel")
+      ) {
+        const requestId = decodeURIComponent(
+          url.pathname
+            .slice("/api/terminal/open-orders/".length)
+            .replace(/\/cancel$/, ""),
+        );
+        if (!isValidExecRequestId(requestId)) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "invalid-request-id",
+              },
+            }),
+            env,
+          );
+        }
+
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        if (!user.walletAddress || !user.privyWalletId) {
+          return withCors(
+            json({ ok: false, error: "user-wallet-missing" }, { status: 503 }),
+            env,
+          );
+        }
+
+        const latest = await getExecutionLatestStatus(
+          env.WAITLIST_DB,
+          requestId,
+        );
+        if (!latest || latest.request.actorId !== user.id) {
+          return withCors(
+            execErrorResponse({
+              code: "not-found",
+              requestId,
+            }),
+            env,
+          );
+        }
+        const reconciled = await reconcileJupiterConditionalOrder({
+          env,
+          latest,
+        });
+        const intent = isRecord(reconciled.latest.request.metadata?.intent)
+          ? reconciled.latest.request.metadata?.intent
+          : null;
+        if (readTrimmedString(intent?.family) !== "conditional_spot_order") {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "unsupported-conditional-order-request",
+              },
+              requestId,
+            }),
+            env,
+          );
+        }
+        const currentState = toExecSubmitState(
+          reconciled.latest.request.status,
+        );
+        const lifecycle = isRecord(reconciled.lifecycle)
+          ? reconciled.lifecycle
+          : null;
+        if (
+          isExecSubmitTerminalState(currentState) ||
+          reconciled.latest.receipt ||
+          reconciled.latest.request.terminalAt
+        ) {
+          return withCors(
+            json({
+              ok: true,
+              requestId,
+              cancelled: false,
+              status: {
+                state: currentState,
+                terminal: true,
+                updatedAt: reconciled.latest.request.updatedAt,
+              },
+              ...(lifecycle ? { lifecycle } : {}),
+            }),
+            env,
+          );
+        }
+        const trackedOrder = reconciled.trackedOrder;
+        if (!trackedOrder) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: "trigger-order-tracking-missing",
+              },
+              requestId,
+            }),
+            env,
+          );
+        }
+        if (trackedOrder.maker !== user.walletAddress) {
+          return withCors(
+            execErrorResponse({
+              code: "auth-required",
+              details: {
+                reason: "trigger-order-maker-mismatch",
+              },
+              requestId,
+            }),
+            env,
+          );
+        }
+
+        const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
+        if (!rpcEndpoint) {
+          return withCors(
+            execErrorResponse({
+              code: "submission-failed",
+              details: {
+                reason: "rpc-endpoint-missing",
+              },
+              requestId,
+            }),
+            env,
+          );
+        }
+        const rpc = new SolanaRpc(rpcEndpoint);
+        const jupiter = new JupiterClient(
+          String(env.JUPITER_BASE_URL ?? "").trim() ||
+            X402_READ_JUPITER_BASE_URL,
+          env.JUPITER_API_KEY,
+        );
+
+        try {
+          const cancelResponse = await jupiter.cancelTriggerOrder({
+            maker: trackedOrder.maker,
+            payer: user.walletAddress,
+            order: trackedOrder.order,
+          });
+          const signedBase64 = await signTransactionWithPrivyById(
+            env,
+            user.privyWalletId,
+            cancelResponse.transaction,
+          );
+          const safeEvaluation = evaluateSafeLaneTransaction({
+            env,
+            signedTransactionBase64: signedBase64,
+          });
+          if (!safeEvaluation.ok) {
+            return withCors(
+              execErrorResponse({
+                code: "policy-denied",
+                details: {
+                  reason: safeEvaluation.reason,
+                },
+                requestId,
+              }),
+              env,
+            );
+          }
+          const simulation = await rpc.simulateTransactionBase64(signedBase64, {
+            commitment: "confirmed",
+            sigVerify: true,
+          });
+          if (simulation.err) {
+            return withCors(
+              execErrorResponse({
+                code: "policy-denied",
+                details: {
+                  reason: "safe-lane-simulation-failed",
+                },
+                requestId,
+              }),
+              env,
+            );
+          }
+          const signature = await rpc.sendTransactionBase64(signedBase64, {
+            preflightCommitment: "confirmed",
+            skipPreflight: false,
+          });
+          const confirmation = await rpc.confirmSignature(signature, {
+            commitment: "confirmed",
+          });
+          if (!confirmation.ok) {
+            return withCors(
+              execErrorResponse({
+                code: "submission-failed",
+                details: {
+                  reason: "conditional-order-cancel-confirmation-failed",
+                },
+                requestId,
+              }),
+              env,
+            );
+          }
+
+          const cancelSummary = summarizeJupiterTriggerOrder({
+            ...(reconciled.orderRecord ?? {}),
+            order: trackedOrder.order,
+            makingAmount:
+              trackedOrder.makingAmount ??
+              readTrimmedString(reconciled.orderRecord?.makingAmount) ??
+              "0",
+            takingAmount:
+              trackedOrder.takingAmount ??
+              readTrimmedString(reconciled.orderRecord?.takingAmount) ??
+              "0",
+            status: "Cancelled",
+            closeTx: signature,
+          });
+          const receipt = buildTerminalJupiterTriggerReceipt({
+            latest: reconciled.latest,
+            trackedOrder,
+            orderRecord: reconciled.orderRecord,
+            summary: cancelSummary,
+          });
+          const readyAt = new Date().toISOString();
+          await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+            requestId,
+            receiptId: newExecutionReceiptId(),
+            finalizedStatus: receipt.finalizedStatus,
+            lane: reconciled.latest.request.lane,
+            provider: reconciled.latest.latestAttempt?.provider ?? "jupiter",
+            signature,
+            slot: null,
+            errorCode: receipt.errorCode,
+            errorMessage: receipt.errorMessage,
+            receipt: receipt.receipt,
+            readyAt,
+          });
+          await terminalizeExecutionRequest(env.WAITLIST_DB, {
+            requestId,
+            status: receipt.finalizedStatus,
+            statusReason: receipt.statusReason,
+            details: {
+              provider: reconciled.latest.latestAttempt?.provider ?? "jupiter",
+              signature,
+              orderState: "cancelled",
+            },
+            nowIso: readyAt,
+          });
+          const refreshed = await getExecutionLatestStatus(
+            env.WAITLIST_DB,
+            requestId,
+          );
+          const refreshedState = toExecSubmitState(
+            refreshed?.request.status ?? receipt.finalizedStatus,
+          );
+          return withCors(
+            json({
+              ok: true,
+              requestId,
+              cancelled: true,
+              status: {
+                state: refreshedState,
+                terminal: isExecSubmitTerminalState(refreshedState),
+                updatedAt: refreshed?.request.updatedAt ?? readyAt,
+              },
+              lifecycle: cancelSummary.lifecycle,
+              signature,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            execErrorResponse({
+              code: normalizeExecutionErrorCode({
+                error,
+                fallback: "submission-failed",
+              }),
+              details: {
+                reason:
+                  readTrimmedString(
+                    error instanceof Error ? error.message : error,
+                  ) ?? "conditional-order-cancel-failed",
+              },
+              requestId,
+            }),
+            env,
+          );
+        }
+      }
+
       if (request.method === "GET" && url.pathname === "/api/me") {
         let user = await requireOnboardedUser(request, env);
         user = await ensureUserWallet(env, user);
@@ -5766,6 +6600,161 @@ function buildExperienceView(user: UserRow): {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readTrimmedString(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  return normalized ? normalized : null;
+}
+
+function readStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value
+    .map((entry) => readTrimmedString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return normalized.length > 0 ? normalized : null;
+}
+
+function readAtomicBigInt(value: unknown): bigint | null {
+  const normalized = readTrimmedString(value);
+  if (!normalized || !/^\d+$/.test(normalized)) return null;
+  try {
+    return BigInt(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function subtractAtomicStrings(
+  total: string | null,
+  consumed: string | null,
+): string | null {
+  const totalAtomic = readAtomicBigInt(total);
+  const consumedAtomic = readAtomicBigInt(consumed);
+  if (totalAtomic === null || consumedAtomic === null) return null;
+  return (
+    totalAtomic > consumedAtomic ? totalAtomic - consumedAtomic : 0n
+  ).toString();
+}
+
+function resolveTerminalSimulationPreference(
+  quality: Record<string, unknown> | null,
+): "auto" | "always" | "never" {
+  if (quality?.requestedRequireSimulation === false) return "never";
+  if (quality?.effectiveRequireSimulation === true) return "always";
+  return "auto";
+}
+
+function resolveTerminalPriorityLevel(
+  quality: Record<string, unknown> | null,
+): "normal" | "high" | "urgent" {
+  const priority = Number(quality?.priorityMicroLamports);
+  if (!Number.isFinite(priority) || priority <= 5_000) return "normal";
+  if (priority >= 200_000) return "urgent";
+  return "high";
+}
+
+function resolveTerminalOpenOrderStatus(
+  lifecycle: Record<string, unknown> | null,
+  terminal: boolean,
+):
+  | "pending"
+  | "working"
+  | "partial"
+  | "filled"
+  | "failed"
+  | "cancelled"
+  | "expired" {
+  const orderState = readTrimmedString(lifecycle?.orderState)?.toLowerCase();
+  if (orderState === "accepted") return "pending";
+  if (orderState === "partially_filled") return "partial";
+  if (orderState === "filled") return "filled";
+  if (orderState === "cancelled") return "cancelled";
+  if (orderState === "expired") return "expired";
+  if (orderState === "rejected") return "failed";
+  if (terminal) return "failed";
+  return "working";
+}
+
+function buildTerminalConditionalOrderView(input: {
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>;
+  lifecycle: Record<string, unknown> | null;
+  trackedOrder: ReturnType<typeof readTrackedJupiterTriggerOrder>;
+  summary: {
+    filledInputAtomic: string;
+    filledOutputAtomic: string;
+    signature: string | null;
+  } | null;
+}): Record<string, unknown> | null {
+  const latest = input.latest;
+  if (!latest) return null;
+  const intent = isRecord(latest.request.metadata?.intent)
+    ? latest.request.metadata.intent
+    : null;
+  if (readTrimmedString(intent?.family) !== "conditional_spot_order") {
+    return null;
+  }
+  const trackedOrder = input.trackedOrder;
+  const quality = isRecord(latest.latestAttempt?.providerResponse?.quality)
+    ? latest.latestAttempt?.providerResponse?.quality
+    : null;
+  const lifecycle = input.lifecycle;
+  const filledInputAtomic = input.summary?.filledInputAtomic ?? "0";
+  const filledOutputAtomic = input.summary?.filledOutputAtomic ?? "0";
+  const terminal = Boolean(latest.request.terminalAt);
+  const notes = readStringArray(lifecycle?.notes);
+  return {
+    requestId: latest.request.requestId,
+    requestStatus: latest.request.status,
+    terminal,
+    receivedAt: latest.request.receivedAt,
+    updatedAt: latest.request.updatedAt,
+    terminalAt: latest.request.terminalAt,
+    pairId:
+      trackedOrder?.instrumentId ?? readTrimmedString(intent?.instrumentId),
+    direction: trackedOrder?.side ?? readTrimmedString(intent?.side),
+    source: readTrimmedString(latest.request.metadata?.source) ?? "TERMINAL",
+    reason: readTrimmedString(latest.request.metadata?.reason),
+    orderType:
+      trackedOrder?.orderType ??
+      readTrimmedString(quality?.orderType) ??
+      "limit",
+    timeInForce: readTrimmedString(quality?.timeInForce) ?? "gtc",
+    lane: latest.request.lane,
+    simulationPreference: resolveTerminalSimulationPreference(quality),
+    priorityLevel: resolveTerminalPriorityLevel(quality),
+    priorityMicroLamports: Number.isFinite(
+      Number(quality?.priorityMicroLamports),
+    )
+      ? Math.max(0, Math.floor(Number(quality?.priorityMicroLamports)))
+      : null,
+    slippageBps: 50,
+    inputMint: trackedOrder?.inputMint,
+    outputMint: trackedOrder?.outputMint,
+    amountAtomic: trackedOrder?.makingAmount ?? null,
+    remainingAmountAtomic: subtractAtomicStrings(
+      trackedOrder?.makingAmount ?? null,
+      filledInputAtomic,
+    ),
+    takingAmountAtomic: trackedOrder?.takingAmount ?? null,
+    filledInputAtomic,
+    filledOutputAtomic,
+    limitPriceAtomic: readTrimmedString(quality?.limitPriceAtomic),
+    triggerPriceAtomic: readTrimmedString(quality?.triggerPriceAtomic),
+    provider:
+      latest.receipt?.provider ?? latest.latestAttempt?.provider ?? null,
+    signature: latest.receipt?.signature ?? input.summary?.signature ?? null,
+    errorCode: latest.receipt?.errorCode ?? null,
+    errorMessage: latest.receipt?.errorMessage ?? null,
+    status: resolveTerminalOpenOrderStatus(lifecycle, terminal),
+    lifecycle:
+      lifecycle && Object.keys(lifecycle).length > 0
+        ? {
+            ...lifecycle,
+            ...(notes ? { notes } : {}),
+          }
+        : null,
+  };
 }
 
 function parseExperienceEventName(value: unknown): ExperienceEventName | null {

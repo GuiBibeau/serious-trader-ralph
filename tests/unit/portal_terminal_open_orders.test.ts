@@ -4,6 +4,7 @@ import {
   cancelAllOpenOrders,
   cancelOpenOrder,
   executeOpenOrderSlice,
+  mapTerminalOpenOrderSnapshot,
   type OpenOrderRow,
   promotePendingOrders,
   queueOpenOrder,
@@ -136,5 +137,55 @@ describe("portal terminal open orders lifecycle", () => {
     if (failedAttempt.ok) return;
     expect(failedAttempt.error).toBe("order-not-executable");
     expect(failedAttempt.next[0]?.status).toBe("failed");
+  });
+
+  test("hydrates remote Trigger snapshots into open-order rows", () => {
+    const row = mapTerminalOpenOrderSnapshot({
+      requestId: "execreq_trigger_row_123456",
+      requestStatus: "dispatched",
+      terminal: false,
+      receivedAt: "2026-03-03T02:00:00.000Z",
+      updatedAt: "2026-03-03T02:00:03.000Z",
+      terminalAt: null,
+      pairId: "SOL/USDC",
+      direction: "buy",
+      source: "TERMINAL",
+      reason: "Hydrated order",
+      orderType: "limit",
+      timeInForce: "gtc",
+      lane: "safe",
+      simulationPreference: "always",
+      priorityLevel: "high",
+      priorityMicroLamports: 50_000,
+      slippageBps: 50,
+      inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      outputMint: "So11111111111111111111111111111111111111112",
+      amountAtomic: "1000000",
+      remainingAmountAtomic: "750000",
+      takingAmountAtomic: "6666666",
+      filledInputAtomic: "250000",
+      filledOutputAtomic: "1666666",
+      limitPriceAtomic: "150000000",
+      triggerPriceAtomic: null,
+      provider: "jupiter",
+      signature: null,
+      errorCode: null,
+      errorMessage: null,
+      status: "working",
+      lifecycle: {
+        orderState: "open",
+        fillState: "pending",
+        settlementState: "confirmed",
+        notes: ["Open"],
+      },
+    });
+
+    expect(row?.id).toBe("execreq_trigger_row_123456");
+    expect(row?.requestId).toBe("execreq_trigger_row_123456");
+    expect(row?.status).toBe("working");
+    expect(row?.amountUi).toBe("1");
+    expect(row?.remainingAmountUi).toBe("0.75");
+    expect(row?.limitPriceUi).toBe("150");
+    expect(row?.lifecycle?.orderState).toBe("open");
   });
 });

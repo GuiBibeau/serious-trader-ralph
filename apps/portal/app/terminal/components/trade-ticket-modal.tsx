@@ -44,7 +44,7 @@ type TradeTicketModalProps = {
   getAccessToken: () => Promise<string | null>;
   onClose: () => void;
   onTradeComplete?: (trade: TradeTicketCompletion) => void;
-  onOrderQueued?: (order: QueuedTerminalOrder) => void;
+  onOrderQueued?: (requestId: string) => void;
 };
 
 type TradeTicketHotkeyBindings = {
@@ -267,6 +267,7 @@ const EMPTY_QUOTE: QuoteState = {
 export function validateOrderConfig(input: {
   orderType: OrderType;
   timeInForce: TimeInForce;
+  lane: ExecutionLane;
   reduceOnly: boolean;
   postOnly: boolean;
   quantityMode: QuantityMode;
@@ -288,13 +289,37 @@ export function validateOrderConfig(input: {
     errors.push("Trigger orders require a trigger price.");
   }
   if (
+    (input.orderType === "limit" || input.orderType === "trigger") &&
+    input.lane !== "safe"
+  ) {
+    errors.push("Limit and trigger orders currently require the safe lane.");
+  }
+  if (
+    (input.orderType === "limit" || input.orderType === "trigger") &&
+    input.timeInForce !== "gtc"
+  ) {
+    errors.push("Trigger-backed spot orders currently require GTC.");
+  }
+  if (
     input.postOnly &&
     (input.timeInForce === "ioc" || input.timeInForce === "fok")
   ) {
     errors.push("Post-only cannot be combined with IOC or FOK.");
   }
+  if (
+    (input.orderType === "limit" || input.orderType === "trigger") &&
+    input.postOnly
+  ) {
+    errors.push("Post-only is not supported for Trigger-backed spot orders.");
+  }
   if (input.orderType === "market" && input.postOnly) {
     errors.push("Post-only is only valid for limit or trigger orders.");
+  }
+  if (
+    (input.orderType === "limit" || input.orderType === "trigger") &&
+    input.reduceOnly
+  ) {
+    errors.push("Reduce-only is not supported for Trigger-backed spot orders.");
   }
   if (
     input.bracketEnabled &&
@@ -327,6 +352,12 @@ export function validateOrderConfig(input: {
     errors.push(
       "Reduce-only market orders currently require quote quantity mode.",
     );
+  }
+  if (
+    (input.orderType === "limit" || input.orderType === "trigger") &&
+    input.bracketEnabled
+  ) {
+    errors.push("Bracket TP/SL is not wired yet for Trigger-backed orders.");
   }
   return errors;
 }
@@ -578,6 +609,7 @@ export function TradeTicketModal({
       validateOrderConfig({
         orderType,
         timeInForce,
+        lane: executionLane,
         reduceOnly,
         postOnly,
         quantityMode,
@@ -591,6 +623,7 @@ export function TradeTicketModal({
     [
       amountAtomicForValidation,
       bracketEnabled,
+      executionLane,
       limitPriceAtomic,
       orderType,
       postOnly,
@@ -815,46 +848,82 @@ export function TradeTicketModal({
     };
 
     if (orderType === "limit" || orderType === "trigger") {
-      if (!onOrderQueued) {
+      setSubmitStatus("submitting");
+      setSubmitMessage(null);
+      try {
+        executeAbortRef.current?.abort();
+        continueExecutionOnUnmountRef.current = false;
+        const controller = new AbortController();
+        executeAbortRef.current = controller;
+        dismissExecuteToast();
+
+        const token = await getAccessToken();
+        if (!token) throw new Error("missing-access-token");
+
+        const executionClient = createExecutionClient({
+          authToken: token,
+          pollIntervalMs: EXEC_POLL_INTERVAL_MS,
+          pollTimeoutMs: EXEC_POLL_TIMEOUT_MS,
+        });
+        const idempotencyKey = newExecutionIdempotencyKey("trade");
+        const submitAck = await executionClient.submit(
+          {
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: executionLane,
+            metadata: {
+              source: intent.source,
+              reason: `${intent.reason} • ${orderType}/${timeInForce}/${quantityMode} • ${executionLane}/${simulationPreference}/${priorityLevel}`,
+              clientRequestId: idempotencyKey,
+            },
+            privyExecute: {
+              wallet: walletAddress,
+              intent: {
+                family: "conditional_spot_order",
+                venueKey: "jupiter",
+                marketType: "spot",
+                instrumentId: intent.pairId,
+                side: intent.direction,
+                quantityAtomic: quote.inAmountAtomic,
+              },
+              options,
+            },
+          },
+          {
+            idempotencyKey,
+            signal: controller.signal,
+          },
+        );
+
+        if (submitAck.terminal) {
+          throw new Error(`conditional-order-${submitAck.state}`);
+        }
+
+        closeModal();
+        onOrderQueued?.(submitAck.requestId);
+        toast.success(`${orderType.toUpperCase()} order submitted`, {
+          description: `${intent.pairId} • ${amountUi.trim()} ${intent.inputSymbol}`,
+          position: "bottom-right",
+          duration: 3500,
+        });
+        return;
+      } catch (error) {
+        const message = describeExecutionClientError(
+          error,
+          "conditional-order-submit-failed",
+        );
+        if (!mountedRef.current || !openRef.current) {
+          toast.error("Conditional order submit failed", {
+            description: message,
+            position: "bottom-right",
+            duration: 7000,
+          });
+          return;
+        }
         setSubmitStatus("error");
-        setSubmitMessage("open-orders-panel-unavailable");
+        setSubmitMessage(message);
         return;
       }
-      const amountForOrder = amountUi.trim();
-      if (!amountForOrder) {
-        setSubmitStatus("error");
-        setSubmitMessage("order-amount-required");
-        return;
-      }
-      const now = Date.now();
-      onOrderQueued({
-        id: crypto.randomUUID(),
-        createdAt: now,
-        updatedAt: now,
-        pairId: intent.pairId,
-        direction: intent.direction,
-        source: intent.source,
-        reason: intent.reason,
-        orderType,
-        timeInForce,
-        amountUi: amountForOrder,
-        remainingAmountUi: amountForOrder,
-        slippageBps: boundedSlippageBps,
-        lane: executionLane,
-        simulationPreference,
-        priorityLevel,
-        limitPriceUi:
-          orderType === "limit" ? limitPriceUi.trim() || null : null,
-        triggerPriceUi:
-          orderType === "trigger" ? triggerPriceUi.trim() || null : null,
-      });
-      closeModal();
-      toast.success(`${orderType.toUpperCase()} order queued`, {
-        description: `${intent.pairId} • ${amountForOrder} ${intent.inputSymbol}`,
-        position: "bottom-right",
-        duration: 3500,
-      });
-      return;
     }
     setSubmitStatus("submitting");
     setSubmitMessage(null);
@@ -995,7 +1064,6 @@ export function TradeTicketModal({
     getAccessToken,
     intent,
     limitPriceAtomic,
-    limitPriceUi,
     onOrderQueued,
     onTradeComplete,
     orderType,
@@ -1020,7 +1088,6 @@ export function TradeTicketModal({
     takeProfitPriceAtomic,
     timeInForce,
     triggerPriceAtomic,
-    triggerPriceUi,
     walletAddress,
   ]);
 

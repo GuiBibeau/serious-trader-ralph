@@ -715,7 +715,7 @@ describe("worker runtime internal routes", () => {
 
   test("executes the bounded runtime canary plan in non-stub mode", async () => {
     const { env, sqlite } = createRuntimeExecutionEnv();
-    const originalFetch = globalThis.fetch;
+    const originalFetch = Bun.fetch;
     registerExecutionAdapter(
       "helius_sender",
       async (input) => ({
@@ -864,7 +864,7 @@ describe("worker runtime internal routes", () => {
 
   test("executes the bounded managed live plan in non-stub mode", async () => {
     const { env, sqlite } = createRuntimeExecutionEnv();
-    const originalFetch = globalThis.fetch;
+    const originalFetch = Bun.fetch;
     registerExecutionAdapter(
       "helius_sender",
       async (input) => ({

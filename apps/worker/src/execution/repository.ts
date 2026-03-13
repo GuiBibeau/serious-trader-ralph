@@ -322,6 +322,172 @@ export async function getExecutionRequestById(
   return mapExecutionRequestRow(row);
 }
 
+export async function listExecutionRequestsByActor(
+  db: D1Database,
+  input: {
+    actorId: string;
+    mode?: ExecutionMode;
+    limit?: number;
+  },
+): Promise<ExecutionRequestRecord[]> {
+  const actorId = input.actorId.trim();
+  if (!actorId) return [];
+  const boundedLimit = Math.max(
+    1,
+    Math.min(200, Math.floor(input.limit ?? 50)),
+  );
+  const mode = input.mode?.trim() || null;
+  const rows = mode
+    ? ((await db
+        .prepare(
+          `
+          SELECT
+            request_id as requestId,
+            schema_version as schemaVersion,
+            idempotency_scope as idempotencyScope,
+            idempotency_key as idempotencyKey,
+            payload_hash as payloadHash,
+            actor_type as actorType,
+            actor_id as actorId,
+            mode,
+            lane,
+            status,
+            status_reason as statusReason,
+            metadata_json as metadataJson,
+            received_at as receivedAt,
+            validated_at as validatedAt,
+            terminal_at as terminalAt,
+            created_at as createdAt,
+            updated_at as updatedAt
+          FROM execution_requests
+          WHERE actor_id = ?1
+            AND mode = ?2
+          ORDER BY received_at DESC
+          LIMIT ?3
+          `,
+        )
+        .bind(actorId, mode, boundedLimit)
+        .all()) as { results?: unknown[] })
+    : ((await db
+        .prepare(
+          `
+          SELECT
+            request_id as requestId,
+            schema_version as schemaVersion,
+            idempotency_scope as idempotencyScope,
+            idempotency_key as idempotencyKey,
+            payload_hash as payloadHash,
+            actor_type as actorType,
+            actor_id as actorId,
+            mode,
+            lane,
+            status,
+            status_reason as statusReason,
+            metadata_json as metadataJson,
+            received_at as receivedAt,
+            validated_at as validatedAt,
+            terminal_at as terminalAt,
+            created_at as createdAt,
+            updated_at as updatedAt
+          FROM execution_requests
+          WHERE actor_id = ?1
+          ORDER BY received_at DESC
+          LIMIT ?2
+          `,
+        )
+        .bind(actorId, boundedLimit)
+        .all()) as { results?: unknown[] });
+  const items = Array.isArray(rows.results) ? rows.results : [];
+  return items.filter(isRecord).map((row) => mapExecutionRequestRow(row));
+}
+
+export async function listOpenExecutionRequestsByActorAndIntentFamily(
+  db: D1Database,
+  input: {
+    actorId: string;
+    intentFamily: string;
+    mode?: ExecutionMode;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<ExecutionRequestRecord[]> {
+  const actorId = input.actorId.trim();
+  const intentFamily = input.intentFamily.trim();
+  if (!actorId || !intentFamily) return [];
+  const boundedLimit = Math.max(
+    1,
+    Math.min(200, Math.floor(input.limit ?? 50)),
+  );
+  const offset = Math.max(0, Math.floor(input.offset ?? 0));
+  const mode = input.mode?.trim() || null;
+  const rows = mode
+    ? ((await db
+        .prepare(
+          `
+          SELECT
+            request_id as requestId,
+            schema_version as schemaVersion,
+            idempotency_scope as idempotencyScope,
+            idempotency_key as idempotencyKey,
+            payload_hash as payloadHash,
+            actor_type as actorType,
+            actor_id as actorId,
+            mode,
+            lane,
+            status,
+            status_reason as statusReason,
+            metadata_json as metadataJson,
+            received_at as receivedAt,
+            validated_at as validatedAt,
+            terminal_at as terminalAt,
+            created_at as createdAt,
+            updated_at as updatedAt
+          FROM execution_requests
+          WHERE actor_id = ?1
+            AND mode = ?2
+            AND terminal_at IS NULL
+            AND json_extract(metadata_json, '$.intent.family') = ?3
+          ORDER BY received_at DESC
+          LIMIT ?4 OFFSET ?5
+          `,
+        )
+        .bind(actorId, mode, intentFamily, boundedLimit, offset)
+        .all()) as { results?: unknown[] })
+    : ((await db
+        .prepare(
+          `
+          SELECT
+            request_id as requestId,
+            schema_version as schemaVersion,
+            idempotency_scope as idempotencyScope,
+            idempotency_key as idempotencyKey,
+            payload_hash as payloadHash,
+            actor_type as actorType,
+            actor_id as actorId,
+            mode,
+            lane,
+            status,
+            status_reason as statusReason,
+            metadata_json as metadataJson,
+            received_at as receivedAt,
+            validated_at as validatedAt,
+            terminal_at as terminalAt,
+            created_at as createdAt,
+            updated_at as updatedAt
+          FROM execution_requests
+          WHERE actor_id = ?1
+            AND terminal_at IS NULL
+            AND json_extract(metadata_json, '$.intent.family') = ?2
+          ORDER BY received_at DESC
+          LIMIT ?3 OFFSET ?4
+          `,
+        )
+        .bind(actorId, intentFamily, boundedLimit, offset)
+        .all()) as { results?: unknown[] });
+  const items = Array.isArray(rows.results) ? rows.results : [];
+  return items.filter(isRecord).map((row) => mapExecutionRequestRow(row));
+}
+
 export async function getExecutionRequestByIdempotency(
   db: D1Database,
   idempotencyScope: string,

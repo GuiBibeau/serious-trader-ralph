@@ -9,6 +9,7 @@ describe("portal terminal advanced trade ticket validation", () => {
     const errors = validateOrderConfig({
       orderType: "limit",
       timeInForce: "ioc",
+      lane: "safe",
       reduceOnly: false,
       postOnly: true,
       quantityMode: "quote",
@@ -23,11 +24,30 @@ describe("portal terminal advanced trade ticket validation", () => {
     expect(errors).toContain("Post-only cannot be combined with IOC or FOK.");
   });
 
-  test("accepts valid trigger + bracket configuration", () => {
+  test("accepts a valid Trigger-backed spot order without bracket controls", () => {
     const errors = validateOrderConfig({
       orderType: "trigger",
       timeInForce: "gtc",
-      reduceOnly: true,
+      lane: "safe",
+      reduceOnly: false,
+      postOnly: false,
+      quantityMode: "quote",
+      amountAtomic: "1000",
+      limitPriceAtomic: null,
+      triggerPriceAtomic: "900000",
+      takeProfitPriceAtomic: null,
+      stopLossPriceAtomic: null,
+      bracketEnabled: false,
+    });
+    expect(errors).toHaveLength(0);
+  });
+
+  test("fails closed for bracket controls until Trigger TP/SL flows are wired", () => {
+    const errors = validateOrderConfig({
+      orderType: "trigger",
+      timeInForce: "gtc",
+      lane: "safe",
+      reduceOnly: false,
       postOnly: false,
       quantityMode: "quote",
       amountAtomic: "1000",
@@ -37,7 +57,9 @@ describe("portal terminal advanced trade ticket validation", () => {
       stopLossPriceAtomic: "850000",
       bracketEnabled: true,
     });
-    expect(errors).toHaveLength(0);
+    expect(errors).toContain(
+      "Bracket TP/SL is not wired yet for Trigger-backed orders.",
+    );
   });
 
   test("blocks invalid safe lane + no-simulation quality combo", () => {
