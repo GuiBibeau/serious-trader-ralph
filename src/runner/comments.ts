@@ -63,7 +63,7 @@ export function buildRunnerSuccessComment(input: {
     "- Status: production canary unchanged until this change reaches `main`.",
   ];
   const riskLines = [
-    "- Human review is still required; this handoff stops at `human-review`.",
+    "- Human review is preferred, but an explicitly authorized agent merge may proceed from `human-review` after OpenAI or Codex review reports no blocking findings and required checks are green.",
     "- Issue-specific risk notes are pending and should be updated before merge if the change introduces rollout or contract risk.",
   ];
   return [

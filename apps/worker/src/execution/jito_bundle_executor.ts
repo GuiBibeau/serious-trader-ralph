@@ -1,3 +1,4 @@
+import { buildProtectedLaneExecutionMeta } from "./low_latency";
 import { buildAndSignPrivySwapTransaction } from "./privy_swap_builder";
 import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
 
@@ -275,6 +276,14 @@ export async function executeJitoBundleSwap(
       executionMeta: {
         route,
         classification: ok ? "simulated" : "error",
+        lowLatency: buildProtectedLaneExecutionMeta({
+          maxRetries,
+          retryBaseMs,
+          attemptsUsed: 0,
+          tipAccount: null,
+          bundleStatus: null,
+          errorCode: ok ? null : "simulate-error",
+        }),
         trace: {
           txBuiltAt,
           simulatedAt,
@@ -368,6 +377,14 @@ export async function executeJitoBundleSwap(
             classification,
             bundleId,
             tipAccount,
+            lowLatency: buildProtectedLaneExecutionMeta({
+              maxRetries,
+              retryBaseMs,
+              attemptsUsed: attemptNo,
+              tipAccount,
+              bundleStatus,
+              errorCode: null,
+            }),
             trace: {
               txBuiltAt,
               sentAt,
@@ -399,6 +416,14 @@ export async function executeJitoBundleSwap(
           classification,
           bundleId,
           tipAccount,
+          lowLatency: buildProtectedLaneExecutionMeta({
+            maxRetries,
+            retryBaseMs,
+            attemptsUsed: attemptNo,
+            tipAccount,
+            bundleStatus,
+            errorCode: lastErrorCode,
+          }),
           trace: {
             txBuiltAt,
             sentAt,
@@ -450,6 +475,14 @@ export async function executeJitoBundleSwap(
       classification: "error",
       bundleId: lastBundleId,
       tipAccount,
+      lowLatency: buildProtectedLaneExecutionMeta({
+        maxRetries,
+        retryBaseMs,
+        attemptsUsed: maxAttempts,
+        tipAccount,
+        bundleStatus: lastBundleStatus,
+        errorCode: lastErrorCode,
+      }),
       trace: {
         txBuiltAt,
         failedAt,

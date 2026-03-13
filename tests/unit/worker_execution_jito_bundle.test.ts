@@ -187,6 +187,22 @@ describe("worker jito bundle execution adapter", () => {
       "TipAccount111111111111111111111111111111111",
     );
     expect(result.executionMeta?.classification).toBe("confirmed");
+    expect(result.executionMeta?.lowLatency).toMatchObject({
+      lane: "protected",
+      landingPath: "jito_bundle",
+      policy: {
+        maxRetries: 2,
+        retryBaseMs: 250,
+        priorityFeeMode: "bundle_tip",
+        antiFrontRunning: "bundle_private_orderflow",
+        revertProtection: "bundle_status_gated_retry",
+      },
+      outcome: {
+        attemptsUsed: 1,
+        bundleStatus: "confirmed",
+        errorCode: null,
+      },
+    });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -260,6 +276,13 @@ describe("worker jito bundle execution adapter", () => {
 
     expect(result.status).toBe("confirmed");
     expect(result.executionMeta?.bundleId).toBe("bundle-2");
+    expect(result.executionMeta?.lowLatency).toMatchObject({
+      lane: "protected",
+      outcome: {
+        attemptsUsed: 2,
+        bundleStatus: "confirmed",
+      },
+    });
     expect(sendBundleCalls).toBe(2);
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
@@ -334,5 +357,13 @@ describe("worker jito bundle execution adapter", () => {
     expect(err.code).toBe("submission-failed");
     expect(err.bundleStatus).toBe("dropped");
     expect(err.attempts).toBe(2);
+    expect(result.executionMeta?.lowLatency).toMatchObject({
+      lane: "protected",
+      outcome: {
+        attemptsUsed: 2,
+        bundleStatus: "dropped",
+        errorCode: "submission-failed",
+      },
+    });
   });
 });

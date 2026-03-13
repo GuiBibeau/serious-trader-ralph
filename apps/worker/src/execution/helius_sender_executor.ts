@@ -1,3 +1,4 @@
+import { buildFastLaneExecutionMeta } from "./low_latency";
 import { buildAndSignPrivySwapTransaction } from "./privy_swap_builder";
 import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
 
@@ -234,6 +235,13 @@ export async function executeHeliusSenderSwap(
       executionMeta: {
         route,
         classification: ok ? "simulated" : "error",
+        lowLatency: await buildFastLaneExecutionMeta({
+          env: input.env,
+          maxRetries,
+          retryBaseMs,
+          attemptsUsed: 0,
+          errorCode: ok ? null : "simulate-error",
+        }),
         trace: {
           txBuiltAt,
           simulatedAt,
@@ -310,6 +318,13 @@ export async function executeHeliusSenderSwap(
           executionMeta: {
             route,
             classification: "error",
+            lowLatency: await buildFastLaneExecutionMeta({
+              env: input.env,
+              maxRetries,
+              retryBaseMs,
+              attemptsUsed: attemptNo,
+              errorCode: lastErrorCode,
+            }),
             trace: {
               txBuiltAt,
               sentAt,
@@ -330,6 +345,13 @@ export async function executeHeliusSenderSwap(
         executionMeta: {
           route,
           classification: classificationFromStatus(status),
+          lowLatency: await buildFastLaneExecutionMeta({
+            env: input.env,
+            maxRetries,
+            retryBaseMs,
+            attemptsUsed: attemptNo,
+            errorCode: null,
+          }),
           trace: {
             txBuiltAt,
             sentAt,
@@ -384,6 +406,13 @@ export async function executeHeliusSenderSwap(
     executionMeta: {
       route,
       classification: "error",
+      lowLatency: await buildFastLaneExecutionMeta({
+        env: input.env,
+        maxRetries,
+        retryBaseMs,
+        attemptsUsed: maxAttempts,
+        errorCode: lastErrorCode,
+      }),
       trace: {
         txBuiltAt,
         failedAt,
