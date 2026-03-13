@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "v2",
+  "mode": "privy_execute",
+  "lane": "safe",
+  "metadata": {
+    "source": "terminal-ui",
+    "reason": "manual-spot-swap"
+  },
+  "privyExecute": {
+    "wallet": "11111111111111111111111111111111",
+    "intent": {
+      "family": "spot_swap",
+      "venueKey": "jupiter",
+      "marketType": "spot",
+      "inputMint": "So11111111111111111111111111111111111111112",
+      "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "amountAtomic": "1500000",
+      "slippageBps": 30
+    },
+    "options": {
+      "requireSimulation": true,
+      "commitment": "confirmed"
+    }
+  }
+}

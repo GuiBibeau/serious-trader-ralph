@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/exec.submit.request.v2.schema.json",
+  "title": "ExecSubmitRequestV2",
+  "type": "object",
+  "required": ["schemaVersion", "mode", "lane"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "v2" },
+    "mode": { "type": "string", "enum": ["relay_signed", "privy_execute"] },
+    "lane": { "type": "string", "enum": ["fast", "protected", "safe"] },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "clientRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      }
+    },
+    "relaySigned": {
+      "type": "object",
+      "required": ["encoding", "signedTransaction"],
+      "additionalProperties": false,
+      "properties": {
+        "encoding": { "const": "base64" },
+        "signedTransaction": {
+          "type": "string",
+          "minLength": 16,
+          "pattern": "^[A-Za-z0-9+/=]+$"
+        }
+      }
+    },
+    "privyExecute": {
+      "type": "object",
+      "required": ["wallet", "intent"],
+      "additionalProperties": false,
+      "properties": {
+        "wallet": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 64,
+          "pattern": "^[1-9A-HJ-NP-Za-km-z]+$"
+        },
+        "intent": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "family",
+                "marketType",
+                "inputMint",
+                "outputMint",
+                "amountAtomic",
+                "slippageBps"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "family": { "const": "spot_swap" },
+                "venueKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "marketType": { "const": "spot" },
+                "inputMint": {
+                  "type": "string",
+                  "minLength": 32,
+                  "maxLength": 64,
+                  "pattern": "^[1-9A-HJ-NP-Za-km-z]+$"
+                },
+                "outputMint": {
+                  "type": "string",
+                  "minLength": 32,
+                  "maxLength": 64,
+                  "pattern": "^[1-9A-HJ-NP-Za-km-z]+$"
+                },
+                "amountAtomic": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                },
+                "slippageBps": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5000
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "family",
+                "venueKey",
+                "marketType",
+                "instrumentId",
+                "side",
+                "quantityAtomic"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "family": { "const": "conditional_spot_order" },
+                "venueKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "marketType": { "const": "spot" },
+                "instrumentId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "side": { "type": "string", "enum": ["buy", "sell"] },
+                "quantityAtomic": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "family",
+                "venueKey",
+                "marketType",
+                "instrumentId",
+                "side",
+                "quantityAtomic"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "family": { "const": "clob_order" },
+                "venueKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "marketType": { "type": "string", "enum": ["spot", "perp"] },
+                "instrumentId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "side": { "type": "string", "enum": ["buy", "sell"] },
+                "quantityAtomic": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "family",
+                "venueKey",
+                "marketType",
+                "instrumentId",
+                "side",
+                "quantityAtomic"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "family": { "const": "perp_order" },
+                "venueKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "marketType": { "const": "perp" },
+                "instrumentId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "side": {
+                  "type": "string",
+                  "enum": ["long", "short", "close_long", "close_short"]
+                },
+                "quantityAtomic": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                },
+                "collateralAtomic": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "family",
+                "venueKey",
+                "marketType",
+                "instrumentId",
+                "outcomeId",
+                "side",
+                "quantityAtomic"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "family": { "const": "prediction_order" },
+                "venueKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "marketType": { "const": "prediction" },
+                "instrumentId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "outcomeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "side": {
+                  "type": "string",
+                  "enum": ["buy_yes", "buy_no", "sell_yes", "sell_no"]
+                },
+                "quantityAtomic": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "family",
+                "venueKey",
+                "marketType",
+                "referenceId",
+                "borrowLegs",
+                "settlementMint"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "family": { "const": "flash_atomic" },
+                "venueKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "marketType": { "const": "spot" },
+                "referenceId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "borrowLegs": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": ["provider", "mint", "amountAtomic"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "mint": {
+                        "type": "string",
+                        "minLength": 32,
+                        "maxLength": 64,
+                        "pattern": "^[1-9A-HJ-NP-Za-km-z]+$"
+                      },
+                      "amountAtomic": {
+                        "type": "string",
+                        "pattern": "^[1-9][0-9]*$"
+                      }
+                    }
+                  }
+                },
+                "settlementMint": {
+                  "type": "string",
+                  "minLength": 32,
+                  "maxLength": 64,
+                  "pattern": "^[1-9A-HJ-NP-Za-km-z]+$"
+                }
+              }
+            }
+          ]
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "simulateOnly": { "type": "boolean" },
+            "requireSimulation": { "type": "boolean" },
+            "dryRun": { "type": "boolean" },
+            "priorityMicroLamports": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000000
+            },
+            "commitment": {
+              "type": "string",
+              "enum": ["processed", "confirmed", "finalized"]
+            },
+            "orderType": {
+              "type": "string",
+              "enum": ["market", "limit", "trigger"]
+            },
+            "timeInForce": {
+              "type": "string",
+              "enum": ["gtc", "ioc", "fok"]
+            },
+            "reduceOnly": { "type": "boolean" },
+            "postOnly": { "type": "boolean" },
+            "quantityMode": {
+              "type": "string",
+              "enum": ["base", "quote", "notional"]
+            },
+            "limitPriceAtomic": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            },
+            "triggerPriceAtomic": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            },
+            "takeProfitPriceAtomic": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            },
+            "stopLossPriceAtomic": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": { "mode": { "const": "relay_signed" } },
+      "required": ["mode", "relaySigned"],
+      "not": { "required": ["privyExecute"] }
+    },
+    {
+      "properties": { "mode": { "const": "privy_execute" } },
+      "required": ["mode", "privyExecute"],
+      "not": { "required": ["relaySigned"] }
+    }
+  ]
+}

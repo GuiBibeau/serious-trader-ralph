@@ -739,6 +739,96 @@ describe("worker x402 exec submit scaffold route", () => {
     }
   });
 
+  test("rejects syntactically valid v2 non-swap intents until the adapter path exists", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-v2-perp-1",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: "protected",
+            privyExecute: {
+              wallet: "11111111111111111111111111111111",
+              intent: {
+                family: "perp_order",
+                venueKey: "drift",
+                marketType: "perp",
+                instrumentId: "SOL-PERP",
+                side: "long",
+                quantityAtomic: "1000000",
+                collateralAtomic: "250000",
+              },
+              options: {
+                orderType: "limit",
+                limitPriceAtomic: "155000000",
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("invalid-request");
+      expect(execErrorReason(body)).toBe(
+        "unsupported-intent-family:perp_order",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("rejects v2 spot swaps that request an unsupported venue key on the public submit path", async () => {
+    const { env, sqlite } = createExecSubmitEnv();
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/x402/exec/submit", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+            "idempotency-key": "idem-privy-v2-phoenix-1",
+          },
+          body: JSON.stringify({
+            schemaVersion: "v2",
+            mode: "privy_execute",
+            lane: "safe",
+            privyExecute: {
+              wallet: "11111111111111111111111111111111",
+              intent: {
+                family: "spot_swap",
+                venueKey: "phoenix",
+                marketType: "spot",
+                inputMint: SOL_MINT,
+                outputMint: MAINNET_USDC_MINT,
+                amountAtomic: "1000000",
+                slippageBps: 50,
+              },
+            },
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(execErrorCode(body)).toBe("invalid-request");
+      expect(execErrorReason(body)).toBe("unsupported-venue-key:phoenix");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("denies privy_execute submit when trusted rollout segment is disabled", async () => {
     const { env, sqlite } = createExecSubmitEnv({
       EXEC_ROLLOUT_TRUSTED_ENABLED: "0",

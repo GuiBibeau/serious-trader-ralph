@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  executeIntentViaRouter,
   executeSwapViaRouter,
   registerExecutionAdapter,
 } from "../../apps/worker/src/execution/router";
@@ -151,12 +152,12 @@ describe("worker execution router", () => {
     ).rejects.toThrow(/magicblock-ephemeral-rollup-url-missing/);
   });
 
-  test("custom execution adapters can be registered for new venues", async () => {
+  test("custom execution adapters can be registered for new intent families", async () => {
     registerExecutionAdapter(
       "phoenix_orderbook",
       async (input) => ({
         status: "simulated",
-        signature: "sig-phoenix",
+        signature: "sig-phoenix-clob",
         usedQuote: input.quoteResponse,
         refreshed: false,
         lastValidBlockHeight: 42,
@@ -164,29 +165,95 @@ describe("worker execution router", () => {
       {
         venueKey: "phoenix",
         supportedModes: ["shadow", "paper"],
+        supportedIntentFamilies: ["clob_order"],
       },
     );
 
-    const result = await executeSwapViaRouter({
-      env: {} as never,
-      venueKey: "phoenix",
-      runtimeMode: "paper",
-      execution: { adapter: "phoenix_orderbook" },
-      policy: normalizePolicy({}),
-      rpc: {} as never,
-      jupiter: {} as never,
-      quoteResponse: {
-        inputMint: "A",
-        outputMint: "B",
-        inAmount: "1",
-        outAmount: "2",
-      },
-      userPublicKey: "11111111111111111111111111111111",
-      log: () => {},
-    });
+    await expect(
+      executeIntentViaRouter({
+        env: {} as never,
+        venueKey: "phoenix",
+        runtimeMode: "paper",
+        execution: { adapter: "phoenix_orderbook" },
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        intent: {
+          family: "clob_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "phoenix",
+          marketType: "spot",
+          instrumentId: "SOL/USDC",
+          side: "buy",
+          quantityAtomic: "1",
+        },
+        log: () => {},
+      }),
+    ).rejects.toThrow(/execution-intent-family-not-implemented/);
+  });
 
-    expect(result.status).toBe("simulated");
-    expect(result.signature).toBe("sig-phoenix");
+  test("fails closed when a venue advertises an intent family but the adapter does not implement it", async () => {
+    await expect(
+      executeIntentViaRouter({
+        env: {} as never,
+        venueKey: "jupiter",
+        runtimeMode: "paper",
+        execution: { adapter: "jupiter" },
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        intent: {
+          family: "conditional_spot_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "jupiter",
+          marketType: "spot",
+          instrumentId: "SOL/USDC",
+          side: "buy",
+          quantityAtomic: "1",
+        },
+        log: () => {},
+      }),
+    ).rejects.toThrow(/execution-adapter-intent-not-supported/);
+  });
+
+  test("fails closed when the runtime venue does not support the requested intent family", async () => {
+    registerExecutionAdapter(
+      "phoenix_orderbook",
+      async (input) => ({
+        status: "simulated",
+        signature: "sig-phoenix-clob",
+        usedQuote: input.quoteResponse,
+        refreshed: false,
+        lastValidBlockHeight: 42,
+      }),
+      {
+        venueKey: "phoenix",
+        supportedModes: ["shadow", "paper"],
+        supportedIntentFamilies: ["clob_order"],
+      },
+    );
+
+    await expect(
+      executeIntentViaRouter({
+        env: {} as never,
+        venueKey: "phoenix",
+        runtimeMode: "paper",
+        execution: { adapter: "phoenix_orderbook" },
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        intent: {
+          family: "perp_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "phoenix",
+          marketType: "perp",
+          instrumentId: "SOL-PERP",
+          side: "long",
+          quantityAtomic: "1",
+        },
+        log: () => {},
+      }),
+    ).rejects.toThrow(/runtime-venue-intent-family-not-supported/);
   });
 
   test("fails closed when a venue adapter does not match the runtime venue", async () => {

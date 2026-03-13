@@ -10,6 +10,99 @@ export type ExecutionLogFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
+export type ExecutionIntentFamily =
+  | "spot_swap"
+  | "conditional_spot_order"
+  | "clob_order"
+  | "perp_order"
+  | "prediction_order"
+  | "flash_atomic";
+
+export type ExecutionIntentLifecycleSnapshot = {
+  orderState?:
+    | "accepted"
+    | "open"
+    | "partially_filled"
+    | "filled"
+    | "cancel_requested"
+    | "cancelled"
+    | "expired"
+    | "rejected";
+  fillState?: "pending" | "partial" | "filled" | "settled" | "failed";
+  positionState?:
+    | "flat"
+    | "opening"
+    | "open"
+    | "closing"
+    | "closed"
+    | "liquidating"
+    | "liquidated";
+  settlementState?:
+    | "pending"
+    | "landed"
+    | "confirmed"
+    | "finalized"
+    | "redeemed"
+    | "failed";
+  notes?: string[];
+};
+
+export type SpotSwapExecutionIntent = {
+  family: "spot_swap";
+  wallet: string;
+  venueKey?: string;
+  marketType: "spot";
+  inputMint: string;
+  outputMint: string;
+  amountAtomic: string;
+  slippageBps: number;
+  lifecycle?: ExecutionIntentLifecycleSnapshot;
+};
+
+export type NonSwapExecutionIntent = {
+  family: Exclude<ExecutionIntentFamily, "spot_swap">;
+  wallet: string;
+  venueKey: string;
+  marketType: "spot" | "perp" | "prediction";
+  instrumentId: string;
+  side?: string;
+  quantityAtomic?: string;
+  referenceId?: string;
+  params?: Record<string, unknown> | null;
+  lifecycle?: ExecutionIntentLifecycleSnapshot;
+};
+
+export type ExecutionRouterIntent =
+  | SpotSwapExecutionIntent
+  | NonSwapExecutionIntent;
+
+type ExecuteIntentInputBase = {
+  env: Env;
+  venueKey?: string;
+  runtimeMode?: RuntimeMode;
+  requireVenueRouting?: boolean;
+  subjectControlBypassReason?: "strategy_lab_readiness_canary";
+  execution?: ExecutionConfig;
+  policy: NormalizedPolicy;
+  rpc: SolanaRpc;
+  jupiter: JupiterClient;
+  log: ExecutionLogFn;
+  guardEnabled?: () => Promise<void>;
+  privyWalletId?: string;
+};
+
+export type ExecuteIntentInput =
+  | (ExecuteIntentInputBase & {
+      intent: SpotSwapExecutionIntent;
+      quoteResponse: JupiterQuoteResponse;
+      userPublicKey: string;
+    })
+  | (ExecuteIntentInputBase & {
+      intent: NonSwapExecutionIntent;
+      quoteResponse?: never;
+      userPublicKey?: string;
+    });
+
 export type ExecuteSwapInput = {
   env: Env;
   venueKey?: string;

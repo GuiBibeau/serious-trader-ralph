@@ -57,6 +57,28 @@ describe("execution contract v1 schemas", () => {
     ).toBe(false);
   });
 
+  test("submit request v2 validates spot and non-swap family fixtures", () => {
+    const schema = "docs/execution/schemas/exec.submit.request.v2.schema.json";
+    expect(
+      validate(
+        schema,
+        "docs/execution/fixtures/submit.privy_execute.spot_swap.valid.v2.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
+        schema,
+        "docs/execution/fixtures/submit.privy_execute.perp_order.valid.v2.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
+        schema,
+        "docs/execution/fixtures/submit.invalid.perp-missing-market-type.v2.json",
+      ),
+    ).toBe(false);
+  });
+
   test("submit response fixture validates", () => {
     expect(
       validate(

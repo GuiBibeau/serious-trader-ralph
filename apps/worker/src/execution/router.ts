@@ -1,6 +1,7 @@
 import {
   requireRuntimeVenueCapability,
   runtimeVenueSupportsAdapter,
+  runtimeVenueSupportsIntentFamily,
   runtimeVenueSupportsMode,
 } from "../../../../src/runtime/venues/catalog.js";
 import { TRADING_TOKEN_BY_MINT } from "../defaults";
@@ -10,7 +11,12 @@ import { executeHeliusSenderSwap } from "./helius_sender_executor";
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
 import { executeJupiterSwap } from "./jupiter_executor";
 import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
-import type { ExecuteSwapInput, ExecuteSwapResult } from "./types";
+import type {
+  ExecuteIntentInput,
+  ExecuteSwapInput,
+  ExecuteSwapResult,
+  ExecutionIntentFamily,
+} from "./types";
 
 export type ExecutionAdapterFn = (
   input: ExecuteSwapInput,
@@ -20,15 +26,20 @@ export type ExecutionAdapterRegistration = {
   adapterKey: string;
   venueKey: string;
   supportedModes: RuntimeMode[];
+  supportedIntentFamilies: ExecutionIntentFamily[];
   adapter: ExecutionAdapterFn;
 };
 
 type RegisterExecutionAdapterOptions = {
   venueKey?: string;
   supportedModes?: RuntimeMode[];
+  supportedIntentFamilies?: ExecutionIntentFamily[];
 };
 
 const DEFAULT_SUPPORTED_MODES: RuntimeMode[] = ["shadow", "paper", "live"];
+const DEFAULT_SUPPORTED_INTENT_FAMILIES: ExecutionIntentFamily[] = [
+  "spot_swap",
+];
 
 const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
   [
@@ -37,6 +48,7 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       adapterKey: "jupiter",
       venueKey: "jupiter",
       supportedModes: ["shadow", "paper", "live"],
+      supportedIntentFamilies: ["spot_swap"],
       adapter: executeJupiterSwap,
     },
   ],
@@ -46,6 +58,7 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       adapterKey: "helius_sender",
       venueKey: "jupiter",
       supportedModes: ["live"],
+      supportedIntentFamilies: ["spot_swap"],
       adapter: executeHeliusSenderSwap,
     },
   ],
@@ -55,6 +68,7 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       adapterKey: "jito_bundle",
       venueKey: "jupiter",
       supportedModes: ["live"],
+      supportedIntentFamilies: ["spot_swap"],
       adapter: executeJitoBundleSwap,
     },
   ],
@@ -64,6 +78,7 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       adapterKey: "magicblock_ephemeral_rollup",
       venueKey: "magicblock",
       supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["spot_swap"],
       adapter: executeMagicBlockEphemeralRollupSwap,
     },
   ],
@@ -84,6 +99,9 @@ export function registerExecutionAdapter(
     supportedModes: options?.supportedModes
       ? [...options.supportedModes]
       : [...DEFAULT_SUPPORTED_MODES],
+    supportedIntentFamilies: options?.supportedIntentFamilies
+      ? [...options.supportedIntentFamilies]
+      : [...DEFAULT_SUPPORTED_INTENT_FAMILIES],
     adapter,
   });
 }
@@ -139,9 +157,17 @@ async function enforceStrategyLabSubjectControls(input: {
   }
 }
 
-export async function executeSwapViaRouter(
-  input: ExecuteSwapInput,
-): Promise<ExecuteSwapResult> {
+async function resolveExecutionAdapterForIntent(input: {
+  env: ExecuteIntentInput["env"];
+  execution: ExecuteIntentInput["execution"];
+  venueKey: string;
+  runtimeMode?: RuntimeMode;
+  requireVenueRouting?: boolean;
+  subjectControlBypassReason?: ExecuteIntentInput["subjectControlBypassReason"];
+  intentFamily: ExecutionIntentFamily;
+  inputMint?: string;
+  outputMint?: string;
+}): Promise<ExecutionAdapterRegistration> {
   const adapterName =
     (input.execution?.adapter ?? "jupiter").trim() || "jupiter";
   const venueKey = String(input.venueKey ?? "").trim();
@@ -174,6 +200,11 @@ export async function executeSwapViaRouter(
         `runtime-venue-adapter-not-supported:${venueKey}:${adapterName}`,
       );
     }
+    if (!runtimeVenueSupportsIntentFamily(capability, input.intentFamily)) {
+      throw new Error(
+        `runtime-venue-intent-family-not-supported:${venueKey}:${input.intentFamily}`,
+      );
+    }
     if (runtimeMode && !runtimeVenueSupportsMode(capability, runtimeMode)) {
       throw new Error(
         `runtime-venue-mode-not-supported:${venueKey}:${runtimeMode}`,
@@ -183,8 +214,8 @@ export async function executeSwapViaRouter(
       await enforceStrategyLabSubjectControls({
         db: input.env.WAITLIST_DB,
         venueKey,
-        inputMint: input.quoteResponse?.inputMint,
-        outputMint: input.quoteResponse?.outputMint,
+        inputMint: input.inputMint,
+        outputMint: input.outputMint,
         bypassReason: input.subjectControlBypassReason,
       });
     }
@@ -194,5 +225,70 @@ export async function executeSwapViaRouter(
       `execution-adapter-mode-unsupported:${adapterName}:${runtimeMode}`,
     );
   }
-  return await registration.adapter(input);
+  if (!registration.supportedIntentFamilies.includes(input.intentFamily)) {
+    throw new Error(
+      `execution-adapter-intent-not-supported:${adapterName}:${input.intentFamily}`,
+    );
+  }
+  return registration;
+}
+
+export async function executeIntentViaRouter(
+  input: ExecuteIntentInput,
+): Promise<ExecuteSwapResult> {
+  const venueKey = String(input.venueKey ?? input.intent.venueKey ?? "").trim();
+  const registration = await resolveExecutionAdapterForIntent({
+    env: input.env,
+    execution: input.execution,
+    venueKey,
+    runtimeMode: input.runtimeMode,
+    requireVenueRouting: input.requireVenueRouting,
+    subjectControlBypassReason: input.subjectControlBypassReason,
+    intentFamily: input.intent.family,
+    inputMint:
+      input.intent.family === "spot_swap" ? input.intent.inputMint : undefined,
+    outputMint:
+      input.intent.family === "spot_swap" ? input.intent.outputMint : undefined,
+  });
+
+  if (input.intent.family !== "spot_swap") {
+    throw new Error(
+      `execution-intent-family-not-implemented:${input.intent.family}:${registration.adapterKey}`,
+    );
+  }
+
+  return await registration.adapter({
+    env: input.env,
+    venueKey,
+    runtimeMode: input.runtimeMode,
+    requireVenueRouting: input.requireVenueRouting,
+    subjectControlBypassReason: input.subjectControlBypassReason,
+    execution: input.execution,
+    policy: input.policy,
+    rpc: input.rpc,
+    jupiter: input.jupiter,
+    quoteResponse: input.quoteResponse,
+    userPublicKey: input.userPublicKey,
+    privyWalletId: input.privyWalletId,
+    log: input.log,
+    guardEnabled: input.guardEnabled,
+  });
+}
+
+export async function executeSwapViaRouter(
+  input: ExecuteSwapInput,
+): Promise<ExecuteSwapResult> {
+  return await executeIntentViaRouter({
+    ...input,
+    intent: {
+      family: "spot_swap",
+      wallet: input.userPublicKey,
+      venueKey: input.venueKey,
+      marketType: "spot",
+      inputMint: String(input.quoteResponse?.inputMint ?? ""),
+      outputMint: String(input.quoteResponse?.outputMint ?? ""),
+      amountAtomic: String(input.quoteResponse?.inAmount ?? ""),
+      slippageBps: input.policy.slippageBps,
+    },
+  });
 }

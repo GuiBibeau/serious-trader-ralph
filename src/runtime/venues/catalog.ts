@@ -1,4 +1,5 @@
 import type {
+  RuntimeExecutionIntentFamily,
   RuntimeMode,
   RuntimeVenueCapability,
 } from "../contracts/index.js";
@@ -10,7 +11,8 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
     displayName: "Jupiter",
     adapterKeys: ["jupiter", "helius_sender", "jito_bundle"],
     marketTypes: ["spot"],
-    orderTypes: ["market"],
+    orderTypes: ["market", "limit", "trigger"],
+    intentFamilies: ["spot_swap", "conditional_spot_order"],
     authModel: "privy_solana_wallet",
     feeModel: "venue_quote_inclusive",
     precision: {
@@ -28,6 +30,13 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
       expectedSettlementMs: 5000,
     },
     settlementBehavior: "swap_atomic",
+    lifecycle: {
+      supportsOrderLifecycle: true,
+      supportsPositionLifecycle: false,
+      requiresExternalOracle: false,
+      settlementModel: "atomic_swap",
+    },
+    oracleRequirements: ["venue_reference"],
     supportedModes: ["shadow", "paper", "live"],
     onboardingState: "broad_live_ready",
     notes:
@@ -40,6 +49,7 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
     adapterKeys: ["magicblock_ephemeral_rollup"],
     marketTypes: ["spot"],
     orderTypes: ["market"],
+    intentFamilies: ["spot_swap"],
     authModel: "privy_solana_wallet",
     feeModel: "fixed_bps",
     precision: {
@@ -57,6 +67,13 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
       expectedSettlementMs: 3000,
     },
     settlementBehavior: "swap_atomic",
+    lifecycle: {
+      supportsOrderLifecycle: false,
+      supportsPositionLifecycle: false,
+      requiresExternalOracle: false,
+      settlementModel: "atomic_swap",
+    },
+    oracleRequirements: ["none"],
     supportedModes: ["shadow", "paper"],
     onboardingState: "paper_ready",
     notes:
@@ -69,6 +86,7 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
     adapterKeys: ["phoenix_orderbook"],
     marketTypes: ["spot"],
     orderTypes: ["market", "limit"],
+    intentFamilies: ["clob_order"],
     authModel: "privy_solana_wallet",
     feeModel: "maker_taker_bps",
     precision: {
@@ -86,6 +104,13 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
       expectedSettlementMs: 4000,
     },
     settlementBehavior: "orderbook_atomic",
+    lifecycle: {
+      supportsOrderLifecycle: true,
+      supportsPositionLifecycle: false,
+      requiresExternalOracle: false,
+      settlementModel: "resting_order",
+    },
+    oracleRequirements: ["venue_reference"],
     supportedModes: ["shadow", "paper"],
     onboardingState: "candidate",
     notes:
@@ -106,10 +131,17 @@ export function listRuntimeVenueCapabilities(): RuntimeVenueCapability[] {
     adapterKeys: [...capability.adapterKeys],
     marketTypes: [...capability.marketTypes],
     orderTypes: [...capability.orderTypes],
+    ...(capability.intentFamilies
+      ? { intentFamilies: [...capability.intentFamilies] }
+      : {}),
     supportedModes: [...capability.supportedModes],
     precision: { ...capability.precision },
     sizeLimits: { ...capability.sizeLimits },
     latencyProfile: { ...capability.latencyProfile },
+    ...(capability.lifecycle ? { lifecycle: { ...capability.lifecycle } } : {}),
+    ...(capability.oracleRequirements
+      ? { oracleRequirements: [...capability.oracleRequirements] }
+      : {}),
   }));
 }
 
@@ -141,4 +173,15 @@ export function runtimeVenueSupportsAdapter(
   adapterKey: string,
 ): boolean {
   return capability.adapterKeys.includes(adapterKey);
+}
+
+export function runtimeVenueSupportsIntentFamily(
+  capability: RuntimeVenueCapability,
+  intentFamily: RuntimeExecutionIntentFamily,
+): boolean {
+  const configured = capability.intentFamilies;
+  if (!configured || configured.length < 1) {
+    return intentFamily === "spot_swap";
+  }
+  return configured.includes(intentFamily);
 }

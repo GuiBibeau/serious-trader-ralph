@@ -79,7 +79,13 @@ import {
 } from "./execution/repository";
 import { evaluateExecutionRolloutGate } from "./execution/rollout_gate";
 import { executeSwapViaRouter } from "./execution/router";
-import { parseExecSubmitPayload } from "./execution/submit_contract";
+import {
+  buildExecSubmitIntentSummary,
+  parseExecSubmitPayload,
+  resolveExecSubmitIntentFamily,
+  resolveExecSubmitSpotSwap,
+  toExecSubmitRequestV1Compat,
+} from "./execution/submit_contract";
 import {
   type ExperienceLevel,
   evaluateOnboarding,
@@ -1097,6 +1103,10 @@ const worker = {
             env,
           );
         }
+        const compatRequest = toExecSubmitRequestV1Compat(parsed.value);
+        const intentFamily = resolveExecSubmitIntentFamily(parsed.value);
+        const spotSwap = resolveExecSubmitSpotSwap(parsed.value);
+        const intentSummary = buildExecSubmitIntentSummary(parsed.value);
 
         const idempotencyKey = readIdempotencyKey(request);
         if (!idempotencyKey) {
@@ -1286,6 +1296,7 @@ const worker = {
             request: abuseCheck.metadata,
           },
           laneResolution: laneResolution.metadata,
+          ...(intentSummary ? { intent: intentSummary } : {}),
           actor: {
             type: actorType,
             id: actorId,
@@ -1359,9 +1370,38 @@ const worker = {
           };
         }
 
+        if (parsed.value.mode === "privy_execute" && !compatRequest) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: intentFamily
+                  ? `unsupported-intent-family:${intentFamily}`
+                  : "unsupported-intent-family",
+              },
+            }),
+            env,
+          );
+        }
+        if (
+          parsed.value.schemaVersion === "v2" &&
+          spotSwap?.venueKey &&
+          spotSwap.venueKey !== "jupiter"
+        ) {
+          return withCors(
+            execErrorResponse({
+              code: "invalid-request",
+              details: {
+                reason: `unsupported-venue-key:${spotSwap.venueKey}`,
+              },
+            }),
+            env,
+          );
+        }
+
         const submitPolicy = await evaluateExecutionSubmitPolicy({
           env,
-          request: parsed.value,
+          request: compatRequest as NonNullable<typeof compatRequest>,
           lane: laneResolution.lane,
           actorType,
         });
@@ -1518,8 +1558,21 @@ const worker = {
           shouldSyncExecutePrivySubmit(env) &&
           privyActorContext
         ) {
-          const swap = parsed.value.privyExecute.swap;
-          const options = parsed.value.privyExecute.options ?? {};
+          if (!spotSwap) {
+            return withCors(
+              execErrorResponse({
+                code: "invalid-request",
+                details: {
+                  reason: intentFamily
+                    ? `unsupported-intent-family:${intentFamily}`
+                    : "unsupported-intent-family",
+                },
+              }),
+              env,
+            );
+          }
+          const swap = spotSwap.swap;
+          const options = spotSwap.options ?? {};
           const requestedRequireSimulation =
             typeof options.requireSimulation === "boolean"
               ? options.requireSimulation
@@ -1706,6 +1759,15 @@ const worker = {
                 route: laneResolution.adapter,
                 resultStatus: result.status,
                 outcome: terminalStatus,
+                lifecycle: {
+                  settlementState:
+                    result.status === "finalized"
+                      ? "finalized"
+                      : result.status === "confirmed"
+                        ? "confirmed"
+                        : "landed",
+                  notes: ["spot_swap"],
+                },
                 quality: qualityMetadata,
                 quote: {
                   inputMint: swap.inputMint,
@@ -1776,6 +1838,10 @@ const worker = {
                 mode: parsed.value.mode,
                 route: laneResolution.adapter,
                 outcome: terminalStatus,
+                lifecycle: {
+                  settlementState: "failed",
+                  notes: [statusReason],
+                },
                 quality: qualityMetadata,
               },
               readyAt: failedAt,
@@ -1887,6 +1953,12 @@ const worker = {
         const relayImmutability = readRelayImmutabilitySnapshot(
           latest.request.metadata,
         );
+        const intentSummary = isRecord(latest.request.metadata?.intent)
+          ? latest.request.metadata.intent
+          : null;
+        const lifecycleSummary = isRecord(latest.receipt?.receipt?.lifecycle)
+          ? latest.receipt?.receipt?.lifecycle
+          : null;
         return withCors(
           json({
             ok: true,
@@ -1925,6 +1997,8 @@ const worker = {
               state: attempt.status,
               at: attempt.completedAt ?? attempt.startedAt,
             })),
+            ...(intentSummary ? { intent: intentSummary } : {}),
+            ...(lifecycleSummary ? { lifecycle: lifecycleSummary } : {}),
           }),
           env,
         );

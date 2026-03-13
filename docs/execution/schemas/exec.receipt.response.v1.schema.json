@@ -127,6 +127,38 @@
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
             }
           }
+        },
+        "intent": {
+          "type": "object",
+          "required": ["family"],
+          "additionalProperties": false,
+          "properties": {
+            "family": { "type": "string", "minLength": 1 },
+            "marketType": { "type": "string", "minLength": 1 },
+            "venueKey": { "type": "string", "minLength": 1 },
+            "instrumentId": { "type": "string", "minLength": 1 },
+            "inputMint": { "type": "string", "minLength": 1 },
+            "outputMint": { "type": "string", "minLength": 1 },
+            "outcomeId": { "type": "string", "minLength": 1 },
+            "referenceId": { "type": "string", "minLength": 1 },
+            "side": { "type": "string", "minLength": 1 },
+            "settlementMint": { "type": "string", "minLength": 1 },
+            "borrowLegCount": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "lifecycle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "orderState": { "type": "string", "minLength": 1 },
+            "fillState": { "type": "string", "minLength": 1 },
+            "positionState": { "type": "string", "minLength": 1 },
+            "settlementState": { "type": "string", "minLength": 1 },
+            "notes": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
         }
       }
     }

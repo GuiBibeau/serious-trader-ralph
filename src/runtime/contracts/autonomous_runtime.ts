@@ -523,11 +523,17 @@ export const RuntimeResearchEvidenceBundleRecordSchema = VersionedSchema.extend(
   },
 ).strict();
 
-export const RuntimeVenueMarketTypeSchema = z.enum(["spot", "perp", "options"]);
+export const RuntimeVenueMarketTypeSchema = z.enum([
+  "spot",
+  "perp",
+  "options",
+  "prediction",
+]);
 
 export const RuntimeVenueOrderTypeSchema = z.enum([
   "market",
   "limit",
+  "trigger",
   "auction",
   "twap",
 ]);
@@ -548,6 +554,39 @@ export const RuntimeVenueSettlementBehaviorSchema = z.enum([
   "orderbook_atomic",
   "orderbook_partial",
 ]);
+
+export const RuntimeExecutionIntentFamilySchema = z.enum([
+  "spot_swap",
+  "conditional_spot_order",
+  "clob_order",
+  "perp_order",
+  "prediction_order",
+  "flash_atomic",
+]);
+
+export const RuntimeVenueSettlementModelSchema = z.enum([
+  "atomic_swap",
+  "resting_order",
+  "position_account",
+  "tokenized_outcome",
+  "flash_loan_atomic",
+]);
+
+export const RuntimeVenueOracleRequirementSchema = z.enum([
+  "pyth",
+  "switchboard",
+  "venue_reference",
+  "none",
+]);
+
+const RuntimeVenueLifecycleCapabilitySchema = z
+  .object({
+    supportsOrderLifecycle: z.boolean(),
+    supportsPositionLifecycle: z.boolean(),
+    requiresExternalOracle: z.boolean(),
+    settlementModel: RuntimeVenueSettlementModelSchema,
+  })
+  .strict();
 
 const RuntimeBacktestConfigSchema = z
   .object({
@@ -906,12 +945,18 @@ export const RuntimeVenueCapabilitySchema = VersionedSchema.extend({
   adapterKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1),
   marketTypes: z.array(RuntimeVenueMarketTypeSchema).min(1),
   orderTypes: z.array(RuntimeVenueOrderTypeSchema).min(1),
+  intentFamilies: z.array(RuntimeExecutionIntentFamilySchema).min(1).optional(),
   authModel: RuntimeVenueAuthModelSchema,
   feeModel: RuntimeVenueFeeModelSchema,
   precision: RuntimeVenuePrecisionSchema,
   sizeLimits: RuntimeVenueSizeLimitsSchema,
   latencyProfile: RuntimeVenueLatencyProfileSchema,
   settlementBehavior: RuntimeVenueSettlementBehaviorSchema,
+  lifecycle: RuntimeVenueLifecycleCapabilitySchema.optional(),
+  oracleRequirements: z
+    .array(RuntimeVenueOracleRequirementSchema)
+    .min(1)
+    .optional(),
   supportedModes: z.array(RuntimeModeSchema).min(1),
   onboardingState: RuntimeOnboardingStateSchema,
   notes: NON_EMPTY_STRING_SCHEMA.optional(),
@@ -1529,10 +1574,22 @@ export type RuntimeVenueMarketType = z.infer<
   typeof RuntimeVenueMarketTypeSchema
 >;
 export type RuntimeVenueOrderType = z.infer<typeof RuntimeVenueOrderTypeSchema>;
+export type RuntimeExecutionIntentFamily = z.infer<
+  typeof RuntimeExecutionIntentFamilySchema
+>;
 export type RuntimeVenueAuthModel = z.infer<typeof RuntimeVenueAuthModelSchema>;
 export type RuntimeVenueFeeModel = z.infer<typeof RuntimeVenueFeeModelSchema>;
 export type RuntimeVenueSettlementBehavior = z.infer<
   typeof RuntimeVenueSettlementBehaviorSchema
+>;
+export type RuntimeVenueSettlementModel = z.infer<
+  typeof RuntimeVenueSettlementModelSchema
+>;
+export type RuntimeVenueOracleRequirement = z.infer<
+  typeof RuntimeVenueOracleRequirementSchema
+>;
+export type RuntimeVenueLifecycleCapability = z.infer<
+  typeof RuntimeVenueLifecycleCapabilitySchema
 >;
 export type RuntimeVenueCapability = z.infer<
   typeof RuntimeVenueCapabilitySchema

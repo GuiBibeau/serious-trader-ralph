@@ -19,7 +19,15 @@ describe("execution receipt assembler", () => {
         lane: "fast",
         status: "landed",
         statusReason: null,
-        metadata: null,
+        metadata: {
+          intent: {
+            family: "perp_order",
+            marketType: "perp",
+            venueKey: "drift",
+            instrumentId: "SOL-PERP",
+            side: "long",
+          },
+        },
         receivedAt: "2026-03-03T00:00:00.000Z",
         validatedAt: "2026-03-03T00:00:01.000Z",
         terminalAt: "2026-03-03T00:00:03.000Z",
@@ -37,7 +45,14 @@ describe("execution receipt assembler", () => {
         slot: 123,
         errorCode: null,
         errorMessage: null,
-        receipt: null,
+        receipt: {
+          lifecycle: {
+            orderState: "filled",
+            positionState: "open",
+            settlementState: "landed",
+            notes: ["paper-fill"],
+          },
+        },
         readyAt: "2026-03-03T00:00:04.000Z",
         createdAt: "2026-03-03T00:00:04.000Z",
         updatedAt: "2026-03-03T00:00:04.000Z",
@@ -73,6 +88,9 @@ describe("execution receipt assembler", () => {
     expect(receipt.trace.dispatchedAt).toBe("2026-03-03T00:00:02.000Z");
     expect(receipt.trace.landedAt).toBe("2026-03-03T00:00:04.000Z");
     expect(receipt.attempts.length).toBe(1);
+    expect(receipt.intent?.family).toBe("perp_order");
+    expect(receipt.lifecycle?.positionState).toBe("open");
+    expect(receipt.lifecycle?.notes).toEqual(["paper-fill"]);
     expect(receipt.immutability?.hashAlgorithm).toBe("sha256");
   });
 

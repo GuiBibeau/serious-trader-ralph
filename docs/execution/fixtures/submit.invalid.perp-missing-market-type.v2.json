@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "v2",
+  "mode": "privy_execute",
+  "lane": "protected",
+  "privyExecute": {
+    "wallet": "11111111111111111111111111111111",
+    "intent": {
+      "family": "perp_order",
+      "venueKey": "drift",
+      "instrumentId": "SOL-PERP",
+      "side": "long",
+      "quantityAtomic": "1000000"
+    }
+  }
+}
