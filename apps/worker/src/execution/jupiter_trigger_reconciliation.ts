@@ -67,6 +67,22 @@ function readPersistedLifecycle(
   return lifecycle ? (lifecycle as ExecutionIntentLifecycleSnapshot) : null;
 }
 
+function resolveReceiptTriggerStatus(input: {
+  orderRecord: JupiterTriggerOrderRecord | null;
+  summary: JupiterTriggerLifecycleSummary;
+}): string | null {
+  if (input.summary.terminalReason === "cancelled") {
+    return "Cancelled";
+  }
+  if (input.summary.terminalReason === "expired") {
+    return "Expired";
+  }
+  if (input.summary.terminalReason === "filled") {
+    return "Filled";
+  }
+  return readString(input.orderRecord?.status);
+}
+
 export function buildTerminalJupiterTriggerReceipt(input: {
   latest: ExecutionLatestStatusRecord;
   trackedOrder: JupiterTrackedTriggerOrder;
@@ -116,7 +132,10 @@ export function buildTerminalJupiterTriggerReceipt(input: {
       lifecycle: input.summary.lifecycle as unknown as JsonObject,
       triggerOrder: {
         ...input.trackedOrder,
-        status: readString(input.orderRecord?.status),
+        status: resolveReceiptTriggerStatus({
+          orderRecord: input.orderRecord,
+          summary: input.summary,
+        }),
         filledInputAtomic: input.summary.filledInputAtomic,
         filledOutputAtomic: input.summary.filledOutputAtomic,
         signature: input.summary.signature,
