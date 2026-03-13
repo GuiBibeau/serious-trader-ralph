@@ -25,6 +25,7 @@ import {
   executionLaneRuntimeControlsFromSnapshot,
   readOpsControlSnapshot,
 } from "./ops_controls";
+import { OrcaClient } from "./orca";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet, getPrivyWalletAddressById } from "./privy";
 import { RaydiumClient } from "./raydium";
@@ -824,6 +825,11 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
     String(env.JUPITER_BASE_URL ?? "").trim() || "https://lite-api.jup.ag",
     env.JUPITER_API_KEY,
   );
+  const orca = new OrcaClient(
+    String(env.RPC_ENDPOINT ?? "").trim() ||
+      "https://api.mainnet-beta.solana.com",
+    String(env.ORCA_API_BASE_URL ?? "").trim() || "https://api.orca.so",
+  );
   const raydium = new RaydiumClient(
     String(env.RAYDIUM_API_BASE_URL ?? "").trim() ||
       "https://api-v3.raydium.io",
@@ -837,6 +843,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
     amountAtomic: slice.inputAmountAtomic,
     slippageBps: slice.slippageBps,
     jupiter,
+    orca,
     raydium,
   });
   const quoteResponse = quotedSwap.quoteResponse;
@@ -961,6 +968,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       policy,
       rpc,
       jupiter,
+      orca,
       raydium,
       quoteResponse,
       userPublicKey: wallet.walletAddress,

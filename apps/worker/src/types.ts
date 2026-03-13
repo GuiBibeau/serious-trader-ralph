@@ -70,6 +70,7 @@ export type Env = {
   JUPITER_BASE_URL?: string;
   JUPITER_PRICE_BASE_URL?: string;
   JUPITER_API_KEY?: string;
+  ORCA_API_BASE_URL?: string;
   RAYDIUM_API_BASE_URL?: string;
   RAYDIUM_TRANSACTION_BASE_URL?: string;
   PYTH_HERMES_BASE_URL?: string;

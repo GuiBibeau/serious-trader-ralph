@@ -118,6 +118,43 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
   },
   {
     schemaVersion: "v1",
+    venueKey: "orca",
+    displayName: "Orca Whirlpools",
+    adapterKeys: ["orca"],
+    marketTypes: ["spot"],
+    orderTypes: ["market"],
+    intentFamilies: ["spot_swap"],
+    authModel: "privy_solana_wallet",
+    feeModel: "venue_quote_inclusive",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 350,
+      expectedSubmitMs: 950,
+      expectedSettlementMs: 5000,
+    },
+    settlementBehavior: "swap_atomic",
+    lifecycle: {
+      supportsOrderLifecycle: false,
+      supportsPositionLifecycle: false,
+      requiresExternalOracle: false,
+      settlementModel: "atomic_swap",
+    },
+    oracleRequirements: ["venue_reference"],
+    supportedModes: ["shadow", "paper"],
+    onboardingState: "paper_ready",
+    notes:
+      "Direct Orca Whirlpools concentrated-liquidity routing kept bounded to shadow and paper while pool-level route quality evidence accumulates.",
+  },
+  {
+    schemaVersion: "v1",
     venueKey: "phoenix",
     displayName: "Phoenix",
     adapterKeys: ["phoenix_orderbook"],

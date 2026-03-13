@@ -186,6 +186,33 @@ describe("worker execution router", () => {
     expect(result.executionMeta?.route).toBe("raydium");
   });
 
+  test("routes bounded Orca spot swaps in paper mode", async () => {
+    const result = await executeSwapViaRouter({
+      env: {} as never,
+      venueKey: "orca",
+      runtimeMode: "paper",
+      requireVenueRouting: true,
+      execution: { adapter: "orca" },
+      policy: normalizePolicy({ dryRun: true }),
+      rpc: {} as never,
+      jupiter: {} as never,
+      quoteResponse: {
+        inputMint: "A",
+        outputMint: "B",
+        inAmount: "1",
+        outAmount: "2",
+        orcaPoolSnapshot: {
+          address: "orca-pool-1",
+        },
+      },
+      userPublicKey: "11111111111111111111111111111111",
+      log: () => {},
+    });
+
+    expect(result.status).toBe("dry_run");
+    expect(result.executionMeta?.route).toBe("orca");
+  });
+
   test("custom execution adapters can be registered for new intent families", async () => {
     registerExecutionAdapter(
       "phoenix_orderbook",
@@ -357,6 +384,32 @@ describe("worker execution router", () => {
         log: () => {},
       }),
     ).rejects.toThrow(/runtime-venue-mode-not-supported:raydium:live/);
+  });
+
+  test("fails closed when Orca spot swaps are requested in live mode", async () => {
+    await expect(
+      executeSwapViaRouter({
+        env: {} as never,
+        venueKey: "orca",
+        runtimeMode: "live",
+        requireVenueRouting: true,
+        execution: { adapter: "orca" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+          orcaPoolSnapshot: {
+            address: "orca-pool-1",
+          },
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      }),
+    ).rejects.toThrow(/runtime-venue-mode-not-supported:orca:live/);
   });
 
   test("fails closed when adapter is not allowlisted for the runtime venue", async () => {

@@ -1,4 +1,5 @@
 import type { JupiterClient, JupiterQuoteResponse } from "../jupiter";
+import type { OrcaClient, OrcaPoolSnapshot } from "../orca";
 import type { RaydiumClient } from "../raydium";
 import type { RuntimeMode } from "../runtime_contracts";
 
@@ -11,6 +12,16 @@ export type SpotVenueQuoteTelemetry = {
   quotedOutAmountAtomic: string;
   minExpectedOutAmountAtomic: string | null;
   priceImpactPct: number | null;
+  poolAddress?: string | null;
+  poolFeeRateBps?: number | null;
+  poolTickSpacing?: number | null;
+  poolCurrentTickIndex?: number | null;
+  poolTvlUsd?: string | null;
+  poolLiquidityAtomic?: string | null;
+  adaptiveFeeEnabled?: boolean | null;
+  warningActive?: boolean | null;
+  addressLookupTable?: string | null;
+  dailyVolumeUsd?: string | null;
 };
 
 function readQuotePriceImpactPct(quoteResponse: JupiterQuoteResponse): number {
@@ -20,6 +31,29 @@ function readQuotePriceImpactPct(quoteResponse: JupiterQuoteResponse): number {
   }
   const parsed = Number(raw ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readTrimmedString(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  return normalized || null;
+}
+
+function readOrcaPoolSnapshot(
+  quoteResponse: JupiterQuoteResponse,
+): OrcaPoolSnapshot | null {
+  const record = (quoteResponse as Record<string, unknown>)?.orcaPoolSnapshot;
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+  return record as OrcaPoolSnapshot;
 }
 
 export function buildSpotVenueQuoteTelemetry(input: {
@@ -55,7 +89,7 @@ export function buildSpotVenueQuoteTelemetry(input: {
       "",
   ).trim();
 
-  return {
+  const base = {
     venueKey: input.venueKey,
     quoteProvider: input.quoteProvider,
     routeHopCount: routePlan.length,
@@ -64,6 +98,27 @@ export function buildSpotVenueQuoteTelemetry(input: {
     quotedOutAmountAtomic: String(input.quoteResponse.outAmount ?? ""),
     minExpectedOutAmountAtomic: minExpectedOutAmountAtomic || null,
     priceImpactPct: readQuotePriceImpactPct(input.quoteResponse),
+  };
+  const orcaPool = readOrcaPoolSnapshot(input.quoteResponse);
+  if (!orcaPool) {
+    return base;
+  }
+  return {
+    ...base,
+    poolAddress: readTrimmedString(orcaPool.address),
+    poolFeeRateBps: readFiniteNumber(orcaPool.feeRate),
+    poolTickSpacing: readFiniteNumber(orcaPool.tickSpacing),
+    poolCurrentTickIndex: readFiniteNumber(orcaPool.tickCurrentIndex),
+    poolTvlUsd: readTrimmedString(orcaPool.tvlUsdc),
+    poolLiquidityAtomic: readTrimmedString(orcaPool.liquidity),
+    adaptiveFeeEnabled:
+      typeof orcaPool.adaptiveFeeEnabled === "boolean"
+        ? orcaPool.adaptiveFeeEnabled
+        : null,
+    warningActive:
+      typeof orcaPool.hasWarning === "boolean" ? orcaPool.hasWarning : null,
+    addressLookupTable: readTrimmedString(orcaPool.addressLookupTable),
+    dailyVolumeUsd: readTrimmedString(orcaPool.stats?.["24h"]?.volume),
   };
 }
 
@@ -74,6 +129,7 @@ export async function quoteSpotSwap(input: {
   amountAtomic: string;
   slippageBps: number;
   jupiter: JupiterClient;
+  orca?: OrcaClient;
   raydium?: RaydiumClient;
 }): Promise<{
   venueKey: string;
@@ -82,6 +138,27 @@ export async function quoteSpotSwap(input: {
   routeQuality: SpotVenueQuoteTelemetry;
 }> {
   const venueKey = String(input.venueKey ?? "jupiter").trim() || "jupiter";
+  if (venueKey === "orca") {
+    if (!input.orca) {
+      throw new Error("orca-client-missing");
+    }
+    const { normalizedQuote } = await input.orca.quoteBaseIn({
+      inputMint: input.inputMint,
+      outputMint: input.outputMint,
+      amount: input.amountAtomic,
+      slippageBps: input.slippageBps,
+    });
+    return {
+      venueKey,
+      quoteProvider: "orca",
+      quoteResponse: normalizedQuote,
+      routeQuality: buildSpotVenueQuoteTelemetry({
+        venueKey,
+        quoteProvider: "orca",
+        quoteResponse: normalizedQuote,
+      }),
+    };
+  }
   if (venueKey === "raydium") {
     if (!input.raydium) {
       throw new Error("raydium-client-missing");
@@ -130,6 +207,9 @@ export function resolveSpotVenueExecutionAdapter(input: {
   defaultAdapter: string;
 }): string {
   const venueKey = String(input.venueKey ?? "").trim();
+  if (venueKey === "orca") {
+    return "orca";
+  }
   if (venueKey === "raydium") {
     return "raydium";
   }
