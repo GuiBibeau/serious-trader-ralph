@@ -28,6 +28,7 @@ import {
   executionLaneRuntimeControlsFromSnapshot,
   readOpsControlSnapshot,
 } from "./ops_controls";
+import { evaluateOracleReferencePriceGuard } from "./oracle_reference";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet, getPrivyWalletAddressById } from "./privy";
 import { SolanaRpc } from "./solana_rpc";
@@ -754,6 +755,36 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       },
     });
   }
+  const referenceGuard = await evaluateOracleReferencePriceGuard({
+    env: input.env,
+    mode: "live",
+    inputMint: context.inputMint,
+    outputMint: context.outputMint,
+    inputAmountAtomic: quoteSummary.amountAtomic,
+    expectedOutputAmountAtomic: String(
+      quoteSummary.quoteResponse.outAmount ?? "",
+    ),
+    jupiter,
+  });
+  if (referenceGuard.enabled && referenceGuard.verdict !== "allow") {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: referenceGuard.reason ?? "reference-price-policy-denied",
+        metadata: {
+          referencePrice: {
+            verdict: referenceGuard.verdict,
+            reason: referenceGuard.reason,
+            executionPrice: referenceGuard.executionPrice,
+            executionDivergenceBps: referenceGuard.executionDivergenceBps,
+            snapshot: referenceGuard.snapshot,
+          },
+        },
+      },
+    });
+  }
 
   const beforeBalances = await readBalances({
     rpc,
@@ -806,6 +837,18 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
           metadata: {
             quote: asJsonObject(quoteSummary.quoteResponse),
             executionMeta: asJsonObject(result.executionMeta),
+            ...(referenceGuard.enabled
+              ? {
+                  referencePrice: {
+                    verdict: referenceGuard.verdict,
+                    reason: referenceGuard.reason,
+                    executionPrice: referenceGuard.executionPrice,
+                    executionDivergenceBps:
+                      referenceGuard.executionDivergenceBps,
+                    snapshot: referenceGuard.snapshot,
+                  },
+                }
+              : {}),
           },
         },
       });
@@ -865,6 +908,17 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
         metadata: {
           quote: asJsonObject(quoteSummary.quoteResponse),
           executionMeta: asJsonObject(result.executionMeta),
+          ...(referenceGuard.enabled
+            ? {
+                referencePrice: {
+                  verdict: referenceGuard.verdict,
+                  reason: referenceGuard.reason,
+                  executionPrice: referenceGuard.executionPrice,
+                  executionDivergenceBps: referenceGuard.executionDivergenceBps,
+                  snapshot: referenceGuard.snapshot,
+                },
+              }
+            : {}),
           beforeBalances: {
             inputAtomic: beforeBalances.inputAtomic.toString(),
             outputAtomic: beforeBalances.outputAtomic.toString(),

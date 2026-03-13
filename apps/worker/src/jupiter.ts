@@ -31,6 +31,15 @@ export type TokenInfo = {
   usdPrice?: number | null;
 };
 
+export type JupiterPriceV3Record = {
+  id: string;
+  usdPrice?: number | null;
+  price?: number | null;
+  time?: number | string | null;
+  blockId?: number | string | null;
+  [k: string]: unknown;
+};
+
 export type QuoteRequest = {
   inputMint: string;
   outputMint: string;
@@ -195,5 +204,70 @@ export class JupiterClient {
           : null,
       }))
       .filter((item) => item.id && Number.isFinite(item.decimals));
+  }
+
+  async priceV3(ids: string[]): Promise<Record<string, JupiterPriceV3Record>> {
+    const uniqueIds = Array.from(
+      new Set(
+        ids
+          .map((value) => String(value ?? "").trim())
+          .filter((value) => Boolean(value)),
+      ),
+    );
+    if (uniqueIds.length < 1) {
+      return {};
+    }
+    const url = new URL("/price/v3", this.baseUrl);
+    url.searchParams.set("ids", uniqueIds.join(","));
+    const headers: Record<string, string> = {};
+    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const response = await fetch(url.toString(), { method: "GET", headers });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Jupiter price v3 failed: ${response.status}${text ? ` ${text}` : ""}`,
+      );
+    }
+    const payload = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Jupiter price v3 invalid response");
+    }
+    const root = payload.data;
+    const records =
+      root && typeof root === "object" && !Array.isArray(root)
+        ? (root as Record<string, unknown>)
+        : payload;
+    const output: Record<string, JupiterPriceV3Record> = {};
+    for (const [key, value] of Object.entries(records)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const record = value as Record<string, unknown>;
+      const usdPriceRaw =
+        typeof record.usdPrice === "number"
+          ? record.usdPrice
+          : Number(record.usdPrice);
+      const priceRaw =
+        typeof record.price === "number" ? record.price : Number(record.price);
+      output[key] = {
+        id: String(record.id ?? key),
+        usdPrice: Number.isFinite(usdPriceRaw) ? usdPriceRaw : null,
+        price: Number.isFinite(priceRaw) ? priceRaw : null,
+        time:
+          typeof record.time === "number" || typeof record.time === "string"
+            ? record.time
+            : null,
+        blockId:
+          typeof record.blockId === "number" ||
+          typeof record.blockId === "string"
+            ? record.blockId
+            : null,
+        ...record,
+      };
+    }
+    return output;
   }
 }

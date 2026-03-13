@@ -17,6 +17,7 @@ import {
   executionLaneRuntimeControlsFromSnapshot,
   readOpsControlSnapshot,
 } from "./ops_controls";
+import { evaluateOracleReferencePriceGuard } from "./oracle_reference";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet } from "./privy";
 import {
@@ -419,6 +420,20 @@ export async function submitManagedRuntimeExecutionPlan(input: {
       `policy-denied:runtime-managed-${error instanceof Error ? error.message : "policy-violation"}`,
     );
   }
+  const referenceGuard = await evaluateOracleReferencePriceGuard({
+    env,
+    mode: plan.mode,
+    inputMint: slice.inputMint,
+    outputMint: slice.outputMint,
+    inputAmountAtomic: slice.inputAmountAtomic,
+    expectedOutputAmountAtomic: String(quoteResponse.outAmount ?? ""),
+    jupiter,
+  });
+  if (referenceGuard.enabled && referenceGuard.verdict !== "allow") {
+    throw new Error(
+      `policy-denied:${referenceGuard.reason ?? "reference-price-policy-denied"}`,
+    );
+  }
 
   const requestId = newExecRequestId();
   const requestReservation = await createExecutionRequestIdempotent(
@@ -480,6 +495,17 @@ export async function submitManagedRuntimeExecutionPlan(input: {
     lane: laneResolution.lane,
     mode: plan.mode,
     quality: qualityMetadata,
+    ...(referenceGuard.enabled
+      ? {
+          referencePrice: {
+            verdict: referenceGuard.verdict,
+            reason: referenceGuard.reason,
+            executionPrice: referenceGuard.executionPrice,
+            executionDivergenceBps: referenceGuard.executionDivergenceBps,
+            snapshot: referenceGuard.snapshot,
+          },
+        }
+      : {}),
   };
 
   try {

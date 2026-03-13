@@ -141,6 +141,7 @@ import {
   resetOpsControlSnapshot,
   writeOpsControlSnapshot,
 } from "./ops_controls";
+import { evaluateOracleReferencePriceGuard } from "./oracle_reference";
 import {
   fetchPerpsFundingSurface,
   fetchPerpsOpenInterestSurface,
@@ -1691,6 +1692,35 @@ const worker = {
             } catch (error) {
               throw asPolicyDeniedError(
                 `privy-quote-${normalizePolicyReason(error, "policy-violation")}`,
+              );
+            }
+            const referenceGuard = await evaluateOracleReferencePriceGuard({
+              env,
+              mode: "live",
+              inputMint: swap.inputMint,
+              outputMint: swap.outputMint,
+              inputAmountAtomic: swap.amountAtomic,
+              expectedOutputAmountAtomic: String(quoteResponse.outAmount ?? ""),
+              jupiter,
+            });
+            providerResponse = {
+              ...(providerResponse ?? {}),
+              ...(referenceGuard.enabled
+                ? {
+                    referencePrice: {
+                      verdict: referenceGuard.verdict,
+                      reason: referenceGuard.reason,
+                      executionPrice: referenceGuard.executionPrice,
+                      executionDivergenceBps:
+                        referenceGuard.executionDivergenceBps,
+                      snapshot: referenceGuard.snapshot,
+                    },
+                  }
+                : {}),
+            };
+            if (referenceGuard.enabled && referenceGuard.verdict !== "allow") {
+              throw asPolicyDeniedError(
+                referenceGuard.reason ?? "reference-price-policy-denied",
               );
             }
 
