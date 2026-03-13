@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   ComputeBudgetProgram,
   Keypair,
@@ -33,10 +33,6 @@ const signTransactionWithPrivyByIdMock = mock(async () =>
   buildSignedTriggerTxBase64(),
 );
 
-mock.module("../../apps/worker/src/privy", () => ({
-  signTransactionWithPrivyById: signTransactionWithPrivyByIdMock,
-}));
-
 const { executeJupiterConditionalSpotOrder } = await import(
   "../../apps/worker/src/execution/jupiter_trigger_executor"
 );
@@ -44,10 +40,6 @@ const { executeJupiterConditionalSpotOrder } = await import(
 describe("worker Jupiter Trigger execution adapter", () => {
   beforeEach(() => {
     signTransactionWithPrivyByIdMock.mockClear();
-  });
-
-  afterAll(() => {
-    mock.restore();
   });
 
   test("honors requireSimulation=false for live Trigger submits", async () => {
@@ -58,46 +50,51 @@ describe("worker Jupiter Trigger execution adapter", () => {
       status: "confirmed",
     }));
 
-    const result = await executeJupiterConditionalSpotOrder({
-      env: {} as Env,
-      runtimeMode: "live",
-      policy: normalizePolicy({ commitment: "confirmed" }),
-      rpc: {
-        simulateTransactionBase64,
-        sendTransactionBase64,
-        confirmSignature,
-      } as never,
-      jupiter: {
-        createTriggerOrder: async () => ({
-          requestId: "trigger_request_1",
-          order: "trigger_order_1",
-          transaction: "unsigned-trigger-tx",
-        }),
-      } as never,
-      privyWalletId: "wallet_1",
-      execution: {
-        adapter: "jupiter",
-        params: {
-          lane: "safe",
-          requireSimulation: false,
+    const result = await executeJupiterConditionalSpotOrder(
+      {
+        env: {} as Env,
+        runtimeMode: "live",
+        policy: normalizePolicy({ commitment: "confirmed" }),
+        rpc: {
+          simulateTransactionBase64,
+          sendTransactionBase64,
+          confirmSignature,
+        } as never,
+        jupiter: {
+          createTriggerOrder: async () => ({
+            requestId: "trigger_request_1",
+            order: "trigger_order_1",
+            transaction: "unsigned-trigger-tx",
+          }),
+        } as never,
+        privyWalletId: "wallet_1",
+        execution: {
+          adapter: "jupiter",
+          params: {
+            lane: "safe",
+            requireSimulation: false,
+          },
         },
-      },
-      intent: {
-        family: "conditional_spot_order",
-        wallet: "11111111111111111111111111111111",
-        venueKey: "jupiter",
-        marketType: "spot",
-        instrumentId: "SOL/USDC",
-        side: "buy",
-        quantityAtomic: "100000000",
-        params: {
-          orderType: "limit",
-          timeInForce: "gtc",
-          limitPriceAtomic: "100000000",
+        intent: {
+          family: "conditional_spot_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "jupiter",
+          marketType: "spot",
+          instrumentId: "SOL/USDC",
+          side: "buy",
+          quantityAtomic: "100000000",
+          params: {
+            orderType: "limit",
+            timeInForce: "gtc",
+            limitPriceAtomic: "100000000",
+          },
         },
+        log: () => {},
       },
-      log: () => {},
-    });
+      {
+        signTransactionWithPrivyById: signTransactionWithPrivyByIdMock,
+      },
+    );
 
     expect(result.status).toBe("confirmed");
     expect(result.signature).toBe("sig-trigger-live");

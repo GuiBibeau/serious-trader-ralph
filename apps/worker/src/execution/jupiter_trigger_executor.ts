@@ -59,6 +59,9 @@ function buildSyntheticQuote(input: {
 
 export async function executeJupiterConditionalSpotOrder(
   input: ExecuteJupiterConditionalSpotOrderInput,
+  deps?: {
+    signTransactionWithPrivyById?: typeof signTransactionWithPrivyById;
+  },
 ): Promise<ExecuteSwapResult> {
   const route = "jupiter";
   const resolved = resolveJupiterConditionalSpotOrder(input.intent);
@@ -127,11 +130,9 @@ export async function executeJupiterConditionalSpotOrder(
     },
   });
   const txBuiltAt = nowIso();
-  const signedBase64 = await signTransactionWithPrivyById(
-    input.env,
-    input.privyWalletId,
-    createResponse.transaction,
-  );
+  const signedBase64 = await (
+    deps?.signTransactionWithPrivyById ?? signTransactionWithPrivyById
+  )(input.env, input.privyWalletId, createResponse.transaction);
 
   const safeEvaluation = evaluateSafeLaneTransaction({
     env: input.env,

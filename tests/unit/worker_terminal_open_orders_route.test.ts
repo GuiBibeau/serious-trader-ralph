@@ -373,7 +373,6 @@ beforeEach(() => {
 
 afterAll(() => {
   globalThis.fetch = originalFetch;
-  mock.restore();
 });
 
 describe("worker terminal open orders and Trigger lifecycle routes", () => {
