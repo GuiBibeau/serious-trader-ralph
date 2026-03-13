@@ -650,9 +650,10 @@ function policyDeniedReason(value: unknown): string | null {
   return null;
 }
 
-function resolveTerminalFailureFromExecuteResult(
+export function resolveTerminalFailureFromExecuteResult(
   status: string,
   err: unknown,
+  signature?: string | null,
 ): {
   terminalStatus: "failed" | "rejected";
   errorCode: string;
@@ -672,6 +673,13 @@ function resolveTerminalFailureFromExecuteResult(
       errorCode: "policy-denied",
       statusReason: `policy-denied:${deniedReason}`,
     };
+  }
+  if (
+    status === "error" &&
+    typeof signature === "string" &&
+    signature.trim().length > 0
+  ) {
+    return null;
   }
   const canonicalErrorCode = normalizeExecutionErrorCode({
     statusHint: status,
@@ -1869,6 +1877,7 @@ const worker = {
               const failure = resolveTerminalFailureFromExecuteResult(
                 result.status,
                 result.err,
+                result.signature,
               );
               const errorMessage = executionErrorMessage(result.err);
               providerResponse = {
@@ -2230,6 +2239,7 @@ const worker = {
               const failure = resolveTerminalFailureFromExecuteResult(
                 result.status,
                 result.err,
+                result.signature,
               );
               const terminalStatus = failure
                 ? failure.terminalStatus

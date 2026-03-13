@@ -427,4 +427,49 @@ describe("worker execution router", () => {
       sqlite.close();
     }
   });
+
+  test("enforces asset controls for live Jupiter conditional spot orders", async () => {
+    const { env, sqlite } = await createLiveRouterEnv();
+    try {
+      await writeStrategyLabSubjectControl(
+        env.WAITLIST_DB,
+        parseRuntimeStrategyLabSubjectControl({
+          schemaVersion: "v1",
+          subjectKind: "asset",
+          subjectKey: "SOL",
+          liveAllowed: false,
+          killSwitchEnabled: false,
+          updatedAt: "2026-03-12T00:00:00.000Z",
+        }),
+      );
+
+      await expect(
+        executeIntentViaRouter({
+          env,
+          venueKey: "jupiter",
+          runtimeMode: "live",
+          execution: { adapter: "jupiter" },
+          policy: normalizePolicy({ dryRun: true }),
+          rpc: {} as never,
+          jupiter: {} as never,
+          intent: {
+            family: "conditional_spot_order",
+            wallet: "11111111111111111111111111111111",
+            venueKey: "jupiter",
+            marketType: "spot",
+            instrumentId: "SOL/USDC",
+            side: "buy",
+            quantityAtomic: "1000000",
+            params: {
+              orderType: "limit",
+              limitPriceAtomic: "150000000",
+            },
+          },
+          log: () => {},
+        }),
+      ).rejects.toThrow(/runtime-asset-not-allowlisted/);
+    } finally {
+      sqlite.close();
+    }
+  });
 });

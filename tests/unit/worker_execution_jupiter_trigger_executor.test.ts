@@ -103,4 +103,67 @@ describe("worker Jupiter Trigger execution adapter", () => {
     expect(confirmSignature).toHaveBeenCalledTimes(1);
     expect(signTransactionWithPrivyByIdMock).toHaveBeenCalledTimes(1);
   });
+
+  test("preserves an open lifecycle when confirmation is uncertain after submit", async () => {
+    const simulateTransactionBase64 = mock(async () => ({ err: null }));
+    const sendTransactionBase64 = mock(async () => "sig-trigger-pending");
+    const confirmSignature = mock(async () => ({
+      ok: false,
+      status: "processed",
+      err: { message: "timeout" },
+    }));
+
+    const result = await executeJupiterConditionalSpotOrder(
+      {
+        env: {} as Env,
+        runtimeMode: "live",
+        policy: normalizePolicy({ commitment: "confirmed" }),
+        rpc: {
+          simulateTransactionBase64,
+          sendTransactionBase64,
+          confirmSignature,
+        } as never,
+        jupiter: {
+          createTriggerOrder: async () => ({
+            requestId: "trigger_request_2",
+            order: "trigger_order_2",
+            transaction: "unsigned-trigger-tx",
+          }),
+        } as never,
+        privyWalletId: "wallet_1",
+        execution: {
+          adapter: "jupiter",
+          params: {
+            lane: "safe",
+            requireSimulation: false,
+          },
+        },
+        intent: {
+          family: "conditional_spot_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "jupiter",
+          marketType: "spot",
+          instrumentId: "SOL/USDC",
+          side: "buy",
+          quantityAtomic: "100000000",
+          params: {
+            orderType: "limit",
+            timeInForce: "gtc",
+            limitPriceAtomic: "100000000",
+          },
+        },
+        log: () => {},
+      },
+      {
+        signTransactionWithPrivyById: signTransactionWithPrivyByIdMock,
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.signature).toBe("sig-trigger-pending");
+    expect(result.executionMeta?.lifecycle?.orderState).toBe("open");
+    expect(result.executionMeta?.lifecycle?.notes).toContain(
+      "trigger-create-confirmation-pending",
+    );
+  });
 });

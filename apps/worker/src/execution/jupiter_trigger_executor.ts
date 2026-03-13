@@ -226,6 +226,10 @@ export async function executeJupiterConditionalSpotOrder(
   const resultStatus = confirmation.ok
     ? normalizeConfirmationStatus(confirmation.status)
     : "error";
+  const uncertainCreateSubmission =
+    resultStatus === "error" &&
+    typeof signature === "string" &&
+    signature !== "";
   const summary = summarizeJupiterTriggerOrder({
     order: createResponse.order,
     status: resolved.orderType === "trigger" ? "Triggered" : "Open",
@@ -261,14 +265,24 @@ export async function executeJupiterConditionalSpotOrder(
       intentId: createResponse.requestId,
       venueSessionId: createResponse.order,
       lifecycle:
-        resultStatus === "error"
+        resultStatus === "error" && !uncertainCreateSubmission
           ? {
               orderState: "rejected",
               fillState: "failed",
               settlementState: "failed",
               notes: ["trigger-create-confirmation-failed"],
             }
-          : summary.lifecycle,
+          : {
+              ...summary.lifecycle,
+              ...(uncertainCreateSubmission
+                ? {
+                    notes: [
+                      ...(summary.lifecycle.notes ?? []),
+                      "trigger-create-confirmation-pending",
+                    ],
+                  }
+                : {}),
+            },
       trace: {
         txBuiltAt,
         ...(simulatedAt ? { simulatedAt } : {}),
