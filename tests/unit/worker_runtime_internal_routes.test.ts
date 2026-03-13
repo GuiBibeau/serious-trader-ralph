@@ -1076,6 +1076,11 @@ describe("worker runtime internal routes", () => {
           cost: {
             modelId: "cost_model_jupiter_sol_usdc_spot",
           },
+          oracle: {
+            requiredSourceCount: 3,
+            healthySourceCount: 3,
+            sourceCoverageBps: 10000,
+          },
         },
       },
     });

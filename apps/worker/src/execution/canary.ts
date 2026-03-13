@@ -5,6 +5,7 @@ import {
   executionLaneRuntimeControlsFromSnapshot,
   readOpsControlSnapshot,
 } from "../ops_controls";
+import { evaluateOracleReferencePriceGuard } from "../oracle_reference";
 import { enforcePolicy, normalizePolicy } from "../policy";
 import { createPrivySolanaWallet, getPrivyWalletAddressById } from "../privy";
 import { SolanaRpc } from "../solana_rpc";
@@ -836,6 +837,41 @@ export async function runExecutionCanary(input: {
       },
     });
   }
+  const referenceGuard = await evaluateOracleReferencePriceGuard({
+    env,
+    mode: "live",
+    inputMint: quoteSummary.inputMint,
+    outputMint: quoteSummary.outputMint,
+    inputAmountAtomic: quoteSummary.amountAtomic,
+    expectedOutputAmountAtomic: quoteSummary.quotedOutAtomic,
+    jupiter,
+  });
+  if (referenceGuard.enabled && referenceGuard.verdict !== "allow") {
+    return await finalizeCanaryRun(env, {
+      runId,
+      status: "blocked",
+      runPatch: {
+        amountAtomic: quoteSummary.amountAtomic,
+        quotedOutAtomic: quoteSummary.quotedOutAtomic,
+        minExpectedOutAtomic: quoteSummary.minExpectedOutAtomic,
+        quotePriceImpactPct: readQuotePriceImpactPct(
+          quoteSummary.quoteResponse,
+        ),
+        quote: asJsonObject(quoteSummary.quoteResponse),
+        errorCode: "policy-denied",
+        errorMessage: referenceGuard.reason ?? "reference-price-policy-denied",
+        metadata: {
+          referencePrice: {
+            verdict: referenceGuard.verdict,
+            reason: referenceGuard.reason,
+            executionPrice: referenceGuard.executionPrice,
+            executionDivergenceBps: referenceGuard.executionDivergenceBps,
+            snapshot: referenceGuard.snapshot,
+          },
+        },
+      },
+    });
+  }
 
   const requestId = newExecRequestId();
   const payloadHash = await hashCanaryPayload({
@@ -897,6 +933,17 @@ export async function runExecutionCanary(input: {
       minExpectedOutAtomic: quoteSummary.minExpectedOutAtomic,
     },
     runtimePolicy: runtimeBalancePolicy.metadata,
+    ...(referenceGuard.enabled
+      ? {
+          referencePrice: {
+            verdict: referenceGuard.verdict,
+            reason: referenceGuard.reason,
+            executionPrice: referenceGuard.executionPrice,
+            executionDivergenceBps: referenceGuard.executionDivergenceBps,
+            snapshot: referenceGuard.snapshot,
+          },
+        }
+      : {}),
   };
   await updateExecutionRequestStatus(env.WAITLIST_DB, {
     requestId,

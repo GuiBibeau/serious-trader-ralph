@@ -257,7 +257,47 @@ export function createWorkerLiveEnv(options?: {
       "JUPITER_BASE_URL",
       "https://lite-api.jup.ag",
     ),
+    JUPITER_PRICE_BASE_URL: readLiveEnv(
+      "JUPITER_PRICE_BASE_URL",
+      "https://lite-api.jup.ag",
+    ),
     JUPITER_API_KEY: readLiveEnv("JUPITER_API_KEY", ""),
+    PYTH_HERMES_BASE_URL: readLiveEnv(
+      "PYTH_HERMES_BASE_URL",
+      "https://hermes.pyth.network",
+    ),
+    SWITCHBOARD_BASE_URL: readLiveEnv(
+      "SWITCHBOARD_BASE_URL",
+      "https://api.switchboard.xyz",
+    ),
+    ORACLE_REFERENCE_ENABLED_MODES: readLiveEnv(
+      "ORACLE_REFERENCE_ENABLED_MODES",
+      "",
+    ),
+    ORACLE_REFERENCE_FRESHNESS_SLO_MS: readLiveEnv(
+      "ORACLE_REFERENCE_FRESHNESS_SLO_MS",
+      "60000",
+    ),
+    ORACLE_REFERENCE_MAX_SOURCE_DIVERGENCE_BPS: readLiveEnv(
+      "ORACLE_REFERENCE_MAX_SOURCE_DIVERGENCE_BPS",
+      "150",
+    ),
+    ORACLE_REFERENCE_MAX_EXECUTION_DIVERGENCE_BPS: readLiveEnv(
+      "ORACLE_REFERENCE_MAX_EXECUTION_DIVERGENCE_BPS",
+      "250",
+    ),
+    ORACLE_REFERENCE_MIN_HEALTHY_SOURCES: readLiveEnv(
+      "ORACLE_REFERENCE_MIN_HEALTHY_SOURCES",
+      "2",
+    ),
+    ORACLE_REFERENCE_SWITCHBOARD_FEEDS_JSON: readLiveEnv(
+      "ORACLE_REFERENCE_SWITCHBOARD_FEEDS_JSON",
+      "",
+    ),
+    ORACLE_REFERENCE_PYTH_SYMBOLS_JSON: readLiveEnv(
+      "ORACLE_REFERENCE_PYTH_SYMBOLS_JSON",
+      "",
+    ),
     BIRDEYE_API_KEY: readLiveEnv("BIRDEYE_API_KEY", ""),
     DUNE_API_KEY: readLiveEnv("DUNE_API_KEY", ""),
     DUNE_QUERY_ID: readLiveEnv("DUNE_QUERY_ID", ""),
