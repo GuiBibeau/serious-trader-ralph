@@ -17,6 +17,7 @@ import {
 import type { ExecutionIntentLifecycleSnapshot } from "./types";
 
 const DEFAULT_JUPITER_BASE_URL = "https://lite-api.jup.ag";
+const MAX_TRIGGER_ORDER_PAGES = 25;
 
 type JupiterConditionalOrderReconciliation = {
   latest: ExecutionLatestStatusRecord;
@@ -140,35 +141,44 @@ async function fetchTrackedJupiterOrder(input: {
     String(input.env.JUPITER_BASE_URL ?? "").trim() || DEFAULT_JUPITER_BASE_URL,
     input.env.JUPITER_API_KEY,
   );
-  const active = await jupiter.getTriggerOrders({
-    maker: input.trackedOrder.maker,
-    orderStatus: "active",
-    ...(input.trackedOrder.inputMint
-      ? { inputMint: input.trackedOrder.inputMint }
-      : {}),
-    ...(input.trackedOrder.outputMint
-      ? { outputMint: input.trackedOrder.outputMint }
-      : {}),
-    includeFailedTx: true,
-  });
-  const activeMatch = findJupiterTriggerOrderByKey(
-    active.orders,
-    input.trackedOrder.order,
-  );
-  if (activeMatch) return activeMatch;
+  const searchOrders = async (
+    orderStatus: "active" | "history",
+  ): Promise<JupiterTriggerOrderRecord | null> => {
+    let page = 1;
+    let pageSize = 0;
+    while (page <= MAX_TRIGGER_ORDER_PAGES) {
+      const response = await jupiter.getTriggerOrders({
+        maker: input.trackedOrder.maker,
+        orderStatus,
+        page,
+        ...(input.trackedOrder.inputMint
+          ? { inputMint: input.trackedOrder.inputMint }
+          : {}),
+        ...(input.trackedOrder.outputMint
+          ? { outputMint: input.trackedOrder.outputMint }
+          : {}),
+        includeFailedTx: true,
+      });
+      const match = findJupiterTriggerOrderByKey(
+        response.orders,
+        input.trackedOrder.order,
+      );
+      if (match) return match;
+      if (response.orders.length === 0) return null;
+      if (pageSize === 0) pageSize = response.orders.length;
+      const totalPages = Math.max(
+        1,
+        Math.ceil(response.totalOrders / pageSize),
+      );
+      if (page >= totalPages) return null;
+      page += 1;
+    }
+    return null;
+  };
 
-  const history = await jupiter.getTriggerOrders({
-    maker: input.trackedOrder.maker,
-    orderStatus: "history",
-    ...(input.trackedOrder.inputMint
-      ? { inputMint: input.trackedOrder.inputMint }
-      : {}),
-    ...(input.trackedOrder.outputMint
-      ? { outputMint: input.trackedOrder.outputMint }
-      : {}),
-    includeFailedTx: true,
-  });
-  return findJupiterTriggerOrderByKey(history.orders, input.trackedOrder.order);
+  const activeMatch = await searchOrders("active");
+  if (activeMatch) return activeMatch;
+  return await searchOrders("history");
 }
 
 export async function reconcileJupiterConditionalOrder(input: {

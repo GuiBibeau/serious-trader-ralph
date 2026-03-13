@@ -314,6 +314,60 @@ function seedConditionalOrder(
   return requestId;
 }
 
+function seedExecutionRequestOnly(
+  db: Database,
+  input: {
+    requestId: string;
+    actorId?: string;
+    intentFamily: string;
+    instrumentId?: string;
+    side?: "buy" | "sell";
+    status?: string;
+    receivedAt: string;
+    terminalAt?: string | null;
+  },
+): void {
+  const metadata = {
+    source: "TERMINAL",
+    reason: `${input.intentFamily} seed`,
+    intent: {
+      family: input.intentFamily,
+      marketType: "spot",
+      venueKey: "jupiter",
+      instrumentId: input.instrumentId ?? "SOL/USDC",
+      side: input.side ?? "buy",
+    },
+  };
+  db.query(
+    `INSERT INTO execution_requests (
+      request_id,
+      idempotency_scope,
+      idempotency_key,
+      payload_hash,
+      actor_type,
+      actor_id,
+      mode,
+      lane,
+      status,
+      status_reason,
+      metadata_json,
+      received_at,
+      validated_at,
+      terminal_at
+    ) VALUES (?1, 'authenticated', ?2, ?3, 'privy_user', ?4, 'privy_execute', 'safe', ?5, NULL, ?6, ?7, ?8, ?9)`,
+  ).run(
+    input.requestId,
+    `idem-${input.requestId}`,
+    `hash-${input.requestId}`,
+    input.actorId ?? "user_1",
+    input.status ?? "landed",
+    JSON.stringify(metadata),
+    input.receivedAt,
+    input.receivedAt,
+    input.terminalAt ?? input.receivedAt,
+  );
+}
+
 function responseJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -400,6 +454,67 @@ describe("worker terminal open orders and Trigger lifecycle routes", () => {
     }
   });
 
+  test("status route paginates active Trigger pages until the tracked order is found", async () => {
+    const { env, sqlite } = createExecEnv();
+    try {
+      const requestId = seedConditionalOrder(sqlite, {
+        requestId: "execreq_trigger_active_page_2",
+      });
+      const seenPages: string[] = [];
+      fetchHandler = async (input) => {
+        const url = readUrl(input);
+        expect(url.toString()).toContain("/trigger/v1/getTriggerOrders");
+        expect(url.searchParams.get("orderStatus")).toBe("active");
+        const page = url.searchParams.get("page") ?? "1";
+        seenPages.push(page);
+        if (page === "1") {
+          return responseJson({
+            orders: [
+              {
+                order: "other-order",
+                status: "Open",
+              },
+            ],
+            totalOrders: 2,
+            page: 1,
+          });
+        }
+        if (page === "2") {
+          return responseJson({
+            orders: [
+              {
+                order: "order_pubkey_1",
+                status: "Open",
+                makingAmount: "1000000",
+                takingAmount: "6666666",
+                openTx: "open-sig-2",
+              },
+            ],
+            totalOrders: 2,
+            page: 2,
+          });
+        }
+        throw new Error(`unexpected active page ${page}`);
+      };
+
+      const response = await worker.fetch(
+        new Request(`http://localhost/api/x402/exec/status/${requestId}`),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        lifecycle?: { orderState?: string };
+        status?: { state?: string };
+      };
+      expect(body.status?.state).toBe("dispatched");
+      expect(body.lifecycle?.orderState).toBe("open");
+      expect(seenPages).toEqual(["1", "2"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("receipt route finalizes filled Trigger orders during reconciliation", async () => {
     const { env, sqlite } = createExecEnv();
     try {
@@ -458,6 +573,82 @@ describe("worker terminal open orders and Trigger lifecycle routes", () => {
     }
   });
 
+  test("receipt route paginates Trigger history until the tracked order is found", async () => {
+    const { env, sqlite } = createExecEnv();
+    try {
+      const requestId = seedConditionalOrder(sqlite, {
+        requestId: "execreq_trigger_history_page_2",
+      });
+      const seenHistoryPages: string[] = [];
+      fetchHandler = async (input) => {
+        const url = readUrl(input);
+        if (url.pathname.endsWith("/trigger/v1/getTriggerOrders")) {
+          const orderStatus = url.searchParams.get("orderStatus");
+          const page = url.searchParams.get("page") ?? "1";
+          if (orderStatus === "active") {
+            return responseJson({ orders: [], totalOrders: 0, page: 1 });
+          }
+          if (orderStatus === "history") {
+            seenHistoryPages.push(page);
+            if (page === "1") {
+              return responseJson({
+                orders: [
+                  {
+                    order: "other-history-order",
+                    status: "Filled",
+                    makingAmount: "1000000",
+                    takingAmount: "6666666",
+                    remainingMakingAmount: "0",
+                    closeTx: "fill-sig-other",
+                  },
+                ],
+                totalOrders: 2,
+                page: 1,
+              });
+            }
+            if (page === "2") {
+              return responseJson({
+                orders: [
+                  {
+                    order: "order_pubkey_1",
+                    status: "Filled",
+                    makingAmount: "1000000",
+                    takingAmount: "6666666",
+                    remainingMakingAmount: "0",
+                    closeTx: "fill-sig-2",
+                  },
+                ],
+                totalOrders: 2,
+                page: 2,
+              });
+            }
+          }
+        }
+        throw new Error(`unexpected fetch ${url.toString()}`);
+      };
+
+      const response = await worker.fetch(
+        new Request(`http://localhost/api/x402/exec/receipt/${requestId}`),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        ready?: boolean;
+        receipt?: {
+          outcome?: { status?: string };
+          lifecycle?: { orderState?: string };
+        };
+      };
+      expect(body.ready).toBe(true);
+      expect(body.receipt?.outcome?.status).toBe("finalized");
+      expect(body.receipt?.lifecycle?.orderState).toBe("filled");
+      expect(seenHistoryPages).toEqual(["1", "2"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("open-orders route rehydrates active Trigger-backed conditional orders", async () => {
     const { env, sqlite } = createExecEnv();
     try {
@@ -505,6 +696,64 @@ describe("worker terminal open orders and Trigger lifecycle routes", () => {
       expect(body.orders?.[0]?.pairId).toBe("SOL/USDC");
       expect(body.orders?.[0]?.status).toBe("working");
       expect(body.orders?.[0]?.orderType).toBe("limit");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("open-orders route still returns older active conditional orders behind newer executions", async () => {
+    const { env, sqlite } = createExecEnv();
+    try {
+      seedConditionalOrder(sqlite, {
+        requestId: "execreq_trigger_oldest_open",
+      });
+      for (let index = 0; index < 95; index += 1) {
+        const minute = String(index % 60).padStart(2, "0");
+        seedExecutionRequestOnly(sqlite, {
+          requestId: `execreq_spot_swap_${index}`,
+          intentFamily: "spot_swap",
+          receivedAt: `2026-03-04T03:${minute}:00.000Z`,
+        });
+      }
+      fetchHandler = async (input) => {
+        const url = readUrl(input);
+        if (url.pathname.endsWith("/trigger/v1/getTriggerOrders")) {
+          return responseJson({
+            orders: [
+              {
+                order: "order_pubkey_1",
+                status: "Open",
+                makingAmount: "1000000",
+                takingAmount: "6666666",
+              },
+            ],
+            totalOrders: 1,
+            page: 1,
+          });
+        }
+        throw new Error(`unexpected fetch ${url.toString()}`);
+      };
+
+      const response = await worker.fetch(
+        new Request("http://localhost/api/terminal/open-orders", {
+          headers: {
+            authorization: "Bearer test-token",
+          },
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        orders?: Array<{
+          requestId?: string;
+        }>;
+      };
+      expect(
+        body.orders?.some(
+          (order) => order.requestId === "execreq_trigger_oldest_open",
+        ),
+      ).toBe(true);
     } finally {
       sqlite.close();
     }

@@ -78,11 +78,12 @@ import {
 import {
   appendExecutionStatusEvent,
   createExecutionAttemptIdempotent,
+  type ExecutionRequestRecord,
   finalizeExecutionAttempt,
   getExecutionLatestStatus,
   listExecutionAttempts,
-  listExecutionRequestsByActor,
   listExecutionStatusEvents,
+  listOpenExecutionRequestsByActorAndIntentFamily,
   terminalizeExecutionRequest,
   updateExecutionRequestStatus,
   upsertExecutionReceiptIdempotent,
@@ -5456,17 +5457,22 @@ const worker = {
       ) {
         let user = await requireOnboardedUser(request, env);
         user = await ensureUserWallet(env, user);
-        const requests = await listExecutionRequestsByActor(env.WAITLIST_DB, {
-          actorId: user.id,
-          mode: "privy_execute",
-          limit: 80,
-        });
-        const conditionalRequests = requests.filter((entry) => {
-          const intent = isRecord(entry.metadata?.intent)
-            ? entry.metadata?.intent
-            : null;
-          return readTrimmedString(intent?.family) === "conditional_spot_order";
-        });
+        const pageSize = 80;
+        const conditionalRequests: ExecutionRequestRecord[] = [];
+        for (let offset = 0; ; offset += pageSize) {
+          const page = await listOpenExecutionRequestsByActorAndIntentFamily(
+            env.WAITLIST_DB,
+            {
+              actorId: user.id,
+              mode: "privy_execute",
+              intentFamily: "conditional_spot_order",
+              limit: pageSize,
+              offset,
+            },
+          );
+          conditionalRequests.push(...page);
+          if (page.length < pageSize) break;
+        }
         const orders: Record<string, unknown>[] = [];
         for (const entry of conditionalRequests) {
           const latest = await getExecutionLatestStatus(

@@ -74,7 +74,13 @@ export type OpenOrderRow = QueuedTerminalOrder & {
 };
 
 const ORDER_PRICE_DECIMALS = 6;
-const SUPPORTED_PAIR_SET = new Set(SUPPORTED_PAIRS.map((pair) => pair.id));
+const SUPPORTED_PAIR_SET = new Set<string>(
+  SUPPORTED_PAIRS.map((pair) => pair.id),
+);
+
+function isSupportedPairId(value: string): value is PairId {
+  return SUPPORTED_PAIR_SET.has(value);
+}
 
 export function formatOrderAmountUi(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "";
@@ -138,8 +144,8 @@ export function mapTerminalOpenOrderSnapshot(
   snapshot: TerminalOpenOrderSnapshot,
 ): OpenOrderRow | null {
   const pairId =
-    snapshot.pairId && SUPPORTED_PAIR_SET.has(snapshot.pairId)
-      ? (snapshot.pairId as PairId)
+    snapshot.pairId && isSupportedPairId(snapshot.pairId)
+      ? snapshot.pairId
       : null;
   if (!pairId || !snapshot.direction || !snapshot.orderType || !snapshot.lane) {
     return null;
