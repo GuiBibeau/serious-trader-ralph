@@ -153,6 +153,29 @@ export type ExecuteSwapResult = {
     settlementRef?: string | null;
     lifecycle?: ExecutionIntentLifecycleSnapshot;
     lowLatency?: LowLatencyExecutionMeta;
+    referencePrice?: {
+      verdict: "allow" | "pause" | "reject";
+      reason: string | null;
+      executionPrice: string | null;
+      executionDivergenceBps: number | null;
+      snapshot?: Record<string, unknown> | null;
+    };
+    composedPlan?: {
+      mode: "instructions" | "prebuilt_fallback";
+      fallbackReason?: string | null;
+      routeHopCount: number;
+      routeLabels: string[];
+      instructionCount: number;
+      computeBudgetInstructionCount: number;
+      setupInstructionCount: number;
+      cleanupInstructionCount: number;
+      otherInstructionCount: number;
+      addressLookupTableCount: number;
+      addressLookupTableAddresses?: string[];
+      computeUnitLimit: number | null;
+      computeUnitPriceMicroLamports: string | null;
+      simulationUnitsConsumed?: number | null;
+    };
     trace?: {
       txBuiltAt?: string;
       simulatedAt?: string;

@@ -1,3 +1,4 @@
+import { AddressLookupTableAccount, PublicKey } from "@solana/web3.js";
 import type { Env } from "./types";
 
 type RpcError = {
@@ -66,6 +67,33 @@ export class SolanaRpc {
     return BigInt(result.value ?? 0);
   }
 
+  async getLatestBlockhash(
+    commitment?: "processed" | "confirmed" | "finalized",
+  ): Promise<{
+    blockhash: string;
+    lastValidBlockHeight: number;
+  }> {
+    const result = await this.request<{
+      value?: {
+        blockhash?: string;
+        lastValidBlockHeight?: number;
+      };
+    }>("getLatestBlockhash", commitment ? [{ commitment }] : []);
+    const blockhash = result.value?.blockhash;
+    const lastValidBlockHeight = result.value?.lastValidBlockHeight;
+    if (
+      typeof blockhash !== "string" ||
+      !blockhash.trim() ||
+      typeof lastValidBlockHeight !== "number"
+    ) {
+      throw new Error("rpc-invalid-latest-blockhash");
+    }
+    return {
+      blockhash: blockhash.trim(),
+      lastValidBlockHeight,
+    };
+  }
+
   async getSlot(
     commitment?: "processed" | "confirmed" | "finalized",
   ): Promise<number> {
@@ -128,6 +156,49 @@ export class SolanaRpc {
       }
     }
     return total;
+  }
+
+  async getAddressLookupTableAccounts(
+    addresses: string[],
+  ): Promise<AddressLookupTableAccount[]> {
+    const uniqueAddresses = Array.from(
+      new Set(
+        addresses
+          .map((value) => String(value ?? "").trim())
+          .filter((value) => Boolean(value)),
+      ),
+    );
+    if (uniqueAddresses.length < 1) {
+      return [];
+    }
+    const result = await this.request<{
+      value?: Array<{
+        data?: [string, string] | string;
+      } | null>;
+    }>("getMultipleAccounts", [uniqueAddresses, { encoding: "base64" }]);
+    const rows = Array.isArray(result.value) ? result.value : [];
+    const accounts: AddressLookupTableAccount[] = [];
+    for (let index = 0; index < uniqueAddresses.length; index += 1) {
+      const row = rows[index];
+      const encoded =
+        Array.isArray(row?.data) && typeof row.data[0] === "string"
+          ? row.data[0]
+          : typeof row?.data === "string"
+            ? row.data
+            : null;
+      if (!encoded) continue;
+      const raw = Uint8Array.from(atob(encoded), (value) =>
+        value.charCodeAt(0),
+      );
+      const state = AddressLookupTableAccount.deserialize(raw);
+      accounts.push(
+        new AddressLookupTableAccount({
+          key: new PublicKey(uniqueAddresses[index] as string),
+          state,
+        }),
+      );
+    }
+    return accounts;
   }
 
   async sendTransactionBase64(

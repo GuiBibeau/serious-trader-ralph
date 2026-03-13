@@ -22,6 +22,29 @@ export type JupiterSwapResponse = {
   [k: string]: unknown;
 };
 
+export type JupiterInstructionAccount = {
+  pubkey: string;
+  isSigner: boolean;
+  isWritable: boolean;
+};
+
+export type JupiterSerializedInstruction = {
+  programId: string;
+  accounts: JupiterInstructionAccount[];
+  data: string;
+};
+
+export type JupiterSwapInstructionsResponse = {
+  tokenLedgerInstruction?: JupiterSerializedInstruction | null;
+  computeBudgetInstructions?: JupiterSerializedInstruction[];
+  setupInstructions?: JupiterSerializedInstruction[];
+  swapInstruction: JupiterSerializedInstruction;
+  cleanupInstruction?: JupiterSerializedInstruction | null;
+  otherInstructions?: JupiterSerializedInstruction[];
+  addressLookupTableAddresses?: string[];
+  [k: string]: unknown;
+};
+
 export type TokenInfo = {
   id: string;
   name?: string;
@@ -235,6 +258,57 @@ export class JupiterClient {
       throw new Error("Jupiter swap missing lastValidBlockHeight");
     }
     return parsed as JupiterSwapResponse;
+  }
+
+  async swapInstructions(request: {
+    quoteResponse: JupiterQuoteResponse;
+    userPublicKey: string;
+    dynamicComputeUnitLimit?: boolean;
+  }): Promise<JupiterSwapInstructionsResponse> {
+    const url = new URL("/swap/v1/swap-instructions", this.baseUrl);
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        quoteResponse: request.quoteResponse,
+        userPublicKey: request.userPublicKey,
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit:
+          request.dynamicComputeUnitLimit !== undefined
+            ? request.dynamicComputeUnitLimit
+            : true,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      const requestId =
+        response.headers.get("x-request-id") ??
+        response.headers.get("x-request-id".toLowerCase()) ??
+        "";
+      const idSuffix = requestId ? ` requestId=${requestId}` : "";
+      throw new Error(
+        `Jupiter swap-instructions failed: ${response.status}${idSuffix} ${body}`,
+      );
+    }
+
+    const data = (await response.json()) as unknown;
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error("Jupiter swap-instructions invalid response");
+    }
+    const parsed = data as Partial<JupiterSwapInstructionsResponse>;
+    if (
+      !parsed.swapInstruction ||
+      typeof parsed.swapInstruction !== "object" ||
+      Array.isArray(parsed.swapInstruction)
+    ) {
+      throw new Error("Jupiter swap-instructions missing swapInstruction");
+    }
+    return parsed as JupiterSwapInstructionsResponse;
   }
 
   async programIdToLabel(): Promise<Record<string, string>> {
