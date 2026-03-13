@@ -1,3 +1,5 @@
+import { parseLowLatencyExecutionMeta } from "./low_latency";
+
 const TERMINAL_STATUS_SET = new Set([
   "landed",
   "finalized",
@@ -32,6 +34,7 @@ type AttemptRow = {
   status: string;
   errorCode: string | null;
   completedAt: string | null;
+  providerResponse: Record<string, unknown> | null;
 };
 
 export type ObservabilityLatencySummary = {
@@ -63,6 +66,34 @@ export type ObservabilityProviderBucket = {
   failed: number;
   expired: number;
   failRate: number;
+};
+
+export type ObservabilityCountBucket = {
+  key: string;
+  count: number;
+};
+
+export type FastLaneObservability = {
+  requests: number;
+  attempts: number;
+  retriedRequests: number;
+  landing: ObservabilityLatencySummary;
+  landingPaths: ObservabilityCountBucket[];
+  streamStatus: ObservabilityCountBucket[];
+  failureReasons: ObservabilityCountBucket[];
+  maxObservedConfirmedLagSlots: number;
+  maxObservedTickDurationMs: number;
+};
+
+export type ProtectedLaneObservability = {
+  requests: number;
+  attempts: number;
+  retriedRequests: number;
+  landing: ObservabilityLatencySummary;
+  bundleStatus: ObservabilityCountBucket[];
+  antiFrontRunning: ObservabilityCountBucket[];
+  revertProtection: ObservabilityCountBucket[];
+  failureReasons: ObservabilityCountBucket[];
 };
 
 export type ObservabilityAlert = {
@@ -138,6 +169,10 @@ export type ExecutionObservabilitySnapshot = {
     actor: ObservabilityOutcomeBucket[];
     provider: ObservabilityProviderBucket[];
   };
+  lowLatency: {
+    fast: FastLaneObservability;
+    protected: ProtectedLaneObservability;
+  };
   alerts: ObservabilityAlert[];
 };
 
@@ -179,6 +214,16 @@ function stringOrNull(value: unknown): string | null {
 function numberValue(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
 }
 
 function roundTo(value: number, digits: number): number {
@@ -258,6 +303,7 @@ function mapAttemptRows(rows: Array<Record<string, unknown>>): AttemptRow[] {
     status: stringValue(row.status),
     errorCode: stringOrNull(row.errorCode),
     completedAt: stringOrNull(row.completedAt),
+    providerResponse: parseJsonObject(row.providerResponseJson),
   }));
 }
 
@@ -318,6 +364,21 @@ function sortOutcomeBuckets(
     .map(([key, counter]) => toOutcomeBucket(key, counter))
     .sort((a, b) => {
       if (b.accepted !== a.accepted) return b.accepted - a.accepted;
+      return a.key.localeCompare(b.key);
+    });
+}
+
+function sortCountBuckets(
+  map: Map<string, number>,
+  fallback = "unknown",
+): ObservabilityCountBucket[] {
+  return Array.from(map.entries())
+    .map(([key, count]) => ({
+      key: key.trim() || fallback,
+      count,
+    }))
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
       return a.key.localeCompare(b.key);
     });
 }
@@ -461,7 +522,8 @@ export async function readExecutionObservabilitySnapshot(input: {
         a.provider AS provider,
         a.status AS status,
         a.error_code AS errorCode,
-        a.completed_at AS completedAt
+        a.completed_at AS completedAt,
+        a.provider_response_json AS providerResponseJson
       FROM execution_attempts a
       INNER JOIN window_requests w ON w.request_id = a.request_id
       ORDER BY a.request_id ASC, a.attempt_no DESC`,
@@ -554,8 +616,43 @@ export async function readExecutionObservabilitySnapshot(input: {
       expired: number;
     }
   >();
+  const fastRequestIds = new Set<string>();
+  const protectedRequestIds = new Set<string>();
+  const fastLandingPathCounts = new Map<string, number>();
+  const fastStreamStatusCounts = new Map<string, number>();
+  const fastFailureReasonCounts = new Map<string, number>();
+  const protectedBundleStatusCounts = new Map<string, number>();
+  const protectedAntiFrontRunningCounts = new Map<string, number>();
+  const protectedRevertProtectionCounts = new Map<string, number>();
+  const protectedFailureReasonCounts = new Map<string, number>();
+  let fastAttemptCount = 0;
+  let protectedAttemptCount = 0;
+  let maxObservedConfirmedLagSlots = 0;
+  let maxObservedTickDurationMs = 0;
 
   for (const row of attemptRows) {
+    const request = requestsById.get(row.requestId);
+    if (request?.lane === "fast") {
+      fastRequestIds.add(row.requestId);
+      fastAttemptCount += 1;
+      if (row.errorCode) {
+        fastFailureReasonCounts.set(
+          row.errorCode,
+          (fastFailureReasonCounts.get(row.errorCode) ?? 0) + 1,
+        );
+      }
+    }
+    if (request?.lane === "protected") {
+      protectedRequestIds.add(row.requestId);
+      protectedAttemptCount += 1;
+      if (row.errorCode) {
+        protectedFailureReasonCounts.set(
+          row.errorCode,
+          (protectedFailureReasonCounts.get(row.errorCode) ?? 0) + 1,
+        );
+      }
+    }
+
     attemptsPerRequest.set(
       row.requestId,
       (attemptsPerRequest.get(row.requestId) ?? 0) + 1,
@@ -578,6 +675,51 @@ export async function readExecutionObservabilitySnapshot(input: {
       providerCounter.errorAttempts += 1;
     }
     providerCounters.set(row.provider, providerCounter);
+
+    const executionMeta = asRecord(row.providerResponse?.executionMeta);
+    const lowLatency = parseLowLatencyExecutionMeta(executionMeta?.lowLatency);
+    if (!lowLatency) {
+      continue;
+    }
+    if (lowLatency.lane === "fast") {
+      fastLandingPathCounts.set(
+        lowLatency.landingPath,
+        (fastLandingPathCounts.get(lowLatency.landingPath) ?? 0) + 1,
+      );
+      const streamStatus = lowLatency.stream?.status ?? "unavailable";
+      fastStreamStatusCounts.set(
+        streamStatus,
+        (fastStreamStatusCounts.get(streamStatus) ?? 0) + 1,
+      );
+      maxObservedConfirmedLagSlots = Math.max(
+        maxObservedConfirmedLagSlots,
+        lowLatency.stream?.confirmedLagSlots ?? 0,
+      );
+      maxObservedTickDurationMs = Math.max(
+        maxObservedTickDurationMs,
+        lowLatency.stream?.tickDurationMs ?? 0,
+      );
+    }
+    if (lowLatency.lane === "protected") {
+      protectedBundleStatusCounts.set(
+        lowLatency.outcome?.bundleStatus ?? "unknown",
+        (protectedBundleStatusCounts.get(
+          lowLatency.outcome?.bundleStatus ?? "unknown",
+        ) ?? 0) + 1,
+      );
+      protectedAntiFrontRunningCounts.set(
+        lowLatency.policy.antiFrontRunning,
+        (protectedAntiFrontRunningCounts.get(
+          lowLatency.policy.antiFrontRunning,
+        ) ?? 0) + 1,
+      );
+      protectedRevertProtectionCounts.set(
+        lowLatency.policy.revertProtection,
+        (protectedRevertProtectionCounts.get(
+          lowLatency.policy.revertProtection,
+        ) ?? 0) + 1,
+      );
+    }
   }
 
   for (const [requestId, provider] of finalProviderByRequest.entries()) {
@@ -601,8 +743,12 @@ export async function readExecutionObservabilitySnapshot(input: {
   const dispatchLatenciesMs: number[] = [];
   const landingLatenciesMs: number[] = [];
   const finalizationLatenciesMs: number[] = [];
+  const fastLandingLatenciesMs: number[] = [];
+  const protectedLandingLatenciesMs: number[] = [];
 
   for (const [requestId, request] of requestsById.entries()) {
+    if (request.lane === "fast") fastRequestIds.add(requestId);
+    if (request.lane === "protected") protectedRequestIds.add(requestId);
     const eventTimes = eventTimesByRequest.get(requestId);
     if (eventTimes && request.receivedAtMs !== null) {
       if (eventTimes.dispatchedAtMs !== null) {
@@ -616,6 +762,12 @@ export async function readExecutionObservabilitySnapshot(input: {
         const landingDelta = landedAtMs - eventTimes.dispatchedAtMs;
         if (landingDelta >= 0) {
           landingLatenciesMs.push(landingDelta);
+          if (request.lane === "fast") {
+            fastLandingLatenciesMs.push(landingDelta);
+          }
+          if (request.lane === "protected") {
+            protectedLandingLatenciesMs.push(landingDelta);
+          }
         }
       }
     }
@@ -631,10 +783,20 @@ export async function readExecutionObservabilitySnapshot(input: {
   const duplicateRequests = Array.from(attemptsPerRequest.values()).filter(
     (attemptCount) => attemptCount > 1,
   ).length;
+  let fastRetriedRequests = 0;
+  let protectedRetriedRequests = 0;
+  for (const [requestId, attemptCount] of attemptsPerRequest.entries()) {
+    if (attemptCount <= 1) continue;
+    const request = requestsById.get(requestId);
+    if (request?.lane === "fast") fastRetriedRequests += 1;
+    if (request?.lane === "protected") protectedRetriedRequests += 1;
+  }
 
   const dispatchSummary = summarizeLatency(dispatchLatenciesMs);
   const landingSummary = summarizeLatency(landingLatenciesMs);
   const finalizationSummary = summarizeLatency(finalizationLatenciesMs);
+  const fastLandingSummary = summarizeLatency(fastLandingLatenciesMs);
+  const protectedLandingSummary = summarizeLatency(protectedLandingLatenciesMs);
 
   const totals = {
     accepted: totalsCounter.accepted,
@@ -731,6 +893,41 @@ export async function readExecutionObservabilitySnapshot(input: {
       mode: sortOutcomeBuckets(modeCounters),
       actor: sortOutcomeBuckets(actorCounters),
       provider,
+    },
+    lowLatency: {
+      fast: {
+        requests: fastRequestIds.size,
+        attempts: fastAttemptCount,
+        retriedRequests: fastRetriedRequests,
+        landing: fastLandingSummary,
+        landingPaths: sortCountBuckets(fastLandingPathCounts, "helius_sender"),
+        streamStatus: sortCountBuckets(fastStreamStatusCounts, "unavailable"),
+        failureReasons: sortCountBuckets(
+          fastFailureReasonCounts,
+          "no-error-code",
+        ),
+        maxObservedConfirmedLagSlots,
+        maxObservedTickDurationMs,
+      },
+      protected: {
+        requests: protectedRequestIds.size,
+        attempts: protectedAttemptCount,
+        retriedRequests: protectedRetriedRequests,
+        landing: protectedLandingSummary,
+        bundleStatus: sortCountBuckets(protectedBundleStatusCounts, "unknown"),
+        antiFrontRunning: sortCountBuckets(
+          protectedAntiFrontRunningCounts,
+          "disabled",
+        ),
+        revertProtection: sortCountBuckets(
+          protectedRevertProtectionCounts,
+          "disabled",
+        ),
+        failureReasons: sortCountBuckets(
+          protectedFailureReasonCounts,
+          "no-error-code",
+        ),
+      },
     },
     alerts,
   };

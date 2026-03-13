@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  LOOP_A_HEALTH_KEY,
+  LOOP_A_LATENCY_LATEST_KEY,
+} from "../../apps/worker/src/loop_a/health";
 import { normalizePolicy } from "../../apps/worker/src/policy";
 import type { Env } from "../../apps/worker/src/types";
 
@@ -132,6 +136,45 @@ describe("worker helius sender execution adapter", () => {
         HELIUS_SENDER_URL: "https://sender.helius.test",
         EXEC_FAST_MAX_RETRIES: "2",
         EXEC_FAST_RETRY_BASE_MS: "0",
+        LOOP_A_SLOT_SOURCE_ENABLED: "1",
+        CONFIG_KV: {
+          get: async (key: string) => {
+            if (key === LOOP_A_HEALTH_KEY) {
+              return JSON.stringify({
+                schemaVersion: "v1",
+                generatedAt: "2026-03-03T00:00:04.000Z",
+                component: "loopA",
+                status: "ok",
+                updatedAt: "2026-03-03T00:00:04.000Z",
+                cursors: {
+                  processed: 100,
+                  confirmed: 98,
+                  finalized: 97,
+                },
+                lagSlots: {
+                  processedLag: 4,
+                  confirmedLag: 2,
+                  finalizedLag: 1,
+                },
+                lastSuccessfulSlot: 98,
+                lastSuccessfulAt: "2026-03-03T00:00:04.000Z",
+                errorCount: 0,
+                warnings: [],
+                version: "v1",
+              });
+            }
+            if (key === LOOP_A_LATENCY_LATEST_KEY) {
+              return JSON.stringify({
+                schemaVersion: "v1",
+                generatedAt: "2026-03-03T00:00:04.000Z",
+                trigger: "scheduled",
+                ok: true,
+                tickDurationMs: 140,
+              });
+            }
+            return null;
+          },
+        } as KVNamespace,
       } as Env,
       policy: normalizePolicy({ commitment: "confirmed" }),
       rpc: {
@@ -152,6 +195,24 @@ describe("worker helius sender execution adapter", () => {
     expect(result.status).toBe("confirmed");
     expect(result.signature).toBe("sig-123");
     expect(result.executionMeta?.classification).toBe("confirmed");
+    expect(result.executionMeta?.lowLatency).toMatchObject({
+      lane: "fast",
+      landingPath: "helius_sender",
+      policy: {
+        maxRetries: 2,
+        retryBaseMs: 0,
+        priorityFeeMode: "sender_managed",
+      },
+      stream: {
+        status: "healthy",
+        confirmedLagSlots: 2,
+        tickDurationMs: 140,
+      },
+      outcome: {
+        attemptsUsed: 2,
+        errorCode: null,
+      },
+    });
     expect(callCount).toBe(2);
     expect(confirmSignature).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalled();

@@ -309,7 +309,31 @@ function seedExecutionObservabilityFixtures(sqlite: Database): void {
       "helius",
       "finalized",
       null,
-      null,
+      JSON.stringify({
+        executionMeta: {
+          lowLatency: {
+            lane: "fast",
+            landingPath: "helius_sender",
+            policy: {
+              maxRetries: 2,
+              retryBaseMs: 200,
+              priorityFeeMode: "sender_managed",
+              antiFrontRunning: "not_applicable",
+              revertProtection: "not_applicable",
+            },
+            stream: {
+              status: "healthy",
+              confirmedLagSlots: 3,
+              tickDurationMs: 120,
+            },
+            outcome: {
+              attemptsUsed: 1,
+              errorCode: null,
+              bundleStatus: null,
+            },
+          },
+        },
+      }),
       null,
       null,
       req1Received,
@@ -340,7 +364,26 @@ function seedExecutionObservabilityFixtures(sqlite: Database): void {
       "jito",
       "error",
       null,
-      null,
+      JSON.stringify({
+        executionMeta: {
+          lowLatency: {
+            lane: "protected",
+            landingPath: "jito_bundle",
+            policy: {
+              maxRetries: 2,
+              retryBaseMs: 250,
+              priorityFeeMode: "bundle_tip",
+              antiFrontRunning: "bundle_private_orderflow",
+              revertProtection: "bundle_status_gated_retry",
+            },
+            outcome: {
+              attemptsUsed: 1,
+              errorCode: "venue-timeout",
+              bundleStatus: "dropped",
+            },
+          },
+        },
+      }),
       "venue-timeout",
       "timeout",
       req2Received,
@@ -474,6 +517,23 @@ describe("worker execution observability route", () => {
           code?: string;
           state?: string;
         }>;
+        lowLatency?: {
+          fast?: {
+            requests?: number;
+            attempts?: number;
+            landingPaths?: Array<{ key?: string; count?: number }>;
+            streamStatus?: Array<{ key?: string; count?: number }>;
+            maxObservedConfirmedLagSlots?: number;
+          };
+          protected?: {
+            requests?: number;
+            attempts?: number;
+            bundleStatus?: Array<{ key?: string; count?: number }>;
+            antiFrontRunning?: Array<{ key?: string; count?: number }>;
+            revertProtection?: Array<{ key?: string; count?: number }>;
+            failureReasons?: Array<{ key?: string; count?: number }>;
+          };
+        };
       };
       expect(body.ok).toBe(true);
       expect(body.totals?.accepted).toBe(3);
@@ -496,6 +556,35 @@ describe("worker execution observability route", () => {
         (entry) => entry.code === "fail-rate",
       );
       expect(failRateAlert?.state).toBe("critical");
+      expect(body.lowLatency?.fast?.requests).toBe(1);
+      expect(body.lowLatency?.fast?.attempts).toBe(1);
+      expect(body.lowLatency?.fast?.landingPaths?.[0]).toMatchObject({
+        key: "helius_sender",
+        count: 1,
+      });
+      expect(body.lowLatency?.fast?.streamStatus?.[0]).toMatchObject({
+        key: "healthy",
+        count: 1,
+      });
+      expect(body.lowLatency?.fast?.maxObservedConfirmedLagSlots).toBe(3);
+      expect(body.lowLatency?.protected?.requests).toBe(1);
+      expect(body.lowLatency?.protected?.attempts).toBe(1);
+      expect(body.lowLatency?.protected?.bundleStatus?.[0]).toMatchObject({
+        key: "dropped",
+        count: 1,
+      });
+      expect(body.lowLatency?.protected?.antiFrontRunning?.[0]).toMatchObject({
+        key: "bundle_private_orderflow",
+        count: 1,
+      });
+      expect(body.lowLatency?.protected?.revertProtection?.[0]).toMatchObject({
+        key: "bundle_status_gated_retry",
+        count: 1,
+      });
+      expect(body.lowLatency?.protected?.failureReasons?.[0]).toMatchObject({
+        key: "venue-timeout",
+        count: 1,
+      });
     } finally {
       sqlite.close();
     }

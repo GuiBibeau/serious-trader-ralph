@@ -3,6 +3,7 @@ import type { NormalizedPolicy } from "../policy";
 import type { RuntimeMode } from "../runtime_contracts";
 import type { SolanaRpc } from "../solana_rpc";
 import type { Env, ExecutionConfig } from "../types";
+import type { LowLatencyExecutionMeta } from "./low_latency";
 
 export type ExecutionLogFn = (
   level: "debug" | "info" | "warn" | "error",
@@ -149,6 +150,7 @@ export type ExecuteSwapResult = {
     intentId?: string | null;
     venueSessionId?: string | null;
     settlementRef?: string | null;
+    lowLatency?: LowLatencyExecutionMeta;
     trace?: {
       txBuiltAt?: string;
       simulatedAt?: string;
