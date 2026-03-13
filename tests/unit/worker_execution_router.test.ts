@@ -152,6 +152,40 @@ describe("worker execution router", () => {
     ).rejects.toThrow(/magicblock-ephemeral-rollup-url-missing/);
   });
 
+  test("routes bounded Raydium spot swaps in paper mode", async () => {
+    const result = await executeSwapViaRouter({
+      env: {} as never,
+      venueKey: "raydium",
+      runtimeMode: "paper",
+      requireVenueRouting: true,
+      execution: { adapter: "raydium" },
+      policy: normalizePolicy({ dryRun: true }),
+      rpc: {} as never,
+      jupiter: {} as never,
+      quoteResponse: {
+        inputMint: "A",
+        outputMint: "B",
+        inAmount: "1",
+        outAmount: "2",
+        raydiumQuoteEnvelope: {
+          id: "quote-1",
+          success: true,
+          data: {
+            inputMint: "A",
+            outputMint: "B",
+            inputAmount: "1",
+            outputAmount: "2",
+          },
+        },
+      },
+      userPublicKey: "11111111111111111111111111111111",
+      log: () => {},
+    });
+
+    expect(result.status).toBe("dry_run");
+    expect(result.executionMeta?.route).toBe("raydium");
+  });
+
   test("custom execution adapters can be registered for new intent families", async () => {
     registerExecutionAdapter(
       "phoenix_orderbook",
@@ -290,6 +324,39 @@ describe("worker execution router", () => {
         log: () => {},
       }),
     ).rejects.toThrow(/execution-adapter-venue-mismatch/);
+  });
+
+  test("fails closed when Raydium spot swaps are requested in live mode", async () => {
+    await expect(
+      executeSwapViaRouter({
+        env: {} as never,
+        venueKey: "raydium",
+        runtimeMode: "live",
+        requireVenueRouting: true,
+        execution: { adapter: "raydium" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+          raydiumQuoteEnvelope: {
+            id: "quote-1",
+            success: true,
+            data: {
+              inputMint: "A",
+              outputMint: "B",
+              inputAmount: "1",
+              outputAmount: "2",
+            },
+          },
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      }),
+    ).rejects.toThrow(/runtime-venue-mode-not-supported:raydium:live/);
   });
 
   test("fails closed when adapter is not allowlisted for the runtime venue", async () => {

@@ -15,6 +15,10 @@ import {
   upsertExecutionReceiptIdempotent,
 } from "./execution/repository";
 import { executeSwapViaRouter } from "./execution/router";
+import {
+  quoteSpotSwap,
+  resolveSpotVenueExecutionAdapter,
+} from "./execution/spot_venues";
 import type { JupiterQuoteResponse } from "./jupiter";
 import { JupiterClient } from "./jupiter";
 import {
@@ -23,6 +27,7 @@ import {
 } from "./ops_controls";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet, getPrivyWalletAddressById } from "./privy";
+import { RaydiumClient } from "./raydium";
 import {
   createRuntimeCanaryRun,
   getRuntimeCanaryDailySpendUsd,
@@ -819,14 +824,22 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
     String(env.JUPITER_BASE_URL ?? "").trim() || "https://lite-api.jup.ag",
     env.JUPITER_API_KEY,
   );
-
-  const quoteResponse = await jupiter.quote({
+  const raydium = new RaydiumClient(
+    String(env.RAYDIUM_API_BASE_URL ?? "").trim() ||
+      "https://api-v3.raydium.io",
+    String(env.RAYDIUM_TRANSACTION_BASE_URL ?? "").trim() ||
+      "https://transaction-v1.raydium.io",
+  );
+  const quotedSwap = await quoteSpotSwap({
+    venueKey: plan.venueKey,
     inputMint: slice.inputMint,
     outputMint: slice.outputMint,
-    amount: slice.inputAmountAtomic,
+    amountAtomic: slice.inputAmountAtomic,
     slippageBps: slice.slippageBps,
-    swapMode: "ExactIn",
+    jupiter,
+    raydium,
   });
+  const quoteResponse = quotedSwap.quoteResponse;
   const policy = buildRuntimeCanaryExecutionPolicy({
     plan,
     requireSimulation: plan.simulateOnly,
@@ -895,14 +908,22 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
 
   const attemptId = newExecutionAttemptId();
   const attemptStartedAt = new Date().toISOString();
+  const executionAdapter = resolveSpotVenueExecutionAdapter({
+    venueKey: plan.venueKey,
+    runtimeMode: plan.mode,
+    defaultAdapter: laneResolution.adapter,
+  });
   const qualityMetadata = {
     lane: laneResolution.lane,
+    venueKey: plan.venueKey,
+    quoteProvider: quotedSwap.quoteProvider,
     slippageBps: slice.slippageBps,
     simulateOnly: plan.simulateOnly,
     dryRun: plan.dryRun,
+    routeQuality: quotedSwap.routeQuality,
   };
   let providerResponse: JsonObject | null = {
-    route: laneResolution.adapter,
+    route: executionAdapter,
     lane: laneResolution.lane,
     mode: plan.mode,
     quality: qualityMetadata,
@@ -919,7 +940,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       requestId: submitRequestId,
       attemptNo: 1,
       lane: laneResolution.lane,
-      provider: laneResolution.adapter,
+      provider: executionAdapter,
       status: "dispatched",
       providerResponse,
       startedAt: attemptStartedAt,
@@ -931,7 +952,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       runtimeMode: plan.mode,
       requireVenueRouting: true,
       execution: {
-        adapter: laneResolution.adapter,
+        adapter: executionAdapter,
         params: {
           lane: laneResolution.lane,
           ...(plan.simulateOnly ? { requireSimulation: true } : {}),
@@ -940,6 +961,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       policy,
       rpc,
       jupiter,
+      raydium,
       quoteResponse,
       userPublicKey: wallet.walletAddress,
       privyWalletId: wallet.walletId,
@@ -983,14 +1005,14 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       receiptId,
       finalizedStatus: terminalStatus,
       lane: laneResolution.lane,
-      provider: laneResolution.adapter,
+      provider: executionAdapter,
       signature: result.signature,
       slot: null,
       errorCode: failure ? failure.errorCode : null,
       errorMessage,
       receipt: {
         mode: plan.mode,
-        route: laneResolution.adapter,
+        route: executionAdapter,
         resultStatus: result.status,
         outcome: terminalStatus,
         quality: qualityMetadata,
@@ -1004,7 +1026,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       status: terminalStatus,
       statusReason: failure ? failure.statusReason : null,
       details: {
-        provider: laneResolution.adapter,
+        provider: executionAdapter,
         attempt: 1,
         ...(result.signature ? { signature: result.signature } : {}),
       },
@@ -1040,7 +1062,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
           ? [failure.statusReason]
           : ["runtime canary execution accepted"],
         signature: result.signature,
-        provider: laneResolution.adapter,
+        provider: executionAdapter,
       },
       observedLedger,
     };
@@ -1064,7 +1086,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       requestId: submitRequestId,
       attemptNo: 1,
       lane: laneResolution.lane,
-      provider: laneResolution.adapter,
+      provider: executionAdapter,
       status: terminalStatus,
       providerResponse,
       errorCode,
@@ -1084,14 +1106,14 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       receiptId: newExecutionReceiptId(),
       finalizedStatus: terminalStatus,
       lane: laneResolution.lane,
-      provider: laneResolution.adapter,
+      provider: executionAdapter,
       signature: null,
       slot: null,
       errorCode,
       errorMessage,
       receipt: {
         mode: plan.mode,
-        route: laneResolution.adapter,
+        route: executionAdapter,
         outcome: terminalStatus,
         quality: qualityMetadata,
         planId: plan.planId,
@@ -1104,7 +1126,7 @@ export async function submitRuntimeCanaryExecutionPlan(input: {
       status: terminalStatus,
       statusReason,
       details: {
-        provider: laneResolution.adapter,
+        provider: executionAdapter,
         attempt: 1,
         errorMessage,
       },

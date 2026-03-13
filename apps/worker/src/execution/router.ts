@@ -13,6 +13,7 @@ import { executeJupiterSwap } from "./jupiter_executor";
 import { resolveJupiterConditionalSpotOrder } from "./jupiter_trigger";
 import { executeJupiterConditionalSpotOrder } from "./jupiter_trigger_executor";
 import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
+import { executeRaydiumSwap } from "./raydium_executor";
 import type {
   ExecuteIntentInput,
   ExecuteSwapInput,
@@ -82,6 +83,16 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       supportedModes: ["shadow", "paper"],
       supportedIntentFamilies: ["spot_swap"],
       adapter: executeMagicBlockEphemeralRollupSwap,
+    },
+  ],
+  [
+    "raydium",
+    {
+      adapterKey: "raydium",
+      venueKey: "raydium",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["spot_swap"],
+      adapter: executeRaydiumSwap,
     },
   ],
 ]);
@@ -284,6 +295,7 @@ export async function executeIntentViaRouter(
     policy: input.policy,
     rpc: input.rpc,
     jupiter: input.jupiter,
+    raydium: input.raydium,
     quoteResponse: input.quoteResponse,
     userPublicKey: input.userPublicKey,
     privyWalletId: input.privyWalletId,

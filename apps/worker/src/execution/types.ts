@@ -1,5 +1,6 @@
 import type { JupiterClient, JupiterQuoteResponse } from "../jupiter";
 import type { NormalizedPolicy } from "../policy";
+import type { RaydiumClient } from "../raydium";
 import type { RuntimeMode } from "../runtime_contracts";
 import type { SolanaRpc } from "../solana_rpc";
 import type { Env, ExecutionConfig } from "../types";
@@ -88,6 +89,7 @@ type ExecuteIntentInputBase = {
   policy: NormalizedPolicy;
   rpc: SolanaRpc;
   jupiter: JupiterClient;
+  raydium?: RaydiumClient;
   log: ExecutionLogFn;
   guardEnabled?: () => Promise<void>;
   privyWalletId?: string;
@@ -115,6 +117,7 @@ export type ExecuteSwapInput = {
   policy: NormalizedPolicy;
   rpc: SolanaRpc;
   jupiter: JupiterClient;
+  raydium?: RaydiumClient;
   quoteResponse: JupiterQuoteResponse;
   userPublicKey: string;
   privyWalletId?: string;
