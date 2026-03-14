@@ -1,5 +1,6 @@
 import type { DriftClient } from "../drift";
 import type { JupiterClient, JupiterQuoteResponse } from "../jupiter";
+import type { OpenBookClient } from "../openbook";
 import type { OrcaClient } from "../orca";
 import type { NormalizedPolicy } from "../policy";
 import type { RaydiumClient } from "../raydium";
@@ -94,6 +95,7 @@ type ExecuteIntentInputBase = {
   jupiter: JupiterClient;
   drift?: DriftClient;
   orca?: OrcaClient;
+  openbook?: OpenBookClient;
   raydium?: RaydiumClient;
   log: ExecutionLogFn;
   guardEnabled?: () => Promise<void>;

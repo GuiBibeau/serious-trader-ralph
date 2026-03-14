@@ -14,6 +14,7 @@ import { executeJupiterSwap } from "./jupiter_executor";
 import { resolveJupiterConditionalSpotOrder } from "./jupiter_trigger";
 import { executeJupiterConditionalSpotOrder } from "./jupiter_trigger_executor";
 import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
+import { executeOpenBookClobOrder } from "./openbook_executor";
 import { executeOrcaSwap } from "./orca_executor";
 import { executeRaydiumSwap } from "./raydium_executor";
 import type {
@@ -129,6 +130,18 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       supportedModes: ["shadow", "paper"],
       supportedIntentFamilies: ["spot_swap"],
       adapter: executeRaydiumSwap,
+    },
+  ],
+  [
+    "openbook_v2",
+    {
+      adapterKey: "openbook_v2",
+      venueKey: "openbook",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["clob_order"],
+      adapter: async () => {
+        throw new Error("openbook-v2-requires-intent-routing");
+      },
     },
   ],
 ]);
@@ -316,6 +329,12 @@ export async function executeIntentViaRouter(
         registration.adapterKey === "drift_swift")
     ) {
       return await executeDriftPerpOrder(input);
+    }
+    if (
+      input.intent.family === "clob_order" &&
+      registration.adapterKey === "openbook_v2"
+    ) {
+      return await executeOpenBookClobOrder(input);
     }
     if (
       input.intent.family === "conditional_spot_order" &&

@@ -368,6 +368,144 @@ function seedExecutionRequestOnly(
   );
 }
 
+function seedOpenBookOrder(
+  db: Database,
+  input?: {
+    requestId?: string;
+    actorId?: string;
+    side?: "buy" | "sell";
+    status?: string;
+    instrumentId?: string;
+  },
+): string {
+  const requestId = input?.requestId ?? "execreq_openbook_1234567890";
+  const actorId = input?.actorId ?? "user_1";
+  const side = input?.side ?? "buy";
+  const status = input?.status ?? "dispatched";
+  const instrumentId = input?.instrumentId ?? "SOL/USDC";
+  const metadata = {
+    source: "TERMINAL",
+    reason: "OpenBook paper order",
+    intent: {
+      family: "clob_order",
+      marketType: "spot",
+      venueKey: "openbook",
+      instrumentId,
+      side,
+      quantityAtomic: "1000000000",
+    },
+  };
+  const providerResponse = {
+    route: "openbook_v2",
+    lane: "safe",
+    mode: "privy_execute",
+    quality: {
+      orderType: "limit",
+      timeInForce: "gtc",
+      limitPriceAtomic: "151000000",
+    },
+    executionStatus: "simulated",
+    executionMeta: {
+      route: "openbook_v2",
+      classification: "simulated",
+      venueSessionId: "oo-1",
+      intentId: "42",
+      lifecycle: {
+        orderState: "open",
+        fillState: "pending",
+        settlementState: "confirmed",
+        notes: ["openbook-limit"],
+      },
+    },
+  };
+
+  db.query(
+    `INSERT INTO execution_requests (
+      request_id,
+      idempotency_scope,
+      idempotency_key,
+      payload_hash,
+      actor_type,
+      actor_id,
+      mode,
+      lane,
+      status,
+      status_reason,
+      metadata_json,
+      received_at,
+      validated_at,
+      terminal_at
+    ) VALUES (?1, 'authenticated', ?2, ?3, 'privy_user', ?4, 'privy_execute', 'safe', ?5, NULL, ?6, ?7, ?8, NULL)`,
+  ).run(
+    requestId,
+    `idem-${requestId}`,
+    `hash-${requestId}`,
+    actorId,
+    status,
+    JSON.stringify(metadata),
+    "2026-03-05T02:00:00.000Z",
+    "2026-03-05T02:00:01.000Z",
+  );
+  db.query(
+    `INSERT INTO execution_attempts (
+      attempt_id,
+      request_id,
+      attempt_no,
+      lane,
+      provider,
+      status,
+      provider_request_id,
+      provider_response_json,
+      error_code,
+      error_message,
+      started_at,
+      completed_at,
+      created_at,
+      updated_at
+    ) VALUES (?1, ?2, 1, 'safe', 'openbook_v2', 'simulated', 'openbook_req_1', ?3, NULL, NULL, ?4, ?5, ?4, ?5)`,
+  ).run(
+    `attempt_${requestId}`,
+    requestId,
+    JSON.stringify(providerResponse),
+    "2026-03-05T02:00:02.000Z",
+    "2026-03-05T02:00:03.000Z",
+  );
+  db.query(
+    `INSERT INTO execution_status_events (
+      event_id,
+      request_id,
+      seq,
+      status,
+      reason,
+      details_json,
+      created_at
+    ) VALUES (?1, ?2, 1, 'received', NULL, NULL, '2026-03-05T02:00:00.000Z')`,
+  ).run(`event_received_${requestId}`, requestId);
+  db.query(
+    `INSERT INTO execution_status_events (
+      event_id,
+      request_id,
+      seq,
+      status,
+      reason,
+      details_json,
+      created_at
+    ) VALUES (?1, ?2, 2, 'validated', NULL, NULL, '2026-03-05T02:00:01.000Z')`,
+  ).run(`event_validated_${requestId}`, requestId);
+  db.query(
+    `INSERT INTO execution_status_events (
+      event_id,
+      request_id,
+      seq,
+      status,
+      reason,
+      details_json,
+      created_at
+    ) VALUES (?1, ?2, 3, 'dispatched', NULL, NULL, '2026-03-05T02:00:03.000Z')`,
+  ).run(`event_dispatched_${requestId}`, requestId);
+  return requestId;
+}
+
 function responseJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -711,6 +849,44 @@ describe("worker terminal open orders and Trigger lifecycle routes", () => {
     }
   });
 
+  test("open-orders route includes active OpenBook paper orders", async () => {
+    const { env, sqlite } = createExecEnv();
+    try {
+      seedOpenBookOrder(sqlite, {
+        requestId: "execreq_openbook_list_123456",
+      });
+
+      const response = await worker.fetch(
+        new Request("http://localhost/api/terminal/open-orders", {
+          headers: {
+            authorization: "Bearer test-token",
+          },
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        orders?: Array<{
+          requestId?: string;
+          pairId?: string;
+          status?: string;
+          orderType?: string;
+          clientOrderId?: string;
+          openOrdersAccount?: string;
+        }>;
+      };
+      expect(body.orders?.[0]?.requestId).toBe("execreq_openbook_list_123456");
+      expect(body.orders?.[0]?.pairId).toBe("SOL/USDC");
+      expect(body.orders?.[0]?.status).toBe("working");
+      expect(body.orders?.[0]?.orderType).toBe("limit");
+      expect(body.orders?.[0]?.clientOrderId).toBe("42");
+      expect(body.orders?.[0]?.openOrdersAccount).toBe("oo-1");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("open-orders route still returns older active conditional orders behind newer executions", async () => {
     const { env, sqlite } = createExecEnv();
     try {
@@ -764,6 +940,56 @@ describe("worker terminal open orders and Trigger lifecycle routes", () => {
           (order) => order.requestId === "execreq_trigger_oldest_open",
         ),
       ).toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("cancel route terminalizes active OpenBook paper orders", async () => {
+    const { env, sqlite } = createExecEnv();
+    try {
+      const requestId = seedOpenBookOrder(sqlite, {
+        requestId: "execreq_openbook_cancel_123456",
+      });
+
+      const response = await worker.fetch(
+        new Request(
+          `http://localhost/api/terminal/open-orders/${requestId}/cancel`,
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer test-token",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        cancelled?: boolean;
+        lifecycle?: { orderState?: string };
+        signature?: string | null;
+        status?: { state?: string; terminal?: boolean };
+      };
+      expect(body.cancelled).toBe(true);
+      expect(body.lifecycle?.orderState).toBe("cancelled");
+      expect(body.signature).toBeNull();
+      expect(body.status?.state).toBe("failed");
+      expect(body.status?.terminal).toBe(true);
+      const requestRow = sqlite
+        .query("SELECT status FROM execution_requests WHERE request_id = ?1")
+        .get(requestId) as { status?: string } | undefined;
+      expect(requestRow?.status).toBe("failed");
+      const receiptRow = sqlite
+        .query(
+          "SELECT finalized_status as finalizedStatus, error_code as errorCode FROM execution_receipts WHERE request_id = ?1",
+        )
+        .get(requestId) as
+        | { finalizedStatus?: string; errorCode?: string }
+        | undefined;
+      expect(receiptRow?.finalizedStatus).toBe("failed");
+      expect(receiptRow?.errorCode).toBe("order-cancelled");
     } finally {
       sqlite.close();
     }

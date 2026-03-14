@@ -5469,6 +5469,7 @@ const worker = {
         user = await ensureUserWallet(env, user);
         const pageSize = 80;
         const conditionalRequests: ExecutionRequestRecord[] = [];
+        const clobRequests: ExecutionRequestRecord[] = [];
         for (let offset = 0; ; offset += pageSize) {
           const page = await listOpenExecutionRequestsByActorAndIntentFamily(
             env.WAITLIST_DB,
@@ -5481,6 +5482,20 @@ const worker = {
             },
           );
           conditionalRequests.push(...page);
+          if (page.length < pageSize) break;
+        }
+        for (let offset = 0; ; offset += pageSize) {
+          const page = await listOpenExecutionRequestsByActorAndIntentFamily(
+            env.WAITLIST_DB,
+            {
+              actorId: user.id,
+              mode: "privy_execute",
+              intentFamily: "clob_order",
+              limit: pageSize,
+              offset,
+            },
+          );
+          clobRequests.push(...page);
           if (page.length < pageSize) break;
         }
         const orders: Record<string, unknown>[] = [];
@@ -5508,6 +5523,17 @@ const worker = {
                   signature: reconciled.summary.signature,
                 }
               : null,
+          });
+          if (order) orders.push(order);
+        }
+        for (const entry of clobRequests) {
+          const latest = await getExecutionLatestStatus(
+            env.WAITLIST_DB,
+            entry.requestId,
+          );
+          const order = buildTerminalOpenBookOrderView({
+            latest,
+            lifecycle: readPersistedExecutionLifecycle({ latest }),
           });
           if (order) orders.push(order);
         }
@@ -5574,14 +5600,148 @@ const worker = {
         const intent = isRecord(reconciled.latest.request.metadata?.intent)
           ? reconciled.latest.request.metadata?.intent
           : null;
-        if (readTrimmedString(intent?.family) !== "conditional_spot_order") {
+        const intentFamily = readTrimmedString(intent?.family);
+        if (
+          intentFamily !== "conditional_spot_order" &&
+          !(
+            intentFamily === "clob_order" &&
+            readTrimmedString(intent?.venueKey) === "openbook"
+          )
+        ) {
           return withCors(
             execErrorResponse({
               code: "invalid-request",
               details: {
-                reason: "unsupported-conditional-order-request",
+                reason: "unsupported-open-order-request",
               },
               requestId,
+            }),
+            env,
+          );
+        }
+        if (
+          intentFamily === "clob_order" &&
+          readTrimmedString(intent?.venueKey) === "openbook"
+        ) {
+          const lifecycle = readPersistedExecutionLifecycle({
+            latest: reconciled.latest,
+          });
+          const currentState = toExecSubmitState(
+            reconciled.latest.request.status,
+          );
+          if (
+            isExecSubmitTerminalState(currentState) ||
+            reconciled.latest.receipt ||
+            reconciled.latest.request.terminalAt
+          ) {
+            return withCors(
+              json({
+                ok: true,
+                requestId,
+                cancelled: false,
+                status: {
+                  state: currentState,
+                  terminal: true,
+                  updatedAt: reconciled.latest.request.updatedAt,
+                },
+                ...(lifecycle ? { lifecycle } : {}),
+              }),
+              env,
+            );
+          }
+          const trackedOrder = readTrackedOpenBookOrder({
+            latest: reconciled.latest,
+          });
+          const clientOrderId = readTrimmedString(trackedOrder?.clientOrderId);
+          if (!clientOrderId) {
+            return withCors(
+              execErrorResponse({
+                code: "invalid-request",
+                details: {
+                  reason: "openbook-order-tracking-missing",
+                },
+                requestId,
+              }),
+              env,
+            );
+          }
+          const provider =
+            reconciled.latest.latestAttempt?.provider ?? "openbook_v2";
+          const cancelledAt = new Date().toISOString();
+          const cancelLifecycle = {
+            orderState: "cancelled",
+            fillState: "failed",
+            settlementState: "failed",
+            notes: ["openbook-order-cancelled"],
+          };
+          await upsertExecutionReceiptIdempotent(env.WAITLIST_DB, {
+            requestId,
+            receiptId: newExecutionReceiptId(),
+            finalizedStatus: "failed",
+            lane: reconciled.latest.request.lane,
+            provider,
+            signature: null,
+            slot: null,
+            errorCode: "order-cancelled",
+            errorMessage: "OpenBook order was cancelled before settlement.",
+            receipt: {
+              mode: reconciled.latest.request.mode,
+              route: provider,
+              outcome: "failed",
+              lifecycle: cancelLifecycle,
+              openbookOrder: {
+                clientOrderId,
+                openOrdersAccount:
+                  readTrimmedString(trackedOrder?.openOrdersAccount) ?? null,
+                instrumentId:
+                  readTrimmedString(trackedOrder?.instrumentId) ??
+                  readTrimmedString(intent?.instrumentId),
+                side:
+                  readTrimmedString(trackedOrder?.side) ??
+                  readTrimmedString(intent?.side),
+                orderType:
+                  readTrimmedString(trackedOrder?.orderType) ?? "limit",
+                timeInForce:
+                  readTrimmedString(trackedOrder?.timeInForce) ?? "gtc",
+                quantityAtomic:
+                  readTrimmedString(trackedOrder?.quantityAtomic) ??
+                  readTrimmedString(intent?.quantityAtomic),
+                limitPriceAtomic:
+                  readTrimmedString(trackedOrder?.limitPriceAtomic) ?? null,
+              },
+            },
+            readyAt: cancelledAt,
+          });
+          await terminalizeExecutionRequest(env.WAITLIST_DB, {
+            requestId,
+            status: "failed",
+            statusReason: "openbook-order-cancelled",
+            details: {
+              provider,
+              orderState: "cancelled",
+              clientOrderId,
+            },
+            nowIso: cancelledAt,
+          });
+          const refreshed = await getExecutionLatestStatus(
+            env.WAITLIST_DB,
+            requestId,
+          );
+          const refreshedState = toExecSubmitState(
+            refreshed?.request.status ?? "failed",
+          );
+          return withCors(
+            json({
+              ok: true,
+              requestId,
+              cancelled: true,
+              status: {
+                state: refreshedState,
+                terminal: isExecSubmitTerminalState(refreshedState),
+                updatedAt: refreshed?.request.updatedAt ?? cancelledAt,
+              },
+              lifecycle: cancelLifecycle,
+              signature: null,
             }),
             env,
           );
@@ -6672,6 +6832,26 @@ function resolveTerminalProviderStatus(input: {
   return input.latest?.receipt?.errorCode ? "degraded" : "healthy";
 }
 
+function readPersistedExecutionLifecycle(input: {
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>;
+}): Record<string, unknown> | null {
+  const latest = input.latest;
+  if (!latest) return null;
+  const receiptLifecycle = isRecord(latest.receipt?.receipt?.lifecycle)
+    ? latest.receipt?.receipt?.lifecycle
+    : null;
+  if (receiptLifecycle) return receiptLifecycle;
+  const executionMeta = isRecord(
+    latest.latestAttempt?.providerResponse?.executionMeta,
+  )
+    ? latest.latestAttempt?.providerResponse?.executionMeta
+    : null;
+  const executionLifecycle = isRecord(executionMeta?.lifecycle)
+    ? executionMeta?.lifecycle
+    : null;
+  return executionLifecycle ?? null;
+}
+
 function resolveTerminalOpenOrderStatus(
   lifecycle: Record<string, unknown> | null,
   terminal: boolean,
@@ -6692,6 +6872,61 @@ function resolveTerminalOpenOrderStatus(
   if (orderState === "rejected") return "failed";
   if (terminal) return "failed";
   return "working";
+}
+
+function readTrackedOpenBookOrder(input: {
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>;
+}): Record<string, unknown> | null {
+  const latest = input.latest;
+  if (!latest) return null;
+  const intent = isRecord(latest.request.metadata?.intent)
+    ? latest.request.metadata.intent
+    : null;
+  if (
+    readTrimmedString(intent?.family) !== "clob_order" ||
+    readTrimmedString(intent?.venueKey) !== "openbook"
+  ) {
+    return null;
+  }
+  const attemptResponse = isRecord(latest.latestAttempt?.providerResponse)
+    ? latest.latestAttempt?.providerResponse
+    : null;
+  const executionMeta = isRecord(attemptResponse?.executionMeta)
+    ? attemptResponse?.executionMeta
+    : null;
+  const quality = isRecord(attemptResponse?.quality)
+    ? attemptResponse?.quality
+    : null;
+  const receiptOrder = isRecord(latest.receipt?.receipt?.openbookOrder)
+    ? latest.receipt?.receipt?.openbookOrder
+    : null;
+  return {
+    clientOrderId:
+      readTrimmedString(receiptOrder?.clientOrderId) ??
+      readTrimmedString(executionMeta?.intentId),
+    openOrdersAccount:
+      readTrimmedString(receiptOrder?.openOrdersAccount) ??
+      readTrimmedString(executionMeta?.venueSessionId),
+    instrumentId:
+      readTrimmedString(receiptOrder?.instrumentId) ??
+      readTrimmedString(intent?.instrumentId),
+    side:
+      readTrimmedString(receiptOrder?.side) ?? readTrimmedString(intent?.side),
+    orderType:
+      readTrimmedString(receiptOrder?.orderType) ??
+      readTrimmedString(quality?.orderType) ??
+      "limit",
+    timeInForce:
+      readTrimmedString(receiptOrder?.timeInForce) ??
+      readTrimmedString(quality?.timeInForce) ??
+      "gtc",
+    quantityAtomic:
+      readTrimmedString(receiptOrder?.quantityAtomic) ??
+      readTrimmedString(intent?.quantityAtomic),
+    limitPriceAtomic:
+      readTrimmedString(receiptOrder?.limitPriceAtomic) ??
+      readTrimmedString(quality?.limitPriceAtomic),
+  };
 }
 
 function buildTerminalConditionalOrderView(input: {
@@ -6780,6 +7015,57 @@ function buildTerminalConditionalOrderView(input: {
     oracleFreshnessMs: null,
     oracleSource: null,
     oracleStale: false,
+    lifecycle:
+      lifecycle && Object.keys(lifecycle).length > 0
+        ? {
+            ...lifecycle,
+            ...(notes ? { notes } : {}),
+          }
+        : null,
+  };
+}
+
+function buildTerminalOpenBookOrderView(input: {
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>;
+  lifecycle: Record<string, unknown> | null;
+}): Record<string, unknown> | null {
+  const latest = input.latest;
+  if (!latest) return null;
+  const trackedOrder = readTrackedOpenBookOrder({ latest });
+  if (!trackedOrder) return null;
+  const terminal = Boolean(latest.request.terminalAt);
+  const lifecycle = input.lifecycle;
+  const notes = readStringArray(lifecycle?.notes);
+  return {
+    requestId: latest.request.requestId,
+    requestStatus: latest.request.status,
+    terminal,
+    receivedAt: latest.request.receivedAt,
+    updatedAt: latest.request.updatedAt,
+    terminalAt: latest.request.terminalAt,
+    pairId: readTrimmedString(trackedOrder.instrumentId),
+    direction: readTrimmedString(trackedOrder.side),
+    source: readTrimmedString(latest.request.metadata?.source) ?? "TERMINAL",
+    reason: readTrimmedString(latest.request.metadata?.reason),
+    orderType: readTrimmedString(trackedOrder.orderType) ?? "limit",
+    timeInForce: readTrimmedString(trackedOrder.timeInForce) ?? "gtc",
+    lane: latest.request.lane,
+    simulationPreference: "always",
+    priorityLevel: "normal",
+    priorityMicroLamports: null,
+    amountAtomic: readTrimmedString(trackedOrder.quantityAtomic),
+    remainingAmountAtomic: readTrimmedString(trackedOrder.quantityAtomic),
+    limitPriceAtomic: readTrimmedString(trackedOrder.limitPriceAtomic),
+    provider:
+      latest.receipt?.provider ??
+      latest.latestAttempt?.provider ??
+      "openbook_v2",
+    signature: latest.receipt?.signature ?? null,
+    errorCode: latest.receipt?.errorCode ?? null,
+    errorMessage: latest.receipt?.errorMessage ?? null,
+    clientOrderId: readTrimmedString(trackedOrder.clientOrderId),
+    openOrdersAccount: readTrimmedString(trackedOrder.openOrdersAccount),
+    status: resolveTerminalOpenOrderStatus(lifecycle, terminal),
     lifecycle:
       lifecycle && Object.keys(lifecycle).length > 0
         ? {

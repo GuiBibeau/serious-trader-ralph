@@ -1270,6 +1270,18 @@ function createRuntimeAssetFixture(
         minNotionalUsd: "0.01",
         notes: "Paper perps collateral and mark-price mapping.",
       },
+      {
+        venueKey: "openbook",
+        nativeId,
+        venueSymbol: assetKey,
+        decimals: isSol ? 9 : 6,
+        listingState: "paper",
+        quoteAssetKeys: ["USDC"],
+        priceDecimals: 6,
+        sizeDecimals: isSol ? 9 : 6,
+        minNotionalUsd: "0.01",
+        notes: "Paper-only CLOB mapping.",
+      },
     ],
     createdAt: FIXTURE_TIMESTAMP,
     updatedAt: FIXTURE_TIMESTAMP,
@@ -1298,6 +1310,7 @@ function createRuntimeCostModelFixture(
   const isPhoenix = venueKey === "phoenix";
   const isMagicBlock = venueKey === "magicblock";
   const isDrift = venueKey === "drift";
+  const isOpenBook = venueKey === "openbook";
   const pairSymbol = isDrift ? "SOL-PERP" : "SOL/USDC";
   const marketType = isDrift ? "perp" : "spot";
   const instrumentId = isDrift ? "SOL-PERP" : "SOL/USDC";
@@ -1315,43 +1328,89 @@ function createRuntimeCostModelFixture(
         : ["shadow", "paper"],
     status: "active",
     assumptions: {
-      feeBps: isPhoenix ? 4 : isMagicBlock ? 6 : isDrift ? 7 : 8,
-      slippageBps: isPhoenix ? 10 : isMagicBlock ? 18 : isDrift ? 14 : 22,
-      marketImpactBps: isPhoenix ? 6 : isMagicBlock ? 8 : isDrift ? 9 : 12,
-      partialFillRateBps: isPhoenix ? 125 : isDrift ? 175 : 50,
-      partialFillPenaltyBps: isPhoenix ? 10 : isDrift ? 14 : 12,
+      feeBps: isPhoenix ? 4 : isMagicBlock ? 6 : isDrift ? 7 : isOpenBook ? 5 : 8,
+      slippageBps: isPhoenix
+        ? 10
+        : isMagicBlock
+          ? 18
+          : isDrift
+            ? 14
+            : isOpenBook
+              ? 12
+              : 22,
+      marketImpactBps: isPhoenix
+        ? 6
+        : isMagicBlock
+          ? 8
+          : isDrift
+            ? 9
+            : isOpenBook
+              ? 7
+              : 12,
+      partialFillRateBps: isPhoenix
+        ? 125
+        : isDrift
+          ? 175
+          : isOpenBook
+            ? 90
+            : 50,
+      partialFillPenaltyBps: isPhoenix
+        ? 10
+        : isDrift
+          ? 14
+          : isOpenBook
+            ? 8
+            : 12,
     },
     calibration: {
       calibrationId: `calibration_${venueKey}_${isDrift ? "sol_perp" : "sol_usdc_spot"}_seed`,
       methodology: "seed_replay_bootstrap",
       sampleStartAt: "2026-03-07T00:00:00.000Z",
       sampleEndAt: FIXTURE_TIMESTAMP,
-      sampleCount: isPhoenix ? 160 : isMagicBlock ? 180 : isDrift ? 210 : 240,
+      sampleCount: isPhoenix
+        ? 160
+        : isMagicBlock
+          ? 180
+          : isDrift
+            ? 210
+            : isOpenBook
+              ? 200
+              : 240,
       confidenceBps: isPhoenix
         ? 7900
         : isMagicBlock
           ? 8100
           : isDrift
             ? 8350
-            : 8600,
+            : isOpenBook
+              ? 8300
+              : 8600,
       referenceNotionalUsd: "25.00",
       tags: ["seed", "bootstrap"],
       notes: "Stubbed execution cost model calibration.",
     },
     driftGuard: {
-      maxCostDriftBps: isPhoenix ? 70 : isMagicBlock ? 80 : isDrift ? 75 : 90,
+      maxCostDriftBps: isPhoenix
+        ? 70
+        : isMagicBlock
+          ? 80
+          : isDrift || isOpenBook
+            ? 75
+            : 90,
       maxLatencyDriftMs: isPhoenix
         ? 5000
         : isMagicBlock
           ? 6000
           : isDrift
             ? 4500
-            : 8000,
+            : isOpenBook
+              ? 5500
+              : 8000,
       maxReconciliationDriftUsd: isPhoenix
         ? "1.00"
         : isMagicBlock
           ? "1.25"
-          : isDrift
+          : isDrift || isOpenBook
             ? "1.10"
             : "1.50",
     },
@@ -1360,7 +1419,7 @@ function createRuntimeCostModelFixture(
         ? 150
         : isMagicBlock
           ? 200
-          : isDrift
+          : isDrift || isOpenBook
             ? 180
             : 250,
       expectedSubmitMs: isPhoenix
@@ -1369,14 +1428,18 @@ function createRuntimeCostModelFixture(
           ? 400
           : isDrift
             ? 450
-            : 750,
+            : isOpenBook
+              ? 420
+              : 750,
       expectedSettlementMs: isPhoenix
         ? 4000
         : isMagicBlock
           ? 3000
           : isDrift
             ? 4000
-            : 5000,
+            : isOpenBook
+              ? 3500
+              : 5000,
     },
     datasetSnapshots: [
       {
@@ -1414,6 +1477,7 @@ function createRuntimeCostModelRegistryFixture() {
     costModels: [
       createRuntimeCostModelFixture("jupiter"),
       createRuntimeCostModelFixture("magicblock"),
+      createRuntimeCostModelFixture("openbook"),
       createRuntimeCostModelFixture("drift"),
       createRuntimeCostModelFixture("phoenix"),
     ],
@@ -1426,6 +1490,7 @@ function createRuntimeCostObservationFixture(
   const isPhoenix = venueKey === "phoenix";
   const isMagicBlock = venueKey === "magicblock";
   const isDrift = venueKey === "drift";
+  const isOpenBook = venueKey === "openbook";
   const pairSymbol = isDrift ? "SOL-PERP" : "SOL/USDC";
   const marketType = isDrift ? "perp" : "spot";
   return parseRuntimeExecutionCostObservationRecord({
@@ -1442,27 +1507,49 @@ function createRuntimeCostObservationFixture(
     mode: "paper",
     observedAt: FIXTURE_TIMESTAMP,
     evaluatedNotionalUsd: "25.00",
-    modeledTotalCostUsd: isPhoenix ? "0.05" : isDrift ? "0.08" : "0.11",
-    observedTotalCostUsd: isPhoenix ? "0.06" : isDrift ? "0.09" : "0.13",
-    costDriftUsd: isPhoenix ? "0.01" : isDrift ? "0.01" : "0.02",
-    costDriftBps: isPhoenix ? 40 : isDrift ? 55 : 80,
+    modeledTotalCostUsd: isPhoenix
+      ? "0.05"
+      : isDrift || isOpenBook
+        ? "0.08"
+        : "0.11",
+    observedTotalCostUsd: isPhoenix
+      ? "0.06"
+      : isDrift || isOpenBook
+        ? "0.09"
+        : "0.13",
+    costDriftUsd: isPhoenix ? "0.01" : isDrift || isOpenBook ? "0.01" : "0.02",
+    costDriftBps: isPhoenix ? 40 : isDrift || isOpenBook ? 55 : 80,
     expectedEndToEndLatencyMs: isPhoenix
       ? 4350
       : isMagicBlock
         ? 3400
         : isDrift
           ? 4050
-          : 5750,
+          : isOpenBook
+            ? 3950
+            : 5750,
     observedEndToEndLatencyMs: isPhoenix
       ? 4525
       : isMagicBlock
         ? 3625
         : isDrift
           ? 4275
-          : 6125,
-    latencyDriftMs: isPhoenix ? 175 : isMagicBlock ? 225 : isDrift ? 225 : 375,
+          : isOpenBook
+            ? 4175
+            : 6125,
+    latencyDriftMs: isPhoenix
+      ? 175
+      : isMagicBlock
+        ? 225
+        : isDrift || isOpenBook
+          ? 225
+          : 375,
     reconciliationStatus: "passed",
-    reconciliationDriftUsd: isPhoenix ? "0.01" : isDrift ? "0.01" : "0.02",
+    reconciliationDriftUsd: isPhoenix
+      ? "0.01"
+      : isDrift || isOpenBook
+        ? "0.01"
+        : "0.02",
     tags: ["cost-observation", marketType],
     notes: "Stubbed modeled-versus-observed execution cost observation.",
   });
@@ -1473,6 +1560,7 @@ function createRuntimeCostObservationRegistryFixture() {
     costObservations: [
       createRuntimeCostObservationFixture("jupiter"),
       createRuntimeCostObservationFixture("magicblock"),
+      createRuntimeCostObservationFixture("openbook"),
       createRuntimeCostObservationFixture("drift"),
       createRuntimeCostObservationFixture("phoenix"),
     ],
@@ -1511,7 +1599,7 @@ function createRuntimeFeatureDefinitionFixture(
     summary: "Stubbed runtime feature catalog definition.",
     status: "active",
     marketType: "spot",
-    venueKeys: ["jupiter", "magicblock", "phoenix"],
+    venueKeys: ["jupiter", "magicblock", "openbook", "phoenix"],
     assetKeys: ["SOL", "USDC"],
     pairSymbols: ["SOL/USDC"],
     inputRequirements: (
@@ -1586,7 +1674,7 @@ function createRuntimeRegimeTagFixture(
     dimension: dimensionByRegimeKey[regimeKey] ?? "trend",
     value: "classified",
     marketType: "spot",
-    venueKeys: ["jupiter", "magicblock", "phoenix"],
+    venueKeys: ["jupiter", "magicblock", "openbook", "phoenix"],
     assetKeys: ["SOL", "USDC"],
     pairSymbols: ["SOL/USDC"],
     sourceFeatureKeys: sourceFeaturesByRegimeKey[regimeKey] ?? [

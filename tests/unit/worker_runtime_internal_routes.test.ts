@@ -1364,6 +1364,11 @@ describe("worker runtime internal routes", () => {
             venueKey: "jupiter",
             marketType: "spot",
           }),
+          expect.objectContaining({
+            modelId: "cost_model_openbook_sol_usdc_spot",
+            venueKey: "openbook",
+            marketType: "spot",
+          }),
         ]),
       },
     });
@@ -1518,6 +1523,7 @@ describe("worker runtime internal routes", () => {
           assetKey: "SOL",
           venueMappings: expect.arrayContaining([
             expect.objectContaining({ venueKey: "jupiter" }),
+            expect.objectContaining({ venueKey: "openbook" }),
           ]),
         }),
       ]),
