@@ -192,6 +192,43 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
   },
   {
     schemaVersion: "v1",
+    venueKey: "flash_liquidity",
+    displayName: "Flash Liquidity",
+    adapterKeys: ["flash_liquidity"],
+    marketTypes: ["spot"],
+    orderTypes: ["market"],
+    intentFamilies: ["flash_atomic"],
+    authModel: "privy_solana_wallet",
+    feeModel: "fixed_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 150,
+      expectedSubmitMs: 300,
+      expectedSettlementMs: 2500,
+    },
+    settlementBehavior: "swap_atomic",
+    lifecycle: {
+      supportsOrderLifecycle: false,
+      supportsPositionLifecycle: false,
+      requiresExternalOracle: false,
+      settlementModel: "atomic_swap",
+    },
+    oracleRequirements: ["venue_reference"],
+    supportedModes: ["shadow", "paper"],
+    onboardingState: "integrated",
+    notes:
+      "Repo-owned flash-liquidity substrate for atomic paper and shadow plans using bounded marginfi and Kamino provider previews. Live stays disabled until dedicated canary and low-latency issues land.",
+  },
+  {
+    schemaVersion: "v1",
     venueKey: "jupiter_perps",
     displayName: "Jupiter Perps",
     adapterKeys: ["jupiter_perps"],

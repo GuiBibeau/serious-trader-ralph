@@ -9,6 +9,7 @@ import type { RuntimeMode } from "../runtime_contracts";
 import { getStrategyLabSubjectControl } from "../strategy_lab_readiness_repository";
 import { executeDFlowPredictionOrder } from "./dflow_executor";
 import { executeDriftPerpOrder } from "./drift_executor";
+import { executeFlashAtomicIntent } from "./flash_atomic_executor";
 import { executeHeliusSenderSwap } from "./helius_sender_executor";
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
 import { executeJupiterSwap } from "./jupiter_executor";
@@ -82,6 +83,18 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       supportedIntentFamilies: ["perp_order"],
       adapter: async () => {
         throw new Error("drift-swift-requires-intent-routing");
+      },
+    },
+  ],
+  [
+    "flash_liquidity",
+    {
+      adapterKey: "flash_liquidity",
+      venueKey: "flash_liquidity",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["flash_atomic"],
+      adapter: async () => {
+        throw new Error("flash-liquidity-requires-intent-routing");
       },
     },
   ],
@@ -380,6 +393,12 @@ export async function executeIntentViaRouter(
       registration.adapterKey === "jupiter"
     ) {
       return await executeJupiterConditionalSpotOrder(input);
+    }
+    if (
+      input.intent.family === "flash_atomic" &&
+      registration.adapterKey === "flash_liquidity"
+    ) {
+      return await executeFlashAtomicIntent(input);
     }
     throw new Error(
       `execution-intent-family-not-implemented:${input.intent.family}:${registration.adapterKey}`,

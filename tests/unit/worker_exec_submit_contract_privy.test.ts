@@ -200,6 +200,52 @@ describe("exec submit contract: privy_execute", () => {
     });
   });
 
+  test("parses flash atomic intents and exposes receipt-ready summaries", () => {
+    const parsed = parseExecSubmitPayload({
+      schemaVersion: "v2",
+      mode: "privy_execute",
+      lane: "safe",
+      privyExecute: {
+        wallet: "11111111111111111111111111111111",
+        intent: {
+          family: "flash_atomic",
+          venueKey: "flash_liquidity",
+          marketType: "spot",
+          referenceId: "arb:sol-usdc-jupiter-raydium",
+          settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          borrowLegs: [
+            {
+              provider: "marginfi",
+              mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              amountAtomic: "1000000",
+            },
+            {
+              provider: "kamino",
+              mint: "So11111111111111111111111111111111111111112",
+              amountAtomic: "5000000",
+            },
+          ],
+        },
+        options: {
+          priorityMicroLamports: 25000,
+        },
+      },
+    });
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(resolveExecSubmitIntentFamily(parsed.value)).toBe("flash_atomic");
+    expect(resolveExecSubmitSpotSwap(parsed.value)).toBeNull();
+    expect(buildExecSubmitIntentSummary(parsed.value)).toEqual({
+      family: "flash_atomic",
+      marketType: "spot",
+      venueKey: "flash_liquidity",
+      referenceId: "arb:sol-usdc-jupiter-raydium",
+      settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      borrowLegCount: 2,
+    });
+  });
+
   test("rejects malformed v2 family payloads deterministically", () => {
     const missingConditionalPricing = parseExecSubmitPayload({
       schemaVersion: "v2",

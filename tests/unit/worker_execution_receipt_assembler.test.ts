@@ -99,4 +99,91 @@ describe("execution receipt assembler", () => {
       "exec/v1/receipts/request_id=execreq_abc.json",
     );
   });
+
+  test("preserves flash-liquidity intent summaries and lifecycle notes", () => {
+    const receipt = assembleCanonicalExecutionReceiptV1({
+      request: {
+        requestId: "execreq_flash_1",
+        schemaVersion: "v2",
+        idempotencyScope: "privy_user:user_1",
+        idempotencyKey: "idem_flash_1",
+        payloadHash: "hash_flash_1",
+        actorType: "privy_user",
+        actorId: "user_1",
+        mode: "privy_execute",
+        lane: "safe",
+        status: "finalized",
+        statusReason: null,
+        metadata: {
+          intent: {
+            family: "flash_atomic",
+            marketType: "spot",
+            venueKey: "flash_liquidity",
+            referenceId: "arb:sol-usdc-jupiter-raydium",
+            settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            borrowLegCount: 2,
+          },
+        },
+        receivedAt: "2026-03-03T01:00:00.000Z",
+        validatedAt: "2026-03-03T01:00:01.000Z",
+        terminalAt: "2026-03-03T01:00:04.000Z",
+        createdAt: "2026-03-03T01:00:00.000Z",
+        updatedAt: "2026-03-03T01:00:04.000Z",
+      },
+      receipt: {
+        requestId: "execreq_flash_1",
+        receiptId: "exec_flash_1",
+        schemaVersion: "v1",
+        finalizedStatus: "finalized",
+        lane: "safe",
+        provider: "flash_liquidity",
+        signature: null,
+        slot: null,
+        errorCode: null,
+        errorMessage: null,
+        receipt: {
+          lifecycle: {
+            settlementState: "confirmed",
+            notes: [
+              "reference:arb:sol-usdc-jupiter-raydium",
+              "provider:marginfi",
+              "provider:kamino",
+            ],
+          },
+        },
+        readyAt: "2026-03-03T01:00:04.000Z",
+        createdAt: "2026-03-03T01:00:04.000Z",
+        updatedAt: "2026-03-03T01:00:04.000Z",
+      },
+      attempts: [
+        {
+          attemptId: "attempt_flash_1",
+          requestId: "execreq_flash_1",
+          attemptNo: 1,
+          lane: "safe",
+          provider: "flash_liquidity",
+          status: "finalized",
+          providerRequestId: null,
+          providerResponse: null,
+          errorCode: null,
+          errorMessage: null,
+          startedAt: "2026-03-03T01:00:02.000Z",
+          completedAt: "2026-03-03T01:00:04.000Z",
+          createdAt: "2026-03-03T01:00:02.000Z",
+          updatedAt: "2026-03-03T01:00:04.000Z",
+        },
+      ],
+    });
+
+    expect(receipt.intent).toEqual({
+      family: "flash_atomic",
+      marketType: "spot",
+      venueKey: "flash_liquidity",
+      referenceId: "arb:sol-usdc-jupiter-raydium",
+      settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      borrowLegCount: 2,
+    });
+    expect(receipt.lifecycle?.settlementState).toBe("confirmed");
+    expect(receipt.lifecycle?.notes).toContain("provider:marginfi");
+  });
 });

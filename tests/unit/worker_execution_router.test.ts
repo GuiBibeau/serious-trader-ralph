@@ -213,6 +213,39 @@ describe("worker execution router", () => {
     expect(result.executionMeta?.route).toBe("orca");
   });
 
+  test("routes flash-liquidity atomic plans in paper mode", async () => {
+    const result = await executeIntentViaRouter({
+      env: {} as never,
+      venueKey: "flash_liquidity",
+      runtimeMode: "paper",
+      requireVenueRouting: true,
+      execution: { adapter: "flash_liquidity" },
+      policy: normalizePolicy({ dryRun: true }),
+      rpc: {} as never,
+      jupiter: {} as never,
+      intent: {
+        family: "flash_atomic",
+        wallet: "11111111111111111111111111111111",
+        venueKey: "flash_liquidity",
+        marketType: "spot",
+        instrumentId: "SOL/USDC",
+        referenceId: "arb:sol-usdc-jupiter-raydium",
+        settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        borrowLegs: [
+          {
+            provider: "marginfi",
+            mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            amountAtomic: "1000000",
+          },
+        ],
+      },
+      log: () => {},
+    });
+
+    expect(result.status).toBe("dry_run");
+    expect(result.executionMeta?.route).toBe("flash_liquidity");
+  });
+
   test("custom execution adapters can be registered for new intent families", async () => {
     registerExecutionAdapter(
       "phoenix_orderbook",

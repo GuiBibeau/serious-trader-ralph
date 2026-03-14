@@ -88,6 +88,31 @@ describe("runtime venue catalog", () => {
     ).toBe(true);
   });
 
+  test("adds flash liquidity as a bounded atomic planning venue", () => {
+    const venue = getRuntimeVenueCapability("flash_liquidity");
+
+    expect(venue).not.toBeNull();
+    if (!venue) {
+      throw new Error("expected-flash-liquidity-capability");
+    }
+
+    expect(venue.marketTypes).toEqual(["spot"]);
+    expect(venue.intentFamilies).toEqual(["flash_atomic"]);
+    expect(venue.onboardingState).toBe("integrated");
+    expect(venue.supportedModes).toEqual(["shadow", "paper"]);
+    expect(runtimeVenueSupportsMode(venue, "paper")).toBe(true);
+    expect(runtimeVenueSupportsMode(venue, "live")).toBe(false);
+    expect(runtimeVenueSupportsIntentFamily(venue, "flash_atomic")).toBe(true);
+    expect(runtimeVenueSupportsIntentFamily(venue, "spot_swap")).toBe(false);
+    expect(venue.notes).toContain("marginfi");
+    expect(venue.notes).toContain("Kamino");
+    expect(
+      listRuntimeVenueCapabilities().some(
+        (capability) => capability.venueKey === "flash_liquidity",
+      ),
+    ).toBe(true);
+  });
+
   test("adds Drift BET as a candidate prediction-market follow-on of Drift", () => {
     const venue = getRuntimeVenueCapability("drift_bet");
 

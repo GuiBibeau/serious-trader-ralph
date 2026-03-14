@@ -78,6 +78,12 @@ export type NonSwapExecutionIntent = {
   quantityAtomic?: string;
   collateralAtomic?: string;
   referenceId?: string;
+  settlementMint?: string;
+  borrowLegs?: Array<{
+    provider: string;
+    mint: string;
+    amountAtomic: string;
+  }>;
   params?: Record<string, unknown> | null;
   lifecycle?: ExecutionIntentLifecycleSnapshot;
 };
@@ -177,7 +183,7 @@ export type ExecuteSwapResult = {
       snapshot?: Record<string, unknown> | null;
     };
     composedPlan?: {
-      mode: "instructions" | "prebuilt_fallback";
+      mode: "instructions" | "prebuilt_fallback" | "flash_atomic";
       fallbackReason?: string | null;
       routeHopCount: number;
       routeLabels: string[];
@@ -191,6 +197,17 @@ export type ExecuteSwapResult = {
       computeUnitLimit: number | null;
       computeUnitPriceMicroLamports: string | null;
       simulationUnitsConsumed?: number | null;
+      flashBorrowLegCount?: number;
+      flashProviderCount?: number;
+      flashBorrowMints?: string[];
+      flashProviderLegs?: Array<{
+        provider: string;
+        mint: string;
+        amountAtomic: string;
+        estimatedFeeAtomic: string;
+      }>;
+      flashEstimatedFeeByMint?: Record<string, string>;
+      settlementMint?: string | null;
     };
     trace?: {
       txBuiltAt?: string;
