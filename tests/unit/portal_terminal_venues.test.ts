@@ -2,18 +2,31 @@ import { describe, expect, test } from "bun:test";
 import {
   formatTerminalOracleFreshness,
   getTerminalIntentFamilyLabel,
+  getTerminalOrderTypeLabel,
+  getTerminalSpotVenueDefinition,
   getTerminalVenueDefinition,
+  getTerminalVenueExecutionReadinessLabel,
   isTerminalIntentFamilyEnabled,
   isTerminalVenueEnabled,
+  listTerminalSpotVenueDefinitions,
   parseTerminalOracleStatus,
+  parseTerminalVenueKey,
   resolveTerminalVenueRolloutPolicy,
 } from "../../apps/portal/app/terminal/terminal-venues";
 
 describe("portal terminal venue substrate", () => {
   test("resolves venue registry metadata", () => {
     expect(getTerminalVenueDefinition("jupiter")?.label).toBe("Jupiter");
-    expect(getTerminalVenueDefinition("openbook_v2")?.badges).toContain("clob");
+    expect(getTerminalVenueDefinition("openbook")?.badges).toContain("clob");
     expect(getTerminalIntentFamilyLabel("prediction_order")).toBe("Prediction");
+    expect(
+      getTerminalSpotVenueDefinition("openbook")?.supportedOrderTypes,
+    ).toEqual(["market", "limit"]);
+    expect(parseTerminalVenueKey("openbook_v2")).toBe("openbook");
+    expect(getTerminalVenueExecutionReadinessLabel("shadow_paper")).toBe(
+      "Shadow / paper",
+    );
+    expect(getTerminalOrderTypeLabel("trigger")).toBe("Trigger");
   });
 
   test("parses venue and family rollout policy from profile and env", () => {
@@ -67,5 +80,26 @@ describe("portal terminal venue substrate", () => {
       source: "pyth",
       stale: false,
     });
+  });
+
+  test("lists spot venues from rollout policy and excludes gated rails by default", () => {
+    const policy = resolveTerminalVenueRolloutPolicy({
+      profile: {
+        terminal: {
+          enabledVenues: ["jupiter", "raydium", "orca", "openbook"],
+          enabledFamilies: [
+            "spot_swap",
+            "conditional_spot_order",
+            "clob_order",
+          ],
+        },
+      },
+    });
+
+    expect(
+      listTerminalSpotVenueDefinitions({ policy }).map(
+        (definition) => definition.venueKey,
+      ),
+    ).toEqual(["jupiter", "raydium", "orca", "openbook"]);
   });
 });

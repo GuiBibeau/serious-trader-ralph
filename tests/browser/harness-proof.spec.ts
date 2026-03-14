@@ -22,16 +22,42 @@ async function captureCheckpoint(page: Page, name: string): Promise<void> {
 test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/x402/read/market_jupiter_quote", async (route) => {
+  await page.route("**/api/terminal/spot-preview", async (route) => {
+    const payload = (route.request().postDataJSON() ?? {}) as {
+      venueKey?: string;
+      amountAtomic?: string;
+    };
+    const venueKey = String(payload.venueKey ?? "jupiter");
+    const outAmountAtomicByVenue: Record<string, string> = {
+      jupiter: "2000000000",
+      raydium: "1985000000",
+      orca: "1979000000",
+    };
+    const routeSummaryByVenue: Record<string, string> = {
+      jupiter: "Jupiter routed spot swap",
+      raydium: "Raydium direct route",
+      orca: "Orca whirlpool path",
+    };
+    const priceImpactByVenue: Record<string, number> = {
+      jupiter: 0.0018,
+      raydium: 0.0026,
+      orca: 0.0031,
+    };
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         ok: true,
-        quote: {
-          outAmount: "2000000000",
-          priceImpactPct: 0.0018,
-          routePlan: [{ swapInfo: { label: "Jupiter" } }],
+        preview: {
+          venueKey,
+          provider: venueKey,
+          inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          outputMint: "So11111111111111111111111111111111111111112",
+          inAmountAtomic: String(payload.amountAtomic ?? "50000000"),
+          outAmountAtomic: outAmountAtomicByVenue[venueKey] ?? "1950000000",
+          priceImpactPct: priceImpactByVenue[venueKey] ?? 0.004,
+          routeSummary:
+            routeSummaryByVenue[venueKey] ?? "Unsupported venue preview",
         },
       }),
     });
@@ -69,6 +95,19 @@ test.beforeEach(async ({ page }) => {
           receivedAt: "2026-03-06T20:45:00.000Z",
           updatedAt: "2026-03-06T20:45:02.000Z",
           terminalAt: "2026-03-06T20:45:03.000Z",
+        },
+        intent: {
+          family: "spot_swap",
+          venueKey: "jupiter",
+          marketType: "spot",
+          instrumentId: "SOL/USDC",
+          instrumentLabel: "SOL / USDC",
+        },
+        lifecycle: {
+          orderState: "filled",
+          fillState: "complete",
+          settlementState: "finalized",
+          notes: ["spot_swap", "proof-harness"],
         },
         events: [
           {
@@ -143,6 +182,18 @@ test("proof route exercises market render, trade validation, and receipt drilldo
 
   await page.getByTestId("proof-open-trade").click();
   await expect(page.getByTestId("trade-ticket-modal")).toBeVisible();
+  await expect(page.getByTestId("trade-ticket-venue-select")).toHaveValue(
+    "jupiter",
+  );
+  await expect(page.getByTestId("trade-ticket-venue-path")).toContainText(
+    "Routed AMM / Trigger",
+  );
+  await expect(page.getByTestId("trade-ticket-quote-route")).toContainText(
+    "Jupiter routed spot swap",
+  );
+  await expect(page.getByTestId("trade-ticket-quote-reference")).not.toHaveText(
+    "--",
+  );
 
   await page.getByTestId("trade-ticket-order-type").selectOption("trigger");
   await expect(
@@ -150,7 +201,25 @@ test("proof route exercises market render, trade validation, and receipt drilldo
   ).toBeVisible();
   await captureCheckpoint(page, "trade-validation.png");
 
+  await page.getByTestId("trade-ticket-venue-select").selectOption("raydium");
+  await expect(page.getByTestId("trade-ticket-venue-path")).toContainText(
+    "Direct AMM route",
+  );
+  await expect(page.getByTestId("trade-ticket-venue-readiness")).toContainText(
+    "Shadow / paper",
+  );
+  await expect(page.getByTestId("trade-ticket-submit")).toHaveText(
+    "Preview Only",
+  );
+  await expect(page.getByText(/Raydium is preview-only/i)).toBeVisible();
+  await expect(page.getByTestId("trade-ticket-submit")).toBeDisabled();
+  await captureCheckpoint(page, "trade-venue-preview.png");
+
+  await page.getByTestId("trade-ticket-venue-select").selectOption("jupiter");
   await page.getByTestId("trade-ticket-order-type").selectOption("market");
+  await expect(page.getByTestId("trade-ticket-submit")).toContainText(
+    "Execute Buy",
+  );
   await expect(page.getByText("2 SOL")).toBeVisible();
 
   await page.getByTestId("trade-ticket-submit").click();
@@ -164,6 +233,7 @@ test("proof route exercises market render, trade validation, and receipt drilldo
   await expect(inspector).toBeVisible();
   await expect(inspector.getByText(`receipt ${RECEIPT_ID}`)).toBeVisible();
   await expect(inspector.getByText(`signature: ${SIGNATURE}`)).toBeVisible();
+  await expect(inspector.getByText(/venue Jupiter/i)).toBeVisible();
   await captureCheckpoint(page, "receipt-drawer.png");
 });
 

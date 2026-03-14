@@ -155,6 +155,7 @@ import {
   writeOpsControlSnapshot,
 } from "./ops_controls";
 import { evaluateOracleReferencePriceGuard } from "./oracle_reference";
+import { OrcaClient } from "./orca";
 import {
   fetchPerpsFundingSurface,
   fetchPerpsOpenInterestSurface,
@@ -164,6 +165,7 @@ import {
 } from "./perps_sources";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet, signTransactionWithPrivyById } from "./privy";
+import { RaydiumClient } from "./raydium";
 import { gatherMarketSnapshot } from "./research";
 import { json, okCors, withCors } from "./response";
 import {
@@ -5462,6 +5464,135 @@ const worker = {
       }
 
       if (
+        request.method === "POST" &&
+        url.pathname === "/api/terminal/spot-preview"
+      ) {
+        await requireOnboardedUser(request, env);
+        const payload = await readPayload(request);
+        const venueKey = readTrimmedString(payload.venueKey)?.toLowerCase();
+        const inputMint = readTrimmedString(payload.inputMint);
+        const outputMint = readTrimmedString(payload.outputMint);
+        const amountAtomic = readTrimmedString(payload.amountAtomic);
+        const slippageBps = toBoundedInt(payload.slippageBps, 50, 1, 5_000);
+        if (
+          !venueKey ||
+          !inputMint ||
+          !outputMint ||
+          !amountAtomic ||
+          !SUPPORTED_TRADING_MINT_SET.has(inputMint) ||
+          !SUPPORTED_TRADING_MINT_SET.has(outputMint) ||
+          !SUPPORTED_TRADING_PAIR_MINT_SET.has(`${inputMint}:${outputMint}`)
+        ) {
+          return withCors(
+            json(
+              { ok: false, error: "invalid-terminal-spot-preview" },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+
+        try {
+          const rpcEndpoint = String(env.RPC_ENDPOINT ?? "").trim();
+          if (!rpcEndpoint) {
+            return withCors(
+              json(
+                { ok: false, error: "rpc-endpoint-missing" },
+                { status: 503 },
+              ),
+              env,
+            );
+          }
+          const jupiter = new JupiterClient(
+            String(env.JUPITER_BASE_URL ?? "").trim() ||
+              X402_READ_JUPITER_BASE_URL,
+            env.JUPITER_API_KEY,
+          );
+
+          let provider = venueKey;
+          let normalizedQuote: Record<string, unknown> | null = null;
+          if (venueKey === "jupiter") {
+            normalizedQuote = (await jupiter.quote({
+              inputMint,
+              outputMint,
+              amount: amountAtomic,
+              slippageBps,
+              swapMode: "ExactIn",
+            })) as unknown as Record<string, unknown>;
+          } else if (venueKey === "raydium") {
+            const raydium = new RaydiumClient();
+            const preview = await raydium.quoteBaseIn({
+              inputMint,
+              outputMint,
+              amount: amountAtomic,
+              slippageBps,
+            });
+            normalizedQuote = preview.normalizedQuote as unknown as Record<
+              string,
+              unknown
+            >;
+            provider = "raydium";
+          } else if (venueKey === "orca") {
+            const orca = new OrcaClient(rpcEndpoint);
+            const preview = await orca.quoteBaseIn({
+              inputMint,
+              outputMint,
+              amount: amountAtomic,
+              slippageBps,
+            });
+            normalizedQuote = preview.normalizedQuote as unknown as Record<
+              string,
+              unknown
+            >;
+            provider = "orca";
+          } else {
+            return withCors(
+              json(
+                {
+                  ok: false,
+                  error: `unsupported-terminal-spot-preview:${venueKey}`,
+                },
+                { status: 400 },
+              ),
+              env,
+            );
+          }
+
+          const previewProvider =
+            readTrimmedString(normalizedQuote?.quoteProvider) ?? provider;
+          const routeSummary =
+            summarizeTerminalRoutePlan(normalizedQuote) ?? previewProvider;
+          return withCors(
+            json({
+              ok: true,
+              preview: {
+                venueKey,
+                provider: previewProvider,
+                inputMint,
+                outputMint,
+                inAmountAtomic:
+                  readTrimmedString(normalizedQuote?.inAmount) ?? amountAtomic,
+                outAmountAtomic:
+                  readTrimmedString(normalizedQuote?.outAmount) ?? "0",
+                priceImpactPct: Number(normalizedQuote?.priceImpactPct),
+                routeSummary,
+              },
+            }),
+            env,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "terminal-spot-preview-failed";
+          return withCors(
+            json({ ok: false, error: message }, { status: 503 }),
+            env,
+          );
+        }
+      }
+
+      if (
         request.method === "GET" &&
         url.pathname === "/api/terminal/open-orders"
       ) {
@@ -6832,6 +6963,7 @@ function resolveTerminalProviderStatus(input: {
   return input.latest?.receipt?.errorCode ? "degraded" : "healthy";
 }
 
+<<<<<<< HEAD
 function readPersistedExecutionLifecycle(input: {
   latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>;
 }): Record<string, unknown> | null {
@@ -6850,6 +6982,24 @@ function readPersistedExecutionLifecycle(input: {
     ? executionMeta?.lifecycle
     : null;
   return executionLifecycle ?? null;
+}
+
+function summarizeTerminalRoutePlan(
+  quote: Record<string, unknown> | null,
+): string | null {
+  if (!quote || !Array.isArray(quote.routePlan)) return null;
+  const labels: string[] = [];
+  for (const hop of quote.routePlan) {
+    if (!isRecord(hop)) continue;
+    const swapInfo = isRecord(hop.swapInfo) ? hop.swapInfo : null;
+    const label =
+      readTrimmedString(swapInfo?.label) ??
+      readTrimmedString(hop.poolId) ??
+      readTrimmedString(hop.marketId);
+    if (!label || labels.includes(label)) continue;
+    labels.push(label);
+  }
+  return labels.length > 0 ? labels.join(" -> ") : null;
 }
 
 function resolveTerminalOpenOrderStatus(

@@ -18,12 +18,22 @@ import {
   type TradeTicketCompletion,
   TradeTicketModal,
 } from "../../terminal/components/trade-ticket-modal";
+import type { TerminalVenueRolloutPolicy } from "../../terminal/terminal-venues";
 
 type RuntimeWindow = Window & {
   __TRADER_RALPH_EDGE_API_BASE__?: string;
 };
 
 const PROOF_WALLET = "7YB4proofHarnessWallet111111111111111111111111";
+const PROOF_TERMINAL_VENUE_POLICY: TerminalVenueRolloutPolicy = {
+  enabledVenues: ["jupiter", "raydium", "orca", "openbook"],
+  enabledFamilies: [
+    "spot_swap",
+    "conditional_spot_order",
+    "clob_order",
+    "flash_atomic",
+  ],
+};
 
 function buildProofMarketState(): MarketState {
   const now = Date.now();
@@ -233,6 +243,8 @@ export default function BrowserProofPage() {
         walletAddress={PROOF_WALLET}
         tokenBalancesByMint={tokenBalancesByMint}
         riskSnapshot={riskSnapshot}
+        referencePrice={market.latestPrice}
+        terminalVenueRolloutPolicy={PROOF_TERMINAL_VENUE_POLICY}
         getAccessToken={async () => "proof-access-token"}
         onClose={() => setTradeOpen(false)}
         onTradeComplete={(trade) => {

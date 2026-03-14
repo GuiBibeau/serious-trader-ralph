@@ -4,7 +4,7 @@ export const TERMINAL_VENUE_KEYS = [
   "jupiter",
   "raydium",
   "orca",
-  "openbook_v2",
+  "openbook",
   "phoenix",
   "drift",
   "dflow",
@@ -21,10 +21,15 @@ export const TERMINAL_INTENT_FAMILIES = [
 ] as const;
 
 export const TERMINAL_MARKET_TYPES = ["spot", "perp", "prediction"] as const;
+export const TERMINAL_ORDER_TYPES = ["market", "limit", "trigger"] as const;
+export const TERMINAL_TIME_IN_FORCE_OPTIONS = ["gtc", "ioc", "fok"] as const;
 
 export type TerminalVenueKey = (typeof TERMINAL_VENUE_KEYS)[number];
 export type TerminalIntentFamily = (typeof TERMINAL_INTENT_FAMILIES)[number];
 export type TerminalMarketType = (typeof TERMINAL_MARKET_TYPES)[number];
+export type TerminalOrderType = (typeof TERMINAL_ORDER_TYPES)[number];
+export type TerminalTimeInForce =
+  (typeof TERMINAL_TIME_IN_FORCE_OPTIONS)[number];
 export type TerminalProviderStatus =
   | "healthy"
   | "degraded"
@@ -46,6 +51,17 @@ export type TerminalVenueDefinition = {
   families: readonly TerminalIntentFamily[];
   rolloutFlag: string;
   badges: readonly string[];
+  executionReadiness:
+    | "broad_live"
+    | "bounded_live"
+    | "shadow_paper"
+    | "research";
+  executionPathLabel: string;
+  supportedOrderTypes?: readonly TerminalOrderType[];
+  supportedTimeInForce?: readonly TerminalTimeInForce[];
+  supportsPostOnly?: boolean;
+  supportsReduceOnly?: boolean;
+  supportsBracket?: boolean;
 };
 
 const TERMINAL_VENUE_REGISTRY: Record<
@@ -60,6 +76,13 @@ const TERMINAL_VENUE_REGISTRY: Record<
     families: ["spot_swap", "conditional_spot_order", "flash_atomic"],
     rolloutFlag: "spot_router",
     badges: ["agg", "custody"],
+    executionReadiness: "bounded_live",
+    executionPathLabel: "Routed AMM / Trigger",
+    supportedOrderTypes: ["market", "limit", "trigger"],
+    supportedTimeInForce: ["gtc"],
+    supportsPostOnly: false,
+    supportsReduceOnly: false,
+    supportsBracket: false,
   },
   raydium: {
     venueKey: "raydium",
@@ -69,6 +92,13 @@ const TERMINAL_VENUE_REGISTRY: Record<
     families: ["spot_swap", "flash_atomic"],
     rolloutFlag: "spot_router",
     badges: ["amm", "router"],
+    executionReadiness: "shadow_paper",
+    executionPathLabel: "Direct AMM route",
+    supportedOrderTypes: ["market"],
+    supportedTimeInForce: ["gtc"],
+    supportsPostOnly: false,
+    supportsReduceOnly: false,
+    supportsBracket: false,
   },
   orca: {
     venueKey: "orca",
@@ -78,15 +108,29 @@ const TERMINAL_VENUE_REGISTRY: Record<
     families: ["spot_swap", "flash_atomic"],
     rolloutFlag: "spot_router",
     badges: ["clmm", "lp"],
+    executionReadiness: "shadow_paper",
+    executionPathLabel: "Whirlpool / CLMM",
+    supportedOrderTypes: ["market"],
+    supportedTimeInForce: ["gtc"],
+    supportsPostOnly: false,
+    supportsReduceOnly: false,
+    supportsBracket: false,
   },
-  openbook_v2: {
-    venueKey: "openbook_v2",
+  openbook: {
+    venueKey: "openbook",
     label: "OpenBook v2",
     shortLabel: "OBV2",
     marketTypes: ["spot"],
     families: ["clob_order"],
     rolloutFlag: "spot_clob",
     badges: ["clob", "maker"],
+    executionReadiness: "shadow_paper",
+    executionPathLabel: "CLOB / order book",
+    supportedOrderTypes: ["market", "limit"],
+    supportedTimeInForce: ["gtc", "ioc", "fok"],
+    supportsPostOnly: true,
+    supportsReduceOnly: false,
+    supportsBracket: false,
   },
   phoenix: {
     venueKey: "phoenix",
@@ -96,6 +140,13 @@ const TERMINAL_VENUE_REGISTRY: Record<
     families: ["clob_order"],
     rolloutFlag: "phoenix",
     badges: ["clob", "maker"],
+    executionReadiness: "research",
+    executionPathLabel: "CLOB / maker rail",
+    supportedOrderTypes: ["market", "limit"],
+    supportedTimeInForce: ["gtc", "ioc", "fok"],
+    supportsPostOnly: true,
+    supportsReduceOnly: false,
+    supportsBracket: false,
   },
   drift: {
     venueKey: "drift",
@@ -105,6 +156,8 @@ const TERMINAL_VENUE_REGISTRY: Record<
     families: ["perp_order"],
     rolloutFlag: "perps",
     badges: ["perps", "margin"],
+    executionReadiness: "shadow_paper",
+    executionPathLabel: "Perp order book",
   },
   dflow: {
     venueKey: "dflow",
@@ -114,6 +167,8 @@ const TERMINAL_VENUE_REGISTRY: Record<
     families: ["prediction_order"],
     rolloutFlag: "prediction",
     badges: ["events", "tokenized"],
+    executionReadiness: "research",
+    executionPathLabel: "Tokenized event market",
   },
   monaco: {
     venueKey: "monaco",
@@ -123,12 +178,23 @@ const TERMINAL_VENUE_REGISTRY: Record<
     families: ["prediction_order"],
     rolloutFlag: "prediction",
     badges: ["events", "native"],
+    executionReadiness: "research",
+    executionPathLabel: "Native prediction venue",
   },
 };
 
 export type TerminalVenueRolloutPolicy = {
   enabledVenues: readonly TerminalVenueKey[];
   enabledFamilies: readonly TerminalIntentFamily[];
+};
+
+export type TerminalSpotVenueDefinition = TerminalVenueDefinition & {
+  marketTypes: readonly ["spot"];
+  supportedOrderTypes: readonly TerminalOrderType[];
+  supportedTimeInForce: readonly TerminalTimeInForce[];
+  supportsPostOnly: boolean;
+  supportsReduceOnly: boolean;
+  supportsBracket: boolean;
 };
 
 function parseEnumList<T extends string>(
@@ -169,6 +235,84 @@ export function getTerminalVenueDefinition(
 ): TerminalVenueDefinition | null {
   if (!venueKey) return null;
   return TERMINAL_VENUE_REGISTRY[venueKey] ?? null;
+}
+
+export function getTerminalSpotVenueDefinition(
+  venueKey: TerminalVenueKey | null | undefined,
+): TerminalSpotVenueDefinition | null {
+  const definition = getTerminalVenueDefinition(venueKey);
+  if (!definition || !definition.marketTypes.includes("spot")) {
+    return null;
+  }
+  const supportedOrderTypes = definition.supportedOrderTypes;
+  const supportedTimeInForce = definition.supportedTimeInForce;
+  if (!supportedOrderTypes || !supportedTimeInForce) {
+    return null;
+  }
+  return definition as TerminalSpotVenueDefinition;
+}
+
+export function listTerminalSpotVenueDefinitions(input: {
+  policy: TerminalVenueRolloutPolicy;
+  includeDisabled?: boolean;
+}): TerminalSpotVenueDefinition[] {
+  const definitions = TERMINAL_VENUE_KEYS.map((venueKey) =>
+    getTerminalSpotVenueDefinition(venueKey),
+  ).filter(
+    (definition): definition is TerminalSpotVenueDefinition =>
+      definition !== null,
+  );
+  if (input.includeDisabled) return definitions;
+  return definitions.filter((definition) =>
+    input.policy.enabledVenues.includes(definition.venueKey),
+  );
+}
+
+export function getTerminalVenueExecutionReadinessLabel(
+  readiness: TerminalVenueDefinition["executionReadiness"],
+): string {
+  switch (readiness) {
+    case "broad_live":
+      return "Broad live";
+    case "bounded_live":
+      return "Bounded live";
+    case "shadow_paper":
+      return "Shadow / paper";
+    case "research":
+      return "Research";
+    default:
+      return "Unknown";
+  }
+}
+
+export function getTerminalOrderTypeLabel(
+  orderType: TerminalOrderType | null | undefined,
+): string | null {
+  switch (orderType) {
+    case "market":
+      return "Market";
+    case "limit":
+      return "Limit";
+    case "trigger":
+      return "Trigger";
+    default:
+      return null;
+  }
+}
+
+export function getTerminalTimeInForceLabel(
+  timeInForce: TerminalTimeInForce | null | undefined,
+): string | null {
+  switch (timeInForce) {
+    case "gtc":
+      return "GTC";
+    case "ioc":
+      return "IOC";
+    case "fok":
+      return "FOK";
+    default:
+      return null;
+  }
 }
 
 export function getTerminalIntentFamilyLabel(
@@ -282,6 +426,7 @@ export function parseTerminalVenueKey(value: unknown): TerminalVenueKey | null {
   const normalized = String(value ?? "")
     .trim()
     .toLowerCase();
+  if (normalized === "openbook_v2") return "openbook";
   return (TERMINAL_VENUE_KEYS as readonly string[]).includes(normalized)
     ? (normalized as TerminalVenueKey)
     : null;

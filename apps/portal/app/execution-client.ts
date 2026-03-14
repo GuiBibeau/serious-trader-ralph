@@ -203,6 +203,17 @@ export type ExecutionOpenOrderSnapshot = {
   } | null;
 };
 
+export type ExecutionSpotPreview = {
+  venueKey: TerminalVenueKey;
+  provider: string;
+  inputMint: string;
+  outputMint: string;
+  inAmountAtomic: string;
+  outAmountAtomic: string;
+  routeSummary: string | null;
+  priceImpactPct: number | null;
+};
+
 export type ExecutionTransportRequest = {
   path: string;
   method: "GET" | "POST";
@@ -633,6 +644,52 @@ function parseOpenOrdersSnapshot(
   return orders;
 }
 
+function parseSpotPreviewSnapshot(payload: unknown): ExecutionSpotPreview {
+  if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.preview)) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-spot-preview-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  const preview = payload.preview;
+  const venueKey = parseTerminalVenueKey(preview.venueKey);
+  const provider = parseOptionalString(preview.provider);
+  const inputMint = parseOptionalString(preview.inputMint);
+  const outputMint = parseOptionalString(preview.outputMint);
+  const inAmountAtomic = parseOptionalAtomicString(preview.inAmountAtomic);
+  const outAmountAtomic = parseOptionalAtomicString(preview.outAmountAtomic);
+  if (
+    !venueKey ||
+    !provider ||
+    !inputMint ||
+    !outputMint ||
+    !inAmountAtomic ||
+    !outAmountAtomic
+  ) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-spot-preview-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  const priceImpactRaw = Number(preview.priceImpactPct);
+  return {
+    venueKey,
+    provider,
+    inputMint,
+    outputMint,
+    inAmountAtomic,
+    outAmountAtomic,
+    routeSummary: parseOptionalString(preview.routeSummary),
+    priceImpactPct: Number.isFinite(priceImpactRaw) ? priceImpactRaw : null,
+  };
+}
+
 function isExecutionSuccessStatus(status: string | null): boolean {
   if (!status) return false;
   const normalized = status.trim().toLowerCase();
@@ -871,6 +928,26 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     return parseOpenOrdersSnapshot(response);
   }
 
+  async function previewSpotOrder(
+    input: {
+      venueKey: TerminalVenueKey;
+      inputMint: string;
+      outputMint: string;
+      amountAtomic: string;
+      slippageBps: number;
+    },
+    options?: RequestOptions,
+  ): Promise<ExecutionSpotPreview> {
+    const response = await requestJson({
+      path: "/api/terminal/spot-preview",
+      method: "POST",
+      signal: options?.signal,
+      headers: options?.headers,
+      body: JSON.stringify(input),
+    });
+    return parseSpotPreviewSnapshot(response);
+  }
+
   async function cancelOpenOrder(
     requestId: string,
     options?: RequestOptions,
@@ -979,6 +1056,7 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     status,
     receipt,
     listOpenOrders,
+    previewSpotOrder,
     cancelOpenOrder,
     waitForTerminalReceipt,
   };

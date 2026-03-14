@@ -1740,6 +1740,8 @@ function ControlRoom() {
           walletAddress={wallet?.walletAddress ?? null}
           tokenBalancesByMint={tokenBalancesByMint}
           riskSnapshot={accountRiskSnapshot}
+          referencePrice={marketFeed.latestPrice}
+          terminalVenueRolloutPolicy={terminalVenueRolloutPolicy}
           riskAcknowledgement={
             isDegenMode
               ? {
