@@ -1328,7 +1328,15 @@ function createRuntimeCostModelFixture(
         : ["shadow", "paper"],
     status: "active",
     assumptions: {
-      feeBps: isPhoenix ? 4 : isMagicBlock ? 6 : isDrift ? 7 : isOpenBook ? 5 : 8,
+      feeBps: isPhoenix
+        ? 4
+        : isMagicBlock
+          ? 6
+          : isDrift
+            ? 7
+            : isOpenBook
+              ? 5
+              : 8,
       slippageBps: isPhoenix
         ? 10
         : isMagicBlock
