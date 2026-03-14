@@ -943,7 +943,7 @@ export function createExecutionClient(options: ExecutionClientOptions) {
       method: "POST",
       signal: options?.signal,
       headers: options?.headers,
-      body: JSON.stringify(input),
+      body: input,
     });
     return parseSpotPreviewSnapshot(response);
   }

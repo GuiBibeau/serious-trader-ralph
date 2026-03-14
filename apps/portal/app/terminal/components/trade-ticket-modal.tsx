@@ -479,6 +479,44 @@ export function validateExecutionQualityConfig(input: {
   return errors;
 }
 
+export function computeQuoteReferenceDivergenceBps(input: {
+  direction: TradeIntent["direction"];
+  quotedInputAtomic: string | null;
+  quotedOutputAtomic: string | null;
+  inputDecimals: number;
+  outputDecimals: number;
+  referencePrice: number | null | undefined;
+}): number | null {
+  const impliedReference =
+    typeof input.referencePrice === "number" &&
+    Number.isFinite(input.referencePrice) &&
+    input.referencePrice > 0
+      ? input.referencePrice
+      : null;
+  if (impliedReference === null) return null;
+
+  const quotedInput = Number(
+    formatAtomicToUi(input.quotedInputAtomic, input.inputDecimals, 9) ?? "",
+  );
+  const quotedOutput = Number(
+    formatAtomicToUi(input.quotedOutputAtomic, input.outputDecimals, 9) ?? "",
+  );
+  if (
+    !Number.isFinite(quotedInput) ||
+    !Number.isFinite(quotedOutput) ||
+    quotedInput <= 0 ||
+    quotedOutput <= 0
+  ) {
+    return null;
+  }
+
+  const quotedPrice =
+    input.direction === "buy"
+      ? quotedInput / quotedOutput
+      : quotedOutput / quotedInput;
+  return ((quotedPrice - impliedReference) / impliedReference) * 10_000;
+}
+
 export function TradeTicketModal({
   open,
   intent,
@@ -1401,6 +1439,7 @@ export function TradeTicketModal({
             onStopLossPriceChange={setStopLossPriceUi}
           />
           <QuoteSummaryCard
+            direction={intent.direction}
             outputSymbol={intent.outputSymbol}
             inputDecimals={intent.inputDecimals}
             outputDecimals={intent.outputDecimals}
@@ -2164,6 +2203,7 @@ const AdvancedOrderConfigSection = memo(
 );
 
 const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
+  direction: TradeIntent["direction"];
   outputSymbol: string;
   inputDecimals: number;
   outputDecimals: number;
@@ -2172,6 +2212,7 @@ const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
   loading: boolean;
 }) {
   const {
+    direction,
     outputSymbol,
     inputDecimals,
     outputDecimals,
@@ -2189,29 +2230,20 @@ const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
     : loading
       ? "text-muted"
       : "text-transparent";
-  const quotedInput = Number(
-    formatAtomicToUi(quote.inAmountAtomic, inputDecimals, 9) ?? "",
-  );
-  const quotedOutput = Number(
-    formatAtomicToUi(quote.outAmountAtomic, outputDecimals, 9) ?? "",
-  );
   const impliedReference =
     typeof referencePrice === "number" &&
     Number.isFinite(referencePrice) &&
     referencePrice > 0
       ? referencePrice
       : null;
-  const quotedPrice =
-    Number.isFinite(quotedInput) &&
-    Number.isFinite(quotedOutput) &&
-    quotedInput > 0 &&
-    quotedOutput > 0
-      ? quotedInput / quotedOutput
-      : null;
-  const referenceDivergenceBps =
-    quotedPrice !== null && impliedReference !== null
-      ? ((quotedPrice - impliedReference) / impliedReference) * 10_000
-      : null;
+  const referenceDivergenceBps = computeQuoteReferenceDivergenceBps({
+    direction,
+    quotedInputAtomic: quote.inAmountAtomic,
+    quotedOutputAtomic: quote.outAmountAtomic,
+    inputDecimals,
+    outputDecimals,
+    referencePrice,
+  });
 
   return (
     <div className="rounded border border-border bg-subtle px-3 py-2 text-xs space-y-1.5 min-h-[112px]">

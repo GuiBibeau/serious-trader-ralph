@@ -173,6 +173,13 @@ describe("portal execution client", () => {
     const client = createExecutionClient({
       transport: async (input) => {
         expect(input.path).toBe("/api/terminal/spot-preview");
+        expect(JSON.parse(String(input.body ?? ""))).toEqual({
+          venueKey: "raydium",
+          inputMint: "mint-in",
+          outputMint: "mint-out",
+          amountAtomic: "1000000",
+          slippageBps: 50,
+        });
         return {
           status: 200,
           payload: {
