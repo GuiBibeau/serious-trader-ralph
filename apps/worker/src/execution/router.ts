@@ -14,6 +14,7 @@ import { executeJupiterSwap } from "./jupiter_executor";
 import { resolveJupiterConditionalSpotOrder } from "./jupiter_trigger";
 import { executeJupiterConditionalSpotOrder } from "./jupiter_trigger_executor";
 import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
+import { executeMangoIntent } from "./mango_executor";
 import { executeOrcaSwap } from "./orca_executor";
 import { executeRaydiumSwap } from "./raydium_executor";
 import type {
@@ -129,6 +130,18 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       supportedModes: ["shadow", "paper"],
       supportedIntentFamilies: ["spot_swap"],
       adapter: executeRaydiumSwap,
+    },
+  ],
+  [
+    "mango",
+    {
+      adapterKey: "mango",
+      venueKey: "mango",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["clob_order", "perp_order"],
+      adapter: async () => {
+        throw new Error("mango-requires-intent-routing");
+      },
     },
   ],
   [
@@ -330,6 +343,13 @@ export async function executeIntentViaRouter(
       return await executeDriftPerpOrder(input);
     }
     if (
+      (input.intent.family === "clob_order" ||
+        input.intent.family === "perp_order") &&
+      registration.adapterKey === "mango"
+    ) {
+      return await executeMangoIntent(input);
+    }
+    if (
       input.intent.family === "clob_order" &&
       registration.adapterKey === "openbook_v2"
     ) {
@@ -357,6 +377,7 @@ export async function executeIntentViaRouter(
     policy: input.policy,
     rpc: input.rpc,
     jupiter: input.jupiter,
+    mango: input.mango,
     orca: input.orca,
     raydium: input.raydium,
     quoteResponse: input.quoteResponse,

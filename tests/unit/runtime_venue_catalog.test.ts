@@ -87,4 +87,29 @@ describe("runtime venue catalog", () => {
       ),
     ).toBe(true);
   });
+
+  test("adds Mango as a bounded cross-margin venue with spot and perp intents", () => {
+    const venue = getRuntimeVenueCapability("mango");
+
+    expect(venue).not.toBeNull();
+    if (!venue) {
+      throw new Error("expected-mango-capability");
+    }
+
+    expect(venue.marketTypes).toEqual(["spot", "perp"]);
+    expect(venue.intentFamilies).toEqual(["clob_order", "perp_order"]);
+    expect(venue.onboardingState).toBe("integrated");
+    expect(venue.supportedModes).toEqual(["shadow", "paper"]);
+    expect(runtimeVenueSupportsMode(venue, "paper")).toBe(true);
+    expect(runtimeVenueSupportsMode(venue, "live")).toBe(false);
+    expect(runtimeVenueSupportsIntentFamily(venue, "clob_order")).toBe(true);
+    expect(runtimeVenueSupportsIntentFamily(venue, "perp_order")).toBe(true);
+    expect(runtimeVenueSupportsIntentFamily(venue, "spot_swap")).toBe(false);
+    expect(venue.notes).toContain("cross-margin");
+    expect(
+      listRuntimeVenueCapabilities().some(
+        (capability) => capability.venueKey === "mango",
+      ),
+    ).toBe(true);
+  });
 });

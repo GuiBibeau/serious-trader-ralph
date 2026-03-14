@@ -74,6 +74,18 @@ describe("execution contract v1 schemas", () => {
     expect(
       validate(
         schema,
+        "docs/execution/fixtures/submit.privy_execute.mango.clob_order.valid.v2.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
+        schema,
+        "docs/execution/fixtures/submit.privy_execute.mango.perp_order.valid.v2.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
+        schema,
         "docs/execution/fixtures/submit.invalid.perp-missing-market-type.v2.json",
       ),
     ).toBe(false);

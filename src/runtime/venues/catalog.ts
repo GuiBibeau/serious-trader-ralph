@@ -229,6 +229,43 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
   },
   {
     schemaVersion: "v1",
+    venueKey: "mango",
+    displayName: "Mango v4",
+    adapterKeys: ["mango"],
+    marketTypes: ["spot", "perp"],
+    orderTypes: ["market", "limit", "trigger"],
+    intentFamilies: ["clob_order", "perp_order"],
+    authModel: "privy_solana_wallet",
+    feeModel: "maker_taker_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 350,
+      expectedSubmitMs: 900,
+      expectedSettlementMs: 4500,
+    },
+    settlementBehavior: "orderbook_partial",
+    lifecycle: {
+      supportsOrderLifecycle: true,
+      supportsPositionLifecycle: true,
+      requiresExternalOracle: true,
+      settlementModel: "position_account",
+    },
+    oracleRequirements: ["pyth", "switchboard", "venue_reference"],
+    supportedModes: ["shadow", "paper"],
+    onboardingState: "integrated",
+    notes:
+      "Bounded Mango v4 cross-margin substrate for shadow and paper. Official Mango sources describe cross-collateral accounts, OpenBook-backed spot margin, Mango perp orderbooks, and dedicated health/liquidation services. Live stays disabled until a later issue lands account-health canaries, oracle freshness evidence, and reconciliation proof.",
+  },
+  {
+    schemaVersion: "v1",
     venueKey: "drift",
     displayName: "Drift",
     adapterKeys: ["drift", "drift_swift"],

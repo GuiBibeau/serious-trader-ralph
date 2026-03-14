@@ -164,6 +164,42 @@ describe("exec submit contract: privy_execute", () => {
     });
   });
 
+  test("parses Mango spot margin clob intents as non-swap v2 families", () => {
+    const parsed = parseExecSubmitPayload({
+      schemaVersion: "v2",
+      mode: "privy_execute",
+      lane: "safe",
+      privyExecute: {
+        wallet: "11111111111111111111111111111111",
+        intent: {
+          family: "clob_order",
+          venueKey: "mango",
+          marketType: "spot",
+          instrumentId: "SOL/USDC",
+          side: "buy",
+          quantityAtomic: "1000000",
+        },
+        options: {
+          orderType: "limit",
+          timeInForce: "gtc",
+          limitPriceAtomic: "155000000",
+        },
+      },
+    });
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(resolveExecSubmitIntentFamily(parsed.value)).toBe("clob_order");
+    expect(resolveExecSubmitSpotSwap(parsed.value)).toBeNull();
+    expect(buildExecSubmitIntentSummary(parsed.value)).toEqual({
+      family: "clob_order",
+      marketType: "spot",
+      venueKey: "mango",
+      instrumentId: "SOL/USDC",
+      side: "buy",
+    });
+  });
+
   test("rejects malformed v2 family payloads deterministically", () => {
     const missingConditionalPricing = parseExecSubmitPayload({
       schemaVersion: "v2",

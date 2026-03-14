@@ -1,5 +1,6 @@
 import type { DriftClient } from "../drift";
 import type { JupiterClient, JupiterQuoteResponse } from "../jupiter";
+import type { MangoClient } from "../mango";
 import type { OpenBookClient } from "../openbook";
 import type { OrcaClient } from "../orca";
 import type { NormalizedPolicy } from "../policy";
@@ -94,6 +95,7 @@ type ExecuteIntentInputBase = {
   rpc: SolanaRpc;
   jupiter: JupiterClient;
   drift?: DriftClient;
+  mango?: MangoClient;
   orca?: OrcaClient;
   openbook?: OpenBookClient;
   raydium?: RaydiumClient;

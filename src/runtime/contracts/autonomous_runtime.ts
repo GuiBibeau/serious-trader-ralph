@@ -588,6 +588,71 @@ const RuntimeVenueLifecycleCapabilitySchema = z
   })
   .strict();
 
+export const RuntimeMarginRiskLevelSchema = z.enum([
+  "low",
+  "warning",
+  "critical",
+]);
+
+export const RuntimeMarginOracleStatusSchema = z.enum([
+  "healthy",
+  "stale",
+  "unconfident",
+  "halted",
+]);
+
+const RuntimeMarginOracleSnapshotSchema = z
+  .object({
+    instrumentId: NON_EMPTY_STRING_SCHEMA,
+    provider: NON_EMPTY_STRING_SCHEMA,
+    status: RuntimeMarginOracleStatusSchema,
+    priceQuote: DECIMAL_STRING_SCHEMA.optional(),
+    confidencePct: DECIMAL_STRING_SCHEMA.optional(),
+    lastUpdatedSlot: z.number().int().nonnegative().optional(),
+    lastUpdatedAt: ISO_DATETIME_SCHEMA.optional(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA),
+  })
+  .strict();
+
+const RuntimeMarginPositionSnapshotSchema = z
+  .object({
+    instrumentId: NON_EMPTY_STRING_SCHEMA,
+    marketType: RuntimeVenueMarketTypeSchema,
+    side: NON_EMPTY_STRING_SCHEMA.optional(),
+    quantityAtomic: NUMERIC_STRING_SCHEMA.optional(),
+    collateralAtomic: NUMERIC_STRING_SCHEMA.optional(),
+    notionalQuote: DECIMAL_STRING_SCHEMA.optional(),
+    entryPriceQuote: DECIMAL_STRING_SCHEMA.optional(),
+    markPriceQuote: DECIMAL_STRING_SCHEMA.optional(),
+    unsettledPnlQuote: DECIMAL_STRING_SCHEMA.optional(),
+    reduceOnly: z.boolean().optional(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA),
+  })
+  .strict();
+
+export const RuntimeMarginAccountSnapshotSchema = VersionedSchema.extend({
+  snapshotId: NON_EMPTY_STRING_SCHEMA,
+  venueKey: NON_EMPTY_STRING_SCHEMA,
+  accountRef: NON_EMPTY_STRING_SCHEMA,
+  capturedAt: ISO_DATETIME_SCHEMA,
+  marketTypes: z.array(RuntimeVenueMarketTypeSchema).min(1),
+  equityQuote: DECIMAL_STRING_SCHEMA,
+  initHealthQuote: DECIMAL_STRING_SCHEMA,
+  maintHealthQuote: DECIMAL_STRING_SCHEMA,
+  initHealthRatioPct: DECIMAL_STRING_SCHEMA.optional(),
+  maintHealthRatioPct: DECIMAL_STRING_SCHEMA.optional(),
+  usedMarginQuote: DECIMAL_STRING_SCHEMA,
+  freeCollateralQuote: DECIMAL_STRING_SCHEMA,
+  liquidationBufferPct: DECIMAL_STRING_SCHEMA.optional(),
+  liquidationRiskLevel: RuntimeMarginRiskLevelSchema,
+  beingLiquidated: z.boolean(),
+  isOperational: z.boolean(),
+  positions: z.array(RuntimeMarginPositionSnapshotSchema),
+  oracles: z.array(RuntimeMarginOracleSnapshotSchema).min(1),
+  tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+  notes: NON_EMPTY_STRING_SCHEMA.optional(),
+}).strict();
+
 const RuntimeBacktestConfigSchema = z
   .object({
     replayCorpusId: NON_EMPTY_STRING_SCHEMA,
@@ -1591,6 +1656,15 @@ export type RuntimeVenueOracleRequirement = z.infer<
 export type RuntimeVenueLifecycleCapability = z.infer<
   typeof RuntimeVenueLifecycleCapabilitySchema
 >;
+export type RuntimeMarginRiskLevel = z.infer<
+  typeof RuntimeMarginRiskLevelSchema
+>;
+export type RuntimeMarginOracleStatus = z.infer<
+  typeof RuntimeMarginOracleStatusSchema
+>;
+export type RuntimeMarginAccountSnapshot = z.infer<
+  typeof RuntimeMarginAccountSnapshotSchema
+>;
 export type RuntimeVenueCapability = z.infer<
   typeof RuntimeVenueCapabilitySchema
 >;
@@ -1828,6 +1902,12 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
     schemaId: "https://trader-ralph.com/schemas/runtime/v1/venue_capability",
     outputFile: "runtime.venue_capability.v1.schema.json",
   },
+  marginAccountSnapshot: {
+    schema: RuntimeMarginAccountSnapshotSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/margin_account_snapshot",
+    outputFile: "runtime.margin_account_snapshot.v1.schema.json",
+  },
   assetRecord: {
     schema: RuntimeAssetRecordSchema,
     schemaId: "https://trader-ralph.com/schemas/runtime/v1/asset_record",
@@ -2029,6 +2109,12 @@ export function parseRuntimeVenueCapability(
   return RuntimeVenueCapabilitySchema.parse(input);
 }
 
+export function parseRuntimeMarginAccountSnapshot(
+  input: unknown,
+): RuntimeMarginAccountSnapshot {
+  return RuntimeMarginAccountSnapshotSchema.parse(input);
+}
+
 export function parseRuntimeAssetRecord(input: unknown): RuntimeAssetRecord {
   return RuntimeAssetRecordSchema.parse(input);
 }
@@ -2157,6 +2243,10 @@ export function safeParseRuntimeBacktestReport(input: unknown) {
 
 export function safeParseRuntimeVenueCapability(input: unknown) {
   return RuntimeVenueCapabilitySchema.safeParse(input);
+}
+
+export function safeParseRuntimeMarginAccountSnapshot(input: unknown) {
+  return RuntimeMarginAccountSnapshotSchema.safeParse(input);
 }
 
 export function safeParseRuntimeAssetRecord(input: unknown) {

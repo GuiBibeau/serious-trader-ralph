@@ -12,6 +12,7 @@ import {
   parseRuntimeFeatureDefinitionRecord,
   parseRuntimeHistoricalDatasetSnapshotRecord,
   parseRuntimeLedgerSnapshot,
+  parseRuntimeMarginAccountSnapshot,
   parseRuntimeReconciliationResult,
   parseRuntimeRegimeTagRecord,
   parseRuntimeReplayCorpusRecord,
@@ -71,6 +72,61 @@ describe("runtime protocol contracts", () => {
     expect(deployment.state).toBe("shadow");
     expect(deployment.pair.baseMint).toBe(SOL_MINT);
     expect(deployment.pair.marketType).toBe("spot");
+  });
+
+  test("parses a valid margin account snapshot", () => {
+    const snapshot = parseRuntimeMarginAccountSnapshot({
+      schemaVersion: "v1",
+      snapshotId: "margin_mango_sol_1",
+      venueKey: "mango",
+      accountRef: "mango-account-1",
+      capturedAt: "2026-03-14T05:00:00Z",
+      marketTypes: ["spot", "perp"],
+      equityQuote: "12450.25",
+      initHealthQuote: "3250.50",
+      maintHealthQuote: "2110.25",
+      initHealthRatioPct: "26.10",
+      maintHealthRatioPct: "16.95",
+      usedMarginQuote: "4200.00",
+      freeCollateralQuote: "8250.25",
+      liquidationBufferPct: "12.35",
+      liquidationRiskLevel: "warning",
+      beingLiquidated: false,
+      isOperational: true,
+      positions: [
+        {
+          instrumentId: "SOL-PERP",
+          marketType: "perp",
+          side: "long",
+          quantityAtomic: "1000000",
+          collateralAtomic: "250000",
+          notionalQuote: "155.20",
+          entryPriceQuote: "154.90",
+          markPriceQuote: "155.20",
+          unsettledPnlQuote: "0.30",
+          reduceOnly: false,
+          notes: ["bounded-preview"],
+        },
+      ],
+      oracles: [
+        {
+          instrumentId: "SOL-PERP",
+          provider: "pyth",
+          status: "healthy",
+          priceQuote: "155.20",
+          confidencePct: "0.15",
+          lastUpdatedSlot: 345,
+          lastUpdatedAt: "2026-03-14T04:59:58Z",
+          notes: ["fresh"],
+        },
+      ],
+      tags: ["mango", "paper"],
+    });
+
+    expect(snapshot.venueKey).toBe("mango");
+    expect(snapshot.liquidationRiskLevel).toBe("warning");
+    expect(snapshot.positions[0]?.instrumentId).toBe("SOL-PERP");
+    expect(snapshot.oracles[0]?.provider).toBe("pyth");
   });
 
   test("rejects a deployment without tags", () => {
