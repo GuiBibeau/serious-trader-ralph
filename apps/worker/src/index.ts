@@ -21,6 +21,7 @@ import {
   SUPPORTED_WALLET_TOKEN_BALANCES,
   USDC_MINT,
 } from "./defaults";
+import { DFlowClient } from "./dflow";
 import {
   enforceExecSubmitAbuseGuard,
   readExecSubmitPayloadWithLimits,
@@ -82,6 +83,7 @@ import {
   finalizeExecutionAttempt,
   getExecutionLatestStatus,
   listExecutionAttempts,
+  listExecutionRequestsByActor,
   listExecutionStatusEvents,
   listOpenExecutionRequestsByActorAndIntentFamily,
   terminalizeExecutionRequest,
@@ -5594,6 +5596,194 @@ const worker = {
 
       if (
         request.method === "GET" &&
+        url.pathname === "/api/terminal/prediction-markets"
+      ) {
+        await requireOnboardedUser(request, env);
+        const venueKey =
+          readTrimmedString(url.searchParams.get("venueKey"))?.toLowerCase() ??
+          "dflow";
+        const limit = toBoundedInt(url.searchParams.get("limit"), 12, 1, 50);
+        if (venueKey !== "dflow") {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error: `unsupported-terminal-prediction-markets:${venueKey}`,
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+        try {
+          const markets = await listTerminalPredictionMarkets({
+            env,
+            venueKey: "dflow",
+            limit,
+          });
+          return withCors(json({ ok: true, markets }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "terminal-prediction-markets-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/terminal/prediction-preview"
+      ) {
+        await requireOnboardedUser(request, env);
+        try {
+          const preview = await previewTerminalPredictionOrder({
+            env,
+            payload: await readPayload(request),
+          });
+          return withCors(json({ ok: true, preview }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "terminal-prediction-preview-failed",
+              },
+              {
+                status:
+                  error instanceof Error &&
+                  error.message.startsWith("invalid-terminal-prediction")
+                    ? 400
+                    : 503,
+              },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/terminal/prediction-orders"
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        if (!user.walletAddress || !user.privyWalletId) {
+          return withCors(
+            json({ ok: false, error: "user-wallet-missing" }, { status: 503 }),
+            env,
+          );
+        }
+        try {
+          const result = await submitTerminalPredictionOrder({
+            request,
+            env,
+            user,
+            payload: await readPayload(request),
+          });
+          return withCors(json({ ok: true, result }), env);
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "terminal-prediction-submit-failed";
+          const status =
+            error instanceof Error &&
+            (message.startsWith("invalid-terminal-prediction") ||
+              message === "missing-idempotency-key")
+              ? 400
+              : message === "rpc-endpoint-missing"
+                ? 503
+                : 409;
+          return withCors(json({ ok: false, error: message }, { status }), env);
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/terminal/prediction-positions"
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        try {
+          const positions = await listTerminalPredictionPositionsForActor({
+            env,
+            actorId: user.id,
+          });
+          return withCors(json({ ok: true, positions }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "terminal-prediction-positions-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname.startsWith("/api/terminal/prediction-positions/") &&
+        url.pathname.endsWith("/settle")
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        if (!user.walletAddress || !user.privyWalletId) {
+          return withCors(
+            json({ ok: false, error: "user-wallet-missing" }, { status: 503 }),
+            env,
+          );
+        }
+        const positionKey = decodeURIComponent(
+          url.pathname
+            .slice("/api/terminal/prediction-positions/".length)
+            .replace(/\/settle$/, ""),
+        );
+        try {
+          const result = await settleTerminalPredictionPosition({
+            request,
+            env,
+            user,
+            positionKey,
+          });
+          return withCors(json({ ok: true, result }), env);
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "terminal-prediction-settlement-failed";
+          const status =
+            error instanceof Error &&
+            (message === "terminal-prediction-position-not-found" ||
+              message.startsWith("terminal-prediction-position-"))
+              ? 404
+              : message.startsWith("invalid-terminal-prediction")
+                ? 400
+                : 409;
+          return withCors(json({ ok: false, error: message }, { status }), env);
+        }
+      }
+
+      if (
+        request.method === "GET" &&
         url.pathname === "/api/terminal/open-orders"
       ) {
         let user = await requireOnboardedUser(request, env);
@@ -7223,6 +7413,1282 @@ function buildTerminalOpenBookOrderView(input: {
           }
         : null,
   };
+}
+
+const TERMINAL_PREDICTION_DECIMALS = 6;
+
+type TerminalPredictionOrderSide =
+  | "buy_yes"
+  | "buy_no"
+  | "sell_yes"
+  | "sell_no";
+
+type TerminalPredictionPositionView = {
+  key: string;
+  venueKey: "dflow";
+  instrumentId: string;
+  instrumentLabel: string;
+  outcomeMint: string;
+  outcomeSide: "yes" | "no" | null;
+  netQuantityAtomic: string;
+  grossBoughtQuantityAtomic: string;
+  netQuantityUi: string;
+  grossBoughtQuantityUi: string;
+  averageEntryPrice: number | null;
+  lastPriceQuote: number | null;
+  marketStatus: string | null;
+  marketResolved: boolean;
+  result: string | null;
+  settleTime: string | null;
+  settlementMint: string | null;
+  redemptionStatus: string | null;
+  canSettle: boolean;
+  expectedPayoutAtomic: string | null;
+  expectedPayoutUi: string | null;
+  positionState: "open" | "closed";
+  settlementState: string;
+  lastRequestId: string | null;
+  lastUpdatedAt: string | null;
+  notes: string[];
+};
+
+function parseTerminalPredictionOrderSide(
+  value: unknown,
+): TerminalPredictionOrderSide | null {
+  const normalized = readTrimmedString(value)?.toLowerCase();
+  if (
+    normalized === "buy_yes" ||
+    normalized === "buy_no" ||
+    normalized === "sell_yes" ||
+    normalized === "sell_no"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function parseTerminalPredictionOrderType(value: unknown): "market" | "limit" {
+  return readTrimmedString(value)?.toLowerCase() === "limit"
+    ? "limit"
+    : "market";
+}
+
+function parseTerminalPredictionTimeInForce(
+  value: unknown,
+): "gtc" | "ioc" | "fok" {
+  const normalized = readTrimmedString(value)?.toLowerCase();
+  if (normalized === "ioc" || normalized === "fok") return normalized;
+  return "gtc";
+}
+
+function parseTerminalPredictionQuantityMode(
+  value: unknown,
+): "base" | "quote" | "notional" {
+  const normalized = readTrimmedString(value)?.toLowerCase();
+  if (normalized === "quote" || normalized === "notional") {
+    return normalized;
+  }
+  return "base";
+}
+
+function atomicToDecimalNumber(
+  atomicInput: string | null,
+  decimals: number,
+): number | null {
+  const normalized = readTrimmedString(atomicInput);
+  if (!normalized || !/^\d+$/.test(normalized)) return null;
+  const safeDecimals = Math.max(0, Math.min(18, Math.floor(decimals)));
+  const padded =
+    safeDecimals > 0 ? normalized.padStart(safeDecimals + 1, "0") : normalized;
+  const whole =
+    safeDecimals > 0 ? padded.slice(0, -safeDecimals) || "0" : padded;
+  const fraction =
+    safeDecimals > 0 ? padded.slice(-safeDecimals).replace(/0+$/, "") : "";
+  const parsed = Number(fraction ? `${whole}.${fraction}` : whole);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizePredictionOutcomeSide(value: unknown): "yes" | "no" | null {
+  const normalized = readTrimmedString(value)?.toLowerCase();
+  if (normalized === "yes" || normalized === "no") return normalized;
+  return null;
+}
+
+function normalizePredictionResult(value: unknown): "yes" | "no" | null {
+  const normalized = readTrimmedString(value)?.toLowerCase();
+  if (normalized === "yes" || normalized === "no") return normalized;
+  return null;
+}
+
+function predictionOutcomeSideFromOrderSide(
+  side: TerminalPredictionOrderSide,
+): "yes" | "no" {
+  return side.endsWith("_yes") ? "yes" : "no";
+}
+
+function isPredictionMarketResolved(input: {
+  status?: string | null;
+  result?: string | null;
+  redemptionStatus?: string | null;
+}): boolean {
+  if (normalizePredictionResult(input.result)) return true;
+  const redemption = readTrimmedString(input.redemptionStatus)?.toLowerCase();
+  if (redemption === "redeemable" || redemption === "ready") {
+    return true;
+  }
+  const status = readTrimmedString(input.status)?.toLowerCase();
+  return Boolean(
+    status &&
+      status !== "open" &&
+      status !== "active" &&
+      status !== "live" &&
+      status !== "trading",
+  );
+}
+
+function buildTerminalPredictionMarketView(input: {
+  venueKey: "dflow";
+  market: {
+    marketId: string;
+    title: string;
+    eventTitle: string | null;
+    status: string | null;
+    result?: string | null;
+    endTime: string | null;
+    settleTime: string | null;
+    accounts: Array<{
+      accountId: string | null;
+      yesMint: string | null;
+      noMint: string | null;
+      settlementMint: string | null;
+      scalarOutcomePct?: number | null;
+      yesBid: number | null;
+      yesAsk: number | null;
+      noBid: number | null;
+      noAsk: number | null;
+      volume: number | null;
+      openInterest: number | null;
+      redemptionStatus: string | null;
+      status: string | null;
+    }>;
+  };
+}): Record<string, unknown> {
+  const primaryAccount = input.market.accounts[0] ?? null;
+  return {
+    venueKey: input.venueKey,
+    marketId: input.market.marketId,
+    title: input.market.title,
+    eventTitle: input.market.eventTitle,
+    status: input.market.status,
+    result: input.market.result ?? null,
+    endTime: input.market.endTime,
+    settleTime: input.market.settleTime,
+    accountId: primaryAccount?.accountId ?? null,
+    settlementMint: primaryAccount?.settlementMint ?? null,
+    yesMint: primaryAccount?.yesMint ?? null,
+    noMint: primaryAccount?.noMint ?? null,
+    scalarOutcomePct: primaryAccount?.scalarOutcomePct ?? null,
+    yesBid: primaryAccount?.yesBid ?? null,
+    yesAsk: primaryAccount?.yesAsk ?? null,
+    noBid: primaryAccount?.noBid ?? null,
+    noAsk: primaryAccount?.noAsk ?? null,
+    volume: primaryAccount?.volume ?? null,
+    openInterest: primaryAccount?.openInterest ?? null,
+    redemptionStatus: primaryAccount?.redemptionStatus ?? null,
+    accountStatus: primaryAccount?.status ?? null,
+    resolved: isPredictionMarketResolved({
+      status: input.market.status,
+      result: input.market.result ?? null,
+      redemptionStatus: primaryAccount?.redemptionStatus ?? null,
+    }),
+  };
+}
+
+function buildTerminalPredictionPositionKey(input: {
+  venueKey: string;
+  instrumentId: string;
+  outcomeMint: string;
+}): string {
+  return `${input.venueKey}:${input.instrumentId}:${input.outcomeMint}`;
+}
+
+function readPredictionReferenceSnapshot(
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>,
+): Record<string, unknown> | null {
+  const providerResponse = isRecord(latest?.latestAttempt?.providerResponse)
+    ? latest.latestAttempt.providerResponse
+    : null;
+  const executionMeta = isRecord(providerResponse?.executionMeta)
+    ? providerResponse.executionMeta
+    : null;
+  const referencePrice = isRecord(executionMeta?.referencePrice)
+    ? executionMeta.referencePrice
+    : null;
+  return isRecord(referencePrice?.snapshot) ? referencePrice.snapshot : null;
+}
+
+function parseTerminalPredictionOrderPayload(input: {
+  payload: Record<string, unknown>;
+  requireReason?: boolean;
+}): {
+  venueKey: "dflow";
+  instrumentId: string;
+  instrumentLabel: string;
+  outcomeId: string;
+  side: TerminalPredictionOrderSide;
+  quantityAtomic: string;
+  orderType: "market" | "limit";
+  timeInForce: "gtc" | "ioc" | "fok";
+  quantityMode: "base";
+  limitPriceAtomic: string | null;
+  source: string;
+  reason: string;
+} {
+  const venueKey =
+    readTrimmedString(input.payload.venueKey)?.toLowerCase() ?? "dflow";
+  if (venueKey !== "dflow") {
+    throw new Error(`invalid-terminal-prediction-venue:${venueKey}`);
+  }
+  const instrumentId = readTrimmedString(input.payload.instrumentId);
+  const instrumentLabel =
+    readTrimmedString(input.payload.instrumentLabel) ?? instrumentId;
+  const outcomeId = readTrimmedString(input.payload.outcomeId);
+  const side = parseTerminalPredictionOrderSide(input.payload.side);
+  const quantityAtomic = readTrimmedString(input.payload.quantityAtomic);
+  const orderType = parseTerminalPredictionOrderType(input.payload.orderType);
+  const timeInForce = parseTerminalPredictionTimeInForce(
+    input.payload.timeInForce,
+  );
+  const quantityMode = parseTerminalPredictionQuantityMode(
+    input.payload.quantityMode,
+  );
+  const limitPriceAtomic = readTrimmedString(input.payload.limitPriceAtomic);
+  const source =
+    readTrimmedString(input.payload.source) ?? "PREDICTION_TERMINAL";
+  const reason =
+    readTrimmedString(input.payload.reason) ??
+    `${side ?? "prediction"}:${instrumentId ?? "market"}`;
+  if (
+    !instrumentId ||
+    !instrumentLabel ||
+    !outcomeId ||
+    !side ||
+    !quantityAtomic ||
+    readAtomicBigInt(quantityAtomic) === null
+  ) {
+    throw new Error("invalid-terminal-prediction-order");
+  }
+  if (quantityMode !== "base") {
+    throw new Error("invalid-terminal-prediction-quantity-mode:base-only");
+  }
+  if (
+    orderType === "limit" &&
+    (!limitPriceAtomic || readAtomicBigInt(limitPriceAtomic) === null)
+  ) {
+    throw new Error("invalid-terminal-prediction-limit-price");
+  }
+  if (input.requireReason && !reason) {
+    throw new Error("invalid-terminal-prediction-reason");
+  }
+  return {
+    venueKey: "dflow",
+    instrumentId,
+    instrumentLabel,
+    outcomeId,
+    side,
+    quantityAtomic,
+    orderType,
+    timeInForce,
+    quantityMode: "base",
+    limitPriceAtomic:
+      orderType === "limit" && limitPriceAtomic ? limitPriceAtomic : null,
+    source,
+    reason,
+  };
+}
+
+async function listTerminalPredictionMarkets(input: {
+  env: Env;
+  venueKey: "dflow";
+  limit: number;
+}): Promise<Record<string, unknown>[]> {
+  const dflow = new DFlowClient(input.env);
+  const markets = await dflow.listPredictionMarkets({
+    status: "active",
+    limit: input.limit,
+  });
+  return markets.map((market) =>
+    buildTerminalPredictionMarketView({
+      venueKey: input.venueKey,
+      market,
+    }),
+  );
+}
+
+async function previewTerminalPredictionOrder(input: {
+  env: Env;
+  payload: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  const parsed = parseTerminalPredictionOrderPayload({
+    payload: input.payload,
+  });
+  const dflow = new DFlowClient(input.env);
+  const preview = await dflow.describePredictionIntent({
+    instrumentId: parsed.instrumentId,
+    outcomeId: parsed.outcomeId,
+    side: parsed.side,
+    quantityAtomic: parsed.quantityAtomic,
+    options: {
+      orderType: parsed.orderType,
+      timeInForce: parsed.timeInForce,
+      quantityMode: parsed.quantityMode,
+      ...(parsed.limitPriceAtomic
+        ? { limitPriceAtomic: parsed.limitPriceAtomic }
+        : {}),
+    },
+  });
+  return {
+    venueKey: parsed.venueKey,
+    provider: "dflow",
+    market: buildTerminalPredictionMarketView({
+      venueKey: parsed.venueKey,
+      market: preview.market,
+    }),
+    instrumentId: parsed.instrumentId,
+    instrumentLabel: parsed.instrumentLabel,
+    outcomeId: parsed.outcomeId,
+    outcomeSide: preview.outcomeSide,
+    side: parsed.side,
+    orderType: parsed.orderType,
+    timeInForce: parsed.timeInForce,
+    quantityMode: parsed.quantityMode,
+    quantityAtomic: parsed.quantityAtomic,
+    settlementMint: preview.settlementMint,
+    priceQuote: preview.priceQuote,
+    estimatedNotionalUsd: preview.estimatedNotionalUsd,
+    liveReady: preview.liveReady,
+    routeSummary: `DFlow ${preview.outcomeSide.toUpperCase()}`,
+    notes: preview.notes,
+  };
+}
+
+async function listTerminalPredictionPositionsForActor(input: {
+  env: Env;
+  actorId: string;
+}): Promise<TerminalPredictionPositionView[]> {
+  const requests = (
+    await listExecutionRequestsByActor(input.env.WAITLIST_DB, {
+      actorId: input.actorId,
+      mode: "privy_execute",
+      limit: 200,
+    })
+  )
+    .filter((entry) => {
+      const intent = isRecord(entry.metadata?.intent)
+        ? entry.metadata.intent
+        : null;
+      return (
+        readTrimmedString(intent?.family) === "prediction_order" &&
+        readTrimmedString(intent?.venueKey)?.toLowerCase() === "dflow"
+      );
+    })
+    .sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)));
+  const dflow = new DFlowClient(input.env);
+  const marketCache = new Map<
+    string,
+    Awaited<ReturnType<DFlowClient["getPredictionMarketByMint"]>>
+  >();
+  const groups = new Map<
+    string,
+    {
+      key: string;
+      instrumentId: string;
+      instrumentLabel: string;
+      outcomeMint: string;
+      outcomeSide: "yes" | "no" | null;
+      netQuantity: bigint;
+      grossBoughtQuantity: bigint;
+      totalBuyNotionalUsd: number;
+      lastPriceQuote: number | null;
+      settlementMint: string | null;
+      lastRequestId: string | null;
+      lastUpdatedAt: string | null;
+      settlementState: string;
+      notes: string[];
+    }
+  >();
+
+  for (const request of requests) {
+    const latest = await getExecutionLatestStatus(
+      input.env.WAITLIST_DB,
+      request.requestId,
+    );
+    if (!latest) continue;
+    const intent = isRecord(latest.request.metadata?.intent)
+      ? latest.request.metadata.intent
+      : null;
+    const instrumentId = readTrimmedString(intent?.instrumentId);
+    const instrumentLabel =
+      readTrimmedString(intent?.instrumentLabel) ?? instrumentId;
+    const outcomeMint = readTrimmedString(intent?.outcomeId);
+    const side = parseTerminalPredictionOrderSide(intent?.side);
+    const quantityAtomic = readAtomicBigInt(intent?.quantityAtomic);
+    if (!instrumentId || !instrumentLabel || !outcomeMint || !side) continue;
+    const key = buildTerminalPredictionPositionKey({
+      venueKey: "dflow",
+      instrumentId,
+      outcomeMint,
+    });
+    const snapshot = readPredictionReferenceSnapshot(latest);
+    const quantity = quantityAtomic ?? 0n;
+    const group = groups.get(key) ?? {
+      key,
+      instrumentId,
+      instrumentLabel,
+      outcomeMint,
+      outcomeSide:
+        normalizePredictionOutcomeSide(snapshot?.outcomeSide) ??
+        predictionOutcomeSideFromOrderSide(side),
+      netQuantity: 0n,
+      grossBoughtQuantity: 0n,
+      totalBuyNotionalUsd: 0,
+      lastPriceQuote: null,
+      settlementMint: readTrimmedString(snapshot?.settlementMint),
+      lastRequestId: null,
+      lastUpdatedAt: null,
+      settlementState: "pending",
+      notes: [],
+    };
+    if (side.startsWith("buy")) {
+      group.netQuantity += quantity;
+      group.grossBoughtQuantity += quantity;
+      const estimatedNotionalUsd = Number(snapshot?.estimatedNotionalUsd);
+      const priceQuote = Number(snapshot?.priceQuote);
+      if (Number.isFinite(estimatedNotionalUsd) && estimatedNotionalUsd > 0) {
+        group.totalBuyNotionalUsd += estimatedNotionalUsd;
+      } else {
+        const quantityUi = atomicToDecimalNumber(
+          quantity.toString(),
+          TERMINAL_PREDICTION_DECIMALS,
+        );
+        if (
+          quantityUi !== null &&
+          Number.isFinite(priceQuote) &&
+          priceQuote > 0
+        ) {
+          group.totalBuyNotionalUsd += quantityUi * priceQuote;
+        }
+      }
+    } else if (group.netQuantity > 0n) {
+      group.netQuantity =
+        quantity >= group.netQuantity ? 0n : group.netQuantity - quantity;
+    }
+    const priceQuote = Number(snapshot?.priceQuote);
+    if (Number.isFinite(priceQuote) && priceQuote > 0) {
+      group.lastPriceQuote = priceQuote;
+    }
+    group.settlementMint =
+      readTrimmedString(snapshot?.settlementMint) ?? group.settlementMint;
+    group.lastRequestId = latest.request.requestId;
+    group.lastUpdatedAt =
+      latest.request.updatedAt ??
+      latest.request.receivedAt ??
+      group.lastUpdatedAt;
+    const lifecycle = readPersistedExecutionLifecycle({ latest });
+    group.settlementState =
+      readTrimmedString(lifecycle?.settlementState) ?? group.settlementState;
+    const lifecycleNotes = readStringArray(lifecycle?.notes) ?? [];
+    group.notes = Array.from(new Set([...group.notes, ...lifecycleNotes]));
+    groups.set(key, group);
+  }
+
+  const positions: TerminalPredictionPositionView[] = [];
+  for (const group of groups.values()) {
+    let market = marketCache.get(group.outcomeMint);
+    if (market === undefined) {
+      market = await dflow.getPredictionMarketByMint(group.outcomeMint);
+      marketCache.set(group.outcomeMint, market);
+    }
+    const primaryAccount = market?.accounts.find(
+      (account) =>
+        account.yesMint === group.outcomeMint ||
+        account.noMint === group.outcomeMint,
+    );
+    const result = normalizePredictionResult(market?.result);
+    const marketResolved = isPredictionMarketResolved({
+      status: market?.status,
+      result,
+      redemptionStatus: primaryAccount?.redemptionStatus ?? null,
+    });
+    const expectedPayoutAtomic =
+      group.netQuantity > 0n && result && group.outcomeSide
+        ? result === group.outcomeSide
+          ? group.netQuantity.toString()
+          : "0"
+        : null;
+    positions.push({
+      key: group.key,
+      venueKey: "dflow",
+      instrumentId: group.instrumentId,
+      instrumentLabel: group.instrumentLabel,
+      outcomeMint: group.outcomeMint,
+      outcomeSide: group.outcomeSide,
+      netQuantityAtomic: group.netQuantity.toString(),
+      grossBoughtQuantityAtomic: group.grossBoughtQuantity.toString(),
+      netQuantityUi: formatAtomicDisplay(
+        group.netQuantity,
+        TERMINAL_PREDICTION_DECIMALS,
+      ),
+      grossBoughtQuantityUi: formatAtomicDisplay(
+        group.grossBoughtQuantity,
+        TERMINAL_PREDICTION_DECIMALS,
+      ),
+      averageEntryPrice:
+        group.grossBoughtQuantity > 0n && group.totalBuyNotionalUsd > 0
+          ? Number(
+              (
+                (group.totalBuyNotionalUsd /
+                  Number(group.grossBoughtQuantity)) *
+                10 ** TERMINAL_PREDICTION_DECIMALS
+              ).toFixed(6),
+            )
+          : null,
+      lastPriceQuote: group.lastPriceQuote,
+      marketStatus: market?.status ?? null,
+      marketResolved,
+      result,
+      settleTime: market?.settleTime ?? null,
+      settlementMint:
+        primaryAccount?.settlementMint ?? group.settlementMint ?? null,
+      redemptionStatus: primaryAccount?.redemptionStatus ?? null,
+      canSettle: group.netQuantity > 0n && result !== null,
+      expectedPayoutAtomic,
+      expectedPayoutUi: formatAtomicDisplay(
+        expectedPayoutAtomic ?? "0",
+        TERMINAL_PREDICTION_DECIMALS,
+      ),
+      positionState: group.netQuantity > 0n ? "open" : "closed",
+      settlementState:
+        group.netQuantity === 0n &&
+        group.notes.includes("prediction-settlement")
+          ? "redeemed"
+          : group.netQuantity > 0n && result !== null
+            ? "redeemable"
+            : group.settlementState,
+      lastRequestId: group.lastRequestId,
+      lastUpdatedAt: group.lastUpdatedAt,
+      notes: Array.from(
+        new Set(
+          [
+            ...(result ? [`resolved:${result}`] : []),
+            ...(marketResolved && result === null
+              ? ["resolved:pending_result"]
+              : []),
+            ...group.notes,
+          ].filter((entry) => Boolean(entry)),
+        ),
+      ),
+    });
+  }
+
+  return positions.sort((a, b) =>
+    String(b.lastUpdatedAt ?? "").localeCompare(String(a.lastUpdatedAt ?? "")),
+  );
+}
+
+function buildTerminalPredictionRequestSummary(
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>,
+): Record<string, unknown> | null {
+  if (!latest) return null;
+  const intent = isRecord(latest.request.metadata?.intent)
+    ? latest.request.metadata.intent
+    : null;
+  if (readTrimmedString(intent?.family) !== "prediction_order") {
+    return null;
+  }
+  const outcomeId = readTrimmedString(intent?.outcomeId);
+  const side = parseTerminalPredictionOrderSide(intent?.side);
+  const snapshot = readPredictionReferenceSnapshot(latest);
+  return {
+    requestId: latest.request.requestId,
+    status: latest.request.status,
+    terminal: Boolean(latest.request.terminalAt),
+    updatedAt: latest.request.updatedAt ?? latest.request.receivedAt,
+    receiptId: latest.receipt?.receiptId ?? null,
+    provider:
+      latest.receipt?.provider ?? latest.latestAttempt?.provider ?? null,
+    instrumentId: readTrimmedString(intent?.instrumentId),
+    instrumentLabel:
+      readTrimmedString(intent?.instrumentLabel) ??
+      readTrimmedString(intent?.instrumentId),
+    outcomeId,
+    outcomeSide:
+      normalizePredictionOutcomeSide(snapshot?.outcomeSide) ??
+      (side ? predictionOutcomeSideFromOrderSide(side) : null),
+    quantityAtomic: readTrimmedString(intent?.quantityAtomic),
+    settlementMint: readTrimmedString(snapshot?.settlementMint),
+    priceQuote: Number(snapshot?.priceQuote),
+    estimatedNotionalUsd: Number(snapshot?.estimatedNotionalUsd),
+  };
+}
+
+async function submitTerminalPredictionOrder(input: {
+  request: Request;
+  env: Env;
+  user: UserRow;
+  payload: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  const parsed = parseTerminalPredictionOrderPayload({
+    payload: input.payload,
+    requireReason: true,
+  });
+  const requestPayload = {
+    schemaVersion: "v2",
+    mode: "privy_execute",
+    lane: "safe",
+    metadata: {
+      source: parsed.source,
+      reason: parsed.reason,
+    },
+    privyExecute: {
+      wallet: input.user.walletAddress,
+      intent: {
+        family: "prediction_order",
+        venueKey: parsed.venueKey,
+        marketType: "prediction",
+        instrumentId: parsed.instrumentId,
+        instrumentLabel: parsed.instrumentLabel,
+        side: parsed.side,
+        quantityAtomic: parsed.quantityAtomic,
+        outcomeId: parsed.outcomeId,
+      },
+      options: {
+        orderType: parsed.orderType,
+        timeInForce: parsed.timeInForce,
+        quantityMode: parsed.quantityMode,
+        ...(parsed.limitPriceAtomic
+          ? { limitPriceAtomic: parsed.limitPriceAtomic }
+          : {}),
+      },
+    },
+  };
+  const payloadHash = await hashExecutionSubmitPayload(requestPayload);
+  const idempotencyKey =
+    readIdempotencyKey(input.request) ?? `pred-${crypto.randomUUID()}`;
+  const metadata = {
+    source: parsed.source,
+    reason: parsed.reason,
+    intent: {
+      family: "prediction_order",
+      marketType: "prediction",
+      venueKey: parsed.venueKey,
+      instrumentId: parsed.instrumentId,
+      instrumentLabel: parsed.instrumentLabel,
+      side: parsed.side,
+      outcomeId: parsed.outcomeId,
+      quantityAtomic: parsed.quantityAtomic,
+    },
+    terminal: {
+      workflow: "prediction",
+      executionMode: "paper",
+    },
+  } as const;
+  const reservation = await reserveExecutionSubmitRequest({
+    db: input.env.WAITLIST_DB,
+    requestId: newExecRequestId(),
+    idempotencyKey,
+    actorType: "privy_user",
+    actorId: input.user.id,
+    mode: "privy_execute",
+    lane: "safe",
+    payloadHash,
+    metadata,
+  });
+  if (reservation.result === "conflict") {
+    throw new Error(reservation.error);
+  }
+  if (reservation.result === "replay") {
+    const latest = await getExecutionLatestStatus(
+      input.env.WAITLIST_DB,
+      reservation.request.requestId,
+    );
+    return (
+      buildTerminalPredictionRequestSummary(latest) ?? {
+        requestId: reservation.request.requestId,
+        status: reservation.request.status,
+        terminal: Boolean(reservation.request.terminalAt),
+      }
+    );
+  }
+
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "received",
+    reason: null,
+    details: null,
+  });
+  await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "validated",
+    statusReason: null,
+  });
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "validated",
+    reason: null,
+    details: null,
+  });
+
+  const rpcEndpoint = String(input.env.RPC_ENDPOINT ?? "").trim();
+  if (!rpcEndpoint) {
+    throw new Error("rpc-endpoint-missing");
+  }
+
+  const attemptId = newExecutionAttemptId();
+  const attemptStartedAt = new Date().toISOString();
+  const quality = {
+    lane: "safe",
+    orderType: parsed.orderType,
+    timeInForce: parsed.timeInForce,
+    quantityMode: parsed.quantityMode,
+    limitPriceAtomic: parsed.limitPriceAtomic,
+  };
+  await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "dispatched",
+    statusReason: null,
+  });
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "dispatched",
+    reason: null,
+    details: {
+      provider: "dflow",
+      attempt: 1,
+    },
+    createdAt: attemptStartedAt,
+  });
+  await createExecutionAttemptIdempotent(input.env.WAITLIST_DB, {
+    attemptId,
+    requestId: reservation.request.requestId,
+    attemptNo: 1,
+    lane: "safe",
+    provider: "dflow",
+    status: "dispatched",
+    providerResponse: {
+      route: "dflow",
+      lane: "safe",
+      mode: "privy_execute",
+      quality,
+    },
+    startedAt: attemptStartedAt,
+  });
+
+  try {
+    const dflow = new DFlowClient(input.env);
+    const rpc = new SolanaRpc(rpcEndpoint);
+    const jupiter = new JupiterClient(
+      String(input.env.JUPITER_BASE_URL ?? "").trim() ||
+        X402_READ_JUPITER_BASE_URL,
+      input.env.JUPITER_API_KEY,
+    );
+    const result = await executeIntentViaRouter({
+      env: input.env,
+      venueKey: parsed.venueKey,
+      runtimeMode: "paper",
+      requireVenueRouting: true,
+      execution: {
+        adapter: "dflow",
+        params: {
+          lane: "safe",
+          orderType: parsed.orderType,
+          timeInForce: parsed.timeInForce,
+          quantityMode: parsed.quantityMode,
+          ...(parsed.limitPriceAtomic
+            ? { limitPriceAtomic: parsed.limitPriceAtomic }
+            : {}),
+        },
+      },
+      policy: normalizePolicy({
+        allowedMints: [USDC_MINT],
+        commitment: "confirmed",
+      }),
+      rpc,
+      jupiter,
+      dflow,
+      intent: {
+        family: "prediction_order",
+        wallet: input.user.walletAddress,
+        venueKey: parsed.venueKey,
+        marketType: "prediction",
+        instrumentId: parsed.instrumentId,
+        outcomeId: parsed.outcomeId,
+        side: parsed.side,
+        quantityAtomic: parsed.quantityAtomic,
+        params: {
+          orderType: parsed.orderType,
+          timeInForce: parsed.timeInForce,
+          quantityMode: parsed.quantityMode,
+          ...(parsed.limitPriceAtomic
+            ? { limitPriceAtomic: parsed.limitPriceAtomic }
+            : {}),
+        },
+      },
+      privyWalletId: input.user.privyWalletId ?? undefined,
+      log(level, message, meta) {
+        console[level]("terminal.prediction.submit", {
+          requestId: reservation.request.requestId,
+          message,
+          ...(meta ?? {}),
+        });
+      },
+    });
+    const completedAt = new Date().toISOString();
+    const providerResponse = {
+      route: "dflow",
+      lane: "safe",
+      mode: "privy_execute",
+      quality,
+      executionMeta:
+        result.executionMeta &&
+        typeof result.executionMeta === "object" &&
+        !Array.isArray(result.executionMeta)
+          ? result.executionMeta
+          : null,
+      predictionOrder: {
+        instrumentId: parsed.instrumentId,
+        instrumentLabel: parsed.instrumentLabel,
+        outcomeId: parsed.outcomeId,
+        side: parsed.side,
+        quantityAtomic: parsed.quantityAtomic,
+      },
+    };
+    await finalizeExecutionAttempt(input.env.WAITLIST_DB, {
+      attemptId,
+      status: result.status,
+      providerResponse,
+      errorCode: null,
+      errorMessage: null,
+      completedAt,
+    });
+    const receiptId = newExecutionReceiptId();
+    await upsertExecutionReceiptIdempotent(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      receiptId,
+      finalizedStatus: "finalized",
+      lane: "safe",
+      provider: "dflow",
+      signature: result.signature,
+      slot: null,
+      errorCode: null,
+      errorMessage: null,
+      receipt: {
+        mode: "privy_execute",
+        route: "dflow",
+        resultStatus: result.status,
+        outcome: "finalized",
+        lifecycle: {
+          ...(result.executionMeta?.lifecycle ?? {}),
+          fillState: "filled",
+          positionState: parsed.side.startsWith("buy") ? "open" : "closed",
+          settlementState: "confirmed",
+        },
+        quality,
+        prediction: {
+          instrumentId: parsed.instrumentId,
+          instrumentLabel: parsed.instrumentLabel,
+          outcomeId: parsed.outcomeId,
+          side: parsed.side,
+          quantityAtomic: parsed.quantityAtomic,
+        },
+        quote: {
+          inputMint:
+            readTrimmedString(result.usedQuote.inputMint) ??
+            readTrimmedString(
+              result.executionMeta?.referencePrice?.snapshot?.settlementMint,
+            ) ??
+            USDC_MINT,
+          outputMint:
+            readTrimmedString(result.usedQuote.outputMint) ?? parsed.outcomeId,
+          inAmount:
+            readTrimmedString(result.usedQuote.inAmount) ??
+            parsed.quantityAtomic,
+          outAmount:
+            readTrimmedString(result.usedQuote.outAmount) ??
+            parsed.quantityAtomic,
+        },
+      },
+      readyAt: completedAt,
+    });
+    await terminalizeExecutionRequest(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      status: "landed",
+      statusReason: null,
+      details: {
+        provider: "dflow",
+        attempt: 1,
+      },
+      nowIso: completedAt,
+    });
+    await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      status: "finalized",
+      statusReason: null,
+      nowIso: completedAt,
+    });
+    await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      status: "finalized",
+      reason: null,
+      details: {
+        provider: "dflow",
+        attempt: 1,
+      },
+      createdAt: completedAt,
+    });
+    const latest = await getExecutionLatestStatus(
+      input.env.WAITLIST_DB,
+      reservation.request.requestId,
+    );
+    return (
+      buildTerminalPredictionRequestSummary(latest) ?? {
+        requestId: reservation.request.requestId,
+        status: "finalized",
+        terminal: true,
+        receiptId,
+        provider: "dflow",
+      }
+    );
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    const deniedReason = policyDeniedReason(error);
+    const terminalStatus = deniedReason ? "rejected" : "failed";
+    const errorCode = deniedReason
+      ? "policy-denied"
+      : normalizeExecutionErrorCode({
+          error,
+          fallback: "submission-failed",
+        });
+    const errorMessage =
+      executionErrorMessage(error) ?? "terminal-prediction-submit-failed";
+    await finalizeExecutionAttempt(input.env.WAITLIST_DB, {
+      attemptId,
+      status: terminalStatus,
+      providerResponse: {
+        route: "dflow",
+        lane: "safe",
+        mode: "privy_execute",
+        quality,
+      },
+      errorCode,
+      errorMessage,
+      completedAt: failedAt,
+    });
+    await upsertExecutionReceiptIdempotent(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      receiptId: newExecutionReceiptId(),
+      finalizedStatus: terminalStatus,
+      lane: "safe",
+      provider: "dflow",
+      signature: null,
+      slot: null,
+      errorCode,
+      errorMessage,
+      receipt: {
+        mode: "privy_execute",
+        route: "dflow",
+        outcome: terminalStatus,
+        lifecycle: {
+          positionState: "closed",
+          settlementState: "failed",
+          notes: [errorMessage],
+        },
+        quality,
+      },
+      readyAt: failedAt,
+    });
+    await terminalizeExecutionRequest(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      status: terminalStatus,
+      statusReason: errorCode,
+      details: {
+        provider: "dflow",
+        attempt: 1,
+        errorMessage,
+      },
+      nowIso: failedAt,
+    });
+    throw error instanceof Error ? error : new Error(errorCode);
+  }
+}
+
+async function settleTerminalPredictionPosition(input: {
+  request: Request;
+  env: Env;
+  user: UserRow;
+  positionKey: string;
+}): Promise<Record<string, unknown>> {
+  const positions = await listTerminalPredictionPositionsForActor({
+    env: input.env,
+    actorId: input.user.id,
+  });
+  const position = positions.find((entry) => entry.key === input.positionKey);
+  if (!position) {
+    throw new Error("terminal-prediction-position-not-found");
+  }
+  if (!position.canSettle) {
+    throw new Error("terminal-prediction-position-not-settleable");
+  }
+  if (!position.outcomeSide) {
+    throw new Error("terminal-prediction-position-outcome-side-missing");
+  }
+  const side = `sell_${position.outcomeSide}` as TerminalPredictionOrderSide;
+  const payloadHash = await hashExecutionSubmitPayload({
+    action: "prediction_settlement",
+    positionKey: position.key,
+    quantityAtomic: position.netQuantityAtomic,
+    expectedPayoutAtomic: position.expectedPayoutAtomic,
+  });
+  const idempotencyKey =
+    readIdempotencyKey(input.request) ?? `pred-settle-${crypto.randomUUID()}`;
+  const metadata = {
+    source: "PREDICTION_SETTLEMENT",
+    reason: `Redeem ${position.instrumentLabel} ${position.outcomeSide.toUpperCase()}`,
+    intent: {
+      family: "prediction_order",
+      marketType: "prediction",
+      venueKey: "dflow",
+      instrumentId: position.instrumentId,
+      instrumentLabel: position.instrumentLabel,
+      side,
+      outcomeId: position.outcomeMint,
+      quantityAtomic: position.netQuantityAtomic,
+    },
+    terminal: {
+      workflow: "prediction_settlement",
+      executionMode: "paper",
+      positionKey: position.key,
+    },
+  } as const;
+  const reservation = await reserveExecutionSubmitRequest({
+    db: input.env.WAITLIST_DB,
+    requestId: newExecRequestId(),
+    idempotencyKey,
+    actorType: "privy_user",
+    actorId: input.user.id,
+    mode: "privy_execute",
+    lane: "safe",
+    payloadHash,
+    metadata,
+  });
+  if (reservation.result === "conflict") {
+    throw new Error(reservation.error);
+  }
+  if (reservation.result === "replay") {
+    const latest = await getExecutionLatestStatus(
+      input.env.WAITLIST_DB,
+      reservation.request.requestId,
+    );
+    return (
+      buildTerminalPredictionRequestSummary(latest) ?? {
+        requestId: reservation.request.requestId,
+        status: reservation.request.status,
+        terminal: Boolean(reservation.request.terminalAt),
+      }
+    );
+  }
+
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "received",
+    reason: null,
+    details: null,
+  });
+  await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "validated",
+    statusReason: null,
+  });
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "validated",
+    reason: null,
+    details: null,
+  });
+
+  const attemptId = newExecutionAttemptId();
+  const attemptStartedAt = new Date().toISOString();
+  const quality = {
+    lane: "safe",
+    orderType: "market",
+    timeInForce: "ioc",
+    quantityMode: "base",
+  };
+  await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "dispatched",
+    statusReason: null,
+  });
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "dispatched",
+    reason: null,
+    details: {
+      provider: "dflow",
+      attempt: 1,
+      action: "redeem",
+    },
+    createdAt: attemptStartedAt,
+  });
+  await createExecutionAttemptIdempotent(input.env.WAITLIST_DB, {
+    attemptId,
+    requestId: reservation.request.requestId,
+    attemptNo: 1,
+    lane: "safe",
+    provider: "dflow",
+    status: "dispatched",
+    providerResponse: {
+      route: "dflow",
+      lane: "safe",
+      mode: "privy_execute",
+      quality,
+    },
+    startedAt: attemptStartedAt,
+  });
+
+  const completedAt = new Date().toISOString();
+  const providerResponse = {
+    route: "dflow",
+    lane: "safe",
+    mode: "privy_execute",
+    quality,
+    predictionSettlement: {
+      positionKey: position.key,
+      instrumentId: position.instrumentId,
+      outcomeMint: position.outcomeMint,
+      outcomeSide: position.outcomeSide,
+      quantityAtomic: position.netQuantityAtomic,
+      payoutAtomic: position.expectedPayoutAtomic ?? "0",
+      settlementMint: position.settlementMint,
+      result: position.result,
+    },
+    executionMeta: {
+      route: "dflow",
+      classification: "simulated",
+      lifecycle: {
+        fillState: "settled",
+        positionState: "closed",
+        settlementState: "redeemed",
+        notes: ["prediction-settlement"],
+      },
+      referencePrice: {
+        verdict: "allow",
+        reason: null,
+        executionPrice: null,
+        executionDivergenceBps: null,
+        snapshot: {
+          marketId: position.instrumentId,
+          outcomeMint: position.outcomeMint,
+          outcomeSide: position.outcomeSide,
+          settlementMint: position.settlementMint,
+          result: position.result,
+          expectedPayoutAtomic: position.expectedPayoutAtomic ?? "0",
+        },
+      },
+      trace: {
+        simulatedAt: completedAt,
+        finalizedAt: completedAt,
+      },
+    },
+  };
+  await finalizeExecutionAttempt(input.env.WAITLIST_DB, {
+    attemptId,
+    status: "simulated",
+    providerResponse,
+    errorCode: null,
+    errorMessage: null,
+    completedAt,
+  });
+  const receiptId = newExecutionReceiptId();
+  await upsertExecutionReceiptIdempotent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    receiptId,
+    finalizedStatus: "finalized",
+    lane: "safe",
+    provider: "dflow",
+    signature: null,
+    slot: null,
+    errorCode: null,
+    errorMessage: null,
+    receipt: {
+      mode: "privy_execute",
+      route: "dflow",
+      resultStatus: "simulated",
+      outcome: "finalized",
+      lifecycle: {
+        fillState: "settled",
+        positionState: "closed",
+        settlementState: "redeemed",
+        notes: ["prediction-settlement"],
+      },
+      quality,
+      prediction: {
+        instrumentId: position.instrumentId,
+        instrumentLabel: position.instrumentLabel,
+        outcomeId: position.outcomeMint,
+        side,
+        quantityAtomic: position.netQuantityAtomic,
+      },
+      quote: {
+        inputMint: position.outcomeMint,
+        outputMint: position.settlementMint ?? USDC_MINT,
+        inAmount: position.netQuantityAtomic,
+        outAmount: position.expectedPayoutAtomic ?? "0",
+      },
+    },
+    readyAt: completedAt,
+  });
+  await terminalizeExecutionRequest(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "landed",
+    statusReason: null,
+    details: {
+      provider: "dflow",
+      attempt: 1,
+      action: "redeem",
+    },
+    nowIso: completedAt,
+  });
+  await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "finalized",
+    statusReason: null,
+    nowIso: completedAt,
+  });
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "finalized",
+    reason: null,
+    details: {
+      provider: "dflow",
+      attempt: 1,
+      action: "redeem",
+    },
+    createdAt: completedAt,
+  });
+  const latest = await getExecutionLatestStatus(
+    input.env.WAITLIST_DB,
+    reservation.request.requestId,
+  );
+  return (
+    buildTerminalPredictionRequestSummary(latest) ?? {
+      requestId: reservation.request.requestId,
+      status: "finalized",
+      terminal: true,
+      receiptId,
+      provider: "dflow",
+    }
+  );
 }
 
 function parseExperienceEventName(value: unknown): ExperienceEventName | null {

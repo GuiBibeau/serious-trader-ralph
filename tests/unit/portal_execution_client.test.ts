@@ -213,6 +213,163 @@ describe("portal execution client", () => {
     expect(preview.priceImpactPct).toBe(0.0025);
   });
 
+  test("parses prediction market, preview, and position responses", async () => {
+    const client = createExecutionClient({
+      transport: async (input) => {
+        if (
+          input.path ===
+          "/api/terminal/prediction-markets?venueKey=dflow&limit=4"
+        ) {
+          return {
+            status: 200,
+            payload: {
+              ok: true,
+              markets: [
+                {
+                  venueKey: "dflow",
+                  marketId: "PRES-2028",
+                  title: "Will candidate X win in 2028?",
+                  eventTitle: "Presidential election",
+                  status: "active",
+                  result: null,
+                  endTime: null,
+                  settleTime: null,
+                  accountId: "acct_1",
+                  settlementMint: "mint-usdc",
+                  yesMint: "mint-yes",
+                  noMint: "mint-no",
+                  scalarOutcomePct: null,
+                  yesBid: 0.48,
+                  yesAsk: 0.52,
+                  noBid: 0.47,
+                  noAsk: 0.53,
+                  volume: 1200,
+                  openInterest: 5000,
+                  redemptionStatus: "open",
+                  accountStatus: "active",
+                  resolved: false,
+                },
+              ],
+            },
+          };
+        }
+        if (input.path === "/api/terminal/prediction-preview") {
+          return {
+            status: 200,
+            payload: {
+              ok: true,
+              preview: {
+                venueKey: "dflow",
+                provider: "dflow",
+                market: {
+                  venueKey: "dflow",
+                  marketId: "PRES-2028",
+                  title: "Will candidate X win in 2028?",
+                  eventTitle: "Presidential election",
+                  status: "active",
+                  result: null,
+                  endTime: null,
+                  settleTime: null,
+                  accountId: "acct_1",
+                  settlementMint: "mint-usdc",
+                  yesMint: "mint-yes",
+                  noMint: "mint-no",
+                  scalarOutcomePct: null,
+                  yesBid: 0.48,
+                  yesAsk: 0.52,
+                  noBid: 0.47,
+                  noAsk: 0.53,
+                  volume: 1200,
+                  openInterest: 5000,
+                  redemptionStatus: "open",
+                  accountStatus: "active",
+                  resolved: false,
+                },
+                instrumentId: "PRES-2028",
+                instrumentLabel: "Will candidate X win in 2028?",
+                outcomeId: "mint-yes",
+                outcomeSide: "yes",
+                side: "buy_yes",
+                orderType: "market",
+                timeInForce: "gtc",
+                quantityMode: "base",
+                quantityAtomic: "1000000",
+                settlementMint: "mint-usdc",
+                priceQuote: 0.52,
+                estimatedNotionalUsd: 0.52,
+                liveReady: false,
+                routeSummary: "DFlow YES",
+                notes: ["prediction-market-live-requires-proof"],
+              },
+            },
+          };
+        }
+        if (input.path === "/api/terminal/prediction-positions") {
+          return {
+            status: 200,
+            payload: {
+              ok: true,
+              positions: [
+                {
+                  key: "dflow:PRES-2028:mint-yes",
+                  venueKey: "dflow",
+                  instrumentId: "PRES-2028",
+                  instrumentLabel: "Will candidate X win in 2028?",
+                  outcomeMint: "mint-yes",
+                  outcomeSide: "yes",
+                  netQuantityAtomic: "1000000",
+                  grossBoughtQuantityAtomic: "1000000",
+                  netQuantityUi: "1.0",
+                  grossBoughtQuantityUi: "1.0",
+                  averageEntryPrice: 0.52,
+                  lastPriceQuote: 0.55,
+                  marketStatus: "active",
+                  marketResolved: false,
+                  result: null,
+                  settleTime: null,
+                  settlementMint: "mint-usdc",
+                  redemptionStatus: "open",
+                  canSettle: false,
+                  expectedPayoutAtomic: null,
+                  expectedPayoutUi: null,
+                  positionState: "open",
+                  settlementState: "pending",
+                  lastRequestId: "execreq_123",
+                  lastUpdatedAt: "2026-03-14T17:00:00.000Z",
+                  notes: ["prediction-market-live-requires-proof"],
+                },
+              ],
+            },
+          };
+        }
+        return {
+          status: 404,
+          payload: { ok: false, error: { code: "not-found", message: "nf" } },
+        };
+      },
+    });
+
+    const markets = await client.listPredictionMarkets({
+      venueKey: "dflow",
+      limit: 4,
+    });
+    expect(markets[0]?.marketId).toBe("PRES-2028");
+
+    const preview = await client.previewPredictionOrder({
+      venueKey: "dflow",
+      instrumentId: "PRES-2028",
+      outcomeId: "mint-yes",
+      side: "buy_yes",
+      quantityAtomic: "1000000",
+    });
+    expect(preview.outcomeSide).toBe("yes");
+    expect(preview.estimatedNotionalUsd).toBe(0.52);
+
+    const positions = await client.listPredictionPositions();
+    expect(positions[0]?.key).toBe("dflow:PRES-2028:mint-yes");
+    expect(positions[0]?.positionState).toBe("open");
+  });
+
   test("waitForTerminalReceipt retries transient failures", async () => {
     let statusCalls = 0;
     let receiptCalls = 0;

@@ -214,6 +214,98 @@ export type ExecutionSpotPreview = {
   priceImpactPct: number | null;
 };
 
+export type ExecutionPredictionMarket = {
+  venueKey: TerminalVenueKey;
+  marketId: string;
+  title: string;
+  eventTitle: string | null;
+  status: string | null;
+  result: "yes" | "no" | null;
+  endTime: string | null;
+  settleTime: string | null;
+  accountId: string | null;
+  settlementMint: string | null;
+  yesMint: string | null;
+  noMint: string | null;
+  scalarOutcomePct: number | null;
+  yesBid: number | null;
+  yesAsk: number | null;
+  noBid: number | null;
+  noAsk: number | null;
+  volume: number | null;
+  openInterest: number | null;
+  redemptionStatus: string | null;
+  accountStatus: string | null;
+  resolved: boolean;
+};
+
+export type ExecutionPredictionPreview = {
+  venueKey: TerminalVenueKey;
+  provider: string;
+  market: ExecutionPredictionMarket;
+  instrumentId: string;
+  instrumentLabel: string | null;
+  outcomeId: string;
+  outcomeSide: "yes" | "no" | null;
+  side: "buy_yes" | "buy_no" | "sell_yes" | "sell_no";
+  orderType: "market" | "limit";
+  timeInForce: "gtc" | "ioc" | "fok";
+  quantityMode: "base" | "quote" | "notional";
+  quantityAtomic: string;
+  settlementMint: string | null;
+  priceQuote: number | null;
+  estimatedNotionalUsd: number | null;
+  liveReady: boolean;
+  routeSummary: string | null;
+  notes: string[];
+};
+
+export type ExecutionPredictionResult = {
+  requestId: string;
+  status: string;
+  terminal: boolean;
+  updatedAt: string | null;
+  receiptId: string | null;
+  provider: string | null;
+  instrumentId: string | null;
+  instrumentLabel: string | null;
+  outcomeId: string | null;
+  outcomeSide: "yes" | "no" | null;
+  quantityAtomic: string | null;
+  settlementMint: string | null;
+  priceQuote: number | null;
+  estimatedNotionalUsd: number | null;
+};
+
+export type ExecutionPredictionPosition = {
+  key: string;
+  venueKey: TerminalVenueKey;
+  instrumentId: string;
+  instrumentLabel: string;
+  outcomeMint: string;
+  outcomeSide: "yes" | "no" | null;
+  netQuantityAtomic: string;
+  grossBoughtQuantityAtomic: string;
+  netQuantityUi: string;
+  grossBoughtQuantityUi: string;
+  averageEntryPrice: number | null;
+  lastPriceQuote: number | null;
+  marketStatus: string | null;
+  marketResolved: boolean;
+  result: "yes" | "no" | null;
+  settleTime: string | null;
+  settlementMint: string | null;
+  redemptionStatus: string | null;
+  canSettle: boolean;
+  expectedPayoutAtomic: string | null;
+  expectedPayoutUi: string | null;
+  positionState: "open" | "closed";
+  settlementState: string;
+  lastRequestId: string | null;
+  lastUpdatedAt: string | null;
+  notes: string[];
+};
+
 export type ExecutionTransportRequest = {
   path: string;
   method: "GET" | "POST";
@@ -690,6 +782,293 @@ function parseSpotPreviewSnapshot(payload: unknown): ExecutionSpotPreview {
   };
 }
 
+function parseOptionalFiniteNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parsePredictionOutcomeSide(value: unknown): "yes" | "no" | null {
+  return value === "yes" || value === "no" ? value : null;
+}
+
+function parsePredictionOrderSide(
+  value: unknown,
+): "buy_yes" | "buy_no" | "sell_yes" | "sell_no" | null {
+  return value === "buy_yes" ||
+    value === "buy_no" ||
+    value === "sell_yes" ||
+    value === "sell_no"
+    ? value
+    : null;
+}
+
+function parsePredictionOrderType(value: unknown): "market" | "limit" | null {
+  return value === "market" || value === "limit" ? value : null;
+}
+
+function parsePredictionQuantityMode(
+  value: unknown,
+): "base" | "quote" | "notional" | null {
+  return value === "base" || value === "quote" || value === "notional"
+    ? value
+    : null;
+}
+
+function parsePredictionMarketSnapshot(
+  value: unknown,
+): ExecutionPredictionMarket | null {
+  if (!isRecord(value)) return null;
+  const venueKey = parseTerminalVenueKey(value.venueKey);
+  const marketId = parseOptionalString(value.marketId);
+  const title = parseOptionalString(value.title);
+  if (!venueKey || !marketId || !title) return null;
+  return {
+    venueKey,
+    marketId,
+    title,
+    eventTitle: parseOptionalString(value.eventTitle),
+    status: parseOptionalString(value.status),
+    result: parsePredictionOutcomeSide(value.result),
+    endTime: parseOptionalString(value.endTime),
+    settleTime: parseOptionalString(value.settleTime),
+    accountId: parseOptionalString(value.accountId),
+    settlementMint: parseOptionalString(value.settlementMint),
+    yesMint: parseOptionalString(value.yesMint),
+    noMint: parseOptionalString(value.noMint),
+    scalarOutcomePct: parseOptionalFiniteNumber(value.scalarOutcomePct),
+    yesBid: parseOptionalFiniteNumber(value.yesBid),
+    yesAsk: parseOptionalFiniteNumber(value.yesAsk),
+    noBid: parseOptionalFiniteNumber(value.noBid),
+    noAsk: parseOptionalFiniteNumber(value.noAsk),
+    volume: parseOptionalFiniteNumber(value.volume),
+    openInterest: parseOptionalFiniteNumber(value.openInterest),
+    redemptionStatus: parseOptionalString(value.redemptionStatus),
+    accountStatus: parseOptionalString(value.accountStatus),
+    resolved: value.resolved === true,
+  };
+}
+
+function parsePredictionMarketsSnapshot(
+  payload: unknown,
+): ExecutionPredictionMarket[] {
+  if (!isRecord(payload) || payload.ok !== true) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-prediction-markets-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  return Array.isArray(payload.markets)
+    ? payload.markets
+        .map((entry) => parsePredictionMarketSnapshot(entry))
+        .filter((entry): entry is ExecutionPredictionMarket => entry !== null)
+    : [];
+}
+
+function parsePredictionPreviewSnapshot(
+  payload: unknown,
+): ExecutionPredictionPreview {
+  if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.preview)) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-prediction-preview-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  const preview = payload.preview;
+  const venueKey = parseTerminalVenueKey(preview.venueKey);
+  const provider = parseOptionalString(preview.provider);
+  const market = parsePredictionMarketSnapshot(preview.market);
+  const instrumentId = parseOptionalString(preview.instrumentId);
+  const outcomeId = parseOptionalString(preview.outcomeId);
+  const side = parsePredictionOrderSide(preview.side);
+  const orderType = parsePredictionOrderType(preview.orderType);
+  const timeInForce =
+    preview.timeInForce === "gtc" ||
+    preview.timeInForce === "ioc" ||
+    preview.timeInForce === "fok"
+      ? preview.timeInForce
+      : null;
+  const quantityMode = parsePredictionQuantityMode(preview.quantityMode);
+  const quantityAtomic = parseOptionalAtomicString(preview.quantityAtomic);
+  if (
+    !venueKey ||
+    !provider ||
+    !market ||
+    !instrumentId ||
+    !outcomeId ||
+    !side ||
+    !orderType ||
+    !timeInForce ||
+    !quantityMode ||
+    !quantityAtomic
+  ) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-prediction-preview-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  return {
+    venueKey,
+    provider,
+    market,
+    instrumentId,
+    instrumentLabel: parseOptionalString(preview.instrumentLabel),
+    outcomeId,
+    outcomeSide: parsePredictionOutcomeSide(preview.outcomeSide),
+    side,
+    orderType,
+    timeInForce,
+    quantityMode,
+    quantityAtomic,
+    settlementMint: parseOptionalString(preview.settlementMint),
+    priceQuote: parseOptionalFiniteNumber(preview.priceQuote),
+    estimatedNotionalUsd: parseOptionalFiniteNumber(
+      preview.estimatedNotionalUsd,
+    ),
+    liveReady: preview.liveReady === true,
+    routeSummary: parseOptionalString(preview.routeSummary),
+    notes: parseStringArray(preview.notes) ?? [],
+  };
+}
+
+function parsePredictionResultSnapshot(
+  payload: unknown,
+): ExecutionPredictionResult {
+  if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.result)) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-prediction-result-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  const result = payload.result;
+  const requestId = parseOptionalString(result.requestId);
+  const status = parseOptionalString(result.status);
+  if (!requestId || !status) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-prediction-result-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  return {
+    requestId,
+    status,
+    terminal: result.terminal === true,
+    updatedAt: parseOptionalString(result.updatedAt),
+    receiptId: parseOptionalString(result.receiptId),
+    provider: parseOptionalString(result.provider),
+    instrumentId: parseOptionalString(result.instrumentId),
+    instrumentLabel: parseOptionalString(result.instrumentLabel),
+    outcomeId: parseOptionalString(result.outcomeId),
+    outcomeSide: parsePredictionOutcomeSide(result.outcomeSide),
+    quantityAtomic: parseOptionalAtomicString(result.quantityAtomic),
+    settlementMint: parseOptionalString(result.settlementMint),
+    priceQuote: parseOptionalFiniteNumber(result.priceQuote),
+    estimatedNotionalUsd: parseOptionalFiniteNumber(
+      result.estimatedNotionalUsd,
+    ),
+  };
+}
+
+function parsePredictionPositionSnapshot(
+  value: unknown,
+): ExecutionPredictionPosition | null {
+  if (!isRecord(value)) return null;
+  const key = parseOptionalString(value.key);
+  const venueKey = parseTerminalVenueKey(value.venueKey);
+  const instrumentId = parseOptionalString(value.instrumentId);
+  const instrumentLabel = parseOptionalString(value.instrumentLabel);
+  const outcomeMint = parseOptionalString(value.outcomeMint);
+  const netQuantityAtomic = parseOptionalAtomicString(value.netQuantityAtomic);
+  const grossBoughtQuantityAtomic = parseOptionalAtomicString(
+    value.grossBoughtQuantityAtomic,
+  );
+  const netQuantityUi = parseOptionalString(value.netQuantityUi);
+  const grossBoughtQuantityUi = parseOptionalString(
+    value.grossBoughtQuantityUi,
+  );
+  const settlementState = parseOptionalString(value.settlementState);
+  if (
+    !key ||
+    !venueKey ||
+    !instrumentId ||
+    !instrumentLabel ||
+    !outcomeMint ||
+    !netQuantityAtomic ||
+    !grossBoughtQuantityAtomic ||
+    !netQuantityUi ||
+    !grossBoughtQuantityUi ||
+    !settlementState
+  ) {
+    return null;
+  }
+  const positionState =
+    value.positionState === "open" || value.positionState === "closed"
+      ? value.positionState
+      : null;
+  if (!positionState) return null;
+  return {
+    key,
+    venueKey,
+    instrumentId,
+    instrumentLabel,
+    outcomeMint,
+    outcomeSide: parsePredictionOutcomeSide(value.outcomeSide),
+    netQuantityAtomic,
+    grossBoughtQuantityAtomic,
+    netQuantityUi,
+    grossBoughtQuantityUi,
+    averageEntryPrice: parseOptionalFiniteNumber(value.averageEntryPrice),
+    lastPriceQuote: parseOptionalFiniteNumber(value.lastPriceQuote),
+    marketStatus: parseOptionalString(value.marketStatus),
+    marketResolved: value.marketResolved === true,
+    result: parsePredictionOutcomeSide(value.result),
+    settleTime: parseOptionalString(value.settleTime),
+    settlementMint: parseOptionalString(value.settlementMint),
+    redemptionStatus: parseOptionalString(value.redemptionStatus),
+    canSettle: value.canSettle === true,
+    expectedPayoutAtomic: parseOptionalAtomicString(value.expectedPayoutAtomic),
+    expectedPayoutUi: parseOptionalString(value.expectedPayoutUi),
+    positionState,
+    settlementState,
+    lastRequestId: parseOptionalString(value.lastRequestId),
+    lastUpdatedAt: parseOptionalString(value.lastUpdatedAt),
+    notes: parseStringArray(value.notes) ?? [],
+  };
+}
+
+function parsePredictionPositionsSnapshot(
+  payload: unknown,
+): ExecutionPredictionPosition[] {
+  if (!isRecord(payload) || payload.ok !== true) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-prediction-positions-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  return Array.isArray(payload.positions)
+    ? payload.positions
+        .map((entry) => parsePredictionPositionSnapshot(entry))
+        .filter((entry): entry is ExecutionPredictionPosition => entry !== null)
+    : [];
+}
+
 function isExecutionSuccessStatus(status: string | null): boolean {
   if (!status) return false;
   const normalized = status.trim().toLowerCase();
@@ -928,6 +1307,27 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     return parseOpenOrdersSnapshot(response);
   }
 
+  async function listPredictionMarkets(
+    input?: {
+      venueKey?: TerminalVenueKey;
+      limit?: number;
+    },
+    options?: RequestOptions,
+  ): Promise<ExecutionPredictionMarket[]> {
+    const params = new URLSearchParams();
+    if (input?.venueKey) params.set("venueKey", input.venueKey);
+    if (typeof input?.limit === "number" && Number.isFinite(input.limit)) {
+      params.set("limit", String(Math.max(1, Math.floor(input.limit))));
+    }
+    const response = await requestJson({
+      path: `/api/terminal/prediction-markets${params.size > 0 ? `?${params.toString()}` : ""}`,
+      method: "GET",
+      signal: options?.signal,
+      headers: options?.headers,
+    });
+    return parsePredictionMarketsSnapshot(response);
+  }
+
   async function previewSpotOrder(
     input: {
       venueKey: TerminalVenueKey;
@@ -948,6 +1348,63 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     return parseSpotPreviewSnapshot(response);
   }
 
+  async function previewPredictionOrder(
+    input: {
+      venueKey: TerminalVenueKey;
+      instrumentId: string;
+      instrumentLabel?: string;
+      outcomeId: string;
+      side: "buy_yes" | "buy_no" | "sell_yes" | "sell_no";
+      quantityAtomic: string;
+      orderType?: "market" | "limit";
+      timeInForce?: "gtc" | "ioc" | "fok";
+      quantityMode?: "base" | "quote" | "notional";
+      limitPriceAtomic?: string;
+    },
+    options?: RequestOptions,
+  ): Promise<ExecutionPredictionPreview> {
+    const response = await requestJson({
+      path: "/api/terminal/prediction-preview",
+      method: "POST",
+      signal: options?.signal,
+      headers: options?.headers,
+      body: input,
+    });
+    return parsePredictionPreviewSnapshot(response);
+  }
+
+  async function submitPredictionOrder(
+    input: {
+      venueKey: TerminalVenueKey;
+      instrumentId: string;
+      instrumentLabel?: string;
+      outcomeId: string;
+      side: "buy_yes" | "buy_no" | "sell_yes" | "sell_no";
+      quantityAtomic: string;
+      orderType?: "market" | "limit";
+      timeInForce?: "gtc" | "ioc" | "fok";
+      quantityMode?: "base" | "quote" | "notional";
+      limitPriceAtomic?: string;
+      source?: string;
+      reason?: string;
+    },
+    options?: SubmitOptions,
+  ): Promise<ExecutionPredictionResult> {
+    const response = await requestJson({
+      path: "/api/terminal/prediction-orders",
+      method: "POST",
+      signal: options?.signal,
+      headers: {
+        ...(options?.idempotencyKey
+          ? { "idempotency-key": options.idempotencyKey }
+          : {}),
+        ...(options?.headers ?? {}),
+      },
+      body: input,
+    });
+    return parsePredictionResultSnapshot(response);
+  }
+
   async function cancelOpenOrder(
     requestId: string,
     options?: RequestOptions,
@@ -959,6 +1416,36 @@ export function createExecutionClient(options: ExecutionClientOptions) {
       headers: options?.headers,
     });
     return parseStatusSnapshot(response);
+  }
+
+  async function listPredictionPositions(
+    options?: RequestOptions,
+  ): Promise<ExecutionPredictionPosition[]> {
+    const response = await requestJson({
+      path: "/api/terminal/prediction-positions",
+      method: "GET",
+      signal: options?.signal,
+      headers: options?.headers,
+    });
+    return parsePredictionPositionsSnapshot(response);
+  }
+
+  async function settlePredictionPosition(
+    positionKey: string,
+    options?: SubmitOptions,
+  ): Promise<ExecutionPredictionResult> {
+    const response = await requestJson({
+      path: `/api/terminal/prediction-positions/${encodeURIComponent(positionKey)}/settle`,
+      method: "POST",
+      signal: options?.signal,
+      headers: {
+        ...(options?.idempotencyKey
+          ? { "idempotency-key": options.idempotencyKey }
+          : {}),
+        ...(options?.headers ?? {}),
+      },
+    });
+    return parsePredictionResultSnapshot(response);
   }
 
   async function waitForTerminalReceipt(input: {
@@ -1056,8 +1543,13 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     status,
     receipt,
     listOpenOrders,
+    listPredictionMarkets,
     previewSpotOrder,
+    previewPredictionOrder,
+    submitPredictionOrder,
     cancelOpenOrder,
+    listPredictionPositions,
+    settlePredictionPosition,
     waitForTerminalReceipt,
   };
 }

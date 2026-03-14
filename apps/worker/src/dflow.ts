@@ -22,6 +22,7 @@ export type DFlowPredictionMarketAccount = {
   noMint: string | null;
   ledgerMint: string | null;
   settlementMint: string | null;
+  scalarOutcomePct: number | null;
   yesBid: number | null;
   yesAsk: number | null;
   noBid: number | null;
@@ -37,6 +38,7 @@ export type DFlowPredictionMarket = {
   title: string;
   eventTitle: string | null;
   status: string | null;
+  result: string | null;
   endTime: string | null;
   settleTime: string | null;
   accounts: DFlowPredictionMarketAccount[];
@@ -148,6 +150,9 @@ function mapMarketAccount(input: {
       readTrimmedString(input.record.settlementMint) ??
       readTrimmedString(input.record.inputMint) ??
       readTrimmedString(input.record.quoteMint),
+    scalarOutcomePct:
+      readFiniteNumber(input.record.scalarOutcomePct) ??
+      readFiniteNumber(input.record.scalar_outcome_pct),
     yesBid:
       readFiniteNumber(input.record.yesBid) ??
       readFiniteNumber(input.record.yes_bid),
@@ -192,6 +197,7 @@ function mapPredictionMarket(
       readTrimmedString(record.eventTitle) ??
       readTrimmedString(record.event_title),
     status: readTrimmedString(record.status),
+    result: readTrimmedString(record.result),
     endTime:
       readTrimmedString(record.endTime) ??
       readTrimmedString(record.closeTime) ??

@@ -29,7 +29,6 @@ import {
   DashboardGrid,
   hasCustomDashboardGridLayouts,
 } from "./components/dashboard-grid";
-import { DegenEventHooksWidget } from "./components/degen-event-hooks-widget";
 import { DegenWatchlistWidget } from "./components/degen-watchlist-widget";
 import {
   buildDepthChartModel,
@@ -59,6 +58,7 @@ import {
   type OpenOrderStatus,
 } from "./components/open-orders";
 import { buildOrderbookLadder } from "./components/orderbook-ladder";
+import { PredictionMarketsPanel } from "./components/prediction-markets-panel";
 import {
   type RealtimeTradeTick,
   type TerminalRealtimeState,
@@ -2109,10 +2109,10 @@ function ControlRoom() {
                       key="degen_event_hooks"
                       className="flex flex-col overflow-hidden bg-surface"
                     >
-                      <DegenEventHooksWidget
-                        selectedPairId={selectedPairId}
+                      <PredictionMarketsPanel
                         tradingEnabled={canQuickTrade}
-                        onTradeAction={openTradeTicket}
+                        getAccessToken={getAccessToken}
+                        terminalVenueRolloutPolicy={terminalVenueRolloutPolicy}
                       />
                     </div>
                   ) : null}

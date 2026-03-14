@@ -18,6 +18,9 @@ describe("portal terminal venue substrate", () => {
   test("resolves venue registry metadata", () => {
     expect(getTerminalVenueDefinition("jupiter")?.label).toBe("Jupiter");
     expect(getTerminalVenueDefinition("openbook")?.badges).toContain("clob");
+    expect(getTerminalVenueDefinition("dflow")?.executionReadiness).toBe(
+      "shadow_paper",
+    );
     expect(getTerminalIntentFamilyLabel("prediction_order")).toBe("Prediction");
     expect(
       getTerminalSpotVenueDefinition("openbook")?.supportedOrderTypes,
