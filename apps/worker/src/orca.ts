@@ -1,10 +1,3 @@
-import { BN } from "@coral-xyz/anchor";
-import { Percentage, ReadOnlyWallet } from "@orca-so/common-sdk";
-import {
-  buildWhirlpoolClient,
-  swapQuoteByInputToken,
-  WhirlpoolContext,
-} from "@orca-so/whirlpools-sdk";
 import {
   Connection,
   PublicKey,
@@ -295,6 +288,14 @@ export function createOrcaSdkFacade(): OrcaSdkFacade {
     slippageBps: number;
     walletPublicKey: string;
   }) {
+    const [{ BN }, { Percentage, ReadOnlyWallet }, whirlpoolSdk] =
+      await Promise.all([
+        import("@coral-xyz/anchor"),
+        import("@orca-so/common-sdk"),
+        import("@orca-so/whirlpools-sdk"),
+      ]);
+    const { buildWhirlpoolClient, swapQuoteByInputToken, WhirlpoolContext } =
+      whirlpoolSdk;
     const connection = new Connection(input.rpcEndpoint, "confirmed");
     const wallet = new ReadOnlyWallet(new PublicKey(input.walletPublicKey));
     const ctx = WhirlpoolContext.from(connection, wallet);
