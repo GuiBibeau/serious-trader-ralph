@@ -118,6 +118,43 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
   },
   {
     schemaVersion: "v1",
+    venueKey: "raydium_perps",
+    displayName: "Raydium Perps",
+    adapterKeys: ["raydium_perps"],
+    marketTypes: ["perp"],
+    orderTypes: ["market", "limit", "trigger"],
+    intentFamilies: ["perp_order"],
+    authModel: "server_signer",
+    feeModel: "maker_taker_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 300,
+      expectedSubmitMs: 700,
+      expectedSettlementMs: 4000,
+    },
+    settlementBehavior: "orderbook_partial",
+    lifecycle: {
+      supportsOrderLifecycle: true,
+      supportsPositionLifecycle: true,
+      requiresExternalOracle: true,
+      settlementModel: "position_account",
+    },
+    oracleRequirements: ["venue_reference"],
+    supportedModes: ["shadow"],
+    onboardingState: "candidate",
+    notes:
+      "Research-gated Raydium Perps candidate. Official Raydium docs route the product through Orderly infrastructure, expose public APIs as read-only market data, and note the venue is not available to U.S. residents as of 2026-03-13. Keep live disabled and fail closed until a later issue models private API auth, account creation, and external dependency health.",
+  },
+  {
+    schemaVersion: "v1",
     venueKey: "orca",
     displayName: "Orca Whirlpools",
     adapterKeys: ["orca"],

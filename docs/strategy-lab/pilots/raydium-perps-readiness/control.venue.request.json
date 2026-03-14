@@ -1,0 +1,13 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "raydium_perps",
+  "liveAllowed": false,
+  "killSwitchEnabled": false,
+  "updatedBy": "codex",
+  "metadata": {
+    "pilot": "raydium-perps-readiness",
+    "issueNumber": 375,
+    "reviewedAt": "2026-03-13",
+    "reason": "orderly-auth-and-jurisdiction-gated"
+  }
+}
