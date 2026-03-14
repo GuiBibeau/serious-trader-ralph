@@ -303,6 +303,43 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
   },
   {
     schemaVersion: "v1",
+    venueKey: "drift_bet",
+    displayName: "Drift BET",
+    adapterKeys: ["drift_prediction"],
+    marketTypes: ["prediction"],
+    orderTypes: ["market", "limit"],
+    intentFamilies: ["prediction_order"],
+    authModel: "privy_solana_wallet",
+    feeModel: "maker_taker_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 250,
+      expectedSubmitMs: 650,
+      expectedSettlementMs: 5000,
+    },
+    settlementBehavior: "orderbook_partial",
+    lifecycle: {
+      supportsOrderLifecycle: true,
+      supportsPositionLifecycle: true,
+      requiresExternalOracle: true,
+      settlementModel: "position_account",
+    },
+    oracleRequirements: ["pyth", "venue_reference"],
+    supportedModes: ["shadow"],
+    onboardingState: "candidate",
+    notes:
+      "Drift BET is a Drift-family prediction market rather than a separate custody venue. Official Drift materials describe prediction markets as perp markets with `contract_type=Prediction`, fully collateralized margin, and prelaunch-oracle valuation, but the current developer surface is still fragmented across older docs repos instead of the main docs site. Keep it candidate-only until a later issue lands maintained discovery, order, and settlement fixtures.",
+  },
+  {
+    schemaVersion: "v1",
     venueKey: "monaco",
     displayName: "Monaco Protocol",
     adapterKeys: ["monaco"],

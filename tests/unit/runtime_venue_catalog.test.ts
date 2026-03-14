@@ -61,6 +61,33 @@ describe("runtime venue catalog", () => {
     ).toBe(true);
   });
 
+  test("adds Drift BET as a candidate prediction-market follow-on of Drift", () => {
+    const venue = getRuntimeVenueCapability("drift_bet");
+
+    expect(venue).not.toBeNull();
+    if (!venue) {
+      throw new Error("expected-drift-bet-capability");
+    }
+
+    expect(venue.marketTypes).toEqual(["prediction"]);
+    expect(venue.intentFamilies).toEqual(["prediction_order"]);
+    expect(venue.onboardingState).toBe("candidate");
+    expect(venue.supportedModes).toEqual(["shadow"]);
+    expect(runtimeVenueSupportsMode(venue, "shadow")).toBe(true);
+    expect(runtimeVenueSupportsMode(venue, "paper")).toBe(false);
+    expect(runtimeVenueSupportsIntentFamily(venue, "prediction_order")).toBe(
+      true,
+    );
+    expect(runtimeVenueSupportsIntentFamily(venue, "perp_order")).toBe(false);
+    expect(venue.notes).toContain("contract_type=Prediction");
+    expect(venue.notes).toContain("main docs site");
+    expect(
+      listRuntimeVenueCapabilities().some(
+        (capability) => capability.venueKey === "drift_bet",
+      ),
+    ).toBe(true);
+  });
+
   test("adds Monaco as a candidate prediction-market venue with order and position lifecycle", () => {
     const venue = getRuntimeVenueCapability("monaco");
 

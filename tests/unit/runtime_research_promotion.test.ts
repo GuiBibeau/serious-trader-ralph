@@ -205,6 +205,28 @@ describe("runtime research promotion", () => {
     );
   });
 
+  test("keeps the Drift BET integrated promotion request blocked until the maintained developer surface stabilizes", () => {
+    const request = parseRuntimeResearchPromotionRequest(
+      readJson(
+        "docs/strategy-lab/pilots/drift-bet-readiness/promotion.request.json",
+      ),
+    );
+    const result = buildRuntimeResearchPromotion({ request });
+
+    expect(request.subjectKind).toBe("venue");
+    expect(request.subjectKey).toBe("drift_bet");
+    expect(request.targetState).toBe("integrated");
+    expect(result.promotion.status).toBe("blocked");
+    expect(
+      result.promotion.checks.find(
+        (check) => check.checkId === "candidate-integrated-mappings",
+      )?.status,
+    ).toBe("blocked");
+    expect(result.promotion.evidenceRefs.map((ref) => ref.kind)).toContain(
+      "metadata_draft",
+    );
+  });
+
   test("keeps the Monaco integrated promotion request blocked until the maintained client path is fixed", () => {
     const request = parseRuntimeResearchPromotionRequest(
       readJson(

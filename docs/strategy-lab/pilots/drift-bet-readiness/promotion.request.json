@@ -1,0 +1,31 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "drift_bet",
+  "currentState": "candidate",
+  "targetState": "integrated",
+  "requestedBy": "codex",
+  "issueNumber": 378,
+  "evidenceRefs": [
+    {
+      "kind": "metadata_draft",
+      "ref": "docs/strategy-lab/pilots/drift-bet-readiness/README.md"
+    }
+  ],
+  "metadata": {
+    "pilot": "drift-bet-readiness",
+    "reviewedAt": "2026-03-14",
+    "highestJustifiedState": "candidate",
+    "blockedOn": [
+      "main-docs-developer-surface",
+      "market-discovery-fixtures",
+      "prediction-settlement-reconciliation",
+      "maintained-order-examples"
+    ],
+    "sourceUrls": [
+      "https://www.drift.trade/updates",
+      "https://github.com/drift-labs/v2-teacher/blob/master/source/includes/_prediction_markets.md",
+      "https://github.com/drift-labs/drift-common/blob/master/common-ts/src/constants/predictionMarket.ts",
+      "https://github.com/drift-labs/protocol-v2"
+    ]
+  }
+}

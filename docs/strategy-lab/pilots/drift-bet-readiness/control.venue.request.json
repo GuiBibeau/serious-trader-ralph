@@ -1,0 +1,13 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "drift_bet",
+  "liveAllowed": false,
+  "killSwitchEnabled": false,
+  "updatedBy": "codex",
+  "metadata": {
+    "pilot": "drift-bet-readiness",
+    "issueNumber": 378,
+    "reviewedAt": "2026-03-14",
+    "reason": "prediction-market-docs-surface-gated"
+  }
+}
