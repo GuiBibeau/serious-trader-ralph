@@ -14,7 +14,6 @@ import { executeJupiterSwap } from "./jupiter_executor";
 import { resolveJupiterConditionalSpotOrder } from "./jupiter_trigger";
 import { executeJupiterConditionalSpotOrder } from "./jupiter_trigger_executor";
 import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
-import { executeOpenBookClobOrder } from "./openbook_executor";
 import { executeOrcaSwap } from "./orca_executor";
 import { executeRaydiumSwap } from "./raydium_executor";
 import type {
@@ -334,6 +333,7 @@ export async function executeIntentViaRouter(
       input.intent.family === "clob_order" &&
       registration.adapterKey === "openbook_v2"
     ) {
+      const { executeOpenBookClobOrder } = await import("./openbook_executor");
       return await executeOpenBookClobOrder(input);
     }
     if (
