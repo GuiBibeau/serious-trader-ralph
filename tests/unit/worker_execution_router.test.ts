@@ -436,6 +436,94 @@ describe("worker execution router", () => {
     expect(result.executionMeta?.lifecycle?.positionState).toBe("opening");
   });
 
+  test("routes Mango spot margin orders through the Mango executor in paper mode", async () => {
+    const result = await executeIntentViaRouter({
+      env: {} as never,
+      venueKey: "mango",
+      runtimeMode: "paper",
+      execution: { adapter: "mango" },
+      policy: normalizePolicy({ dryRun: true }),
+      rpc: {} as never,
+      jupiter: {} as never,
+      mango: {
+        describeIntent: () => ({
+          market: {
+            instrumentId: "SOL/USDC",
+            marketType: "spot",
+            marketName: "SOL/USDC",
+            orderbookSource: "openbook_v2",
+            oracleProvider: "pyth",
+            status: "active",
+            referencePriceQuote: 155.2,
+            initialMarginRatio: 0.1,
+            maintenanceMarginRatio: 0.05,
+          },
+          account: {
+            schemaVersion: "v1",
+            snapshotId: "margin_mango_sol_1",
+            venueKey: "mango",
+            accountRef: "mango-account-1",
+            capturedAt: "2026-03-14T05:00:00Z",
+            marketTypes: ["spot", "perp"],
+            equityQuote: "12450.25",
+            initHealthQuote: "3250.50",
+            maintHealthQuote: "2110.25",
+            usedMarginQuote: "4200.00",
+            freeCollateralQuote: "8250.25",
+            liquidationRiskLevel: "warning",
+            beingLiquidated: false,
+            isOperational: true,
+            positions: [],
+            oracles: [
+              {
+                instrumentId: "SOL/USDC",
+                provider: "pyth",
+                status: "healthy",
+                notes: ["fresh"],
+              },
+            ],
+            tags: ["mango", "paper"],
+          },
+          family: "clob_order",
+          side: "buy",
+          orderType: "limit",
+          timeInForce: "gtc",
+          reduceOnly: false,
+          quantityAtomic: "1000000",
+          collateralAtomic: null,
+          limitPriceAtomic: "155000000",
+          triggerPriceAtomic: null,
+        }),
+        buildSyntheticQuote: () => ({
+          inputMint: "mango-account-1",
+          outputMint: "SOL/USDC",
+          inAmount: "1000000",
+          outAmount: "1000000",
+          priceImpactPct: 0,
+          routePlan: [
+            { poolId: "SOL/USDC", swapInfo: { label: "Mango v4 Spot Margin" } },
+          ],
+        }),
+      } as never,
+      intent: {
+        family: "clob_order",
+        wallet: "11111111111111111111111111111111",
+        venueKey: "mango",
+        marketType: "spot",
+        instrumentId: "SOL/USDC",
+        side: "buy",
+        quantityAtomic: "1000000",
+        params: {
+          orderType: "limit",
+        },
+      },
+      log: () => {},
+    });
+
+    expect(result.status).toBe("dry_run");
+    expect(result.executionMeta?.route).toBe("mango");
+  });
+
   test("fails closed when the runtime venue does not support the requested intent family", async () => {
     registerExecutionAdapter(
       "phoenix_orderbook",
