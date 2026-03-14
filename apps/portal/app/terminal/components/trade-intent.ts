@@ -1,3 +1,8 @@
+import type {
+  TerminalIntentFamily,
+  TerminalMarketType,
+  TerminalVenueKey,
+} from "../terminal-venues";
 import {
   DEFAULT_PAIR_ID,
   getPairConfig,
@@ -10,6 +15,11 @@ export type TradeDirection = "buy" | "sell";
 
 export type TradeIntent = {
   pairId: PairId;
+  instrumentId: string;
+  instrumentLabel: string;
+  venueKey: TerminalVenueKey;
+  intentFamily: TerminalIntentFamily;
+  marketType: TerminalMarketType;
   source: string;
   reason: string;
   direction: TradeDirection;
@@ -44,6 +54,11 @@ export function createTradeIntent(
 
   return {
     pairId: pair.id,
+    instrumentId: pair.id,
+    instrumentLabel: pair.id,
+    venueKey: "jupiter",
+    intentFamily: "spot_swap",
+    marketType: "spot",
     source,
     reason:
       opts?.reason ?? (buy ? `Buy ${outputSymbol}` : `Sell ${inputSymbol}`),

@@ -687,15 +687,25 @@ describe("worker terminal open orders and Trigger lifecycle routes", () => {
       const body = (await response.json()) as {
         orders?: Array<{
           requestId?: string;
+          intentFamily?: string;
+          venueKey?: string;
+          marketType?: string;
           pairId?: string;
+          instrumentId?: string;
           status?: string;
           orderType?: string;
+          providerStatus?: string;
         }>;
       };
       expect(body.orders?.[0]?.requestId).toBe("execreq_trigger_list_123456");
+      expect(body.orders?.[0]?.intentFamily).toBe("conditional_spot_order");
+      expect(body.orders?.[0]?.venueKey).toBe("jupiter");
+      expect(body.orders?.[0]?.marketType).toBe("spot");
       expect(body.orders?.[0]?.pairId).toBe("SOL/USDC");
+      expect(body.orders?.[0]?.instrumentId).toBe("SOL/USDC");
       expect(body.orders?.[0]?.status).toBe("working");
       expect(body.orders?.[0]?.orderType).toBe("limit");
+      expect(body.orders?.[0]?.providerStatus).toBe("pending");
     } finally {
       sqlite.close();
     }

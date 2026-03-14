@@ -186,6 +186,70 @@ describe("portal terminal open orders lifecycle", () => {
     expect(row?.amountUi).toBe("1");
     expect(row?.remainingAmountUi).toBe("0.75");
     expect(row?.limitPriceUi).toBe("150");
+    expect(row?.venueKey).toBe("jupiter");
+    expect(row?.intentFamily).toBe("conditional_spot_order");
     expect(row?.lifecycle?.orderState).toBe("open");
+  });
+
+  test("hydrates venue-aware non-pair snapshots without forcing pair support", () => {
+    const row = mapTerminalOpenOrderSnapshot({
+      requestId: "execreq_drift_row_123456",
+      requestStatus: "dispatched",
+      terminal: false,
+      receivedAt: "2026-03-03T02:00:00.000Z",
+      updatedAt: "2026-03-03T02:00:03.000Z",
+      terminalAt: null,
+      intentFamily: "perp_order",
+      venueKey: "drift",
+      marketType: "perp",
+      pairId: null,
+      instrumentId: "SOL-PERP",
+      instrumentLabel: "SOL-PERP",
+      direction: "sell",
+      source: "TERMINAL",
+      reason: "Hydrated perp order",
+      orderType: "limit",
+      timeInForce: "gtc",
+      lane: "safe",
+      simulationPreference: "always",
+      priorityLevel: "high",
+      priorityMicroLamports: 50_000,
+      slippageBps: 25,
+      inputMint: null,
+      outputMint: null,
+      amountAtomic: "10",
+      remainingAmountAtomic: "4",
+      takingAmountAtomic: null,
+      filledInputAtomic: "6",
+      filledOutputAtomic: "0",
+      limitPriceAtomic: "150000000",
+      triggerPriceAtomic: null,
+      provider: "drift",
+      providerStatus: "healthy",
+      signature: null,
+      errorCode: null,
+      errorMessage: null,
+      status: "working",
+      oracleStatus: {
+        freshnessMs: 450,
+        source: "pyth",
+        stale: false,
+      },
+      lifecycle: {
+        orderState: "open",
+        fillState: "pending",
+        settlementState: "confirmed",
+        positionState: "opening",
+        riskState: "healthy",
+        notes: ["Perp order accepted"],
+      },
+    });
+
+    expect(row?.pairId).toBeNull();
+    expect(row?.instrumentLabel).toBe("SOL-PERP");
+    expect(row?.venueKey).toBe("drift");
+    expect(row?.familyLabel).toBe("Perps");
+    expect(row?.providerStatus).toBe("healthy");
+    expect(row?.oracleFreshnessLabel).toBe("450ms");
   });
 });

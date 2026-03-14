@@ -1,4 +1,16 @@
 import { apiBase, isRecord } from "./lib";
+import {
+  parseTerminalIntentFamily,
+  parseTerminalMarketType,
+  parseTerminalOracleStatus,
+  parseTerminalProviderStatus,
+  parseTerminalVenueKey,
+  type TerminalIntentFamily,
+  type TerminalMarketType,
+  type TerminalOracleStatus,
+  type TerminalProviderStatus,
+  type TerminalVenueKey,
+} from "./terminal/terminal-venues";
 
 const BEARER_RE = /^bearer\s+/i;
 
@@ -77,12 +89,15 @@ export type ExecutionSubmitPayload =
       privyExecute: {
         wallet: string;
         intent: {
-          family: "conditional_spot_order";
-          venueKey: "jupiter";
-          marketType: "spot";
+          family: TerminalIntentFamily;
+          venueKey: TerminalVenueKey;
+          marketType: TerminalMarketType;
           instrumentId: string;
-          side: "buy" | "sell";
-          quantityAtomic: string;
+          instrumentLabel?: string;
+          side: "buy" | "sell" | "long" | "short";
+          quantityAtomic?: string;
+          collateralAtomic?: string;
+          notionalAtomic?: string;
         };
         options?: {
           commitment?: "processed" | "confirmed" | "finalized";
@@ -146,7 +161,12 @@ export type ExecutionOpenOrderSnapshot = {
   receivedAt: string | null;
   updatedAt: string | null;
   terminalAt: string | null;
+  intentFamily: TerminalIntentFamily | null;
+  venueKey: TerminalVenueKey | null;
+  marketType: TerminalMarketType | null;
   pairId: string | null;
+  instrumentId: string | null;
+  instrumentLabel: string | null;
   direction: "buy" | "sell" | null;
   source: string | null;
   reason: string | null;
@@ -167,14 +187,18 @@ export type ExecutionOpenOrderSnapshot = {
   limitPriceAtomic: string | null;
   triggerPriceAtomic: string | null;
   provider: string | null;
+  providerStatus: TerminalProviderStatus | null;
   signature: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   status: string | null;
+  oracleStatus: TerminalOracleStatus | null;
   lifecycle: {
     orderState?: string;
     fillState?: string;
     settlementState?: string;
+    positionState?: string;
+    riskState?: string;
     notes?: string[];
   } | null;
 };
@@ -510,7 +534,12 @@ function parseOpenOrderSnapshot(
     receivedAt: parseOptionalString(value.receivedAt),
     updatedAt: parseOptionalString(value.updatedAt),
     terminalAt: parseOptionalString(value.terminalAt),
+    intentFamily: parseTerminalIntentFamily(value.intentFamily),
+    venueKey: parseTerminalVenueKey(value.venueKey),
+    marketType: parseTerminalMarketType(value.marketType),
     pairId: parseOptionalString(value.pairId),
+    instrumentId: parseOptionalString(value.instrumentId),
+    instrumentLabel: parseOptionalString(value.instrumentLabel),
     direction:
       value.direction === "buy" || value.direction === "sell"
         ? value.direction
@@ -559,16 +588,25 @@ function parseOpenOrderSnapshot(
     limitPriceAtomic: parseOptionalAtomicString(value.limitPriceAtomic),
     triggerPriceAtomic: parseOptionalAtomicString(value.triggerPriceAtomic),
     provider: parseOptionalString(value.provider),
+    providerStatus: parseTerminalProviderStatus(value.providerStatus),
     signature: parseOptionalString(value.signature),
     errorCode: parseOptionalString(value.errorCode),
     errorMessage: parseOptionalString(value.errorMessage),
     status: parseOptionalString(value.status),
+    oracleStatus: parseTerminalOracleStatus({
+      freshnessMs: value.oracleFreshnessMs,
+      source: value.oracleSource,
+      stale: value.oracleStale,
+    }),
     lifecycle: lifecycleRaw
       ? {
           orderState: parseOptionalString(lifecycleRaw.orderState) ?? undefined,
           fillState: parseOptionalString(lifecycleRaw.fillState) ?? undefined,
           settlementState:
             parseOptionalString(lifecycleRaw.settlementState) ?? undefined,
+          positionState:
+            parseOptionalString(lifecycleRaw.positionState) ?? undefined,
+          riskState: parseOptionalString(lifecycleRaw.riskState) ?? undefined,
           notes: parseStringArray(lifecycleRaw.notes) ?? undefined,
         }
       : null,

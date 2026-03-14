@@ -6654,6 +6654,24 @@ function resolveTerminalPriorityLevel(
   return "high";
 }
 
+function resolveTerminalProviderStatus(input: {
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>;
+  terminal: boolean;
+}): "healthy" | "degraded" | "pending" {
+  const latestAttemptStatus = readTrimmedString(
+    input.latest?.latestAttempt?.status,
+  )?.toLowerCase();
+  if (
+    latestAttemptStatus === "failed" ||
+    latestAttemptStatus === "rejected" ||
+    latestAttemptStatus === "expired"
+  ) {
+    return "degraded";
+  }
+  if (!input.terminal) return "pending";
+  return input.latest?.receipt?.errorCode ? "degraded" : "healthy";
+}
+
 function resolveTerminalOpenOrderStatus(
   lifecycle: Record<string, unknown> | null,
   terminal: boolean,
@@ -6703,6 +6721,10 @@ function buildTerminalConditionalOrderView(input: {
   const filledOutputAtomic = input.summary?.filledOutputAtomic ?? "0";
   const terminal = Boolean(latest.request.terminalAt);
   const notes = readStringArray(lifecycle?.notes);
+  const providerStatus = resolveTerminalProviderStatus({
+    latest,
+    terminal,
+  });
   return {
     requestId: latest.request.requestId,
     requestStatus: latest.request.status,
@@ -6710,7 +6732,14 @@ function buildTerminalConditionalOrderView(input: {
     receivedAt: latest.request.receivedAt,
     updatedAt: latest.request.updatedAt,
     terminalAt: latest.request.terminalAt,
+    intentFamily: readTrimmedString(intent?.family) ?? "conditional_spot_order",
+    venueKey: readTrimmedString(intent?.venueKey) ?? "jupiter",
+    marketType: readTrimmedString(intent?.marketType) ?? "spot",
     pairId:
+      trackedOrder?.instrumentId ?? readTrimmedString(intent?.instrumentId),
+    instrumentId:
+      trackedOrder?.instrumentId ?? readTrimmedString(intent?.instrumentId),
+    instrumentLabel:
       trackedOrder?.instrumentId ?? readTrimmedString(intent?.instrumentId),
     direction: trackedOrder?.side ?? readTrimmedString(intent?.side),
     source: readTrimmedString(latest.request.metadata?.source) ?? "TERMINAL",
@@ -6743,10 +6772,14 @@ function buildTerminalConditionalOrderView(input: {
     triggerPriceAtomic: readTrimmedString(quality?.triggerPriceAtomic),
     provider:
       latest.receipt?.provider ?? latest.latestAttempt?.provider ?? null,
+    providerStatus,
     signature: latest.receipt?.signature ?? input.summary?.signature ?? null,
     errorCode: latest.receipt?.errorCode ?? null,
     errorMessage: latest.receipt?.errorMessage ?? null,
     status: resolveTerminalOpenOrderStatus(lifecycle, terminal),
+    oracleFreshnessMs: null,
+    oracleSource: null,
+    oracleStale: false,
     lifecycle:
       lifecycle && Object.keys(lifecycle).length > 0
         ? {

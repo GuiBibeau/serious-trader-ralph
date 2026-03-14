@@ -3,6 +3,16 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../cn";
 import { apiBase, BTN_SECONDARY, isRecord } from "../../lib";
+import {
+  getTerminalIntentFamilyLabel,
+  getTerminalVenueDefinition,
+  parseTerminalIntentFamily,
+  parseTerminalMarketType,
+  parseTerminalVenueKey,
+  type TerminalIntentFamily,
+  type TerminalMarketType,
+  type TerminalVenueKey,
+} from "../terminal-venues";
 
 type ExecutionInspectorEvent = {
   state: string;
@@ -31,6 +41,21 @@ export type ExecutionInspectorSnapshot = {
     updatedAt: string | null;
     terminalAt: string | null;
   };
+  intent: {
+    family: TerminalIntentFamily | null;
+    venueKey: TerminalVenueKey | null;
+    marketType: TerminalMarketType | null;
+    instrumentId: string | null;
+    instrumentLabel: string | null;
+  } | null;
+  lifecycle: {
+    orderState?: string;
+    fillState?: string;
+    settlementState?: string;
+    positionState?: string;
+    riskState?: string;
+    notes?: string[];
+  } | null;
   events: ExecutionInspectorEvent[];
   attempts: ExecutionInspectorAttempt[];
   receipt: {
@@ -69,6 +94,8 @@ function parseOptionalInteger(value: unknown): number | null {
 export function parseStatusPayload(payload: unknown): {
   requestId: string;
   status: ExecutionInspectorSnapshot["status"];
+  intent: ExecutionInspectorSnapshot["intent"];
+  lifecycle: ExecutionInspectorSnapshot["lifecycle"];
   events: ExecutionInspectorEvent[];
   attempts: ExecutionInspectorAttempt[];
 } {
@@ -90,6 +117,35 @@ export function parseStatusPayload(payload: unknown): {
     updatedAt: parseOptionalString(statusRaw.updatedAt),
     terminalAt: parseOptionalString(statusRaw.terminalAt),
   };
+  const intentRaw = isRecord(payload.intent) ? payload.intent : null;
+  const lifecycleRaw = isRecord(payload.lifecycle) ? payload.lifecycle : null;
+  const intent = intentRaw
+    ? {
+        family: parseTerminalIntentFamily(intentRaw.family),
+        venueKey: parseTerminalVenueKey(intentRaw.venueKey),
+        marketType: parseTerminalMarketType(intentRaw.marketType),
+        instrumentId: parseOptionalString(intentRaw.instrumentId),
+        instrumentLabel:
+          parseOptionalString(intentRaw.instrumentLabel) ??
+          parseOptionalString(intentRaw.instrumentId),
+      }
+    : null;
+  const lifecycle = lifecycleRaw
+    ? {
+        orderState: parseOptionalString(lifecycleRaw.orderState) ?? undefined,
+        fillState: parseOptionalString(lifecycleRaw.fillState) ?? undefined,
+        settlementState:
+          parseOptionalString(lifecycleRaw.settlementState) ?? undefined,
+        positionState:
+          parseOptionalString(lifecycleRaw.positionState) ?? undefined,
+        riskState: parseOptionalString(lifecycleRaw.riskState) ?? undefined,
+        notes: Array.isArray(lifecycleRaw.notes)
+          ? lifecycleRaw.notes
+              .map((note) => parseOptionalString(note))
+              .filter((note): note is string => note !== null)
+          : undefined,
+      }
+    : null;
 
   const events: ExecutionInspectorEvent[] = Array.isArray(payload.events)
     ? payload.events
@@ -127,7 +183,7 @@ export function parseStatusPayload(payload: unknown): {
         )
     : [];
 
-  return { requestId, status, events, attempts };
+  return { requestId, status, intent, lifecycle, events, attempts };
 }
 
 export function parseReceiptPayload(
@@ -219,6 +275,8 @@ async function fetchExecutionInspectorSnapshot(
   return {
     requestId: status.requestId,
     status: status.status,
+    intent: status.intent,
+    lifecycle: status.lifecycle,
     events: status.events,
     attempts: status.attempts,
     receipt,
@@ -383,11 +441,43 @@ export const ExecutionInspectorDrawer = memo(function ExecutionInspectorDrawer(
                   {snapshot.status.lane ?? "--"} • actor{" "}
                   {snapshot.status.actorType ?? "--"}
                 </p>
+                {snapshot.intent ? (
+                  <p className="text-[11px] text-muted">
+                    venue{" "}
+                    {getTerminalVenueDefinition(snapshot.intent.venueKey)
+                      ?.label ??
+                      snapshot.intent.venueKey ??
+                      "--"}{" "}
+                    • family{" "}
+                    {getTerminalIntentFamilyLabel(snapshot.intent.family) ??
+                      snapshot.intent.family ??
+                      "--"}{" "}
+                    • market {snapshot.intent.marketType ?? "--"} • instrument{" "}
+                    {snapshot.intent.instrumentLabel ??
+                      snapshot.intent.instrumentId ??
+                      "--"}
+                  </p>
+                ) : null}
                 <p className="text-[11px] text-muted">
                   received {formatTimestamp(snapshot.status.receivedAt)} •
                   updated {formatTimestamp(snapshot.status.updatedAt)} •
                   terminal {formatTimestamp(snapshot.status.terminalAt)}
                 </p>
+                {snapshot.lifecycle ? (
+                  <p className="text-[11px] text-muted">
+                    order {snapshot.lifecycle.orderState ?? "--"} • fill{" "}
+                    {snapshot.lifecycle.fillState ?? "--"} • settle{" "}
+                    {snapshot.lifecycle.settlementState ?? "--"} • position{" "}
+                    {snapshot.lifecycle.positionState ?? "--"} • risk{" "}
+                    {snapshot.lifecycle.riskState ?? "--"}
+                  </p>
+                ) : null}
+                {snapshot.lifecycle?.notes &&
+                snapshot.lifecycle.notes.length > 0 ? (
+                  <p className="text-[11px] text-muted">
+                    notes: {snapshot.lifecycle.notes.join(" • ")}
+                  </p>
+                ) : null}
                 {normalizedError ? (
                   <p className="mt-1 text-[11px] text-red-300">
                     {normalizedError}

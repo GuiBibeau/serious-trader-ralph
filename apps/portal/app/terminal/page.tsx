@@ -136,6 +136,13 @@ import {
   type TerminalModule,
   writeLocalTerminalMode,
 } from "./terminal-modes";
+import {
+  resolveTerminalVenueRolloutPolicy,
+  type TerminalIntentFamily,
+  type TerminalMarketType,
+  type TerminalProviderStatus,
+  type TerminalVenueKey,
+} from "./terminal-venues";
 
 type Balances = BalanceResponse;
 type ExecutionActivityRow = {
@@ -143,7 +150,12 @@ type ExecutionActivityRow = {
   ts: number;
   requestId: string;
   receiptId: string | null;
-  pairId: PairId;
+  pairId: PairId | null;
+  instrumentId: string;
+  instrumentLabel: string;
+  venueKey: TerminalVenueKey;
+  intentFamily: TerminalIntentFamily;
+  marketType: TerminalMarketType;
   direction: "buy" | "sell";
   leg: string;
   lane: "fast" | "protected" | "safe";
@@ -154,6 +166,7 @@ type ExecutionActivityRow = {
   feeSymbol: string | null;
   status: string;
   provider: string | null;
+  providerStatus: TerminalProviderStatus | null;
   signature: string | null;
   qualitySummary: string;
 };
@@ -311,25 +324,31 @@ function isSupportedPairId(value: string): value is PairId {
 function buildConditionalOrderExecutionEntry(
   snapshot: ExecutionOpenOrderSnapshot,
 ): ExecutionActivityRow | null {
-  if (
-    !snapshot.requestId ||
-    !snapshot.pairId ||
-    !isSupportedPairId(snapshot.pairId)
-  ) {
-    return null;
-  }
+  if (!snapshot.requestId) return null;
   if (snapshot.direction !== "buy" && snapshot.direction !== "sell") {
     return null;
   }
-  const pair = getPairConfig(snapshot.pairId);
+  const pairId =
+    snapshot.pairId && isSupportedPairId(snapshot.pairId)
+      ? snapshot.pairId
+      : null;
+  const pair = pairId ? getPairConfig(pairId) : null;
   const fallbackInputToken =
     snapshot.direction === "buy"
-      ? TOKEN_CONFIGS[pair.quoteSymbol]
-      : TOKEN_CONFIGS[pair.baseSymbol];
+      ? pair
+        ? TOKEN_CONFIGS[pair.quoteSymbol]
+        : null
+      : pair
+        ? TOKEN_CONFIGS[pair.baseSymbol]
+        : null;
   const fallbackOutputToken =
     snapshot.direction === "buy"
-      ? TOKEN_CONFIGS[pair.baseSymbol]
-      : TOKEN_CONFIGS[pair.quoteSymbol];
+      ? pair
+        ? TOKEN_CONFIGS[pair.baseSymbol]
+        : null
+      : pair
+        ? TOKEN_CONFIGS[pair.quoteSymbol]
+        : null;
   const inputToken =
     (snapshot.inputMint ? TOKEN_BY_MINT[snapshot.inputMint] : null) ??
     fallbackInputToken;
@@ -339,14 +358,14 @@ function buildConditionalOrderExecutionEntry(
   const inputFilledUi = Number(
     formatAtomicTokenBalance(
       snapshot.filledInputAtomic,
-      inputToken.decimals,
+      inputToken?.decimals ?? 0,
       9,
     ),
   );
   const outputFilledUi = Number(
     formatAtomicTokenBalance(
       snapshot.filledOutputAtomic,
-      outputToken.decimals,
+      outputToken?.decimals ?? 0,
       9,
     ),
   );
@@ -372,9 +391,21 @@ function buildConditionalOrderExecutionEntry(
     ts: Number.isFinite(tsRaw) ? tsRaw : Date.now(),
     requestId: snapshot.requestId,
     receiptId: null,
-    pairId: snapshot.pairId,
+    pairId,
+    instrumentId: snapshot.instrumentId ?? pairId ?? snapshot.requestId,
+    instrumentLabel:
+      snapshot.instrumentLabel ??
+      pairId ??
+      snapshot.instrumentId ??
+      "Instrument",
+    venueKey: snapshot.venueKey ?? "jupiter",
+    intentFamily: snapshot.intentFamily ?? "conditional_spot_order",
+    marketType: snapshot.marketType ?? "spot",
     direction: snapshot.direction,
-    leg: `${inputToken.symbol} -> ${outputToken.symbol}`,
+    leg:
+      inputToken && outputToken
+        ? `${inputToken.symbol} -> ${outputToken.symbol}`
+        : (snapshot.instrumentLabel ?? snapshot.instrumentId ?? "instrument"),
     lane: snapshot.lane ?? "safe",
     baseFilledUi,
     quoteFilledUi,
@@ -383,6 +414,7 @@ function buildConditionalOrderExecutionEntry(
     feeSymbol: null,
     status: snapshot.status ?? snapshot.requestStatus,
     provider: snapshot.provider,
+    providerStatus: snapshot.providerStatus,
     signature: snapshot.signature,
     qualitySummary: `lane ${snapshot.lane ?? "safe"} • sim ${snapshot.simulationPreference ?? "auto"} • slip ${snapshot.slippageBps ?? 50} bps • prio ${snapshot.priorityLevel ?? "normal"}`,
   };
@@ -546,6 +578,13 @@ function ControlRoom() {
         context: terminalRolloutContext,
       }),
     [terminalRolloutContext],
+  );
+  const terminalVenueRolloutPolicy = useMemo(
+    () =>
+      resolveTerminalVenueRolloutPolicy({
+        profile: userProfile,
+      }),
+    [userProfile],
   );
   const modeCapabilities = getTerminalModeCapabilities(terminalMode);
   const activeCustomWorkspace = useMemo(
@@ -1466,6 +1505,11 @@ function ControlRoom() {
           requestId: trade.requestId,
           receiptId: trade.receiptId,
           pairId: trade.pairId,
+          instrumentId: trade.instrumentId,
+          instrumentLabel: trade.instrumentLabel,
+          venueKey: trade.venueKey,
+          intentFamily: trade.intentFamily,
+          marketType: trade.marketType,
           direction: trade.direction,
           leg: `${trade.inputSymbol} -> ${trade.outputSymbol}`,
           lane: trade.lane,
@@ -1476,6 +1520,7 @@ function ControlRoom() {
           feeSymbol: trade.feeSymbol,
           status: trade.status,
           provider: trade.provider,
+          providerStatus: null,
           signature: trade.signature,
           qualitySummary: `lane ${trade.lane} • sim ${trade.simulationPreference} • slip ${trade.slippageBps} bps • prio ${trade.priorityLevel}`,
         };
@@ -1978,6 +2023,7 @@ function ControlRoom() {
                       <PositionsOrdersFillsPanel
                         entries={recentExecutions}
                         openOrders={openOrders}
+                        terminalVenueRolloutPolicy={terminalVenueRolloutPolicy}
                         selectedPairId={selectedPairId}
                         selectedPairMark={marketFeed.latestPrice}
                         tokenBalancesByMint={tokenBalancesByMint}
@@ -2838,6 +2884,9 @@ const PositionsOrdersFillsPanel = memo(
   function PositionsOrdersFillsPanel(props: {
     entries: ExecutionActivityRow[];
     openOrders: OpenOrderRow[];
+    terminalVenueRolloutPolicy: ReturnType<
+      typeof resolveTerminalVenueRolloutPolicy
+    >;
     selectedPairId: PairId;
     selectedPairMark: number | null;
     tokenBalancesByMint: Record<string, string>;
@@ -2849,6 +2898,7 @@ const PositionsOrdersFillsPanel = memo(
     const {
       entries,
       openOrders,
+      terminalVenueRolloutPolicy,
       selectedPairId,
       selectedPairMark,
       tokenBalancesByMint,
@@ -2879,18 +2929,24 @@ const PositionsOrdersFillsPanel = memo(
     }, [tokenBalancesByMint]);
     const fills = useMemo<PositionFill[]>(
       () =>
-        entries.map((entry) => ({
-          id: entry.id,
-          ts: entry.ts,
-          pairId: entry.pairId,
-          direction: entry.direction,
-          status: entry.status,
-          signature: entry.signature,
-          baseFilledUi: entry.baseFilledUi,
-          quoteFilledUi: entry.quoteFilledUi,
-          fillPrice: entry.fillPrice,
-          qualitySummary: entry.qualitySummary,
-        })),
+        entries.flatMap((entry) =>
+          entry.pairId
+            ? [
+                {
+                  id: entry.id,
+                  ts: entry.ts,
+                  pairId: entry.pairId,
+                  direction: entry.direction,
+                  status: entry.status,
+                  signature: entry.signature,
+                  baseFilledUi: entry.baseFilledUi,
+                  quoteFilledUi: entry.quoteFilledUi,
+                  fillPrice: entry.fillPrice,
+                  qualitySummary: entry.qualitySummary,
+                },
+              ]
+            : [],
+        ),
       [entries],
     );
     const positions = useMemo(
@@ -2989,22 +3045,28 @@ const PositionsOrdersFillsPanel = memo(
     );
     const ledgerRows = useMemo<FillLedgerRow[]>(
       () =>
-        entries.map((entry) => ({
-          id: entry.id,
-          ts: entry.ts,
-          requestId: entry.requestId,
-          receiptId: entry.receiptId,
-          pairId: entry.pairId,
-          side: entry.direction,
-          sizeBaseUi: entry.baseFilledUi,
-          quoteFilledUi: entry.quoteFilledUi,
-          price: entry.fillPrice,
-          feeUi: entry.feeUi,
-          feeSymbol: entry.feeSymbol,
-          status: entry.status,
-          provider: entry.provider,
-          signature: entry.signature,
-        })),
+        entries.flatMap((entry) =>
+          entry.pairId
+            ? [
+                {
+                  id: entry.id,
+                  ts: entry.ts,
+                  requestId: entry.requestId,
+                  receiptId: entry.receiptId,
+                  pairId: entry.pairId,
+                  side: entry.direction,
+                  sizeBaseUi: entry.baseFilledUi,
+                  quoteFilledUi: entry.quoteFilledUi,
+                  price: entry.fillPrice,
+                  feeUi: entry.feeUi,
+                  feeSymbol: entry.feeSymbol,
+                  status: entry.status,
+                  provider: entry.provider,
+                  signature: entry.signature,
+                },
+              ]
+            : [],
+        ),
       [entries],
     );
     const filteredLedgerRows = useMemo(
@@ -3112,7 +3174,8 @@ const PositionsOrdersFillsPanel = memo(
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-mono text-[11px] text-ink truncate">
-                        {order.pairId} • {order.direction.toUpperCase()} •{" "}
+                        {order.instrumentLabel} •{" "}
+                        {order.direction.toUpperCase()} •{" "}
                         {order.orderType.toUpperCase()}
                       </p>
                       <p className="text-[10px] text-muted">
@@ -3127,6 +3190,34 @@ const PositionsOrdersFillsPanel = memo(
                           Request {shortExecutionId(order.requestId)}
                         </p>
                       ) : null}
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <span className="rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-sky-200">
+                          {order.venueLabel}
+                        </span>
+                        <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-emerald-200">
+                          {order.familyLabel}
+                        </span>
+                        {order.providerStatus ? (
+                          <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted">
+                            provider {order.providerStatus}
+                          </span>
+                        ) : null}
+                        {order.oracleFreshnessLabel ? (
+                          <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted">
+                            oracle {order.oracleFreshnessLabel}
+                          </span>
+                        ) : null}
+                        {!terminalVenueRolloutPolicy.enabledVenues.includes(
+                          order.venueKey,
+                        ) ||
+                        !terminalVenueRolloutPolicy.enabledFamilies.includes(
+                          order.intentFamily,
+                        ) ? (
+                          <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-200">
+                            rollout gated
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                     <span
                       className={cn(

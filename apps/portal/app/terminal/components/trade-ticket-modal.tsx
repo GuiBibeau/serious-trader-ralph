@@ -17,6 +17,13 @@ import {
   newExecutionIdempotencyKey,
 } from "../../execution-client";
 import { apiBase, BTN_PRIMARY, BTN_SECONDARY, isRecord } from "../../lib";
+import type {
+  TerminalIntentFamily,
+  TerminalMarketType,
+  TerminalOracleStatus,
+  TerminalProviderStatus,
+  TerminalVenueKey,
+} from "../terminal-venues";
 import {
   type AccountRiskSnapshot,
   evaluatePreSubmitRisk,
@@ -57,6 +64,11 @@ type TradeTicketHotkeyBindings = {
 
 export type TradeTicketCompletion = {
   pairId: TradeIntent["pairId"];
+  instrumentId: string;
+  instrumentLabel: string;
+  venueKey: TradeIntent["venueKey"];
+  intentFamily: TradeIntent["intentFamily"];
+  marketType: TradeIntent["marketType"];
   direction: TradeIntent["direction"];
   source: string;
   reason: string;
@@ -88,6 +100,13 @@ export type QueuedTerminalOrder = {
   createdAt: number;
   updatedAt: number;
   pairId: TradeIntent["pairId"];
+  instrumentId?: string;
+  instrumentLabel?: string;
+  venueKey?: TerminalVenueKey;
+  intentFamily?: TerminalIntentFamily;
+  marketType?: TerminalMarketType;
+  providerStatus?: TerminalProviderStatus | null;
+  oracleStatus?: TerminalOracleStatus | null;
   direction: TradeIntent["direction"];
   source: string;
   reason: string;
@@ -880,9 +899,9 @@ export function TradeTicketModal({
               wallet: walletAddress,
               intent: {
                 family: "conditional_spot_order",
-                venueKey: "jupiter",
-                marketType: "spot",
-                instrumentId: intent.pairId,
+                venueKey: intent.venueKey,
+                marketType: intent.marketType,
+                instrumentId: intent.instrumentId,
                 side: intent.direction,
                 quantityAtomic: quote.inAmountAtomic,
               },
@@ -902,7 +921,7 @@ export function TradeTicketModal({
         closeModal();
         onOrderQueued?.(submitAck.requestId);
         toast.success(`${orderType.toUpperCase()} order submitted`, {
-          description: `${intent.pairId} • ${amountUi.trim()} ${intent.inputSymbol}`,
+          description: `${intent.instrumentLabel} • ${amountUi.trim()} ${intent.inputSymbol}`,
           position: "bottom-right",
           duration: 3500,
         });
@@ -998,6 +1017,11 @@ export function TradeTicketModal({
 
       onTradeComplete?.({
         pairId: intent.pairId,
+        instrumentId: intent.instrumentId,
+        instrumentLabel: intent.instrumentLabel,
+        venueKey: intent.venueKey,
+        intentFamily: intent.intentFamily,
+        marketType: intent.marketType,
         direction: intent.direction,
         source: intent.source,
         reason: intent.reason,

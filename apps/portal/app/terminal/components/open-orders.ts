@@ -1,3 +1,13 @@
+import {
+  formatTerminalOracleFreshness,
+  getTerminalIntentFamilyLabel,
+  getTerminalVenueDefinition,
+  type TerminalIntentFamily,
+  type TerminalMarketType,
+  type TerminalOracleStatus,
+  type TerminalProviderStatus,
+  type TerminalVenueKey,
+} from "../terminal-venues";
 import { type PairId, SUPPORTED_PAIRS, TOKEN_BY_MINT } from "./trade-pairs";
 import type { QueuedTerminalOrder } from "./trade-ticket-modal";
 
@@ -17,7 +27,12 @@ export type TerminalOpenOrderSnapshot = {
   receivedAt: string | null;
   updatedAt: string | null;
   terminalAt: string | null;
+  intentFamily: TerminalIntentFamily | null;
+  venueKey: TerminalVenueKey | null;
+  marketType: TerminalMarketType | null;
   pairId: string | null;
+  instrumentId: string | null;
+  instrumentLabel: string | null;
   direction: "buy" | "sell" | null;
   source: string | null;
   reason: string | null;
@@ -38,19 +53,34 @@ export type TerminalOpenOrderSnapshot = {
   limitPriceAtomic: string | null;
   triggerPriceAtomic: string | null;
   provider: string | null;
+  providerStatus: TerminalProviderStatus | null;
   signature: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   status: string | null;
+  oracleStatus: TerminalOracleStatus | null;
   lifecycle: {
     orderState?: string;
     fillState?: string;
     settlementState?: string;
+    positionState?: string;
+    riskState?: string;
     notes?: string[];
   } | null;
 };
 
-export type OpenOrderRow = QueuedTerminalOrder & {
+export type OpenOrderRow = Omit<QueuedTerminalOrder, "pairId"> & {
+  pairId: PairId | null;
+  instrumentId: string;
+  instrumentLabel: string;
+  venueKey: TerminalVenueKey;
+  intentFamily: TerminalIntentFamily;
+  marketType: TerminalMarketType;
+  venueLabel: string;
+  familyLabel: string;
+  providerStatus: TerminalProviderStatus | null;
+  oracleStatus: TerminalOracleStatus | null;
+  oracleFreshnessLabel: string | null;
   requestId?: string | null;
   status: OpenOrderStatus;
   initialAmountUi: string;
@@ -147,9 +177,20 @@ export function mapTerminalOpenOrderSnapshot(
     snapshot.pairId && isSupportedPairId(snapshot.pairId)
       ? snapshot.pairId
       : null;
-  if (!pairId || !snapshot.direction || !snapshot.orderType || !snapshot.lane) {
+  if (!snapshot.direction || !snapshot.orderType || !snapshot.lane) {
     return null;
   }
+  const instrumentId = snapshot.instrumentId ?? pairId ?? snapshot.requestId;
+  if (!instrumentId) return null;
+  const instrumentLabel =
+    snapshot.instrumentLabel ?? pairId ?? snapshot.instrumentId ?? instrumentId;
+  const venueKey = snapshot.venueKey ?? "jupiter";
+  const intentFamily = snapshot.intentFamily ?? "conditional_spot_order";
+  const marketType = snapshot.marketType ?? "spot";
+  const venueLabel =
+    getTerminalVenueDefinition(venueKey)?.label ?? venueKey.toUpperCase();
+  const familyLabel =
+    getTerminalIntentFamilyLabel(intentFamily) ?? intentFamily;
   const inputToken = snapshot.inputMint
     ? TOKEN_BY_MINT[snapshot.inputMint]
     : null;
@@ -168,6 +209,18 @@ export function mapTerminalOpenOrderSnapshot(
     createdAt,
     updatedAt,
     pairId,
+    instrumentId,
+    instrumentLabel,
+    venueKey,
+    intentFamily,
+    marketType,
+    venueLabel,
+    familyLabel,
+    providerStatus: snapshot.providerStatus,
+    oracleStatus: snapshot.oracleStatus,
+    oracleFreshnessLabel: formatTerminalOracleFreshness(
+      snapshot.oracleStatus?.freshnessMs,
+    ),
     direction: snapshot.direction,
     source: snapshot.source ?? "TERMINAL",
     reason: snapshot.reason ?? "Conditional order",
@@ -213,8 +266,27 @@ export function queueOpenOrder(
   current: readonly OpenOrderRow[],
   order: QueuedTerminalOrder,
 ): OpenOrderRow[] {
+  const venueKey = order.venueKey ?? "jupiter";
+  const intentFamily = order.intentFamily ?? "conditional_spot_order";
+  const venueLabel =
+    getTerminalVenueDefinition(venueKey)?.label ?? venueKey.toUpperCase();
+  const familyLabel =
+    getTerminalIntentFamilyLabel(intentFamily) ?? intentFamily;
   const nextOrder: OpenOrderRow = {
     ...order,
+    pairId: order.pairId,
+    instrumentId: order.instrumentId ?? order.pairId,
+    instrumentLabel: order.instrumentLabel ?? order.pairId,
+    venueKey,
+    intentFamily,
+    marketType: order.marketType ?? "spot",
+    venueLabel,
+    familyLabel,
+    providerStatus: order.providerStatus ?? null,
+    oracleStatus: order.oracleStatus ?? null,
+    oracleFreshnessLabel: formatTerminalOracleFreshness(
+      order.oracleStatus?.freshnessMs,
+    ),
     status: "pending",
     initialAmountUi: order.amountUi,
     lastError: null,
