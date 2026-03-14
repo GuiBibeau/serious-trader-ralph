@@ -1,3 +1,4 @@
+import type { DFlowClient } from "../dflow";
 import type { DriftClient } from "../drift";
 import type { JupiterClient, JupiterQuoteResponse } from "../jupiter";
 import type { MangoClient } from "../mango";
@@ -72,6 +73,7 @@ export type NonSwapExecutionIntent = {
   venueKey: string;
   marketType: "spot" | "perp" | "prediction";
   instrumentId: string;
+  outcomeId?: string;
   side?: string;
   quantityAtomic?: string;
   collateralAtomic?: string;
@@ -94,6 +96,7 @@ type ExecuteIntentInputBase = {
   policy: NormalizedPolicy;
   rpc: SolanaRpc;
   jupiter: JupiterClient;
+  dflow?: DFlowClient;
   drift?: DriftClient;
   mango?: MangoClient;
   orca?: OrcaClient;

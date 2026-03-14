@@ -1,0 +1,38 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "dflow",
+  "currentState": "candidate",
+  "targetState": "integrated",
+  "requestedBy": "codex",
+  "issueNumber": 376,
+  "evidenceRefs": [
+    {
+      "kind": "metadata_draft",
+      "ref": "docs/strategy-lab/pilots/dflow-readiness/README.md"
+    },
+    {
+      "kind": "mapping_coverage",
+      "ref": "apps/worker/src/dflow.ts"
+    }
+  ],
+  "metadata": {
+    "pilot": "dflow-readiness",
+    "reviewedAt": "2026-03-14",
+    "highestJustifiedState": "integrated",
+    "blockedOn": [
+      "proof-aware-live-identity-gating",
+      "settlement-and-redemption-reconciliation",
+      "tiny-notional-live-canary"
+    ],
+    "sourceUrls": [
+      "https://pond.dflow.net/introduction/getting-started",
+      "https://pond.dflow.net/build/recipes/prediction-markets/discover-markets",
+      "https://pond.dflow.net/build/endpoints/metadata-api/market-by-mint",
+      "https://pond.dflow.net/build/recipes/prediction-markets/track-positions",
+      "https://pond.dflow.net/build/recipes/prediction-markets/trade-into-position",
+      "https://pond.dflow.net/build/recipes/prediction-markets/monitor-market-lifecycle",
+      "https://pond.dflow.net/build/recipes/prediction-markets/fees-and-settlement",
+      "https://pond.dflow.net/build/prediction-markets/kyc"
+    ]
+  }
+}

@@ -61,6 +61,33 @@ describe("runtime venue catalog", () => {
     ).toBe(true);
   });
 
+  test("adds DFlow as an integrated prediction-market venue for shadow and paper", () => {
+    const venue = getRuntimeVenueCapability("dflow");
+
+    expect(venue).not.toBeNull();
+    if (!venue) {
+      throw new Error("expected-dflow-capability");
+    }
+
+    expect(venue.marketTypes).toEqual(["prediction"]);
+    expect(venue.intentFamilies).toEqual(["prediction_order"]);
+    expect(venue.onboardingState).toBe("integrated");
+    expect(venue.supportedModes).toEqual(["shadow", "paper"]);
+    expect(runtimeVenueSupportsMode(venue, "paper")).toBe(true);
+    expect(runtimeVenueSupportsMode(venue, "live")).toBe(false);
+    expect(runtimeVenueSupportsIntentFamily(venue, "prediction_order")).toBe(
+      true,
+    );
+    expect(runtimeVenueSupportsIntentFamily(venue, "perp_order")).toBe(false);
+    expect(venue.notes).toContain("Proof");
+    expect(venue.notes).toContain("Kalshi");
+    expect(
+      listRuntimeVenueCapabilities().some(
+        (capability) => capability.venueKey === "dflow",
+      ),
+    ).toBe(true);
+  });
+
   test("adds Drift BET as a candidate prediction-market follow-on of Drift", () => {
     const venue = getRuntimeVenueCapability("drift_bet");
 

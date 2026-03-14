@@ -42,6 +42,10 @@ export function registerMarketTools(
     computePriceSnapshot,
     resolveVenueDexes,
   } = deps;
+  const dflowMetadataBaseUrl =
+    process.env.DFLOW_METADATA_API_BASE ||
+    "https://dev-prediction-markets-api.dflow.net/api/v1";
+  const dflowApiKey = process.env.DFLOW_API_KEY || "";
 
   const buildConnection = (ctx: ToolContext): Connection =>
     new Connection(ctx.config.rpc.endpoint, "confirmed");
@@ -60,6 +64,173 @@ export function registerMarketTools(
       if (value === 0) sawZero = true;
     }
     return sawZero ? 0 : null;
+  };
+
+  const sumFinite = (
+    values: Array<number | null | undefined>,
+  ): number | null => {
+    const total = values.reduce<number>((sum, value) => {
+      if (value === null || value === undefined) return sum;
+      if (!Number.isFinite(value)) return sum;
+      return sum + value;
+    }, 0);
+    return total > 0 ? total : null;
+  };
+
+  const isToolRecord = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+  const readToolString = (value: unknown): string | null => {
+    const normalized = String(value ?? "").trim();
+    return normalized || null;
+  };
+
+  const readToolNumberish = (
+    value: unknown,
+  ): string | number | null | undefined =>
+    typeof value === "string" ||
+    typeof value === "number" ||
+    value === null ||
+    value === undefined
+      ? value
+      : undefined;
+
+  const mapDFlowMarket = (record: Record<string, unknown>) => {
+    const marketId =
+      readToolString(record.ticker) ??
+      readToolString(record.marketId) ??
+      readToolString(record.id);
+    if (!marketId) return null;
+    const accounts = Array.isArray(record.accounts)
+      ? record.accounts.filter(isToolRecord).map((entry) => ({
+          yesMint:
+            readToolString(entry.yesMint) ?? readToolString(entry.yes_mint),
+          noMint: readToolString(entry.noMint) ?? readToolString(entry.no_mint),
+          ledgerMint:
+            readToolString(entry.ledgerMint) ??
+            readToolString(entry.ledger_mint),
+          settlementMint:
+            readToolString(entry.settlementMint) ??
+            readToolString(entry.inputMint) ??
+            readToolString(entry.quoteMint),
+          yesBid:
+            toNumber(readToolNumberish(entry.yesBid)) ??
+            toNumber(readToolNumberish(entry.yes_bid)),
+          yesAsk:
+            toNumber(readToolNumberish(entry.yesAsk)) ??
+            toNumber(readToolNumberish(entry.yes_ask)),
+          noBid:
+            toNumber(readToolNumberish(entry.noBid)) ??
+            toNumber(readToolNumberish(entry.no_bid)),
+          noAsk:
+            toNumber(readToolNumberish(entry.noAsk)) ??
+            toNumber(readToolNumberish(entry.no_ask)),
+          openInterest:
+            toNumber(readToolNumberish(entry.openInterest)) ??
+            toNumber(readToolNumberish(entry.open_interest)),
+          volume:
+            toNumber(readToolNumberish(entry.volume)) ??
+            toNumber(readToolNumberish(entry.volumeUsd)),
+        }))
+      : isToolRecord(record.accounts)
+        ? Object.values(record.accounts)
+            .filter(isToolRecord)
+            .map((entry) => ({
+              yesMint:
+                readToolString(entry.yesMint) ?? readToolString(entry.yes_mint),
+              noMint:
+                readToolString(entry.noMint) ?? readToolString(entry.no_mint),
+              ledgerMint:
+                readToolString(entry.ledgerMint) ??
+                readToolString(entry.ledger_mint),
+              settlementMint:
+                readToolString(entry.settlementMint) ??
+                readToolString(entry.inputMint) ??
+                readToolString(entry.quoteMint),
+              yesBid:
+                toNumber(readToolNumberish(entry.yesBid)) ??
+                toNumber(readToolNumberish(entry.yes_bid)),
+              yesAsk:
+                toNumber(readToolNumberish(entry.yesAsk)) ??
+                toNumber(readToolNumberish(entry.yes_ask)),
+              noBid:
+                toNumber(readToolNumberish(entry.noBid)) ??
+                toNumber(readToolNumberish(entry.no_bid)),
+              noAsk:
+                toNumber(readToolNumberish(entry.noAsk)) ??
+                toNumber(readToolNumberish(entry.no_ask)),
+              openInterest:
+                toNumber(readToolNumberish(entry.openInterest)) ??
+                toNumber(readToolNumberish(entry.open_interest)),
+              volume:
+                toNumber(readToolNumberish(entry.volume)) ??
+                toNumber(readToolNumberish(entry.volumeUsd)),
+            }))
+        : [];
+    return {
+      marketId,
+      title:
+        readToolString(record.title) ??
+        readToolString(record.question) ??
+        marketId,
+      endTime:
+        readToolString(record.endTime) ??
+        readToolString(record.closeTime) ??
+        readToolString(record.close_time),
+      settleTime:
+        readToolString(record.settleTime) ??
+        readToolString(record.settlementTime) ??
+        readToolString(record.settlement_time),
+      accounts,
+    };
+  };
+
+  const fetchDFlowJson = async (path: string): Promise<unknown> => {
+    const url = new URL(path, dflowMetadataBaseUrl);
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        ...(dflowApiKey ? { "x-api-key": dflowApiKey } : {}),
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`dflow request failed: ${response.status}`);
+    }
+    return await response.json();
+  };
+
+  const listDFlowMarkets = async () => {
+    const payload = await fetchDFlowJson("/markets?status=active&limit=200");
+    if (!isToolRecord(payload)) {
+      throw new Error("dflow-market-invalid-payload");
+    }
+    const records = Array.isArray(payload.markets)
+      ? payload.markets
+      : Array.isArray(payload.data)
+        ? payload.data
+        : [];
+    return records
+      .filter(isToolRecord)
+      .map(mapDFlowMarket)
+      .filter((market): market is NonNullable<typeof market> =>
+        Boolean(market),
+      );
+  };
+
+  const getDFlowMarketByMint = async (mint: string) => {
+    const payload = await fetchDFlowJson(
+      `/markets/by-mint/${encodeURIComponent(mint)}`,
+    );
+    if (!isToolRecord(payload)) {
+      throw new Error("dflow-market-invalid-payload");
+    }
+    const record = isToolRecord(payload.market)
+      ? payload.market
+      : isToolRecord(payload.data)
+        ? payload.data
+        : null;
+    return record ? mapDFlowMarket(record) : null;
   };
 
   const parseBigInt = (
@@ -361,6 +532,19 @@ export function registerMarketTools(
     },
     execute: async (_ctx: ToolContext, input: { venue: string }) => {
       const venue = input.venue.trim().toLowerCase();
+      if (venue === "dflow") {
+        const markets = (await listDFlowMarkets()).slice(0, 50);
+        return {
+          markets: markets.map((market) => ({
+            id: market.marketId,
+            title: market.title,
+            endTime: market.endTime ?? "",
+            yesMint: market.accounts[0]?.yesMint ?? "",
+            noMint: market.accounts[0]?.noMint ?? "",
+            settlementMint: market.accounts[0]?.settlementMint ?? "",
+          })),
+        };
+      }
       if (venue !== "kalshi") {
         throw new Error("unsupported-venue");
       }
@@ -412,6 +596,54 @@ export function registerMarketTools(
       input: { venue: string; marketId: string },
     ) => {
       const venue = input.venue.trim().toLowerCase();
+      if (venue === "dflow") {
+        const marketId = input.marketId.trim();
+        if (!marketId) {
+          throw new Error("market-id-required");
+        }
+        let market = await getDFlowMarketByMint(marketId);
+        if (!market) {
+          const markets = await listDFlowMarkets();
+          market =
+            markets.find(
+              (entry) =>
+                entry.marketId.toLowerCase() === marketId.toLowerCase() ||
+                entry.accounts.some(
+                  (account) =>
+                    account.yesMint === marketId ||
+                    account.noMint === marketId ||
+                    account.ledgerMint === marketId,
+                ),
+            ) ?? null;
+        }
+        if (!market) {
+          throw new Error("dflow-market-unavailable");
+        }
+        const yesPrice = pickBestPrice(
+          ...market.accounts.flatMap((account) => [
+            account.yesAsk,
+            account.yesBid,
+          ]),
+        );
+        const noPrice = pickBestPrice(
+          ...market.accounts.flatMap((account) => [
+            account.noAsk,
+            account.noBid,
+          ]),
+        );
+        const liquidity = sumFinite(
+          market.accounts.flatMap((account) => [
+            account.openInterest,
+            account.volume,
+          ]),
+        );
+        return {
+          yesPrice: toStringOrEmpty(yesPrice),
+          noPrice: toStringOrEmpty(noPrice),
+          liquidity: toStringOrEmpty(liquidity),
+          ts: market.settleTime ?? market.endTime ?? new Date().toISOString(),
+        };
+      }
       if (venue !== "kalshi") {
         throw new Error("unsupported-venue");
       }
