@@ -396,8 +396,8 @@ function deriveAggressivePriceUi(input: {
 }): number {
   const anchorPrice =
     input.side === "buy"
-      ? (input.market.bestAskPriceUi ?? input.market.bestBidPriceUi)
-      : (input.market.bestBidPriceUi ?? input.market.bestAskPriceUi);
+      ? input.market.bestAskPriceUi
+      : input.market.bestBidPriceUi;
   if (anchorPrice === null || anchorPrice <= 0) {
     throw new Error("openbook-orderbook-liquidity-missing");
   }

@@ -75,6 +75,22 @@ describe("worker openbook helpers", () => {
     expect(quote.routePlan?.[0]?.swapInfo?.label).toBe("OpenBook v2");
   });
 
+  test("fails closed when the opposite side of book is missing", () => {
+    expect(() =>
+      resolveOpenBookOrderRequest({
+        market: {
+          ...MARKET,
+          bestAskPriceUi: null,
+        },
+        side: "buy",
+        quantityAtomic: "1000000000",
+        options: {
+          orderType: "market",
+        },
+      }),
+    ).toThrow(/openbook-orderbook-liquidity-missing/);
+  });
+
   test("delegates place-order plan building through the injected SDK facade", async () => {
     const buildPlaceOrderPlan = mock(async () => ({
       unsignedTransactionBase64: "unsigned",
