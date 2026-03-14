@@ -2196,8 +2196,8 @@ const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
     formatAtomicToUi(quote.outAmountAtomic, outputDecimals, 9) ?? "",
   );
   const impliedReference =
-    Number.isFinite(referencePrice ?? NaN) &&
-    referencePrice !== null &&
+    typeof referencePrice === "number" &&
+    Number.isFinite(referencePrice) &&
     referencePrice > 0
       ? referencePrice
       : null;
