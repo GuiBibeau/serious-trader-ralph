@@ -7,6 +7,7 @@ import {
 import { TRADING_TOKEN_BY_MINT } from "../defaults";
 import type { RuntimeMode } from "../runtime_contracts";
 import { getStrategyLabSubjectControl } from "../strategy_lab_readiness_repository";
+import { executeDFlowPredictionOrder } from "./dflow_executor";
 import { executeDriftPerpOrder } from "./drift_executor";
 import { executeHeliusSenderSwap } from "./helius_sender_executor";
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
@@ -48,6 +49,18 @@ const DEFAULT_SUPPORTED_INTENT_FAMILIES: ExecutionIntentFamily[] = [
 ];
 
 const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
+  [
+    "dflow",
+    {
+      adapterKey: "dflow",
+      venueKey: "dflow",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["prediction_order"],
+      adapter: async () => {
+        throw new Error("dflow-requires-intent-routing");
+      },
+    },
+  ],
   [
     "drift",
     {
@@ -336,6 +349,12 @@ export async function executeIntentViaRouter(
 
   if (input.intent.family !== "spot_swap") {
     if (
+      input.intent.family === "prediction_order" &&
+      registration.adapterKey === "dflow"
+    ) {
+      return await executeDFlowPredictionOrder(input);
+    }
+    if (
       input.intent.family === "perp_order" &&
       (registration.adapterKey === "drift" ||
         registration.adapterKey === "drift_swift")
@@ -377,6 +396,7 @@ export async function executeIntentViaRouter(
     policy: input.policy,
     rpc: input.rpc,
     jupiter: input.jupiter,
+    dflow: input.dflow,
     mango: input.mango,
     orca: input.orca,
     raydium: input.raydium,

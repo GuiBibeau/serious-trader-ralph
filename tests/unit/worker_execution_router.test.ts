@@ -283,6 +283,83 @@ describe("worker execution router", () => {
     expect(result.executionMeta?.lifecycle?.orderState).toBe("open");
   });
 
+  test("routes DFlow prediction intents through the DFlow executor in paper mode", async () => {
+    const result = await executeIntentViaRouter({
+      env: {} as never,
+      venueKey: "dflow",
+      runtimeMode: "paper",
+      requireVenueRouting: true,
+      execution: { adapter: "dflow" },
+      policy: normalizePolicy({ dryRun: true }),
+      rpc: {} as never,
+      jupiter: {} as never,
+      dflow: {
+        describePredictionIntent: async () => ({
+          market: {
+            marketId: "PRES-2028",
+            title: "Will candidate X win in 2028?",
+            eventTitle: "Presidential election",
+            status: "active",
+            endTime: "2028-11-06T08:00:00.000Z",
+            settleTime: null,
+            accounts: [],
+          },
+          marketAccount: {
+            accountId: "acct_1",
+            yesMint: "YesMint1111111111111111111111111111111",
+            noMint: "NoMint11111111111111111111111111111111",
+            ledgerMint: "Ledger1111111111111111111111111111111",
+            settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            yesBid: 0.49,
+            yesAsk: 0.52,
+            noBid: 0.47,
+            noAsk: 0.51,
+            volume: 2450,
+            openInterest: 5000,
+            redemptionStatus: "open",
+            status: "active",
+          },
+          outcomeMint: "YesMint1111111111111111111111111111111",
+          outcomeSide: "yes" as const,
+          side: "buy_yes" as const,
+          orderType: "limit" as const,
+          timeInForce: "gtc" as const,
+          quantityMode: "notional" as const,
+          quantityAtomic: "1000000",
+          settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          priceQuote: 0.52,
+          estimatedNotionalUsd: 1,
+          liveReady: false,
+          notes: ["prediction-market-live-requires-proof"],
+        }),
+        buildSyntheticQuote: () => ({
+          inputMint: "USDC",
+          outputMint: "YES",
+          inAmount: "1000000",
+          outAmount: "1000000",
+          priceImpactPct: 0,
+          routePlan: [
+            { poolId: "PRES-2028", swapInfo: { label: "DFlow Prediction" } },
+          ],
+        }),
+      } as never,
+      intent: {
+        family: "prediction_order",
+        wallet: "11111111111111111111111111111111",
+        venueKey: "dflow",
+        marketType: "prediction",
+        instrumentId: "PRES-2028",
+        outcomeId: "YesMint1111111111111111111111111111111",
+        side: "buy_yes",
+        quantityAtomic: "1000000",
+      },
+      log: () => {},
+    });
+
+    expect(result.status).toBe("dry_run");
+    expect(result.executionMeta?.route).toBe("dflow");
+  });
+
   test("routes OpenBook clob orders through the OpenBook executor in paper mode", async () => {
     const result = await executeIntentViaRouter({
       env: { RPC_ENDPOINT: "https://rpc.test" } as never,

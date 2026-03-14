@@ -205,6 +205,26 @@ describe("runtime research promotion", () => {
     );
   });
 
+  test("passes the DFlow integrated promotion gate from the checked-in pilot artifact", () => {
+    const request = parseRuntimeResearchPromotionRequest(
+      readJson(
+        "docs/strategy-lab/pilots/dflow-readiness/promotion.request.json",
+      ),
+    );
+    const result = buildRuntimeResearchPromotion({ request });
+
+    expect(request.subjectKind).toBe("venue");
+    expect(request.subjectKey).toBe("dflow");
+    expect(request.targetState).toBe("integrated");
+    expect(result.promotion.status).toBe("pass");
+    expect(
+      result.promotion.checks.every((check) => check.status === "pass"),
+    ).toBe(true);
+    expect(result.promotion.evidenceRefs.map((ref) => ref.kind)).toEqual(
+      expect.arrayContaining(["metadata_draft", "mapping_coverage"]),
+    );
+  });
+
   test("keeps the Drift BET integrated promotion request blocked until the maintained developer surface stabilizes", () => {
     const request = parseRuntimeResearchPromotionRequest(
       readJson(
