@@ -38,10 +38,11 @@ function parseUiAmountToAtomic(value: string, decimals: number): string | null {
     decimals,
   );
   try {
+    const zero = BigInt(0);
     const scale = BigInt(10) ** BigInt(decimals);
     const total =
-      BigInt(whole) * scale + (paddedFraction ? BigInt(paddedFraction) : 0n);
-    return total > 0n ? total.toString() : null;
+      BigInt(whole) * scale + (paddedFraction ? BigInt(paddedFraction) : zero);
+    return total > zero ? total.toString() : null;
   } catch {
     return null;
   }
