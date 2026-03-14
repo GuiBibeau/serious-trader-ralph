@@ -155,6 +155,43 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
   },
   {
     schemaVersion: "v1",
+    venueKey: "drift",
+    displayName: "Drift",
+    adapterKeys: ["drift", "drift_swift"],
+    marketTypes: ["perp"],
+    orderTypes: ["market", "limit", "trigger"],
+    intentFamilies: ["perp_order"],
+    authModel: "privy_solana_wallet",
+    feeModel: "maker_taker_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 200,
+      expectedSubmitMs: 450,
+      expectedSettlementMs: 4000,
+    },
+    settlementBehavior: "orderbook_partial",
+    lifecycle: {
+      supportsOrderLifecycle: true,
+      supportsPositionLifecycle: true,
+      requiresExternalOracle: true,
+      settlementModel: "position_account",
+    },
+    oracleRequirements: ["pyth", "switchboard", "venue_reference"],
+    supportedModes: ["shadow", "paper"],
+    onboardingState: "integrated",
+    notes:
+      "Bounded Drift perps substrate for shadow and paper; live stays blocked until oracle, margin, and Swift canary evidence land.",
+  },
+  {
+    schemaVersion: "v1",
     venueKey: "phoenix",
     displayName: "Phoenix",
     adapterKeys: ["phoenix_orderbook"],

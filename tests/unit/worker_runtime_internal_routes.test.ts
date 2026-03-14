@@ -1369,6 +1369,47 @@ describe("worker runtime internal routes", () => {
     });
   });
 
+  test("returns stubbed Drift runtime cost model registry", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/cost-models?venueKey=drift&assetKey=SOL&pairSymbol=SOL-PERP&marketType=perp&mode=paper",
+        {
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+          },
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "stub",
+      filters: {
+        venueKey: "drift",
+        assetKey: "SOL",
+        pairSymbol: "SOL-PERP",
+        marketType: "perp",
+        mode: "paper",
+      },
+      registry: {
+        costModels: expect.arrayContaining([
+          expect.objectContaining({
+            modelId: "cost_model_drift_sol_perp",
+            venueKey: "drift",
+            marketType: "perp",
+            pairSymbol: "SOL-PERP",
+          }),
+        ]),
+      },
+    });
+  });
+
   test("accepts stubbed runtime research writes", async () => {
     const env = createWorkerLiveEnv();
 
@@ -1477,6 +1518,45 @@ describe("worker runtime internal routes", () => {
           assetKey: "SOL",
           venueMappings: expect.arrayContaining([
             expect.objectContaining({ venueKey: "jupiter" }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  test("returns stubbed runtime asset registry entries for Drift", async () => {
+    const env = createWorkerLiveEnv();
+
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/internal/runtime/assets?assetKey=SOL&venueKey=drift&listingState=paper",
+        {
+          headers: {
+            authorization: "Bearer runtime-service-secret",
+          },
+        },
+      ),
+      env,
+      createExecutionContextStub(),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "stub",
+      filters: {
+        assetKey: "SOL",
+        venueKey: "drift",
+        listingState: "paper",
+      },
+    });
+    expect(payload.registry.assets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          assetKey: "SOL",
+          venueMappings: expect.arrayContaining([
+            expect.objectContaining({ venueKey: "drift" }),
           ]),
         }),
       ]),

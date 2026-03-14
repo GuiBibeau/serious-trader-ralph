@@ -283,6 +283,78 @@ describe("worker execution router", () => {
     expect(result.executionMeta?.lifecycle?.orderState).toBe("open");
   });
 
+  test("routes Drift perp intents through the Drift executor in paper mode", async () => {
+    const result = await executeIntentViaRouter({
+      env: {} as never,
+      venueKey: "drift",
+      runtimeMode: "paper",
+      execution: { adapter: "drift" },
+      policy: normalizePolicy({}),
+      rpc: {} as never,
+      jupiter: {} as never,
+      drift: {
+        swiftConfigured: () => false,
+        describePerpIntent: async () => ({
+          instrument: {
+            marketName: "SOL-PERP",
+            marketIndex: 2,
+            oracle: "oracle-sol",
+            oracleSource: "pyth",
+            status: "active",
+            contractType: "perp",
+            initialMarginRatio: 1000,
+            maintenanceMarginRatio: 500,
+          },
+          funding: {
+            marketName: "SOL-PERP",
+            fundingRate1h: 0.00012,
+            fundingRate1hBps: 1.2,
+            oraclePrice: 153.25,
+            markPrice: 153.3,
+            sourceTs: "2026-03-13T23:59:00.000Z",
+          },
+          side: "long",
+          direction: "long",
+          reduceOnly: false,
+          orderType: "limit",
+          timeInForce: "gtc",
+          quantityAtomic: "1000000",
+          collateralAtomic: "250000",
+          limitPriceAtomic: "155000000",
+          triggerPriceAtomic: null,
+          swiftSupported: false,
+        }),
+        buildSyntheticQuote: () => ({
+          inputMint: "SOL-PERP",
+          outputMint: "SOL-PERP",
+          inAmount: "250000",
+          outAmount: "1000000",
+          priceImpactPct: 0,
+          routePlan: [{ poolId: "SOL-PERP", swapInfo: { label: "Drift" } }],
+        }),
+      } as never,
+      intent: {
+        family: "perp_order",
+        wallet: "11111111111111111111111111111111",
+        venueKey: "drift",
+        marketType: "perp",
+        instrumentId: "SOL-PERP",
+        side: "long",
+        quantityAtomic: "1000000",
+        collateralAtomic: "250000",
+        params: {
+          orderType: "limit",
+          limitPriceAtomic: "155000000",
+        },
+      },
+      log: () => {},
+    });
+
+    expect(result.status).toBe("simulated");
+    expect(result.executionMeta?.route).toBe("drift");
+    expect(result.executionMeta?.lifecycle?.positionState).toBe("opening");
+  });
+
   test("fails closed when the runtime venue does not support the requested intent family", async () => {
     registerExecutionAdapter(
       "phoenix_orderbook",

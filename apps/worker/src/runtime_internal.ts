@@ -1258,6 +1258,18 @@ function createRuntimeAssetFixture(
         minNotionalUsd: "0.01",
         notes: "Native paper routing mapping.",
       },
+      {
+        venueKey: "drift",
+        nativeId,
+        venueSymbol: assetKey,
+        decimals: isSol ? 9 : 6,
+        listingState: "paper",
+        quoteAssetKeys: ["USDC"],
+        priceDecimals: 6,
+        sizeDecimals: isSol ? 9 : 6,
+        minNotionalUsd: "0.01",
+        notes: "Paper perps collateral and mark-price mapping.",
+      },
     ],
     createdAt: FIXTURE_TIMESTAMP,
     updatedAt: FIXTURE_TIMESTAMP,
@@ -1283,13 +1295,19 @@ function createRuntimeAssetRegistryFixture() {
 function createRuntimeCostModelFixture(
   venueKey = "jupiter",
 ): RuntimeExecutionCostModelRecord {
+  const isPhoenix = venueKey === "phoenix";
+  const isMagicBlock = venueKey === "magicblock";
+  const isDrift = venueKey === "drift";
+  const pairSymbol = isDrift ? "SOL-PERP" : "SOL/USDC";
+  const marketType = isDrift ? "perp" : "spot";
+  const instrumentId = isDrift ? "SOL-PERP" : "SOL/USDC";
   return parseRuntimeExecutionCostModelRecord({
     schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
-    modelId: `cost_model_${venueKey}_sol_usdc_spot`,
+    modelId: `cost_model_${venueKey}_${isDrift ? "sol_perp" : "sol_usdc_spot"}`,
     venueKey,
-    marketType: "spot",
-    pairSymbol: "SOL/USDC",
-    instrumentId: "SOL/USDC",
+    marketType,
+    pairSymbol,
+    instrumentId,
     assetKeys: ["SOL", "USDC"],
     modeCoverage:
       venueKey === "jupiter"
@@ -1297,66 +1315,96 @@ function createRuntimeCostModelFixture(
         : ["shadow", "paper"],
     status: "active",
     assumptions: {
-      feeBps: venueKey === "phoenix" ? 4 : venueKey === "magicblock" ? 6 : 8,
-      slippageBps:
-        venueKey === "phoenix" ? 10 : venueKey === "magicblock" ? 18 : 22,
-      marketImpactBps:
-        venueKey === "phoenix" ? 6 : venueKey === "magicblock" ? 8 : 12,
-      partialFillRateBps: venueKey === "phoenix" ? 125 : 50,
-      partialFillPenaltyBps: venueKey === "phoenix" ? 10 : 12,
+      feeBps: isPhoenix ? 4 : isMagicBlock ? 6 : isDrift ? 7 : 8,
+      slippageBps: isPhoenix ? 10 : isMagicBlock ? 18 : isDrift ? 14 : 22,
+      marketImpactBps: isPhoenix ? 6 : isMagicBlock ? 8 : isDrift ? 9 : 12,
+      partialFillRateBps: isPhoenix ? 125 : isDrift ? 175 : 50,
+      partialFillPenaltyBps: isPhoenix ? 10 : isDrift ? 14 : 12,
     },
     calibration: {
-      calibrationId: `calibration_${venueKey}_sol_usdc_spot_seed`,
+      calibrationId: `calibration_${venueKey}_${isDrift ? "sol_perp" : "sol_usdc_spot"}_seed`,
       methodology: "seed_replay_bootstrap",
       sampleStartAt: "2026-03-07T00:00:00.000Z",
       sampleEndAt: FIXTURE_TIMESTAMP,
-      sampleCount:
-        venueKey === "phoenix" ? 160 : venueKey === "magicblock" ? 180 : 240,
-      confidenceBps:
-        venueKey === "phoenix" ? 7900 : venueKey === "magicblock" ? 8100 : 8600,
+      sampleCount: isPhoenix ? 160 : isMagicBlock ? 180 : isDrift ? 210 : 240,
+      confidenceBps: isPhoenix
+        ? 7900
+        : isMagicBlock
+          ? 8100
+          : isDrift
+            ? 8350
+            : 8600,
       referenceNotionalUsd: "25.00",
       tags: ["seed", "bootstrap"],
       notes: "Stubbed execution cost model calibration.",
     },
     driftGuard: {
-      maxCostDriftBps:
-        venueKey === "phoenix" ? 70 : venueKey === "magicblock" ? 80 : 90,
-      maxLatencyDriftMs:
-        venueKey === "phoenix" ? 5000 : venueKey === "magicblock" ? 6000 : 8000,
-      maxReconciliationDriftUsd:
-        venueKey === "phoenix"
-          ? "1.00"
-          : venueKey === "magicblock"
-            ? "1.25"
+      maxCostDriftBps: isPhoenix ? 70 : isMagicBlock ? 80 : isDrift ? 75 : 90,
+      maxLatencyDriftMs: isPhoenix
+        ? 5000
+        : isMagicBlock
+          ? 6000
+          : isDrift
+            ? 4500
+            : 8000,
+      maxReconciliationDriftUsd: isPhoenix
+        ? "1.00"
+        : isMagicBlock
+          ? "1.25"
+          : isDrift
+            ? "1.10"
             : "1.50",
     },
     latencyProfile: {
-      expectedQuoteMs:
-        venueKey === "phoenix" ? 150 : venueKey === "magicblock" ? 200 : 250,
-      expectedSubmitMs:
-        venueKey === "phoenix" ? 350 : venueKey === "magicblock" ? 400 : 750,
-      expectedSettlementMs:
-        venueKey === "phoenix" ? 4000 : venueKey === "magicblock" ? 3000 : 5000,
+      expectedQuoteMs: isPhoenix
+        ? 150
+        : isMagicBlock
+          ? 200
+          : isDrift
+            ? 180
+            : 250,
+      expectedSubmitMs: isPhoenix
+        ? 350
+        : isMagicBlock
+          ? 400
+          : isDrift
+            ? 450
+            : 750,
+      expectedSettlementMs: isPhoenix
+        ? 4000
+        : isMagicBlock
+          ? 3000
+          : isDrift
+            ? 4000
+            : 5000,
     },
     datasetSnapshots: [
       {
-        datasetId: "dataset_feed_replay_sol_usdc_market_events",
+        datasetId: isDrift
+          ? "dataset_feed_replay_sol_perp_market_events"
+          : "dataset_feed_replay_sol_usdc_market_events",
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+        uri: isDrift
+          ? "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_perp.v1.json#marketEvents"
+          : "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
         contentDigest: "sha256:fixture",
       },
       {
-        datasetId: "dataset_feed_replay_sol_usdc_slot_events",
+        datasetId: isDrift
+          ? "dataset_feed_replay_sol_perp_slot_events"
+          : "dataset_feed_replay_sol_usdc_slot_events",
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+        uri: isDrift
+          ? "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_perp.v1.json#slotEvents"
+          : "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
         contentDigest: "sha256:fixture",
       },
     ],
     createdAt: FIXTURE_TIMESTAMP,
     updatedAt: FIXTURE_TIMESTAMP,
-    tags: ["seed", "spot"],
+    tags: ["seed", marketType],
     notes: "Stubbed execution cost model fixture.",
   });
 }
@@ -1366,6 +1414,7 @@ function createRuntimeCostModelRegistryFixture() {
     costModels: [
       createRuntimeCostModelFixture("jupiter"),
       createRuntimeCostModelFixture("magicblock"),
+      createRuntimeCostModelFixture("drift"),
       createRuntimeCostModelFixture("phoenix"),
     ],
   };
@@ -1374,33 +1423,47 @@ function createRuntimeCostModelRegistryFixture() {
 function createRuntimeCostObservationFixture(
   venueKey = "jupiter",
 ): RuntimeExecutionCostObservationRecord {
+  const isPhoenix = venueKey === "phoenix";
+  const isMagicBlock = venueKey === "magicblock";
+  const isDrift = venueKey === "drift";
+  const pairSymbol = isDrift ? "SOL-PERP" : "SOL/USDC";
+  const marketType = isDrift ? "perp" : "spot";
   return parseRuntimeExecutionCostObservationRecord({
     schemaVersion: RUNTIME_PROTOCOL_SCHEMA_VERSION,
     observationId: `costobs_${venueKey}_deployment_shadow_fixture_run_1`,
-    modelId: `cost_model_${venueKey}_sol_usdc_spot`,
+    modelId: `cost_model_${venueKey}_${isDrift ? "sol_perp" : "sol_usdc_spot"}`,
     deploymentId: "deployment_shadow_fixture",
     runId: "deployment_shadow_fixture_run_1",
     receiptId: `receipt_${venueKey}_deployment_shadow_fixture_run_1`,
     venueKey,
-    marketType: "spot",
-    pairSymbol: "SOL/USDC",
+    marketType,
+    pairSymbol,
     assetKeys: ["SOL", "USDC"],
     mode: "paper",
     observedAt: FIXTURE_TIMESTAMP,
     evaluatedNotionalUsd: "25.00",
-    modeledTotalCostUsd: venueKey === "phoenix" ? "0.05" : "0.11",
-    observedTotalCostUsd: venueKey === "phoenix" ? "0.06" : "0.13",
-    costDriftUsd: venueKey === "phoenix" ? "0.01" : "0.02",
-    costDriftBps: venueKey === "phoenix" ? 40 : 80,
-    expectedEndToEndLatencyMs:
-      venueKey === "phoenix" ? 4350 : venueKey === "magicblock" ? 3400 : 5750,
-    observedEndToEndLatencyMs:
-      venueKey === "phoenix" ? 4525 : venueKey === "magicblock" ? 3625 : 6125,
-    latencyDriftMs:
-      venueKey === "phoenix" ? 175 : venueKey === "magicblock" ? 225 : 375,
+    modeledTotalCostUsd: isPhoenix ? "0.05" : isDrift ? "0.08" : "0.11",
+    observedTotalCostUsd: isPhoenix ? "0.06" : isDrift ? "0.09" : "0.13",
+    costDriftUsd: isPhoenix ? "0.01" : isDrift ? "0.01" : "0.02",
+    costDriftBps: isPhoenix ? 40 : isDrift ? 55 : 80,
+    expectedEndToEndLatencyMs: isPhoenix
+      ? 4350
+      : isMagicBlock
+        ? 3400
+        : isDrift
+          ? 4050
+          : 5750,
+    observedEndToEndLatencyMs: isPhoenix
+      ? 4525
+      : isMagicBlock
+        ? 3625
+        : isDrift
+          ? 4275
+          : 6125,
+    latencyDriftMs: isPhoenix ? 175 : isMagicBlock ? 225 : isDrift ? 225 : 375,
     reconciliationStatus: "passed",
-    reconciliationDriftUsd: venueKey === "phoenix" ? "0.01" : "0.02",
-    tags: ["cost-observation", "paper"],
+    reconciliationDriftUsd: isPhoenix ? "0.01" : isDrift ? "0.01" : "0.02",
+    tags: ["cost-observation", marketType],
     notes: "Stubbed modeled-versus-observed execution cost observation.",
   });
 }
@@ -1410,6 +1473,7 @@ function createRuntimeCostObservationRegistryFixture() {
     costObservations: [
       createRuntimeCostObservationFixture("jupiter"),
       createRuntimeCostObservationFixture("magicblock"),
+      createRuntimeCostObservationFixture("drift"),
       createRuntimeCostObservationFixture("phoenix"),
     ],
   };

@@ -7,6 +7,7 @@ import {
 import { TRADING_TOKEN_BY_MINT } from "../defaults";
 import type { RuntimeMode } from "../runtime_contracts";
 import { getStrategyLabSubjectControl } from "../strategy_lab_readiness_repository";
+import { executeDriftPerpOrder } from "./drift_executor";
 import { executeHeliusSenderSwap } from "./helius_sender_executor";
 import { executeJitoBundleSwap } from "./jito_bundle_executor";
 import { executeJupiterSwap } from "./jupiter_executor";
@@ -46,6 +47,30 @@ const DEFAULT_SUPPORTED_INTENT_FAMILIES: ExecutionIntentFamily[] = [
 ];
 
 const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
+  [
+    "drift",
+    {
+      adapterKey: "drift",
+      venueKey: "drift",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["perp_order"],
+      adapter: async () => {
+        throw new Error("drift-requires-intent-routing");
+      },
+    },
+  ],
+  [
+    "drift_swift",
+    {
+      adapterKey: "drift_swift",
+      venueKey: "drift",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["perp_order"],
+      adapter: async () => {
+        throw new Error("drift-swift-requires-intent-routing");
+      },
+    },
+  ],
   [
     "jupiter",
     {
@@ -285,6 +310,13 @@ export async function executeIntentViaRouter(
   });
 
   if (input.intent.family !== "spot_swap") {
+    if (
+      input.intent.family === "perp_order" &&
+      (registration.adapterKey === "drift" ||
+        registration.adapterKey === "drift_swift")
+    ) {
+      return await executeDriftPerpOrder(input);
+    }
     if (
       input.intent.family === "conditional_spot_order" &&
       registration.adapterKey === "jupiter"
