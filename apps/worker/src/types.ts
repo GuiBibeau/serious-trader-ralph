@@ -70,6 +70,8 @@ export type Env = {
   JUPITER_BASE_URL?: string;
   JUPITER_PRICE_BASE_URL?: string;
   JUPITER_API_KEY?: string;
+  DRIFT_DATA_API_BASE?: string;
+  DRIFT_SWIFT_API_BASE?: string;
   ORCA_API_BASE_URL?: string;
   RAYDIUM_API_BASE_URL?: string;
   RAYDIUM_TRANSACTION_BASE_URL?: string;

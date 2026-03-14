@@ -1,3 +1,4 @@
+import type { DriftClient } from "../drift";
 import type { JupiterClient, JupiterQuoteResponse } from "../jupiter";
 import type { OrcaClient } from "../orca";
 import type { NormalizedPolicy } from "../policy";
@@ -71,6 +72,7 @@ export type NonSwapExecutionIntent = {
   instrumentId: string;
   side?: string;
   quantityAtomic?: string;
+  collateralAtomic?: string;
   referenceId?: string;
   params?: Record<string, unknown> | null;
   lifecycle?: ExecutionIntentLifecycleSnapshot;
@@ -90,6 +92,7 @@ type ExecuteIntentInputBase = {
   policy: NormalizedPolicy;
   rpc: SolanaRpc;
   jupiter: JupiterClient;
+  drift?: DriftClient;
   orca?: OrcaClient;
   raydium?: RaydiumClient;
   log: ExecutionLogFn;
