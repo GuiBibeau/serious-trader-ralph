@@ -227,6 +227,43 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
     notes:
       "Stubbed non-current venue proving the runtime can add a new venue through the shared capability and adapter abstractions.",
   },
+  {
+    schemaVersion: "v1",
+    venueKey: "openbook",
+    displayName: "OpenBook v2",
+    adapterKeys: ["openbook_v2"],
+    marketTypes: ["spot"],
+    orderTypes: ["market", "limit"],
+    intentFamilies: ["clob_order"],
+    authModel: "privy_solana_wallet",
+    feeModel: "maker_taker_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 150,
+      expectedSubmitMs: 350,
+      expectedSettlementMs: 4000,
+    },
+    settlementBehavior: "orderbook_atomic",
+    lifecycle: {
+      supportsOrderLifecycle: true,
+      supportsPositionLifecycle: false,
+      requiresExternalOracle: false,
+      settlementModel: "resting_order",
+    },
+    oracleRequirements: ["venue_reference"],
+    supportedModes: ["shadow", "paper"],
+    onboardingState: "integrated",
+    notes:
+      "Bounded OpenBook v2 spot CLOB integration for shadow and paper only; live stays blocked until venue-specific canary notes and kill controls land.",
+  },
 ] as const satisfies readonly RuntimeVenueCapability[];
 
 const CAPABILITY_INDEX = new Map<string, RuntimeVenueCapability>(

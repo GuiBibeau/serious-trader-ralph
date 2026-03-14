@@ -131,6 +131,18 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       adapter: executeRaydiumSwap,
     },
   ],
+  [
+    "openbook_v2",
+    {
+      adapterKey: "openbook_v2",
+      venueKey: "openbook",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["clob_order"],
+      adapter: async () => {
+        throw new Error("openbook-v2-requires-intent-routing");
+      },
+    },
+  ],
 ]);
 
 export function registerExecutionAdapter(
@@ -316,6 +328,13 @@ export async function executeIntentViaRouter(
         registration.adapterKey === "drift_swift")
     ) {
       return await executeDriftPerpOrder(input);
+    }
+    if (
+      input.intent.family === "clob_order" &&
+      registration.adapterKey === "openbook_v2"
+    ) {
+      const { executeOpenBookClobOrder } = await import("./openbook_executor");
+      return await executeOpenBookClobOrder(input);
     }
     if (
       input.intent.family === "conditional_spot_order" &&

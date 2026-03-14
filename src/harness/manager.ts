@@ -15,7 +15,7 @@ const PORTAL_PORT_BASE = 3000;
 const RUNTIME_PORT_BASE = 8080;
 const WORKER_PORT_BASE = 8800;
 const PORT_SCAN_WINDOW = 400;
-const STARTUP_TIMEOUT_MS = 90_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 1_000;
 const DEFAULT_RUNTIME_INTERNAL_SERVICE_TOKEN = "runtime-service-secret";
 const DEFAULT_RUNTIME_INTERNAL_SERVICE_NAME = "runtime-rs";
@@ -131,6 +131,38 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolvePromise) => {
     setTimeout(resolvePromise, ms);
   });
+}
+
+function parsePositiveIntegerEnv(
+  value: string | null | undefined,
+  fallback: number,
+): number {
+  const normalized = String(value ?? "").trim();
+  if (!/^[0-9]+$/.test(normalized)) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function resolveStartupTimeoutMs(): number {
+  return parsePositiveIntegerEnv(
+    process.env.HARNESS_STARTUP_TIMEOUT_MS,
+    DEFAULT_STARTUP_TIMEOUT_MS,
+  );
+}
+
+function readLogTail(path: string, maxLines = 40): string {
+  if (!existsSync(path)) {
+    return "<log file not created>";
+  }
+  const lines = readFileSync(path, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+  if (lines.length < 1) {
+    return "<log file is empty>";
+  }
+  return lines.slice(-maxLines).join("\n");
 }
 
 async function isPortAvailable(port: number): Promise<boolean> {
@@ -444,6 +476,7 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
   let workerPid: number | undefined;
   let portalPid: number | undefined;
   let runtimePid: number | undefined;
+  const startupTimeoutMs = resolveStartupTimeoutMs();
 
   try {
     workerPid = startProcess({
@@ -470,10 +503,16 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
 
     const workerHealthy = await waitForHttp(
       `http://127.0.0.1:${workerPort}/api/health`,
-      STARTUP_TIMEOUT_MS,
+      startupTimeoutMs,
     );
     if (!workerHealthy) {
-      throw new Error(`worker failed to become healthy on port ${workerPort}`);
+      throw new Error(
+        [
+          `worker failed to become healthy on port ${workerPort} within ${startupTimeoutMs}ms`,
+          "worker log tail:",
+          readLogTail(paths.workerLog),
+        ].join("\n"),
+      );
     }
 
     if (runtimeEnabled) {
@@ -496,11 +535,15 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
 
       const runtimeHealthy = await waitForHttp(
         `http://127.0.0.1:${runtimePort}/health`,
-        STARTUP_TIMEOUT_MS,
+        startupTimeoutMs,
       );
       if (!runtimeHealthy) {
         throw new Error(
-          `runtime-rs failed to become healthy on port ${runtimePort}`,
+          [
+            `runtime-rs failed to become healthy on port ${runtimePort} within ${startupTimeoutMs}ms`,
+            "runtime-rs log tail:",
+            readLogTail(paths.runtimeLog),
+          ].join("\n"),
         );
       }
     }
@@ -525,10 +568,16 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
 
     const portalHealthy = await waitForHttp(
       `http://localhost:${portalPort}/login`,
-      STARTUP_TIMEOUT_MS,
+      startupTimeoutMs,
     );
     if (!portalHealthy) {
-      throw new Error(`portal failed to become healthy on port ${portalPort}`);
+      throw new Error(
+        [
+          `portal failed to become healthy on port ${portalPort} within ${startupTimeoutMs}ms`,
+          "portal log tail:",
+          readLogTail(paths.portalLog),
+        ].join("\n"),
+      );
     }
 
     saveHarnessState({
