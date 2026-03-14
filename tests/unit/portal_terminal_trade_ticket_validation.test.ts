@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  computeQuoteReferenceDivergenceBps,
   validateExecutionQualityConfig,
   validateOrderConfig,
 } from "../../apps/portal/app/terminal/components/trade-ticket-modal";
+import { getTerminalSpotVenueDefinition } from "../../apps/portal/app/terminal/terminal-venues";
 
 describe("portal terminal advanced trade ticket validation", () => {
   test("rejects invalid limit and post-only combinations", () => {
@@ -29,6 +31,7 @@ describe("portal terminal advanced trade ticket validation", () => {
       orderType: "trigger",
       timeInForce: "gtc",
       lane: "safe",
+      venue: getTerminalSpotVenueDefinition("jupiter"),
       reduceOnly: false,
       postOnly: false,
       quantityMode: "quote",
@@ -47,6 +50,7 @@ describe("portal terminal advanced trade ticket validation", () => {
       orderType: "trigger",
       timeInForce: "gtc",
       lane: "safe",
+      venue: getTerminalSpotVenueDefinition("jupiter"),
       reduceOnly: false,
       postOnly: false,
       quantityMode: "quote",
@@ -59,6 +63,27 @@ describe("portal terminal advanced trade ticket validation", () => {
     });
     expect(errors).toContain(
       "Bracket TP/SL is not wired yet for Trigger-backed orders.",
+    );
+  });
+
+  test("fails closed for unsupported OpenBook trigger controls", () => {
+    const errors = validateOrderConfig({
+      orderType: "trigger",
+      timeInForce: "gtc",
+      lane: "safe",
+      venue: getTerminalSpotVenueDefinition("openbook"),
+      reduceOnly: false,
+      postOnly: false,
+      quantityMode: "quote",
+      amountAtomic: "1000",
+      limitPriceAtomic: null,
+      triggerPriceAtomic: "900000",
+      takeProfitPriceAtomic: null,
+      stopLossPriceAtomic: null,
+      bracketEnabled: false,
+    });
+    expect(errors).toContain(
+      "OpenBook v2 does not support TRIGGER spot orders.",
     );
   });
 
@@ -82,5 +107,31 @@ describe("portal terminal advanced trade ticket validation", () => {
       priorityMicroLamports: 200000,
     });
     expect(errors).toHaveLength(0);
+  });
+
+  test("computes quote divergence against reference price for buys", () => {
+    const divergence = computeQuoteReferenceDivergenceBps({
+      direction: "buy",
+      quotedInputAtomic: "155000000",
+      quotedOutputAtomic: "1000000",
+      inputDecimals: 6,
+      outputDecimals: 6,
+      referencePrice: 155,
+    });
+
+    expect(divergence).toBe(0);
+  });
+
+  test("computes quote divergence against reference price for sells without inverting the quote", () => {
+    const divergence = computeQuoteReferenceDivergenceBps({
+      direction: "sell",
+      quotedInputAtomic: "1000000",
+      quotedOutputAtomic: "155000000",
+      inputDecimals: 6,
+      outputDecimals: 6,
+      referencePrice: 155,
+    });
+
+    expect(divergence).toBe(0);
   });
 });

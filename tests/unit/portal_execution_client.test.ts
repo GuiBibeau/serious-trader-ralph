@@ -169,6 +169,50 @@ describe("portal execution client", () => {
     }
   });
 
+  test("parses terminal spot preview responses", async () => {
+    const client = createExecutionClient({
+      transport: async (input) => {
+        expect(input.path).toBe("/api/terminal/spot-preview");
+        expect(JSON.parse(String(input.body ?? ""))).toEqual({
+          venueKey: "raydium",
+          inputMint: "mint-in",
+          outputMint: "mint-out",
+          amountAtomic: "1000000",
+          slippageBps: 50,
+        });
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            preview: {
+              venueKey: "raydium",
+              provider: "raydium",
+              inputMint: "mint-in",
+              outputMint: "mint-out",
+              inAmountAtomic: "1000000",
+              outAmountAtomic: "250000",
+              routeSummary: "Raydium",
+              priceImpactPct: 0.0025,
+            },
+          },
+        };
+      },
+    });
+
+    const preview = await client.previewSpotOrder({
+      venueKey: "raydium",
+      inputMint: "mint-in",
+      outputMint: "mint-out",
+      amountAtomic: "1000000",
+      slippageBps: 50,
+    });
+
+    expect(preview.venueKey).toBe("raydium");
+    expect(preview.provider).toBe("raydium");
+    expect(preview.routeSummary).toBe("Raydium");
+    expect(preview.priceImpactPct).toBe(0.0025);
+  });
+
   test("waitForTerminalReceipt retries transient failures", async () => {
     let statusCalls = 0;
     let receiptCalls = 0;

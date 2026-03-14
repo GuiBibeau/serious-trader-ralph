@@ -8,6 +8,8 @@ import {
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
+import { OrcaClient } from "../../apps/worker/src/orca";
+import { RaydiumClient } from "../../apps/worker/src/raydium";
 import type { Env } from "../../apps/worker/src/types";
 import {
   createExecutionContextStub,
@@ -551,6 +553,122 @@ afterAll(() => {
 });
 
 describe("worker terminal open orders and Trigger lifecycle routes", () => {
+  test("terminal spot preview route returns bounded Raydium previews", async () => {
+    const { env, sqlite } = createExecEnv();
+    const original = RaydiumClient.prototype.quoteBaseIn;
+    RaydiumClient.prototype.quoteBaseIn = (async () => ({
+      envelope: { success: true },
+      normalizedQuote: {
+        inputMint: SOL_MINT,
+        outputMint: MAINNET_USDC_MINT,
+        inAmount: "1000000",
+        outAmount: "150000000",
+        priceImpactPct: 0.0012,
+        routePlan: [{ poolId: "ray-pool-1", swapInfo: { label: "Raydium" } }],
+        quoteProvider: "raydium",
+      },
+    })) as never;
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/terminal/spot-preview", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+          },
+          body: JSON.stringify({
+            venueKey: "raydium",
+            inputMint: SOL_MINT,
+            outputMint: MAINNET_USDC_MINT,
+            amountAtomic: "1000000",
+            slippageBps: 50,
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        preview?: {
+          provider?: string;
+          routeSummary?: string;
+          outAmountAtomic?: string;
+        };
+      };
+      expect(body.preview?.provider).toBe("raydium");
+      expect(body.preview?.routeSummary).toBe("Raydium");
+      expect(body.preview?.outAmountAtomic).toBe("150000000");
+    } finally {
+      RaydiumClient.prototype.quoteBaseIn = original;
+      sqlite.close();
+    }
+  });
+
+  test("terminal spot preview route returns bounded Orca previews", async () => {
+    const { env, sqlite } = createExecEnv();
+    const original = OrcaClient.prototype.quoteBaseIn;
+    OrcaClient.prototype.quoteBaseIn = (async () => ({
+      pool: { address: "orca-pool-1" },
+      sdkQuote: {
+        estimatedAmountInAtomic: "1000000",
+        estimatedAmountOutAtomic: "149500000",
+        otherAmountThresholdAtomic: "149000000",
+        estimatedFeeAmountAtomic: "1000",
+        sqrtPriceLimit: "1",
+        tickArrayAddresses: [],
+        aToB: true,
+        amountSpecifiedIsInput: true,
+      },
+      normalizedQuote: {
+        inputMint: SOL_MINT,
+        outputMint: MAINNET_USDC_MINT,
+        inAmount: "1000000",
+        outAmount: "149500000",
+        priceImpactPct: 0.0025,
+        routePlan: [
+          { poolId: "orca-pool-1", swapInfo: { label: "Orca Whirlpool" } },
+        ],
+        quoteProvider: "orca",
+      },
+    })) as never;
+    try {
+      const response = await worker.fetch(
+        new Request("http://localhost/api/terminal/spot-preview", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer mock-token",
+          },
+          body: JSON.stringify({
+            venueKey: "orca",
+            inputMint: SOL_MINT,
+            outputMint: MAINNET_USDC_MINT,
+            amountAtomic: "1000000",
+            slippageBps: 50,
+          }),
+        }),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        preview?: {
+          provider?: string;
+          routeSummary?: string;
+          outAmountAtomic?: string;
+        };
+      };
+      expect(body.preview?.provider).toBe("orca");
+      expect(body.preview?.routeSummary).toBe("Orca Whirlpool");
+      expect(body.preview?.outAmountAtomic).toBe("149500000");
+    } finally {
+      OrcaClient.prototype.quoteBaseIn = original;
+      sqlite.close();
+    }
+  });
+
   test("status route exposes live Trigger lifecycle for conditional spot orders", async () => {
     const { env, sqlite } = createExecEnv();
     try {

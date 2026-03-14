@@ -16,13 +16,22 @@ import {
   describeExecutionClientError,
   newExecutionIdempotencyKey,
 } from "../../execution-client";
-import { apiBase, BTN_PRIMARY, BTN_SECONDARY, isRecord } from "../../lib";
+import { BTN_PRIMARY, BTN_SECONDARY } from "../../lib";
 import type {
   TerminalIntentFamily,
   TerminalMarketType,
   TerminalOracleStatus,
   TerminalProviderStatus,
+  TerminalSpotVenueDefinition,
   TerminalVenueKey,
+  TerminalVenueRolloutPolicy,
+} from "../terminal-venues";
+import {
+  getTerminalOrderTypeLabel,
+  getTerminalSpotVenueDefinition,
+  getTerminalTimeInForceLabel,
+  getTerminalVenueExecutionReadinessLabel,
+  listTerminalSpotVenueDefinitions,
 } from "../terminal-venues";
 import {
   type AccountRiskSnapshot,
@@ -41,6 +50,8 @@ type TradeTicketModalProps = {
   walletAddress: string | null;
   tokenBalancesByMint?: Record<string, string> | null;
   riskSnapshot?: AccountRiskSnapshot | null;
+  referencePrice?: number | null;
+  terminalVenueRolloutPolicy: TerminalVenueRolloutPolicy;
   riskAcknowledgement?: {
     required: boolean;
     title?: string;
@@ -141,7 +152,6 @@ type PriorityLevel = "normal" | "high" | "urgent";
 
 const MIN_SLIPPAGE_BPS = "1";
 const MAX_SLIPPAGE_BPS = "5000";
-const BEARER_RE = /^bearer\s+/i;
 const EXEC_POLL_INTERVAL_MS = 1200;
 const EXEC_POLL_TIMEOUT_MS = 45000;
 const ORDER_PRICE_DECIMALS = 6;
@@ -234,20 +244,6 @@ function toPositiveAtomic(raw: string | null | undefined): string | null {
   }
 }
 
-function summarizeQuoteRoute(payload: unknown): string | null {
-  if (!isRecord(payload) || !Array.isArray(payload.routePlan)) return null;
-  const labels: string[] = [];
-  for (const hop of payload.routePlan) {
-    if (!isRecord(hop) || !isRecord(hop.swapInfo)) continue;
-    const label = hop.swapInfo.label;
-    if (typeof label === "string" && label.trim()) {
-      labels.push(label.trim());
-    }
-    if (labels.length >= 3) break;
-  }
-  return labels.length > 0 ? labels.join(" -> ") : null;
-}
-
 function toBoundedSlippage(value: string, fallback: number): number {
   const raw = Number(value);
   if (!Number.isFinite(raw)) return fallback;
@@ -283,10 +279,40 @@ const EMPTY_QUOTE: QuoteState = {
   priceImpactPct: null,
 };
 
+function isVenueLiveExecutable(
+  venue: TerminalSpotVenueDefinition | null,
+): boolean {
+  return (
+    venue?.executionReadiness === "bounded_live" ||
+    venue?.executionReadiness === "broad_live"
+  );
+}
+
+function coerceVenueOrderType(
+  venue: TerminalSpotVenueDefinition | null,
+  orderType: OrderType,
+): OrderType {
+  if (!venue) return orderType;
+  return venue.supportedOrderTypes.includes(orderType)
+    ? orderType
+    : (venue.supportedOrderTypes[0] ?? "market");
+}
+
+function coerceVenueTimeInForce(
+  venue: TerminalSpotVenueDefinition | null,
+  timeInForce: TimeInForce,
+): TimeInForce {
+  if (!venue) return timeInForce;
+  return venue.supportedTimeInForce.includes(timeInForce)
+    ? timeInForce
+    : (venue.supportedTimeInForce[0] ?? "gtc");
+}
+
 export function validateOrderConfig(input: {
   orderType: OrderType;
   timeInForce: TimeInForce;
   lane: ExecutionLane;
+  venue?: TerminalSpotVenueDefinition | null;
   reduceOnly: boolean;
   postOnly: boolean;
   quantityMode: QuantityMode;
@@ -298,6 +324,17 @@ export function validateOrderConfig(input: {
   bracketEnabled: boolean;
 }): string[] {
   const errors: string[] = [];
+  const venue = input.venue ?? getTerminalSpotVenueDefinition("jupiter");
+  if (venue && !venue.supportedOrderTypes.includes(input.orderType)) {
+    errors.push(
+      `${venue.label} does not support ${input.orderType.toUpperCase()} spot orders.`,
+    );
+  }
+  if (venue && !venue.supportedTimeInForce.includes(input.timeInForce)) {
+    errors.push(
+      `${venue.label} does not support ${input.timeInForce.toUpperCase()} time-in-force.`,
+    );
+  }
   if (!input.amountAtomic) {
     errors.push("Amount must be greater than zero.");
   }
@@ -325,6 +362,9 @@ export function validateOrderConfig(input: {
   ) {
     errors.push("Post-only cannot be combined with IOC or FOK.");
   }
+  if (input.postOnly && venue && !venue.supportsPostOnly) {
+    errors.push(`${venue.label} does not support post-only spot orders.`);
+  }
   if (
     (input.orderType === "limit" || input.orderType === "trigger") &&
     input.postOnly
@@ -339,6 +379,9 @@ export function validateOrderConfig(input: {
     input.reduceOnly
   ) {
     errors.push("Reduce-only is not supported for Trigger-backed spot orders.");
+  }
+  if (input.reduceOnly && venue && !venue.supportsReduceOnly) {
+    errors.push(`${venue.label} does not support reduce-only spot orders.`);
   }
   if (
     input.bracketEnabled &&
@@ -377,6 +420,9 @@ export function validateOrderConfig(input: {
     input.bracketEnabled
   ) {
     errors.push("Bracket TP/SL is not wired yet for Trigger-backed orders.");
+  }
+  if (input.bracketEnabled && venue && !venue.supportsBracket) {
+    errors.push(`${venue.label} does not support bracket TP/SL controls.`);
   }
   return errors;
 }
@@ -433,12 +479,52 @@ export function validateExecutionQualityConfig(input: {
   return errors;
 }
 
+export function computeQuoteReferenceDivergenceBps(input: {
+  direction: TradeIntent["direction"];
+  quotedInputAtomic: string | null;
+  quotedOutputAtomic: string | null;
+  inputDecimals: number;
+  outputDecimals: number;
+  referencePrice: number | null | undefined;
+}): number | null {
+  const impliedReference =
+    typeof input.referencePrice === "number" &&
+    Number.isFinite(input.referencePrice) &&
+    input.referencePrice > 0
+      ? input.referencePrice
+      : null;
+  if (impliedReference === null) return null;
+
+  const quotedInput = Number(
+    formatAtomicToUi(input.quotedInputAtomic, input.inputDecimals, 9) ?? "",
+  );
+  const quotedOutput = Number(
+    formatAtomicToUi(input.quotedOutputAtomic, input.outputDecimals, 9) ?? "",
+  );
+  if (
+    !Number.isFinite(quotedInput) ||
+    !Number.isFinite(quotedOutput) ||
+    quotedInput <= 0 ||
+    quotedOutput <= 0
+  ) {
+    return null;
+  }
+
+  const quotedPrice =
+    input.direction === "buy"
+      ? quotedInput / quotedOutput
+      : quotedOutput / quotedInput;
+  return ((quotedPrice - impliedReference) / impliedReference) * 10_000;
+}
+
 export function TradeTicketModal({
   open,
   intent,
   walletAddress,
   tokenBalancesByMint,
   riskSnapshot,
+  referencePrice,
+  terminalVenueRolloutPolicy,
   riskAcknowledgement,
   hotkeyBindings = DEFAULT_TRADE_TICKET_HOTKEY_BINDINGS,
   getAccessToken,
@@ -456,6 +542,8 @@ export function TradeTicketModal({
   const [priorityLevel, setPriorityLevel] = useState<PriorityLevel>(
     DEFAULT_PRIORITY_LEVEL,
   );
+  const [selectedVenueKey, setSelectedVenueKey] =
+    useState<TerminalVenueKey>("jupiter");
   const [orderType, setOrderType] = useState<OrderType>("market");
   const [timeInForce, setTimeInForce] = useState<TimeInForce>("gtc");
   const [quantityMode, setQuantityMode] = useState<QuantityMode>("quote");
@@ -538,6 +626,7 @@ export function TradeTicketModal({
     setExecutionLane(DEFAULT_EXECUTION_LANE);
     setSimulationPreference(DEFAULT_SIMULATION_PREFERENCE);
     setPriorityLevel(DEFAULT_PRIORITY_LEVEL);
+    setSelectedVenueKey(intent.venueKey);
     setOrderType("market");
     setTimeInForce("gtc");
     setQuantityMode("quote");
@@ -556,6 +645,54 @@ export function TradeTicketModal({
 
   const deferredAmountUi = useDeferredValue(amountUi);
   const deferredSlippageInput = useDeferredValue(slippageInput);
+
+  const spotVenueOptions = useMemo(
+    () =>
+      listTerminalSpotVenueDefinitions({
+        policy: terminalVenueRolloutPolicy,
+        includeDisabled: true,
+      }).filter((definition) => definition.executionReadiness !== "research"),
+    [terminalVenueRolloutPolicy],
+  );
+  const selectedVenue = useMemo(
+    () => getTerminalSpotVenueDefinition(selectedVenueKey),
+    [selectedVenueKey],
+  );
+  const selectedVenueLiveExecutable = useMemo(
+    () => isVenueLiveExecutable(selectedVenue),
+    [selectedVenue],
+  );
+  const selectedVenueEnabled = useMemo(
+    () => terminalVenueRolloutPolicy.enabledVenues.includes(selectedVenueKey),
+    [selectedVenueKey, terminalVenueRolloutPolicy.enabledVenues],
+  );
+
+  useEffect(() => {
+    const nextOrderType = coerceVenueOrderType(selectedVenue, orderType);
+    if (nextOrderType !== orderType) {
+      setOrderType(nextOrderType);
+    }
+    const nextTimeInForce = coerceVenueTimeInForce(selectedVenue, timeInForce);
+    if (nextTimeInForce !== timeInForce) {
+      setTimeInForce(nextTimeInForce);
+    }
+    if (postOnly && !selectedVenue?.supportsPostOnly) {
+      setPostOnly(false);
+    }
+    if (reduceOnly && !selectedVenue?.supportsReduceOnly) {
+      setReduceOnly(false);
+    }
+    if (bracketEnabled && !selectedVenue?.supportsBracket) {
+      setBracketEnabled(false);
+    }
+  }, [
+    bracketEnabled,
+    orderType,
+    postOnly,
+    reduceOnly,
+    selectedVenue,
+    timeInForce,
+  ]);
 
   const amountPresets = useMemo(
     () => intent?.amountPresets ?? [],
@@ -629,6 +766,7 @@ export function TradeTicketModal({
         orderType,
         timeInForce,
         lane: executionLane,
+        venue: selectedVenue,
         reduceOnly,
         postOnly,
         quantityMode,
@@ -648,6 +786,7 @@ export function TradeTicketModal({
       postOnly,
       quantityMode,
       reduceOnly,
+      selectedVenue,
       stopLossPriceAtomic,
       takeProfitPriceAtomic,
       timeInForce,
@@ -681,20 +820,6 @@ export function TradeTicketModal({
       return;
     }
 
-    const base = apiBase();
-    if (!base) {
-      setQuoteTransition({
-        status: "error",
-        error: "missing NEXT_PUBLIC_EDGE_API_BASE",
-        inAmountAtomic,
-        outAmountAtomic: null,
-        outAmountUi: null,
-        route: null,
-        priceImpactPct: null,
-      });
-      return;
-    }
-
     setQuoteTransition({
       status: "loading",
       error: null,
@@ -713,54 +838,24 @@ export function TradeTicketModal({
 
     try {
       const rawToken = String((await getAccessToken()) ?? "").trim();
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-        "payment-signature": "portal-trade-ticket",
-      };
-      if (rawToken) {
-        headers.authorization = BEARER_RE.test(rawToken)
-          ? rawToken
-          : `Bearer ${rawToken}`;
-      }
-      const response = await fetch(
-        `${base}/api/x402/read/market_jupiter_quote`,
+      const executionClient = createExecutionClient({
+        authToken: rawToken,
+      });
+      const preview = await executionClient.previewSpotOrder(
         {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            inputMint: intent.inputMint,
-            outputMint: intent.outputMint,
-            amount: inAmountAtomic,
-            slippageBps: resolvedSlippageBps,
-          }),
-          signal: controller.signal,
+          venueKey: selectedVenueKey,
+          inputMint: intent.inputMint,
+          outputMint: intent.outputMint,
+          amountAtomic: inAmountAtomic,
+          slippageBps: resolvedSlippageBps,
         },
+        { signal: controller.signal },
       );
-      const payload = (await response.json().catch(() => null)) as unknown;
       if (requestId !== quoteRequestIdRef.current) return;
-      if (!response.ok) {
-        const error =
-          isRecord(payload) && typeof payload.error === "string"
-            ? payload.error
-            : `http-${response.status}`;
-        throw new Error(error);
-      }
-      if (
-        !isRecord(payload) ||
-        payload.ok !== true ||
-        !isRecord(payload.quote)
-      ) {
-        throw new Error("invalid-quote-payload");
-      }
 
-      const outAmountAtomic = String(payload.quote.outAmount ?? "").trim();
+      const outAmountAtomic = preview.outAmountAtomic;
       const outAmountUi = formatAtomicToUi(outAmountAtomic, outputDecimals, 6);
       if (!outAmountUi) throw new Error("invalid-quote-out-amount");
-      const priceImpactRaw = payload.quote.priceImpactPct;
-      const priceImpactPct =
-        typeof priceImpactRaw === "number"
-          ? priceImpactRaw
-          : Number(priceImpactRaw);
 
       setQuoteTransition({
         status: "ready",
@@ -768,8 +863,8 @@ export function TradeTicketModal({
         inAmountAtomic,
         outAmountAtomic,
         outAmountUi,
-        route: summarizeQuoteRoute(payload.quote),
-        priceImpactPct: Number.isFinite(priceImpactPct) ? priceImpactPct : null,
+        route: preview.routeSummary,
+        priceImpactPct: preview.priceImpactPct,
       });
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -789,6 +884,7 @@ export function TradeTicketModal({
     intent,
     open,
     resolvedSlippageBps,
+    selectedVenueKey,
     setQuoteTransition,
   ]);
 
@@ -805,6 +901,16 @@ export function TradeTicketModal({
 
   const executeTrade = useCallback(async (): Promise<void> => {
     if (!intent) return;
+    if (!selectedVenueEnabled) {
+      setSubmitStatus("error");
+      setSubmitMessage("selected-venue-rollout-gated");
+      return;
+    }
+    if (!selectedVenueLiveExecutable) {
+      setSubmitStatus("error");
+      setSubmitMessage("selected-venue-preview-only");
+      return;
+    }
     if (orderValidationErrors.length > 0 || executionQualityErrors.length > 0) {
       setSubmitStatus("error");
       setSubmitMessage(
@@ -899,7 +1005,7 @@ export function TradeTicketModal({
               wallet: walletAddress,
               intent: {
                 family: "conditional_spot_order",
-                venueKey: intent.venueKey,
+                venueKey: selectedVenueKey,
                 marketType: intent.marketType,
                 instrumentId: intent.instrumentId,
                 side: intent.direction,
@@ -1019,7 +1125,7 @@ export function TradeTicketModal({
         pairId: intent.pairId,
         instrumentId: intent.instrumentId,
         instrumentLabel: intent.instrumentLabel,
-        venueKey: intent.venueKey,
+        venueKey: selectedVenueKey,
         intentFamily: intent.intentFamily,
         marketType: intent.marketType,
         direction: intent.direction,
@@ -1106,6 +1212,9 @@ export function TradeTicketModal({
     quote.outAmountAtomic,
     reduceOnly,
     resolvedSlippageBps,
+    selectedVenueKey,
+    selectedVenueEnabled,
+    selectedVenueLiveExecutable,
     slippageInput,
     stopLossPriceAtomic,
     simulationPreference,
@@ -1152,6 +1261,8 @@ export function TradeTicketModal({
     submitStatus !== "tracking" &&
     quote.status === "ready" &&
     Boolean(quote.inAmountAtomic) &&
+    selectedVenueEnabled &&
+    selectedVenueLiveExecutable &&
     (!riskAcknowledgement?.required || riskConfirmed) &&
     orderValidationErrors.length < 1 &&
     executionQualityErrors.length < 1 &&
@@ -1251,6 +1362,16 @@ export function TradeTicketModal({
 
         <div className="p-6 space-y-4">
           <TradeIdentityCard intent={intent} walletAddress={walletAddress} />
+          <SpotVenueSection
+            venueOptions={spotVenueOptions}
+            selectedVenueKey={selectedVenueKey}
+            selectedVenue={selectedVenue}
+            selectedVenueEnabled={selectedVenueEnabled}
+            selectedVenueLiveExecutable={selectedVenueLiveExecutable}
+            orderType={orderType}
+            timeInForce={timeInForce}
+            onVenueChange={setSelectedVenueKey}
+          />
           <TradeRiskContextCard
             snapshot={riskSnapshot ?? null}
             preSubmitRisk={preSubmitRisk}
@@ -1294,6 +1415,7 @@ export function TradeTicketModal({
             onPriorityLevelChange={setPriorityLevel}
           />
           <AdvancedOrderConfigSection
+            venue={selectedVenue}
             orderType={orderType}
             timeInForce={timeInForce}
             quantityMode={quantityMode}
@@ -1317,8 +1439,12 @@ export function TradeTicketModal({
             onStopLossPriceChange={setStopLossPriceUi}
           />
           <QuoteSummaryCard
+            direction={intent.direction}
             outputSymbol={intent.outputSymbol}
+            inputDecimals={intent.inputDecimals}
+            outputDecimals={intent.outputDecimals}
             quote={quote}
+            referencePrice={referencePrice}
             loading={quote.status === "loading" || isQuoteTransitionPending}
           />
 
@@ -1331,6 +1457,22 @@ export function TradeTicketModal({
               }
             >
               {submitMessage}
+            </p>
+          ) : null}
+          {!selectedVenueEnabled ? (
+            <p className="text-amber-300 text-xs">
+              {selectedVenue?.label ?? "Selected venue"} is rollout-gated for
+              this cohort.
+            </p>
+          ) : null}
+          {selectedVenueEnabled && !selectedVenueLiveExecutable ? (
+            <p className="text-amber-300 text-xs">
+              {selectedVenue?.label ?? "Selected venue"} is preview-only in the
+              current harness. Live terminal execution remains gated to{" "}
+              {getTerminalVenueExecutionReadinessLabel(
+                selectedVenue?.executionReadiness ?? "research",
+              ).toLowerCase()}
+              .
             </p>
           ) : null}
 
@@ -1355,7 +1497,11 @@ export function TradeTicketModal({
                 ? submitStatus === "tracking"
                   ? "Tracking..."
                   : "Submitting..."
-                : `Execute ${intent.direction === "buy" ? "Buy" : "Sell"}`}
+                : !selectedVenueEnabled
+                  ? "Rollout Gated"
+                  : !selectedVenueLiveExecutable
+                    ? "Preview Only"
+                    : `Execute ${intent.direction === "buy" ? "Buy" : "Sell"}`}
             </button>
           </div>
           <p className="text-[10px] text-muted text-right">
@@ -1394,6 +1540,108 @@ const TradeIdentityCard = memo(function TradeIdentityCard(props: {
             : "--"}
         </span>
       </div>
+    </div>
+  );
+});
+
+const SpotVenueSection = memo(function SpotVenueSection(props: {
+  venueOptions: TerminalSpotVenueDefinition[];
+  selectedVenueKey: TerminalVenueKey;
+  selectedVenue: TerminalSpotVenueDefinition | null;
+  selectedVenueEnabled: boolean;
+  selectedVenueLiveExecutable: boolean;
+  orderType: OrderType;
+  timeInForce: TimeInForce;
+  onVenueChange: (value: TerminalVenueKey) => void;
+}) {
+  const {
+    venueOptions,
+    selectedVenueKey,
+    selectedVenue,
+    selectedVenueEnabled,
+    selectedVenueLiveExecutable,
+    orderType,
+    timeInForce,
+    onVenueChange,
+  } = props;
+
+  return (
+    <div className="rounded border border-border bg-subtle px-3 py-2 text-xs space-y-3">
+      <p className="label">SPOT_VENUE_PATH</p>
+      <div className="grid grid-cols-1 sm:grid-cols-[1.2fr_0.8fr_0.8fr] gap-2">
+        <label className="space-y-1">
+          <span className="text-muted text-[10px] uppercase tracking-wider">
+            Venue
+          </span>
+          <select
+            className="input-field !py-2 font-mono"
+            data-testid="trade-ticket-venue-select"
+            value={selectedVenueKey}
+            onChange={(event) =>
+              onVenueChange(event.target.value as TerminalVenueKey)
+            }
+          >
+            {venueOptions.map((venue) => (
+              <option key={venue.venueKey} value={venue.venueKey}>
+                {venue.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="rounded border border-border/60 bg-paper/70 px-2 py-1.5 text-[10px] text-muted">
+          <p className="uppercase tracking-wider">Path</p>
+          <p
+            className="mt-1 font-mono text-ink"
+            data-testid="trade-ticket-venue-path"
+          >
+            {selectedVenue?.executionPathLabel ?? "--"}
+          </p>
+        </div>
+        <div className="rounded border border-border/60 bg-paper/70 px-2 py-1.5 text-[10px] text-muted">
+          <p className="uppercase tracking-wider">Readiness</p>
+          <p
+            className="mt-1 font-mono text-ink"
+            data-testid="trade-ticket-venue-readiness"
+          >
+            {selectedVenue
+              ? getTerminalVenueExecutionReadinessLabel(
+                  selectedVenue.executionReadiness,
+                )
+              : "--"}
+          </p>
+        </div>
+      </div>
+      {selectedVenue ? (
+        <div className="rounded border border-border/60 bg-paper/70 px-2 py-1.5 text-[10px] text-muted space-y-0.5">
+          <p>
+            Orders:{" "}
+            {selectedVenue.supportedOrderTypes
+              .map((value) => getTerminalOrderTypeLabel(value) ?? value)
+              .join(", ")}
+          </p>
+          <p>
+            TIF:{" "}
+            {selectedVenue.supportedTimeInForce
+              .map((value) => getTerminalTimeInForceLabel(value) ?? value)
+              .join(", ")}
+          </p>
+          <p>
+            Current path:{" "}
+            {(getTerminalOrderTypeLabel(orderType) ?? orderType).toUpperCase()}{" "}
+            /{" "}
+            {(
+              getTerminalTimeInForceLabel(timeInForce) ?? timeInForce
+            ).toUpperCase()}
+          </p>
+          <p>
+            {selectedVenueEnabled
+              ? selectedVenueLiveExecutable
+                ? "This venue is eligible for live terminal execution."
+                : "This venue is preview-only in the current harness."
+              : "This venue is rollout-gated for the current cohort."}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -1735,6 +1983,7 @@ const ExecutionQualitySection = memo(function ExecutionQualitySection(props: {
 
 const AdvancedOrderConfigSection = memo(
   function AdvancedOrderConfigSection(props: {
+    venue: TerminalSpotVenueDefinition | null;
     orderType: OrderType;
     timeInForce: TimeInForce;
     quantityMode: QuantityMode;
@@ -1758,6 +2007,7 @@ const AdvancedOrderConfigSection = memo(
     onStopLossPriceChange: (value: string) => void;
   }) {
     const {
+      venue,
       orderType,
       timeInForce,
       quantityMode,
@@ -1798,9 +2048,11 @@ const AdvancedOrderConfigSection = memo(
                 onOrderTypeChange(event.target.value as OrderType)
               }
             >
-              <option value="market">market</option>
-              <option value="limit">limit</option>
-              <option value="trigger">trigger</option>
+              {(venue?.supportedOrderTypes ?? ["market"]).map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
             </select>
           </label>
           <label className="space-y-1">
@@ -1814,9 +2066,11 @@ const AdvancedOrderConfigSection = memo(
                 onTimeInForceChange(event.target.value as TimeInForce)
               }
             >
-              <option value="gtc">gtc</option>
-              <option value="ioc">ioc</option>
-              <option value="fok">fok</option>
+              {(venue?.supportedTimeInForce ?? ["gtc"]).map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
             </select>
           </label>
           <label className="space-y-1">
@@ -1843,6 +2097,7 @@ const AdvancedOrderConfigSection = memo(
               checked={reduceOnly}
               onChange={(event) => onReduceOnlyChange(event.target.checked)}
               type="checkbox"
+              disabled={!venue?.supportsReduceOnly}
             />
             <span>Reduce-only</span>
           </label>
@@ -1851,6 +2106,7 @@ const AdvancedOrderConfigSection = memo(
               checked={postOnly}
               onChange={(event) => onPostOnlyChange(event.target.checked)}
               type="checkbox"
+              disabled={!venue?.supportsPostOnly}
             />
             <span>Post-only</span>
           </label>
@@ -1859,6 +2115,7 @@ const AdvancedOrderConfigSection = memo(
               checked={bracketEnabled}
               onChange={(event) => onBracketEnabledChange(event.target.checked)}
               type="checkbox"
+              disabled={!venue?.supportsBracket}
             />
             <span>Bracket TP/SL</span>
           </label>
@@ -1946,11 +2203,23 @@ const AdvancedOrderConfigSection = memo(
 );
 
 const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
+  direction: TradeIntent["direction"];
   outputSymbol: string;
+  inputDecimals: number;
+  outputDecimals: number;
   quote: QuoteState;
+  referencePrice: number | null | undefined;
   loading: boolean;
 }) {
-  const { outputSymbol, quote, loading } = props;
+  const {
+    direction,
+    outputSymbol,
+    inputDecimals,
+    outputDecimals,
+    quote,
+    referencePrice,
+    loading,
+  } = props;
   const statusText = quote.error
     ? quote.error
     : loading
@@ -1961,6 +2230,20 @@ const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
     : loading
       ? "text-muted"
       : "text-transparent";
+  const impliedReference =
+    typeof referencePrice === "number" &&
+    Number.isFinite(referencePrice) &&
+    referencePrice > 0
+      ? referencePrice
+      : null;
+  const referenceDivergenceBps = computeQuoteReferenceDivergenceBps({
+    direction,
+    quotedInputAtomic: quote.inAmountAtomic,
+    quotedOutputAtomic: quote.outAmountAtomic,
+    inputDecimals,
+    outputDecimals,
+    referencePrice,
+  });
 
   return (
     <div className="rounded border border-border bg-subtle px-3 py-2 text-xs space-y-1.5 min-h-[112px]">
@@ -1980,8 +2263,25 @@ const QuoteSummaryCard = memo(function QuoteSummaryCard(props: {
       </div>
       <div className="flex items-center justify-between">
         <span className="text-muted">Route</span>
-        <span className="font-mono truncate max-w-[65%] text-right">
+        <span
+          className="font-mono truncate max-w-[65%] text-right"
+          data-testid="trade-ticket-quote-route"
+        >
           {quote.route ?? "--"}
+        </span>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-muted">Reference</span>
+        <span className="font-mono" data-testid="trade-ticket-quote-reference">
+          {impliedReference === null ? "--" : impliedReference.toFixed(4)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-muted">Vs Ref</span>
+        <span className="font-mono" data-testid="trade-ticket-quote-vs-ref">
+          {referenceDivergenceBps === null
+            ? "--"
+            : `${referenceDivergenceBps >= 0 ? "+" : ""}${referenceDivergenceBps.toFixed(1)} bps`}
         </span>
       </div>
       <p aria-live="polite" className={statusClass}>
