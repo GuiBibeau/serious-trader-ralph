@@ -250,6 +250,7 @@ export function normalizeOrcaQuoteResponse(input: {
   pool: OrcaPoolSnapshot;
   inputMint: string;
   outputMint: string;
+  slippageBps: number;
   sdkQuote: OrcaSdkQuoteResponse;
 }): JupiterQuoteResponse {
   return {
@@ -278,6 +279,7 @@ export function normalizeOrcaQuoteResponse(input: {
         },
       },
     ],
+    slippageBps: input.slippageBps,
     quoteProvider: "orca",
     orcaPoolSnapshot: input.pool,
     orcaQuote: input.sdkQuote,
@@ -437,6 +439,7 @@ export class OrcaClient {
         pool,
         inputMint: request.inputMint,
         outputMint: request.outputMint,
+        slippageBps: request.slippageBps,
         sdkQuote,
       }),
     };

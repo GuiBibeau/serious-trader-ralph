@@ -57,6 +57,7 @@ describe("worker orca client", () => {
       },
       inputMint: "mint-a",
       outputMint: "mint-b",
+      slippageBps: 25,
       sdkQuote: {
         estimatedAmountInAtomic: "1000",
         estimatedAmountOutAtomic: "2200",
@@ -75,6 +76,7 @@ describe("worker orca client", () => {
       inAmount: "1000",
       outAmount: "2200",
       otherAmountThreshold: "2100",
+      slippageBps: 25,
       quoteProvider: "orca",
     });
     expect(normalized.routePlan?.[0]?.swapInfo?.label).toBe("Orca Whirlpool");
@@ -149,6 +151,7 @@ describe("worker orca client", () => {
     ]);
     expect(quote.pool.address).toBe("pool-1");
     expect(quote.normalizedQuote.outAmount).toBe("2200");
+    expect(quote.normalizedQuote.slippageBps).toBe(50);
     expect(quoteByInputPool).toHaveBeenCalledTimes(1);
   });
 
