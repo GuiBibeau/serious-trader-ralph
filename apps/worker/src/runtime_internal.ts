@@ -1235,6 +1235,18 @@ function createRuntimeAssetFixture(
         notes: "Paper-only mapping.",
       },
       {
+        venueKey: "orca",
+        nativeId,
+        venueSymbol: assetKey,
+        decimals: isSol ? 9 : 6,
+        listingState: "paper",
+        quoteAssetKeys: ["USDC"],
+        priceDecimals: 6,
+        sizeDecimals: isSol ? 9 : 6,
+        minNotionalUsd: "0.01",
+        notes: "Concentrated-liquidity paper routing mapping.",
+      },
+      {
         venueKey: "raydium",
         nativeId,
         venueSymbol: assetKey,

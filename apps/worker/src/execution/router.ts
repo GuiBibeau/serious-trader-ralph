@@ -13,6 +13,7 @@ import { executeJupiterSwap } from "./jupiter_executor";
 import { resolveJupiterConditionalSpotOrder } from "./jupiter_trigger";
 import { executeJupiterConditionalSpotOrder } from "./jupiter_trigger_executor";
 import { executeMagicBlockEphemeralRollupSwap } from "./magicblock_ephemeral_rollup_executor";
+import { executeOrcaSwap } from "./orca_executor";
 import { executeRaydiumSwap } from "./raydium_executor";
 import type {
   ExecuteIntentInput,
@@ -83,6 +84,16 @@ const ADAPTERS = new Map<string, ExecutionAdapterRegistration>([
       supportedModes: ["shadow", "paper"],
       supportedIntentFamilies: ["spot_swap"],
       adapter: executeMagicBlockEphemeralRollupSwap,
+    },
+  ],
+  [
+    "orca",
+    {
+      adapterKey: "orca",
+      venueKey: "orca",
+      supportedModes: ["shadow", "paper"],
+      supportedIntentFamilies: ["spot_swap"],
+      adapter: executeOrcaSwap,
     },
   ],
   [
@@ -295,6 +306,7 @@ export async function executeIntentViaRouter(
     policy: input.policy,
     rpc: input.rpc,
     jupiter: input.jupiter,
+    orca: input.orca,
     raydium: input.raydium,
     quoteResponse: input.quoteResponse,
     userPublicKey: input.userPublicKey,
