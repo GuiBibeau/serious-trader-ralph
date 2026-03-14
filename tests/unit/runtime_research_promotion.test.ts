@@ -183,6 +183,28 @@ describe("runtime research promotion", () => {
     );
   });
 
+  test("keeps the Raydium Perps integrated promotion request blocked until auth mapping exists", () => {
+    const request = parseRuntimeResearchPromotionRequest(
+      readJson(
+        "docs/strategy-lab/pilots/raydium-perps-readiness/promotion.request.json",
+      ),
+    );
+    const result = buildRuntimeResearchPromotion({ request });
+
+    expect(request.subjectKind).toBe("venue");
+    expect(request.subjectKey).toBe("raydium_perps");
+    expect(request.targetState).toBe("integrated");
+    expect(result.promotion.status).toBe("blocked");
+    expect(
+      result.promotion.checks.find(
+        (check) => check.checkId === "candidate-integrated-mappings",
+      )?.status,
+    ).toBe("blocked");
+    expect(result.promotion.evidenceRefs.map((ref) => ref.kind)).toContain(
+      "metadata_draft",
+    );
+  });
+
   test("promotes candidate strategies into draft with synthesis and triage evidence", () => {
     const { synthesis, triage } = buildCandidateArtifacts();
     const result = buildRuntimeResearchPromotion({
