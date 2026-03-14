@@ -50,6 +50,7 @@ describe("worker runtime contract bridge", () => {
       "executionCostModel",
       "executionCostObservation",
       "venueCapability",
+      "marginAccountSnapshot",
       "assetRecord",
       "strategySpec",
       "strategyLabPromotion",
