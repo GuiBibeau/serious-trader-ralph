@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   parseRuntimeAssetRecord,
   parseRuntimeDeploymentRecord,
@@ -50,6 +52,11 @@ const briefFixture = {
     },
   ],
 } as const;
+
+function readJson(path: string): unknown {
+  const absolute = resolve(import.meta.dir, "..", "..", path);
+  return JSON.parse(readFileSync(absolute, "utf8")) as unknown;
+}
 
 function buildCandidateArtifacts() {
   const synthesis = buildRuntimeResearchSynthesis({
@@ -154,6 +161,26 @@ describe("runtime research promotion", () => {
 
     expect(request.subjectKind).toBe("strategy");
     expect(request.targetState).toBe("draft");
+  });
+
+  test("passes the Jupiter Perps integrated promotion gate from the checked-in pilot artifact", () => {
+    const request = parseRuntimeResearchPromotionRequest(
+      readJson(
+        "docs/strategy-lab/pilots/jupiter-perps-readiness/promotion.request.json",
+      ),
+    );
+    const result = buildRuntimeResearchPromotion({ request });
+
+    expect(request.subjectKind).toBe("venue");
+    expect(request.subjectKey).toBe("jupiter_perps");
+    expect(request.targetState).toBe("integrated");
+    expect(result.promotion.status).toBe("pass");
+    expect(
+      result.promotion.checks.every((check) => check.status === "pass"),
+    ).toBe(true);
+    expect(result.promotion.evidenceRefs.map((ref) => ref.kind)).toEqual(
+      expect.arrayContaining(["metadata_draft", "mapping_coverage"]),
+    );
   });
 
   test("promotes candidate strategies into draft with synthesis and triage evidence", () => {

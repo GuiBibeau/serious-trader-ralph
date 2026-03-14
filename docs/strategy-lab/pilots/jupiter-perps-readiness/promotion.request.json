@@ -1,0 +1,30 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "jupiter_perps",
+  "currentState": "candidate",
+  "targetState": "integrated",
+  "requestedBy": "codex",
+  "issueNumber": 373,
+  "evidenceRefs": [
+    {
+      "kind": "metadata_draft",
+      "ref": "docs/strategy-lab/pilots/jupiter-perps-readiness/README.md"
+    },
+    {
+      "kind": "mapping_coverage",
+      "ref": "src/runtime/venues/catalog.ts"
+    }
+  ],
+  "metadata": {
+    "pilot": "jupiter-perps-readiness",
+    "reviewedAt": "2026-03-13",
+    "highestJustifiedState": "integrated",
+    "stopBefore": "shadow_ready",
+    "sourceUrls": [
+      "https://dev.jup.ag/docs/perps/about-perps-api",
+      "https://dev.jup.ag/docs/perps/position-account",
+      "https://dev.jup.ag/docs/perps/pool-account",
+      "https://dev.jup.ag/docs/perps/custody-account"
+    ]
+  }
+}

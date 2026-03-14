@@ -98,6 +98,10 @@ export type OrcaSdkFacade = {
   }): Promise<OrcaBuiltSwapTransaction>;
 };
 
+async function importOrcaRuntimeModule<T>(specifier: string): Promise<T> {
+  return (await import(specifier)) as T;
+}
+
 function normalizeOrcaPath(pathname: string): string {
   return pathname.startsWith("/") ? pathname : `/${pathname}`;
 }
@@ -290,9 +294,15 @@ export function createOrcaSdkFacade(): OrcaSdkFacade {
   }) {
     const [{ BN }, { Percentage, ReadOnlyWallet }, whirlpoolSdk] =
       await Promise.all([
-        import("@coral-xyz/anchor"),
-        import("@orca-so/common-sdk"),
-        import("@orca-so/whirlpools-sdk"),
+        importOrcaRuntimeModule<typeof import("@coral-xyz/anchor")>(
+          "@coral-xyz/anchor",
+        ),
+        importOrcaRuntimeModule<typeof import("@orca-so/common-sdk")>(
+          "@orca-so/common-sdk",
+        ),
+        importOrcaRuntimeModule<typeof import("@orca-so/whirlpools-sdk")>(
+          "@orca-so/whirlpools-sdk",
+        ),
       ]);
     const { buildWhirlpoolClient, swapQuoteByInputToken, WhirlpoolContext } =
       whirlpoolSdk;

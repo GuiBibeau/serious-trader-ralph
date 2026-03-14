@@ -155,6 +155,43 @@ const BUILTIN_RUNTIME_VENUE_CAPABILITIES = [
   },
   {
     schemaVersion: "v1",
+    venueKey: "jupiter_perps",
+    displayName: "Jupiter Perps",
+    adapterKeys: ["jupiter_perps"],
+    marketTypes: ["perp"],
+    orderTypes: ["market", "limit", "trigger"],
+    intentFamilies: ["perp_order"],
+    authModel: "privy_solana_wallet",
+    feeModel: "maker_taker_bps",
+    precision: {
+      priceDecimals: 6,
+      sizeDecimals: 9,
+      minOrderIncrement: "0.000001",
+      minQuoteNotionalUsd: "0.01",
+    },
+    sizeLimits: {
+      minNotionalUsd: "0.01",
+    },
+    latencyProfile: {
+      expectedQuoteMs: 250,
+      expectedSubmitMs: 700,
+      expectedSettlementMs: 4000,
+    },
+    settlementBehavior: "orderbook_partial",
+    lifecycle: {
+      supportsOrderLifecycle: true,
+      supportsPositionLifecycle: true,
+      requiresExternalOracle: true,
+      settlementModel: "position_account",
+    },
+    oracleRequirements: ["pyth", "switchboard", "venue_reference"],
+    supportedModes: ["shadow", "paper"],
+    onboardingState: "integrated",
+    notes:
+      "Dated research-gated Jupiter Perps capability kept separate from Jupiter spot. The official docs still describe the Perps API as work in progress, so live stays disabled until a later issue lands replay fixtures, paper lifecycle evidence, and venue-specific canary controls.",
+  },
+  {
+    schemaVersion: "v1",
     venueKey: "drift",
     displayName: "Drift",
     adapterKeys: ["drift", "drift_swift"],

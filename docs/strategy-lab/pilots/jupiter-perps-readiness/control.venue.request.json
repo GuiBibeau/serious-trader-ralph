@@ -1,0 +1,13 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "jupiter_perps",
+  "liveAllowed": false,
+  "killSwitchEnabled": false,
+  "updatedBy": "codex",
+  "metadata": {
+    "pilot": "jupiter-perps-readiness",
+    "issueNumber": 373,
+    "reviewedAt": "2026-03-13",
+    "reason": "perps-api-wip"
+  }
+}
