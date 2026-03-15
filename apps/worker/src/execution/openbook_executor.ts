@@ -63,6 +63,16 @@ function readOpenBookOptions(
   return params as OpenBookOrderOptions;
 }
 
+function allowsVenueTxSmokeLiveBypass(
+  input: ExecuteOpenBookClobOrderInput,
+): boolean {
+  return (
+    input.runtimeMode === "live" &&
+    input.experimentalLiveModeBypass === "venue_tx_smoke" &&
+    input.subjectControlBypassReason === "strategy_lab_readiness_canary"
+  );
+}
+
 export async function executeOpenBookClobOrder(
   input: ExecuteOpenBookClobOrderInput,
   deps: OpenBookExecutorDeps = {},
@@ -79,7 +89,8 @@ export async function executeOpenBookClobOrder(
   if (input.intent.side !== "buy" && input.intent.side !== "sell") {
     throw new Error("invalid-openbook-side");
   }
-  if (input.runtimeMode === "live") {
+  const allowVenueTxSmokeLiveBypass = allowsVenueTxSmokeLiveBypass(input);
+  if (input.runtimeMode === "live" && !allowVenueTxSmokeLiveBypass) {
     throw new Error("openbook-live-mode-not-supported");
   }
 
@@ -199,10 +210,15 @@ export async function executeOpenBookClobOrder(
       };
     }
   }
+  const preflightCommitment =
+    input.policy.commitment === "finalized"
+      ? "confirmed"
+      : input.policy.commitment;
 
   const requiresSimulation =
     input.runtimeMode === "shadow" ||
     input.runtimeMode === "paper" ||
+    input.runtimeMode === "live" ||
     input.policy.simulateOnly ||
     readsTruthyExecutionParam(input.execution?.params?.requireSimulation);
 
@@ -227,7 +243,7 @@ export async function executeOpenBookClobOrder(
   }
 
   const simulation = await input.rpc.simulateTransactionBase64(signedBase64, {
-    commitment: input.policy.commitment,
+    commitment: preflightCommitment,
     sigVerify: true,
   });
   const simulatedAt = nowIso();
@@ -259,21 +275,91 @@ export async function executeOpenBookClobOrder(
     };
   }
 
+  if (
+    input.runtimeMode === "shadow" ||
+    input.runtimeMode === "paper" ||
+    input.policy.simulateOnly
+  ) {
+    return {
+      status: "simulated",
+      signature: null,
+      usedQuote: plan.quotePreview,
+      refreshed: false,
+      lastValidBlockHeight: plan.lastValidBlockHeight,
+      executionMeta: {
+        route,
+        classification: "simulated",
+        venueSessionId: plan.prerequisites.openOrdersAccount,
+        intentId: plan.request.clientOrderId,
+        lifecycle,
+        trace: {
+          txBuiltAt,
+          simulatedAt,
+        },
+      },
+    };
+  }
+
+  const signature = await input.rpc.sendTransactionBase64(signedBase64, {
+    skipPreflight: input.policy.skipPreflight,
+    preflightCommitment,
+  });
+  const sentAt = nowIso();
+  const confirmation = await input.rpc.confirmSignature(signature, {
+    commitment: input.policy.commitment,
+  });
+  const confirmedAt = nowIso();
+
+  const status = confirmation.ok
+    ? confirmation.status === "finalized"
+      ? "finalized"
+      : confirmation.status === "confirmed"
+        ? "confirmed"
+        : confirmation.status === "processed"
+          ? "processed"
+          : "error"
+    : "error";
+
   return {
-    status: "simulated",
-    signature: null,
+    status,
+    signature,
     usedQuote: plan.quotePreview,
     refreshed: false,
     lastValidBlockHeight: plan.lastValidBlockHeight,
+    ...(confirmation.ok ? {} : { err: confirmation.err ?? null }),
     executionMeta: {
       route,
-      classification: "simulated",
+      classification:
+        status === "finalized"
+          ? "finalized"
+          : status === "confirmed"
+            ? "confirmed"
+            : status === "processed"
+              ? "submitted"
+              : "error",
       venueSessionId: plan.prerequisites.openOrdersAccount,
       intentId: plan.request.clientOrderId,
-      lifecycle,
+      lifecycle:
+        status === "error"
+          ? {
+              orderState: "rejected",
+              fillState: "failed",
+              settlementState: "failed",
+              notes: ["openbook-live-submit-failed"],
+            }
+          : {
+              ...lifecycle,
+              orderState: "accepted",
+              settlementState:
+                status === "finalized" ? "finalized" : "confirmed",
+            },
       trace: {
         txBuiltAt,
         simulatedAt,
+        sentAt,
+        confirmedAt,
+        ...(status === "finalized" ? { finalizedAt: confirmedAt } : {}),
+        ...(status === "error" ? { failedAt: confirmedAt } : {}),
       },
     },
   };

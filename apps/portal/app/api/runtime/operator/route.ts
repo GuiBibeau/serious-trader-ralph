@@ -803,6 +803,15 @@ export async function POST(request: Request) {
         ...(readString(payload.targetNotionalUsd)
           ? { targetNotionalUsd: readString(payload.targetNotionalUsd) }
           : {}),
+        ...(payload.smokeIntentFamily === "spot_swap" ||
+        payload.smokeIntentFamily === "conditional_spot_order" ||
+        payload.smokeIntentFamily === "clob_order"
+          ? { smokeIntentFamily: payload.smokeIntentFamily }
+          : {}),
+        ...(payload.smokeOrderSide === "buy" ||
+        payload.smokeOrderSide === "sell"
+          ? { smokeOrderSide: payload.smokeOrderSide }
+          : {}),
         ...(typeof payload.tightenOnFailure === "boolean"
           ? { tightenOnFailure: payload.tightenOnFailure }
           : {}),

@@ -1,7 +1,7 @@
+import { createHash } from "node:crypto";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
-  findAccountsByMints,
   getAssociatedTokenAddress,
   I64_MAX_BN,
   OPENBOOK_PROGRAM_ID,
@@ -19,8 +19,20 @@ import {
   type TransactionInstruction,
   type VersionedTransaction,
 } from "@solana/web3.js";
+import bs58 from "bs58";
 import { SUPPORTED_TRADING_PAIRS, type SupportedTradingPair } from "./defaults";
 import type { JupiterQuoteResponse } from "./jupiter";
+
+export const OPENBOOK_MARKET_ACCOUNT_LAYOUT = {
+  discriminatorOffset: 0,
+  discriminator: createHash("sha256")
+    .update("account:Market")
+    .digest()
+    .subarray(0, 8),
+  dataSize: 848,
+  baseMintOffset: 576,
+  quoteMintOffset: 608,
+} as const;
 
 export type OpenBookOrderOptions = {
   orderType?: "market" | "limit" | "trigger" | null;
@@ -335,6 +347,56 @@ function compareMarketCandidates(
   return a.marketAddress.localeCompare(b.marketAddress);
 }
 
+export function buildOpenBookMarketAccountFilters(input: {
+  baseMintAddress: PublicKey;
+  quoteMintAddress: PublicKey;
+}): Array<
+  { dataSize: number } | { memcmp: { offset: number; bytes: string } }
+> {
+  return [
+    {
+      dataSize: OPENBOOK_MARKET_ACCOUNT_LAYOUT.dataSize,
+    },
+    {
+      memcmp: {
+        offset: OPENBOOK_MARKET_ACCOUNT_LAYOUT.discriminatorOffset,
+        bytes: bs58.encode(OPENBOOK_MARKET_ACCOUNT_LAYOUT.discriminator),
+      },
+    },
+    {
+      memcmp: {
+        offset: OPENBOOK_MARKET_ACCOUNT_LAYOUT.baseMintOffset,
+        bytes: input.baseMintAddress.toBase58(),
+      },
+    },
+    {
+      memcmp: {
+        offset: OPENBOOK_MARKET_ACCOUNT_LAYOUT.quoteMintOffset,
+        bytes: input.quoteMintAddress.toBase58(),
+      },
+    },
+  ];
+}
+
+async function findMarketAccountsByMints(input: {
+  connection: Connection;
+  baseMintAddress: PublicKey;
+  quoteMintAddress: PublicKey;
+  programId: PublicKey;
+}) {
+  return await input.connection.getProgramAccounts(input.programId, {
+    commitment: "confirmed",
+    filters: buildOpenBookMarketAccountFilters({
+      baseMintAddress: input.baseMintAddress,
+      quoteMintAddress: input.quoteMintAddress,
+    }),
+    dataSlice: {
+      offset: 0,
+      length: 0,
+    },
+  });
+}
+
 async function resolveMarket(input: {
   client: OpenBookV2Client;
   instrumentId: string;
@@ -344,18 +406,18 @@ async function resolveMarket(input: {
 }> {
   const pair = resolveSupportedPair(input.instrumentId);
   if (pair) {
-    const accounts = await findAccountsByMints(
-      input.client.connection,
-      new PublicKey(pair.baseMint),
-      new PublicKey(pair.quoteMint),
-      input.client.programId,
-    );
+    const accounts = await findMarketAccountsByMints({
+      connection: input.client.connection,
+      baseMintAddress: new PublicKey(pair.baseMint),
+      quoteMintAddress: new PublicKey(pair.quoteMint),
+      programId: input.client.programId,
+    });
     if (accounts.length < 1) {
       throw new Error(`openbook-market-not-found:${input.instrumentId}`);
     }
     const loaded = await Promise.all(
-      accounts.map(async ({ publicKey }) => {
-        const market = await OpenBookMarket.load(input.client, publicKey);
+      accounts.map(async ({ pubkey }) => {
+        const market = await OpenBookMarket.load(input.client, pubkey);
         await market.loadOrderBook();
         return {
           market,
@@ -732,17 +794,9 @@ export function createOpenBookSdkFacade(): OpenBookSdkFacade {
         [];
       let createdOpenOrdersIndexer = false;
       let createdOpenOrdersAccount = false;
-      if (!openOrdersIndexerAccount) {
-        instructions.push(
-          await client.createOpenOrdersIndexerIx(
-            openOrdersIndexer,
-            walletPublicKey,
-          ),
-        );
-        createdOpenOrdersIndexer = true;
-      }
       let openOrdersAccount = existingOpenOrders[0] ?? null;
       if (!openOrdersAccount) {
+        // `createOpenOrdersIx` already prepends indexer creation when needed.
         const [createOpenOrdersIxs, createdOpenOrders] =
           await client.createOpenOrdersIx(
             market.pubkey,
@@ -753,6 +807,7 @@ export function createOpenBookSdkFacade(): OpenBookSdkFacade {
           );
         instructions.push(...createOpenOrdersIxs);
         openOrdersAccount = createdOpenOrders;
+        createdOpenOrdersIndexer = !openOrdersIndexerAccount;
         createdOpenOrdersAccount = true;
       }
       if (!openOrdersAccount) {

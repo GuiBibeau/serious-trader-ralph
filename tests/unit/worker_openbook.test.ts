@@ -1,6 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
+import { PublicKey } from "@solana/web3.js";
 import {
+  buildOpenBookMarketAccountFilters,
   buildOpenBookSyntheticQuote,
+  OPENBOOK_MARKET_ACCOUNT_LAYOUT,
   OpenBookClient,
   resolveOpenBookOrderRequest,
 } from "../../apps/worker/src/openbook";
@@ -89,6 +92,33 @@ describe("worker openbook helpers", () => {
         },
       }),
     ).toThrow(/openbook-orderbook-liquidity-missing/);
+  });
+
+  test("builds market account filters with the live layout offsets", () => {
+    const filters = buildOpenBookMarketAccountFilters({
+      baseMintAddress: new PublicKey(
+        "So11111111111111111111111111111111111111112",
+      ),
+      quoteMintAddress: new PublicKey(
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      ),
+    });
+
+    expect(filters[0]).toEqual({
+      dataSize: OPENBOOK_MARKET_ACCOUNT_LAYOUT.dataSize,
+    });
+    expect(filters[2]).toEqual({
+      memcmp: {
+        offset: OPENBOOK_MARKET_ACCOUNT_LAYOUT.baseMintOffset,
+        bytes: "So11111111111111111111111111111111111111112",
+      },
+    });
+    expect(filters[3]).toEqual({
+      memcmp: {
+        offset: OPENBOOK_MARKET_ACCOUNT_LAYOUT.quoteMintOffset,
+        bytes: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      },
+    });
   });
 
   test("delegates place-order plan building through the injected SDK facade", async () => {
