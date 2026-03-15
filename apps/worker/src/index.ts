@@ -7,6 +7,7 @@ import {
   parseRuntimeResearchReadinessCanaryRequest,
   parseRuntimeResearchReadinessRequest,
   parseRuntimeResearchSubjectControlPatch,
+  parseRuntimeResearchVenueTxSmokeRequest,
 } from "../../../src/runtime/research/readiness.js";
 import { parseRuntimeResearchSynthesisRequest } from "../../../src/runtime/research/synthesis.js";
 import { parseRuntimeResearchCandidateTriageRequest } from "../../../src/runtime/research/triage.js";
@@ -3533,6 +3534,53 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-research-readiness-canary-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/research/readiness/smoke"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const smokeRequest = parseRuntimeResearchVenueTxSmokeRequest(
+            await request.json(),
+          );
+          const result = await runRuntimeResearchReadinessCanaryWithMarkdown({
+            env,
+            request: smokeRequest,
+          });
+          return withCors(
+            json({
+              ok: result.ok,
+              status: result.status,
+              run: result.run,
+              state: result.state,
+              markdown: result.markdown,
+              ...(result.error ? { error: result.error } : {}),
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-research-venue-tx-smoke-failed",
               },
               { status: 400 },
             ),

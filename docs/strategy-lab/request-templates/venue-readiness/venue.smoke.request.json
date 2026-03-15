@@ -1,0 +1,23 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "raydium",
+  "requestedBy": "operator@example.com",
+  "venueKey": "raydium",
+  "assetKey": "SOL",
+  "pairSymbol": "SOL/USDC",
+  "adapterKey": "raydium",
+  "triggerSource": "manual",
+  "proofMode": "venue_tx_smoke",
+  "targetNotionalUsd": "5.00",
+  "tightenOnFailure": true,
+  "failureControlMode": "disable_live",
+  "killDrillNotes": [
+    "Tighten Raydium only.",
+    "Do not widen to a runtime-wide pause."
+  ],
+  "metadata": {
+    "issueNumber": 413,
+    "purpose": "venue-live-smoke",
+    "notes": "Manual tiny-notional venue landing proof without enabling a strategy loop."
+  }
+}

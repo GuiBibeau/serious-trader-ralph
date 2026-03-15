@@ -736,7 +736,8 @@ describe("portal runtime operator route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(JSON.parse(capturedBody)).toMatchObject({
+    const parsedBody = JSON.parse(capturedBody) as Record<string, unknown>;
+    expect(parsedBody).toMatchObject({
       subjectKind: "asset",
       subjectKey: "SOL",
       venueKey: "jupiter",
@@ -745,10 +746,92 @@ describe("portal runtime operator route", () => {
       requestedBy: "operator@example.com",
       triggerSource: "manual",
     });
+    expect(parsedBody).not.toHaveProperty("proofMode");
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       run: {
         runId: "readycanary_sol",
+      },
+    });
+  });
+
+  test("forwards venue tx smoke actions with operator identity", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    let capturedBody = "";
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            user: { id: "u_1", email: "operator@example.com" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.endsWith("/api/admin/ops/runtime/research/readiness/smoke")) {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ ok: true, run: { runId: "smoke_jupiter" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await POST(
+      new Request("https://www.trader-ralph.com/api/runtime/operator", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer user-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "run_venue_tx_smoke",
+          subjectKind: "venue",
+          subjectKey: "jupiter",
+          venueKey: "jupiter",
+          assetKey: "SOL",
+          pairSymbol: "SOL/USDC",
+          targetNotionalUsd: "5.00",
+          tightenOnFailure: true,
+          failureControlMode: "disable_live",
+          killDrillNotes: ["Disable Jupiter only."],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(capturedBody)).toMatchObject({
+      subjectKind: "venue",
+      subjectKey: "jupiter",
+      venueKey: "jupiter",
+      assetKey: "SOL",
+      pairSymbol: "SOL/USDC",
+      targetNotionalUsd: "5.00",
+      requestedBy: "operator@example.com",
+      triggerSource: "manual",
+      proofMode: "venue_tx_smoke",
+      tightenOnFailure: true,
+      failureControlMode: "disable_live",
+      killDrillNotes: ["Disable Jupiter only."],
+    });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      run: {
+        runId: "smoke_jupiter",
       },
     });
   });

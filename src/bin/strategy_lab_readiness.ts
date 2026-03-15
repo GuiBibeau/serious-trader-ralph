@@ -4,9 +4,10 @@ import {
   parseRuntimeResearchReadinessCanaryRequest,
   parseRuntimeResearchReadinessRequest,
   parseRuntimeResearchSubjectControlPatch,
+  parseRuntimeResearchVenueTxSmokeRequest,
 } from "../runtime/research/readiness.js";
 
-type Operation = "readiness" | "canary" | "control";
+type Operation = "readiness" | "canary" | "control" | "smoke";
 
 function readArg(flag: string): string | null {
   const index = process.argv.indexOf(flag);
@@ -20,7 +21,12 @@ function readJsonFile(path: string): unknown {
 
 function resolveOperation(): Operation {
   const raw = readArg("--operation") ?? "readiness";
-  if (raw === "readiness" || raw === "canary" || raw === "control") {
+  if (
+    raw === "readiness" ||
+    raw === "canary" ||
+    raw === "control" ||
+    raw === "smoke"
+  ) {
     return raw;
   }
   throw new Error("invalid-arg:--operation");
@@ -48,14 +54,18 @@ async function main(): Promise<void> {
       ? parseRuntimeResearchReadinessRequest(requestPayload)
       : operation === "canary"
         ? parseRuntimeResearchReadinessCanaryRequest(requestPayload)
-        : parseRuntimeResearchSubjectControlPatch(requestPayload);
+        : operation === "smoke"
+          ? parseRuntimeResearchVenueTxSmokeRequest(requestPayload)
+          : parseRuntimeResearchSubjectControlPatch(requestPayload);
 
   const endpoint =
     operation === "readiness"
       ? "/api/admin/ops/runtime/research/readiness"
       : operation === "canary"
         ? "/api/admin/ops/runtime/research/readiness/canary"
-        : "/api/admin/ops/runtime/research/subject-controls";
+        : operation === "smoke"
+          ? "/api/admin/ops/runtime/research/readiness/smoke"
+          : "/api/admin/ops/runtime/research/subject-controls";
 
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}${endpoint}`, {
     method: "POST",

@@ -10,7 +10,7 @@
   "targetNotionalUsd": "5.00",
   "metadata": {
     "issueNumber": 413,
-    "purpose": "venue-live-smoke",
-    "notes": "Manual tiny-notional venue landing proof without enabling a strategy loop."
+    "purpose": "venue-readiness-canary",
+    "notes": "Manual readiness canary for venue-scoped promotion evidence without automatic failure tightening."
   }
 }

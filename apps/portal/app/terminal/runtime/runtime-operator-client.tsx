@@ -8,6 +8,7 @@ import type {
   RuntimeOperatorApiPayload,
   RuntimeOperatorReadinessCanaryInput,
   RuntimeOperatorSubjectControlInput,
+  RuntimeOperatorVenueTxSmokeInput,
 } from "./types";
 
 async function readJson<T>(response: Response): Promise<T | null> {
@@ -136,6 +137,16 @@ export function RuntimeOperatorClient() {
     );
   }
 
+  async function runVenueTxSmoke(input: RuntimeOperatorVenueTxSmokeInput) {
+    await runOperatorAction(
+      {
+        action: "run_venue_tx_smoke",
+        ...input,
+      },
+      `venue-tx-smoke:${input.subjectKey}`,
+    );
+  }
+
   useEffect(() => {
     if (!ready) return;
     if (!authenticated) {
@@ -234,6 +245,17 @@ export function RuntimeOperatorClient() {
               cause instanceof Error
                 ? cause.message
                 : "runtime-operator-readiness-canary-failed",
+            );
+          });
+        });
+      }}
+      onVenueTxSmoke={(input) => {
+        startTransition(() => {
+          void runVenueTxSmoke(input).catch((cause) => {
+            setError(
+              cause instanceof Error
+                ? cause.message
+                : "runtime-operator-venue-tx-smoke-failed",
             );
           });
         });

@@ -11,12 +11,26 @@ issue bodies and PR notes.
 
 - Treat venue readiness as separate from strategy readiness.
 - Use the request templates in
-  [`docs/strategy-lab/request-templates/venue-readiness`](/Users/guillaumebibeau-laviolette/github/serious-trader-ralph-380/docs/strategy-lab/request-templates/venue-readiness)
-  for manual readiness, canary, and control operations.
+  `docs/strategy-lab/request-templates/venue-readiness`
+  for manual readiness, canary, smoke, and control operations.
 - A venue is not meaningfully ready for `limited_live_ready` unless the matrix
   names both an evidence target and an isolated disable drill.
 - Real-TX landing proof without a full strategy runtime is tracked separately in
   `#410` through `#421`.
+
+## Shared Smoke Workflow
+
+Use the shared operator-invoked smoke harness for venue landing proofs:
+
+```bash
+bun run strategy-lab:readiness \
+  --operation smoke \
+  --request-file docs/strategy-lab/request-templates/venue-readiness/venue.smoke.request.json
+```
+
+The smoke request is distinct from the readiness canary request because it
+records venue-TX landing proof intent and can automatically tighten the single
+venue path on failure.
 
 ## Execution Order
 

@@ -1,5 +1,6 @@
 import {
   buildRuntimeResearchReadinessCanaryMarkdown,
+  buildRuntimeStrategyLabSubjectControlRecord,
   type RuntimeResearchReadinessCanaryRequest,
 } from "../../../src/runtime/research/readiness.js";
 import {
@@ -37,10 +38,12 @@ import {
   getStrategyLabReadinessCanaryDailySpendUsd,
   getStrategyLabReadinessCanaryRun,
   getStrategyLabReadinessCanaryState,
+  getStrategyLabSubjectControl,
   listStrategyLabReadinessCanaryRuns,
   type ReadinessCanaryStateRecord,
   updateStrategyLabReadinessCanaryRun,
   updateStrategyLabReadinessCanaryState,
+  writeStrategyLabSubjectControl,
 } from "./strategy_lab_readiness_repository";
 import type { Env } from "./types";
 
@@ -112,6 +115,23 @@ function readBooleanEnv(value: unknown, fallback = false): boolean {
     return false;
   }
   return fallback;
+}
+
+function readBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === "boolean") return value;
+  return readBooleanEnv(value, fallback);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  const normalized = String(value ?? "").trim();
+  return normalized ? normalized : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => readOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 function readNumberEnv(
@@ -253,6 +273,37 @@ function readStrategyLabReadinessCanaryConfig(
       ) ?? 50_000_000n,
     ),
   };
+}
+
+function readProofMode(
+  request: RuntimeResearchReadinessCanaryRequest,
+): "readiness_canary" | "venue_tx_smoke" {
+  return request.proofMode === "venue_tx_smoke"
+    ? "venue_tx_smoke"
+    : "readiness_canary";
+}
+
+function readFailureControlMode(
+  request: RuntimeResearchReadinessCanaryRequest | Record<string, unknown>,
+): "disable_live" | "engage_kill_switch" {
+  const raw =
+    "failureControlMode" in request
+      ? readOptionalString(request.failureControlMode)
+      : undefined;
+  return raw === "engage_kill_switch" ? "engage_kill_switch" : "disable_live";
+}
+
+function shouldTightenOnFailure(
+  request: RuntimeResearchReadinessCanaryRequest | Record<string, unknown>,
+): boolean {
+  const proofMode =
+    "proofMode" in request ? readOptionalString(request.proofMode) : undefined;
+  if (proofMode !== "venue_tx_smoke") {
+    return false;
+  }
+  return "tightenOnFailure" in request
+    ? readBoolean(request.tightenOnFailure, true)
+    : true;
 }
 
 async function ensureReadinessCanaryWallet(
@@ -434,6 +485,83 @@ async function fetchCanaryQuote(input: {
   };
 }
 
+function mergeMetadata(
+  current: unknown,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...(isRecord(current) ? current : {}),
+    ...patch,
+  };
+}
+
+async function applyVenueSmokeFailureControl(input: {
+  env: Env;
+  run: NonNullable<RuntimeResearchReadinessCanaryWorkflowResult["run"]>;
+}): Promise<NonNullable<RuntimeResearchReadinessCanaryWorkflowResult["run"]>> {
+  const metadata = isRecord(input.run.metadata) ? input.run.metadata : {};
+  if (
+    input.run.subjectKind !== "venue" ||
+    !shouldTightenOnFailure(metadata) ||
+    input.run.status === "success"
+  ) {
+    return input.run;
+  }
+
+  const existing = await getStrategyLabSubjectControl(
+    input.env.WAITLIST_DB,
+    "venue",
+    input.run.subjectKey,
+  );
+  const controlMode = readFailureControlMode(metadata);
+  const updatedBy =
+    readOptionalString(metadata.requestedBy) ?? "system:venue-tx-smoke";
+  const disabledReason = `venue-tx-smoke-${input.run.status}:${input.run.runId}`;
+  const control = buildRuntimeStrategyLabSubjectControlRecord({
+    existing,
+    patch: {
+      subjectKind: "venue",
+      subjectKey: input.run.subjectKey,
+      liveAllowed: false,
+      ...(controlMode === "engage_kill_switch"
+        ? { killSwitchEnabled: true }
+        : {}),
+      disabledReason,
+      updatedBy,
+      metadata: {
+        source: "venue_tx_smoke",
+        runId: input.run.runId,
+        mode: controlMode,
+      },
+    },
+  });
+  await writeStrategyLabSubjectControl(input.env.WAITLIST_DB, control);
+
+  return (await updateStrategyLabReadinessCanaryRun(input.env.WAITLIST_DB, {
+    ...input.run,
+    evidenceRefs: [
+      ...input.run.evidenceRefs,
+      {
+        kind: "subject_control_patch",
+        ref: `subject-control:venue:${input.run.subjectKey}:${controlMode}`,
+      },
+    ],
+    metadata: mergeMetadata(input.run.metadata, {
+      smokeFailureControl: {
+        applied: true,
+        mode: controlMode,
+        subjectKind: "venue",
+        subjectKey: input.run.subjectKey,
+        liveAllowed: control.liveAllowed,
+        killSwitchEnabled: control.killSwitchEnabled,
+        disabledReason: control.disabledReason ?? null,
+        updatedAt: control.updatedAt,
+        updatedBy: control.updatedBy ?? null,
+      },
+    }),
+  })) as NonNullable<RuntimeResearchReadinessCanaryWorkflowResult["run"]>;
+}
+
 async function finalizeReadinessCanaryRun(
   env: Env,
   input: {
@@ -452,12 +580,28 @@ async function finalizeReadinessCanaryRun(
     throw new Error("strategy-lab-readiness-canary-run-missing");
   }
   const completedAt = new Date().toISOString();
+  const runPatch =
+    input.runPatch && isRecord(input.runPatch.metadata)
+      ? {
+          ...input.runPatch,
+          metadata: mergeMetadata(current.metadata, input.runPatch.metadata),
+        }
+      : input.runPatch;
   const run = await updateStrategyLabReadinessCanaryRun(env.WAITLIST_DB, {
     ...current,
     status: input.status,
-    ...(input.runPatch ?? {}),
+    ...(runPatch ?? {}),
     completedAt,
   });
+  const nextRun =
+    run && input.status !== "success"
+      ? await applyVenueSmokeFailureControl({
+          env,
+          run: run as NonNullable<
+            RuntimeResearchReadinessCanaryWorkflowResult["run"]
+          >,
+        })
+      : run;
   const state = await updateStrategyLabReadinessCanaryState(env.WAITLIST_DB, {
     canaryKey: STRATEGY_LAB_READINESS_CANARY_KEY,
     lastRunId: input.runId,
@@ -466,15 +610,17 @@ async function finalizeReadinessCanaryRun(
   return {
     ok: input.status === "success",
     status: input.status,
-    run,
+    run: nextRun,
     state,
-    markdown: run ? buildRuntimeResearchReadinessCanaryMarkdown(run) : null,
+    markdown: nextRun
+      ? buildRuntimeResearchReadinessCanaryMarkdown(nextRun)
+      : null,
     ...(input.status === "success"
       ? {}
       : {
           error:
-            input.runPatch && "errorMessage" in input.runPatch
-              ? (input.runPatch.errorMessage as string | undefined)
+            runPatch && "errorMessage" in runPatch
+              ? (runPatch.errorMessage as string | undefined)
               : undefined,
         }),
   };
@@ -495,6 +641,10 @@ function buildStubCanaryMetadata(input: {
   return {
     source: "stub",
     requestedBy: input.request.requestedBy,
+    proofMode: readProofMode(input.request),
+    tightenOnFailure: shouldTightenOnFailure(input.request),
+    failureControlMode: readFailureControlMode(input.request),
+    killDrillNotes: readStringArray(input.request.killDrillNotes),
     pairSymbol: input.context.pairSymbol,
     venueKey: input.context.venueKey,
     assetKey: input.context.assetKey,
@@ -615,6 +765,10 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
     startedAt,
     metadata: {
       requestedBy: input.request.requestedBy,
+      proofMode: readProofMode(input.request),
+      tightenOnFailure: shouldTightenOnFailure(input.request),
+      failureControlMode: readFailureControlMode(input.request),
+      killDrillNotes: readStringArray(input.request.killDrillNotes),
       ...(input.request.metadata
         ? { requestMetadata: input.request.metadata }
         : {}),
@@ -681,6 +835,12 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       },
     });
   }
+  const submissionPath = {
+    venueKey: context.venueKey,
+    adapterKey: context.adapterKey,
+    lane: laneResolution.lane,
+    adapter: laneResolution.adapter,
+  };
 
   const rpc = SolanaRpc.fromEnv(input.env);
   const jupiter = new JupiterClient(
@@ -737,6 +897,7 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
         errorCode: "policy-denied",
         errorMessage: runtimeBalancePolicy.reason,
         metadata: {
+          submissionPath,
           runtimePolicy: runtimeBalancePolicy.metadata,
         },
       },
@@ -835,6 +996,10 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
           errorCode: failure.errorCode,
           errorMessage: failure.errorMessage,
           metadata: {
+            submissionPath: {
+              ...submissionPath,
+              landingStatus: result.status,
+            },
             quote: asJsonObject(quoteSummary.quoteResponse),
             executionMeta: asJsonObject(result.executionMeta),
             ...(referenceGuard.enabled
@@ -906,8 +1071,13 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
           },
         ],
         metadata: {
+          submissionPath: {
+            ...submissionPath,
+            landingStatus: result.status,
+          },
           quote: asJsonObject(quoteSummary.quoteResponse),
           executionMeta: asJsonObject(result.executionMeta),
+          feeLamports: feeLamports.toString(),
           ...(referenceGuard.enabled
             ? {
                 referencePrice: {
@@ -942,6 +1112,9 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
           fallback: "submission-failed",
         }),
         errorMessage: executionErrorMessage(error),
+        metadata: {
+          submissionPath,
+        },
       },
     });
   }

@@ -71,6 +71,10 @@ export type RuntimeResearchReadinessCanaryRequest = {
   adapterKey?: string;
   triggerSource?: "manual" | "promotion";
   targetNotionalUsd?: string;
+  proofMode?: "readiness_canary" | "venue_tx_smoke";
+  tightenOnFailure?: boolean;
+  failureControlMode?: "disable_live" | "engage_kill_switch";
+  killDrillNotes?: string[];
   metadata?: Record<string, unknown>;
 };
 
@@ -116,6 +120,13 @@ function readOptionalString(value: unknown): string | undefined {
 function readOptionalBoolean(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value;
   return undefined;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .map((entry) => readOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 function readStatus(
@@ -340,6 +351,33 @@ export function parseRuntimeResearchReadinessCanaryRequest(
     triggerSourceValue === "manual" || triggerSourceValue === "promotion"
       ? triggerSourceValue
       : undefined;
+  const proofModeValue = readOptionalString(input.proofMode);
+  if (
+    proofModeValue &&
+    proofModeValue !== "readiness_canary" &&
+    proofModeValue !== "venue_tx_smoke"
+  ) {
+    throw new Error("invalid-runtime-research-readiness-canary-proof-mode");
+  }
+  const failureControlModeValue = readOptionalString(input.failureControlMode);
+  if (
+    failureControlModeValue &&
+    failureControlModeValue !== "disable_live" &&
+    failureControlModeValue !== "engage_kill_switch"
+  ) {
+    throw new Error(
+      "invalid-runtime-research-readiness-canary-failure-control-mode",
+    );
+  }
+  const proofMode =
+    proofModeValue === "readiness_canary" || proofModeValue === "venue_tx_smoke"
+      ? proofModeValue
+      : undefined;
+  const failureControlMode =
+    failureControlModeValue === "disable_live" ||
+    failureControlModeValue === "engage_kill_switch"
+      ? failureControlModeValue
+      : undefined;
 
   return {
     subjectKind,
@@ -361,9 +399,34 @@ export function parseRuntimeResearchReadinessCanaryRequest(
     ...(readOptionalString(input.targetNotionalUsd)
       ? { targetNotionalUsd: readOptionalString(input.targetNotionalUsd) }
       : {}),
+    ...(proofMode ? { proofMode } : {}),
+    ...(readOptionalBoolean(input.tightenOnFailure) !== undefined
+      ? { tightenOnFailure: readOptionalBoolean(input.tightenOnFailure) }
+      : {}),
+    ...(failureControlMode ? { failureControlMode } : {}),
+    ...(readStringArray(input.killDrillNotes)
+      ? { killDrillNotes: readStringArray(input.killDrillNotes) }
+      : {}),
     ...(isRecord(input.metadata)
       ? { metadata: input.metadata as Record<string, unknown> }
       : {}),
+  };
+}
+
+export function parseRuntimeResearchVenueTxSmokeRequest(
+  input: unknown,
+): RuntimeResearchReadinessCanaryRequest {
+  const request = parseRuntimeResearchReadinessCanaryRequest(input);
+  if (request.subjectKind !== "venue") {
+    throw new Error("invalid-runtime-research-venue-tx-smoke-subject-kind");
+  }
+
+  return {
+    ...request,
+    proofMode: "venue_tx_smoke",
+    triggerSource: request.triggerSource ?? "manual",
+    tightenOnFailure: request.tightenOnFailure ?? true,
+    failureControlMode: request.failureControlMode ?? "disable_live",
   };
 }
 
@@ -769,8 +832,19 @@ export function buildRuntimeResearchReadinessMarkdown(
 export function buildRuntimeResearchReadinessCanaryMarkdown(
   canaryRun: RuntimeStrategyLabReadinessCanaryRun,
 ): string {
+  const metadata = isRecord(canaryRun.metadata) ? canaryRun.metadata : null;
+  const proofMode = readOptionalString(metadata?.proofMode);
+  const failureControl = isRecord(metadata?.smokeFailureControl)
+    ? metadata.smokeFailureControl
+    : null;
+  const submissionPath = isRecord(metadata?.submissionPath)
+    ? metadata.submissionPath
+    : null;
+  const killDrillNotes = readStringArray(metadata?.killDrillNotes) ?? [];
   const lines = [
-    `# Strategy-lab readiness canary for ${canaryRun.subjectKind}:${canaryRun.subjectKey}`,
+    proofMode === "venue_tx_smoke"
+      ? `# Venue TX smoke for ${canaryRun.subjectKind}:${canaryRun.subjectKey}`
+      : `# Strategy-lab readiness canary for ${canaryRun.subjectKind}:${canaryRun.subjectKey}`,
     "",
     `- Run id: ${canaryRun.runId}`,
     `- Status: ${canaryRun.status}`,
@@ -794,6 +868,11 @@ export function buildRuntimeResearchReadinessCanaryMarkdown(
   }
   if (canaryRun.errorMessage) {
     lines.push(`- Error: ${canaryRun.errorMessage}`);
+  }
+  if (submissionPath) {
+    lines.push(
+      `- Submission path: ${readOptionalString(submissionPath.adapter) ?? "unknown adapter"} on ${readOptionalString(submissionPath.lane) ?? "unknown lane"}`,
+    );
   }
 
   lines.push("", "## Evidence", "");
@@ -820,6 +899,28 @@ export function buildRuntimeResearchReadinessCanaryMarkdown(
     }
     for (const note of canaryRun.reconciliation.notes ?? []) {
       lines.push(`- Note: ${note}`);
+    }
+  }
+
+  if (proofMode === "venue_tx_smoke" && killDrillNotes.length > 0) {
+    lines.push("", "## Kill Drill Notes", "");
+    for (const note of killDrillNotes) {
+      lines.push(`- ${note}`);
+    }
+  }
+
+  if (proofMode === "venue_tx_smoke" && failureControl) {
+    lines.push("", "## Failure Control", "");
+    lines.push(
+      `- Applied: ${String(failureControl.applied ?? false)}`,
+      `- Mode: ${readOptionalString(failureControl.mode) ?? "n/a"}`,
+      `- Live allowed: ${String(failureControl.liveAllowed ?? "n/a")}`,
+      `- Kill switch enabled: ${String(failureControl.killSwitchEnabled ?? "n/a")}`,
+    );
+    if (readOptionalString(failureControl.disabledReason)) {
+      lines.push(
+        `- Disabled reason: ${readOptionalString(failureControl.disabledReason)}`,
+      );
     }
   }
 

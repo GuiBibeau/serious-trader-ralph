@@ -28,6 +28,19 @@ export type RuntimeOperatorReadinessCanaryInput = {
   targetNotionalUsd?: string;
 };
 
+export type RuntimeOperatorVenueTxSmokeInput = {
+  subjectKind: "venue";
+  subjectKey: string;
+  venueKey?: string;
+  assetKey?: string;
+  pairSymbol?: string;
+  adapterKey?: string;
+  targetNotionalUsd?: string;
+  tightenOnFailure?: boolean;
+  failureControlMode?: "disable_live" | "engage_kill_switch";
+  killDrillNotes?: string[];
+};
+
 export type RuntimeOperatorControls = {
   enabled: boolean;
   disabledReason: string | null;

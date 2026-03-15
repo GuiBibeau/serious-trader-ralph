@@ -258,4 +258,174 @@ describe("worker runtime research readiness routes", () => {
       sqlite.close();
     }
   });
+
+  test("runs a venue tx smoke and returns smoke-scoped evidence", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "jupiter",
+              requestedBy: "codex",
+              venueKey: "jupiter",
+              assetKey: "SOL",
+              pairSymbol: "SOL/USDC",
+              proofMode: "venue_tx_smoke",
+              tightenOnFailure: true,
+              failureControlMode: "disable_live",
+              killDrillNotes: ["Disable Jupiter only."],
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        markdown: string;
+        run: {
+          metadata?: Record<string, unknown>;
+          evidenceRefs: Array<{ kind: string }>;
+          reconciliation: { status: string };
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.status).toBe("success");
+      expect(payload.markdown).toContain("Venue TX smoke");
+      expect(payload.run.reconciliation.status).toBe("passed");
+      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+      expect(payload.run.metadata?.proofMode).toBe("venue_tx_smoke");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("tightens the venue on tx smoke failure", async () => {
+    const { env, sqlite } = createOpsEnv({
+      STRATEGY_LAB_READINESS_CANARY_DAILY_CAP_USD: "1",
+    });
+    try {
+      const warmupResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "jupiter",
+              requestedBy: "codex",
+              venueKey: "jupiter",
+              assetKey: "SOL",
+              pairSymbol: "SOL/USDC",
+              proofMode: "venue_tx_smoke",
+              tightenOnFailure: true,
+              failureControlMode: "disable_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(warmupResponse.status).toBe(200);
+
+      const smokeResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "jupiter",
+              requestedBy: "codex",
+              venueKey: "jupiter",
+              assetKey: "SOL",
+              pairSymbol: "SOL/USDC",
+              proofMode: "venue_tx_smoke",
+              tightenOnFailure: true,
+              failureControlMode: "disable_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(smokeResponse.status).toBe(200);
+      const payload = (await smokeResponse.json()) as {
+        ok: boolean;
+        status: string;
+        run: {
+          evidenceRefs: Array<{ kind: string }>;
+          metadata?: {
+            smokeFailureControl?: {
+              applied?: boolean;
+              liveAllowed?: boolean;
+              killSwitchEnabled?: boolean;
+            };
+          };
+        };
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.status).toBe("skipped");
+      expect(
+        payload.run.evidenceRefs.some(
+          (ref) => ref.kind === "subject_control_patch",
+        ),
+      ).toBe(true);
+      expect(payload.run.metadata?.smokeFailureControl).toMatchObject({
+        applied: true,
+        liveAllowed: false,
+        killSwitchEnabled: false,
+      });
+
+      const subjectControls = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/subject-controls?subjectKind=venue&subjectKey=jupiter",
+          {
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(subjectControls.status).toBe(200);
+      const controlPayload = (await subjectControls.json()) as {
+        ok: boolean;
+        controls: Array<{
+          subjectKey: string;
+          liveAllowed: boolean;
+          killSwitchEnabled: boolean;
+        }>;
+      };
+      expect(controlPayload.ok).toBe(true);
+      expect(controlPayload.controls[0]).toMatchObject({
+        subjectKey: "jupiter",
+        liveAllowed: false,
+        killSwitchEnabled: false,
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
 });

@@ -19,6 +19,7 @@ import type {
   RuntimeOperatorReadinessCanaryInput,
   RuntimeOperatorSnapshot,
   RuntimeOperatorSubjectControlInput,
+  RuntimeOperatorVenueTxSmokeInput,
 } from "./types";
 
 type RuntimeOperatorViewProps = {
@@ -32,6 +33,7 @@ type RuntimeOperatorViewProps = {
   onControl?: (action: RuntimeControlAction) => void;
   onSubjectControl?: (input: RuntimeOperatorSubjectControlInput) => void;
   onReadinessCanary?: (input: RuntimeOperatorReadinessCanaryInput) => void;
+  onVenueTxSmoke?: (input: RuntimeOperatorVenueTxSmokeInput) => void;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -104,6 +106,12 @@ function buildReadinessCanaryActionKey(
   input: RuntimeOperatorReadinessCanaryInput,
 ): string {
   return `readiness-canary:${input.subjectKind}:${input.subjectKey}`;
+}
+
+function buildVenueTxSmokeActionKey(
+  input: RuntimeOperatorVenueTxSmokeInput,
+): string {
+  return `venue-tx-smoke:${input.subjectKey}`;
 }
 
 function renderBadge(status: string, label?: string) {
@@ -1304,6 +1312,7 @@ function renderReadinessControls(
   actionPending: string | null,
   onSubjectControl?: (input: RuntimeOperatorSubjectControlInput) => void,
   onReadinessCanary?: (input: RuntimeOperatorReadinessCanaryInput) => void,
+  onVenueTxSmoke?: (input: RuntimeOperatorVenueTxSmokeInput) => void,
 ) {
   const deployment = detail?.deployment ?? null;
   const readiness = detail?.lab?.readiness ?? null;
@@ -1327,6 +1336,7 @@ function renderReadinessControls(
       {subjects.map((subject) => {
         const subjectKind =
           readString(subject.subjectKind) === "asset" ? "asset" : "venue";
+        const isVenueSubject = subjectKind === "venue";
         const subjectKey = readString(subject.subjectKey) ?? "unknown";
         const controls = readRecordArray(subject.controls);
         const artifacts = readRecordArray(subject.artifacts);
@@ -1362,12 +1372,30 @@ function renderReadinessControls(
           pairSymbol: deployment.pair.symbol,
           targetNotionalUsd: "5.00",
         };
+        const smokeInput: RuntimeOperatorVenueTxSmokeInput | null =
+          isVenueSubject
+            ? {
+                subjectKind: "venue",
+                subjectKey,
+                venueKey: subjectKey,
+                assetKey,
+                pairSymbol: deployment.pair.symbol,
+                targetNotionalUsd: "5.00",
+                tightenOnFailure: true,
+                failureControlMode: "disable_live",
+                killDrillNotes: [
+                  `Tighten ${subjectKey} only; do not widen to runtime-wide pause.`,
+                ],
+              }
+            : null;
         const liveTogglePending =
           actionPending === buildSubjectActionKey(liveToggleInput);
         const killTogglePending =
           actionPending === buildSubjectActionKey(killToggleInput);
         const canaryPending =
-          actionPending === buildReadinessCanaryActionKey(canaryInput);
+          isVenueSubject && smokeInput
+            ? actionPending === buildVenueTxSmokeActionKey(smokeInput)
+            : actionPending === buildReadinessCanaryActionKey(canaryInput);
 
         return (
           <article
@@ -1408,7 +1436,7 @@ function renderReadinessControls(
                 readString(latestArtifact?.targetState) ?? "n/a",
               )}
               {summaryItem(
-                "Latest canary",
+                isVenueSubject ? "Latest tx smoke" : "Latest canary",
                 readString(latestCanary?.status) ?? "not run",
               )}
             </div>
@@ -1468,10 +1496,24 @@ function renderReadinessControls(
                   <button
                     className={BTN_PRIMARY}
                     type="button"
-                    onClick={() => onReadinessCanary?.(canaryInput)}
-                    disabled={!onReadinessCanary}
+                    onClick={() =>
+                      isVenueSubject
+                        ? smokeInput && onVenueTxSmoke?.(smokeInput)
+                        : onReadinessCanary?.(canaryInput)
+                    }
+                    disabled={
+                      isVenueSubject
+                        ? !onVenueTxSmoke || !smokeInput
+                        : !onReadinessCanary
+                    }
                   >
-                    {canaryPending ? "Running canary..." : "Run canary"}
+                    {canaryPending
+                      ? isVenueSubject
+                        ? "Running tx smoke..."
+                        : "Running canary..."
+                      : isVenueSubject
+                        ? "Run tx smoke"
+                        : "Run canary"}
                   </button>
                 </div>
               </div>
@@ -1494,6 +1536,7 @@ export function RuntimeOperatorView({
   onControl,
   onSubjectControl,
   onReadinessCanary,
+  onVenueTxSmoke,
 }: RuntimeOperatorViewProps) {
   const runtime = payload?.runtime ?? null;
   const detail = payload?.detail ?? null;
@@ -1780,6 +1823,7 @@ export function RuntimeOperatorView({
               actionPending,
               onSubjectControl,
               onReadinessCanary,
+              onVenueTxSmoke,
             )}
           </section>
 

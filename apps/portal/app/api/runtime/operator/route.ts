@@ -769,6 +769,59 @@ export async function POST(request: Request) {
     return NextResponse.json(result.payload, { status: result.status });
   }
 
+  if (action === "run_venue_tx_smoke") {
+    const subjectKind = payload.subjectKind === "venue" ? "venue" : null;
+    const subjectKey = readString(payload.subjectKey);
+    if (!subjectKind || !subjectKey) {
+      return NextResponse.json(
+        { ok: false, error: "invalid-runtime-operator-action" },
+        { status: 400 },
+      );
+    }
+    const result = await requestWorkerJson({
+      path: "/api/admin/ops/runtime/research/readiness/smoke",
+      method: "POST",
+      authHeader: `Bearer ${adminToken}`,
+      body: {
+        subjectKind,
+        subjectKey,
+        requestedBy: operatorActor,
+        triggerSource: "manual",
+        proofMode: "venue_tx_smoke",
+        ...(readString(payload.venueKey)
+          ? { venueKey: readString(payload.venueKey) }
+          : {}),
+        ...(readString(payload.assetKey)
+          ? { assetKey: readString(payload.assetKey) }
+          : {}),
+        ...(readString(payload.pairSymbol)
+          ? { pairSymbol: readString(payload.pairSymbol) }
+          : {}),
+        ...(readString(payload.adapterKey)
+          ? { adapterKey: readString(payload.adapterKey) }
+          : {}),
+        ...(readString(payload.targetNotionalUsd)
+          ? { targetNotionalUsd: readString(payload.targetNotionalUsd) }
+          : {}),
+        ...(typeof payload.tightenOnFailure === "boolean"
+          ? { tightenOnFailure: payload.tightenOnFailure }
+          : {}),
+        ...(payload.failureControlMode === "disable_live" ||
+        payload.failureControlMode === "engage_kill_switch"
+          ? { failureControlMode: payload.failureControlMode }
+          : {}),
+        ...(Array.isArray(payload.killDrillNotes)
+          ? {
+              killDrillNotes: payload.killDrillNotes
+                .map((entry) => readString(entry))
+                .filter((entry): entry is string => Boolean(entry)),
+            }
+          : {}),
+      },
+    });
+    return NextResponse.json(result.payload, { status: result.status });
+  }
+
   return NextResponse.json(
     { ok: false, error: "invalid-runtime-operator-action" },
     { status: 400 },
