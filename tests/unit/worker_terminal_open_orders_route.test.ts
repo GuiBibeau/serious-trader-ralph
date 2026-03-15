@@ -676,11 +676,15 @@ describe("worker terminal open orders and Trigger lifecycle routes", () => {
       fetchHandler = async (input) => {
         const url = readUrl(input);
         expect(url.toString()).toContain("/trigger/v1/getTriggerOrders");
+        expect(url.searchParams.get("user")).toBe(
+          "11111111111111111111111111111111",
+        );
         expect(url.searchParams.get("orderStatus")).toBe("active");
         return responseJson({
           orders: [
             {
-              order: "order_pubkey_1",
+              orderKey: "order_pubkey_1",
+              userPubkey: "11111111111111111111111111111111",
               status: "Open",
               makingAmount: "1000000",
               takingAmount: "6666666",
@@ -739,7 +743,8 @@ describe("worker terminal open orders and Trigger lifecycle routes", () => {
           return responseJson({
             orders: [
               {
-                order: "order_pubkey_1",
+                orderKey: "order_pubkey_1",
+                userPubkey: "11111111111111111111111111111111",
                 status: "Open",
                 makingAmount: "1000000",
                 takingAmount: "6666666",

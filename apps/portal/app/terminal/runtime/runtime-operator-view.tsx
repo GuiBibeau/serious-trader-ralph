@@ -111,7 +111,7 @@ function buildReadinessCanaryActionKey(
 function buildVenueTxSmokeActionKey(
   input: RuntimeOperatorVenueTxSmokeInput,
 ): string {
-  return `venue-tx-smoke:${input.subjectKey}`;
+  return `venue-tx-smoke:${input.subjectKey}:${input.smokeIntentFamily ?? "spot_swap"}`;
 }
 
 function renderBadge(status: string, label?: string) {
@@ -1381,6 +1381,7 @@ function renderReadinessControls(
                 assetKey,
                 pairSymbol: deployment.pair.symbol,
                 targetNotionalUsd: "5.00",
+                smokeIntentFamily: "spot_swap",
                 tightenOnFailure: true,
                 failureControlMode: "disable_live",
                 killDrillNotes: [

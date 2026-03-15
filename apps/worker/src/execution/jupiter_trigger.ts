@@ -98,6 +98,16 @@ function readOptionalBigInt(value: unknown): bigint | null {
   }
 }
 
+function readTriggerAtomic(
+  record: JupiterTriggerOrderRecord | JupiterTriggerOrderTrade,
+  rawKey: string,
+  humanKey: string,
+): bigint | null {
+  const rawValue = isRecord(record) ? record[rawKey] : null;
+  const humanValue = isRecord(record) ? record[humanKey] : null;
+  return readOptionalBigInt(rawValue) ?? readOptionalBigInt(humanValue);
+}
+
 function getPairByInstrumentId(instrumentId: string) {
   return (
     SUPPORTED_TRADING_PAIRS.find((pair) => pair.id === instrumentId) ?? null
@@ -239,16 +249,26 @@ function normalizeLifecycleStatus(
   const normalized = String(status ?? "")
     .trim()
     .toLowerCase();
-  const remainingMakingAmount = readOptionalBigInt(order.remainingMakingAmount);
-  const totalMakingAmount = readPositiveBigInt(order.makingAmount);
-  const totalTakingAmount = readPositiveBigInt(order.takingAmount);
+  const remainingMakingAmount = readTriggerAtomic(
+    order,
+    "rawRemainingMakingAmount",
+    "remainingMakingAmount",
+  );
+  const totalMakingAmount =
+    readTriggerAtomic(order, "rawMakingAmount", "makingAmount") ??
+    readPositiveBigInt(order.makingAmount);
+  const totalTakingAmount =
+    readTriggerAtomic(order, "rawTakingAmount", "takingAmount") ??
+    readPositiveBigInt(order.takingAmount);
 
   let filledInput = 0n;
   let filledOutput = 0n;
   const trades = Array.isArray(order.trades) ? order.trades : [];
   for (const trade of trades) {
-    const inputAmount = readOptionalBigInt(trade.inputAmount) ?? 0n;
-    const outputAmount = readOptionalBigInt(trade.outputAmount) ?? 0n;
+    const inputAmount =
+      readTriggerAtomic(trade, "rawInputAmount", "inputAmount") ?? 0n;
+    const outputAmount =
+      readTriggerAtomic(trade, "rawOutputAmount", "outputAmount") ?? 0n;
     filledInput += inputAmount;
     filledOutput += outputAmount;
   }
@@ -415,7 +435,11 @@ export function findJupiterTriggerOrderByKey(
   const normalizedKey = readString(orderKey);
   if (!normalizedKey) return null;
   return (
-    orders.find((order) => readString(order.order) === normalizedKey) ?? null
+    orders.find((order) => {
+      const recordOrderKey =
+        readString(order.order) ?? readString(order.orderKey);
+      return recordOrderKey === normalizedKey;
+    }) ?? null
   );
 }
 
@@ -424,8 +448,8 @@ export function readTrackedJupiterTriggerOrder(
 ): JupiterTrackedTriggerOrder | null {
   const record = isRecord(value) ? value : null;
   if (!record) return null;
-  const maker = readString(record.maker);
-  const order = readString(record.order);
+  const maker = readString(record.maker) ?? readString(record.userPubkey);
+  const order = readString(record.order) ?? readString(record.orderKey);
   if (!maker || !order) return null;
   return {
     maker,

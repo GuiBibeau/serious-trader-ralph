@@ -126,7 +126,7 @@ export async function executeJupiterConditionalSpotOrder(
       makingAmount: resolved.makingAmount,
       takingAmount: resolved.takingAmount,
       triggerCondition: resolved.triggerCondition,
-      slippageBps: 50,
+      slippageBps: "50",
     },
   });
   const txBuiltAt = nowIso();

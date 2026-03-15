@@ -128,6 +128,22 @@ describe("worker Jupiter trigger conditional order helpers", () => {
     expect(filled.terminalReason).toBe("filled");
     expect(filled.filledInputAtomic).toBe("100000000");
     expect(filled.filledOutputAtomic).toBe("1000000000");
+
+    const completed = summarizeJupiterTriggerOrder({
+      orderKey: "order-completed",
+      status: "Completed",
+      makingAmount: "5.25",
+      takingAmount: "0.054108916",
+      rawMakingAmount: "5250000",
+      rawTakingAmount: "54108916",
+      remainingMakingAmount: "0",
+      rawRemainingMakingAmount: "0",
+      closeTx: "sig-completed",
+    });
+    expect(completed.lifecycle.orderState).toBe("filled");
+    expect(completed.terminalReason).toBe("filled");
+    expect(completed.filledInputAtomic).toBe("5250000");
+    expect(completed.filledOutputAtomic).toBe("54108916");
   });
 
   test("finds an order by public key", () => {
@@ -136,6 +152,15 @@ describe("worker Jupiter trigger conditional order helpers", () => {
         [{ order: "order-a" }, { order: "order-b" }],
         "order-b",
       )?.order,
+    ).toBe("order-b");
+  });
+
+  test("finds an order by orderKey when Jupiter returns the current field names", () => {
+    expect(
+      findJupiterTriggerOrderByKey(
+        [{ orderKey: "order-a" }, { orderKey: "order-b" }],
+        "order-b",
+      )?.orderKey,
     ).toBe("order-b");
   });
 });

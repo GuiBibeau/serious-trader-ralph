@@ -143,7 +143,7 @@ export function RuntimeOperatorClient() {
         action: "run_venue_tx_smoke",
         ...input,
       },
-      `venue-tx-smoke:${input.subjectKey}`,
+      `venue-tx-smoke:${input.subjectKey}:${input.smokeIntentFamily ?? "spot_swap"}`,
     );
   }
 

@@ -49,6 +49,11 @@ describe("worker Jupiter Trigger execution adapter", () => {
       ok: true,
       status: "confirmed",
     }));
+    const createTriggerOrder = mock(async () => ({
+      requestId: "trigger_request_1",
+      order: "trigger_order_1",
+      transaction: "unsigned-trigger-tx",
+    }));
 
     const result = await executeJupiterConditionalSpotOrder(
       {
@@ -61,11 +66,7 @@ describe("worker Jupiter Trigger execution adapter", () => {
           confirmSignature,
         } as never,
         jupiter: {
-          createTriggerOrder: async () => ({
-            requestId: "trigger_request_1",
-            order: "trigger_order_1",
-            transaction: "unsigned-trigger-tx",
-          }),
+          createTriggerOrder,
         } as never,
         privyWalletId: "wallet_1",
         execution: {
@@ -102,6 +103,13 @@ describe("worker Jupiter Trigger execution adapter", () => {
     expect(sendTransactionBase64).toHaveBeenCalledTimes(1);
     expect(confirmSignature).toHaveBeenCalledTimes(1);
     expect(signTransactionWithPrivyByIdMock).toHaveBeenCalledTimes(1);
+    expect(createTriggerOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          slippageBps: "50",
+        }),
+      }),
+    );
   });
 
   test("preserves an open lifecycle when confirmation is uncertain after submit", async () => {

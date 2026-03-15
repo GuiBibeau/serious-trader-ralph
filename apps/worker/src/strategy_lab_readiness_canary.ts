@@ -2,9 +2,11 @@ import {
   buildRuntimeResearchReadinessCanaryMarkdown,
   buildRuntimeStrategyLabSubjectControlRecord,
   type RuntimeResearchReadinessCanaryRequest,
+  type RuntimeResearchVenueTxSmokeIntentFamily,
 } from "../../../src/runtime/research/readiness.js";
 import {
   requireRuntimeVenueCapability,
+  runtimeVenueSupportsIntentFamily,
   runtimeVenueSupportsMode,
 } from "../../../src/runtime/venues/catalog.js";
 import {
@@ -17,14 +19,25 @@ import {
   type CanonicalExecutionErrorCode,
   normalizeExecutionErrorCode,
 } from "./execution/error_taxonomy";
+import {
+  findJupiterTriggerOrderByKey,
+  JUPITER_TRIGGER_PRICE_DECIMALS,
+  type JupiterTrackedTriggerOrder,
+  summarizeJupiterTriggerOrder,
+} from "./execution/jupiter_trigger";
 import { resolveExecutionLane } from "./execution/lane_resolver";
 import { evaluatePrivyRuntimeBalancePolicy } from "./execution/policy_engine";
 import {
+  executeIntentViaRouter,
   executeSwapViaRouter,
   resolveExecutionAdapterRegistration,
 } from "./execution/router";
+import { evaluateSafeLaneTransaction } from "./execution/safe_lane_policy";
 import { quoteSpotSwap } from "./execution/spot_venues";
-import type { JupiterQuoteResponse } from "./jupiter";
+import type {
+  JupiterQuoteResponse,
+  JupiterTriggerOrderRecord,
+} from "./jupiter";
 import { JupiterClient } from "./jupiter";
 import {
   executionLaneRuntimeControlsFromSnapshot,
@@ -33,7 +46,11 @@ import {
 import { evaluateOracleReferencePriceGuard } from "./oracle_reference";
 import { OrcaClient } from "./orca";
 import { enforcePolicy, normalizePolicy } from "./policy";
-import { createPrivySolanaWallet, getPrivyWalletAddressById } from "./privy";
+import {
+  createPrivySolanaWallet,
+  getPrivyWalletAddressById,
+  signTransactionWithPrivyById,
+} from "./privy";
 import { RaydiumClient } from "./raydium";
 import { SolanaRpc } from "./solana_rpc";
 import {
@@ -52,6 +69,10 @@ import type { Env } from "./types";
 
 const STRATEGY_LAB_READINESS_CANARY_KEY = "strategy_lab";
 const USDC_DECIMALS = 6;
+const JUPITER_TRIGGER_SMOKE_MARGIN_BPS = 1_000n;
+const JUPITER_TRIGGER_SMOKE_MAX_PAGES = 25;
+const JUPITER_TRIGGER_SMOKE_POLL_ATTEMPTS = 8;
+const JUPITER_TRIGGER_SMOKE_POLL_DELAY_MS = 750;
 
 type StrategyLabReadinessCanaryConfig = {
   enabled: boolean;
@@ -82,6 +103,13 @@ type CanaryPairContext = {
   adapterKey: string;
   inputMint: string;
   outputMint: string;
+};
+
+type CanarySubmissionPath = {
+  venueKey: string;
+  adapterKey: string;
+  lane: string;
+  adapter: string;
 };
 
 export type RuntimeResearchReadinessCanaryWorkflowResult = {
@@ -135,6 +163,43 @@ function readStringArray(value: unknown): string[] {
   return value
     .map((entry) => readOptionalString(entry))
     .filter((entry): entry is string => Boolean(entry));
+}
+
+function readSmokeIntentFamily(
+  request: RuntimeResearchReadinessCanaryRequest | Record<string, unknown>,
+): RuntimeResearchVenueTxSmokeIntentFamily {
+  const raw =
+    "smokeIntentFamily" in request
+      ? readOptionalString(request.smokeIntentFamily)
+      : undefined;
+  return raw === "conditional_spot_order"
+    ? "conditional_spot_order"
+    : "spot_swap";
+}
+
+function readSmokeOrderSide(
+  request: RuntimeResearchReadinessCanaryRequest | Record<string, unknown>,
+): "buy" | "sell" {
+  const raw =
+    "smokeOrderSide" in request
+      ? readOptionalString(request.smokeOrderSide)
+      : undefined;
+  return raw === "sell" ? "sell" : "buy";
+}
+
+function pow10(exp: number): bigint {
+  return 10n ** BigInt(Math.max(0, Math.floor(exp)));
+}
+
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  if (denominator <= 0n) {
+    throw new Error("invalid-readiness-canary-denominator");
+  }
+  return (numerator + denominator - 1n) / denominator;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readNumberEnv(
@@ -375,6 +440,7 @@ function resolveDefaultPairForAsset(assetKey: string): string | null {
 function resolveCanaryPairContext(
   request: RuntimeResearchReadinessCanaryRequest,
 ): CanaryPairContext {
+  const smokeIntentFamily = readSmokeIntentFamily(request);
   const venueKey =
     request.venueKey ??
     (request.subjectKind === "venue" ? request.subjectKey : "jupiter");
@@ -412,21 +478,42 @@ function resolveCanaryPairContext(
   if (!runtimeVenueSupportsMode(capability, "live") && !allowSmokeLiveBypass) {
     throw new Error(`strategy-lab-readiness-canary-venue-not-live:${venueKey}`);
   }
+  if (!runtimeVenueSupportsIntentFamily(capability, smokeIntentFamily)) {
+    throw new Error(
+      `strategy-lab-readiness-canary-intent-family-unsupported:${venueKey}:${smokeIntentFamily}`,
+    );
+  }
 
+  const requestedAdapterKey = readOptionalString(request.adapterKey);
   const adapterKey =
-    request.adapterKey ??
+    requestedAdapterKey ??
     capability.adapterKeys.find((candidate) => {
       const registration = resolveExecutionAdapterRegistration(candidate);
       return (
         registration !== null &&
         registration.venueKey === venueKey &&
-        (registration.supportedModes.includes("live") || allowSmokeLiveBypass)
+        (registration.supportedModes.includes("live") || allowSmokeLiveBypass) &&
+        registration.supportedIntentFamilies.includes(smokeIntentFamily)
       );
     });
   if (!adapterKey) {
     throw new Error(
       `strategy-lab-readiness-canary-adapter-unavailable:${venueKey}`,
     );
+  }
+  if (requestedAdapterKey) {
+    const registration =
+      resolveExecutionAdapterRegistration(requestedAdapterKey);
+    if (
+      !registration ||
+      registration.venueKey !== venueKey ||
+      !registration.supportedIntentFamilies.includes(smokeIntentFamily) ||
+      (!registration.supportedModes.includes("live") && !allowSmokeLiveBypass)
+    ) {
+      throw new Error(
+        `strategy-lab-readiness-canary-adapter-unavailable:${venueKey}:${requestedAdapterKey}:${smokeIntentFamily}`,
+      );
+    }
   }
 
   return {
@@ -501,6 +588,172 @@ async function fetchCanaryQuote(input: {
     quoteResponse,
     quotedOutAtomic: quotedOutAtomic.toString(),
     minExpectedOutAtomic,
+  };
+}
+
+function buildReferencePriceMetadata(
+  referenceGuard: Awaited<ReturnType<typeof evaluateOracleReferencePriceGuard>>,
+): Record<string, unknown> | null {
+  if (!referenceGuard.enabled) {
+    return null;
+  }
+  return {
+    verdict: referenceGuard.verdict,
+    reason: referenceGuard.reason,
+    executionPrice: referenceGuard.executionPrice,
+    executionDivergenceBps: referenceGuard.executionDivergenceBps,
+    snapshot: referenceGuard.snapshot,
+  };
+}
+
+function deriveJupiterTriggerSmokePriceAtomic(input: {
+  context: CanaryPairContext;
+  quoteSummary: Awaited<ReturnType<typeof fetchCanaryQuote>>;
+  side: "buy" | "sell";
+}): string {
+  const inputToken = TRADING_TOKEN_BY_MINT[input.context.inputMint];
+  const outputToken = TRADING_TOKEN_BY_MINT[input.context.outputMint];
+  const inputAmountAtomic = parseBigIntLike(input.quoteSummary.amountAtomic);
+  const quotedOutAtomic = parseBigIntLike(input.quoteSummary.quotedOutAtomic);
+  if (!inputToken || !outputToken || !inputAmountAtomic || !quotedOutAtomic) {
+    throw new Error("strategy-lab-readiness-canary-trigger-price-unavailable");
+  }
+  const currentPriceAtomic = ceilDiv(
+    inputAmountAtomic *
+      pow10(outputToken.decimals) *
+      pow10(JUPITER_TRIGGER_PRICE_DECIMALS),
+    quotedOutAtomic * pow10(inputToken.decimals),
+  );
+  if (currentPriceAtomic <= 0n) {
+    throw new Error("strategy-lab-readiness-canary-trigger-price-invalid");
+  }
+  const triggerPriceAtomic = ceilDiv(
+    input.side === "buy"
+      ? currentPriceAtomic * (10_000n + JUPITER_TRIGGER_SMOKE_MARGIN_BPS)
+      : currentPriceAtomic * (10_000n - JUPITER_TRIGGER_SMOKE_MARGIN_BPS),
+    10_000n,
+  );
+  if (input.side === "buy") {
+    return (
+      triggerPriceAtomic > currentPriceAtomic
+        ? triggerPriceAtomic
+        : currentPriceAtomic + 1n
+    ).toString();
+  }
+  return (triggerPriceAtomic > 0n ? triggerPriceAtomic : 1n).toString();
+}
+
+async function fetchJupiterTriggerOrder(input: {
+  jupiter: JupiterClient;
+  trackedOrder: JupiterTrackedTriggerOrder;
+}): Promise<JupiterTriggerOrderRecord | null> {
+  const searchOrders = async (
+    orderStatus: "active" | "history",
+  ): Promise<JupiterTriggerOrderRecord | null> => {
+    let page = 1;
+    let pageSize = 0;
+    while (page <= JUPITER_TRIGGER_SMOKE_MAX_PAGES) {
+      const response = await input.jupiter.getTriggerOrders({
+        maker: input.trackedOrder.maker,
+        orderStatus,
+        page,
+        ...(input.trackedOrder.inputMint
+          ? { inputMint: input.trackedOrder.inputMint }
+          : {}),
+        ...(input.trackedOrder.outputMint
+          ? { outputMint: input.trackedOrder.outputMint }
+          : {}),
+        includeFailedTx: true,
+      });
+      const match = findJupiterTriggerOrderByKey(
+        response.orders,
+        input.trackedOrder.order,
+      );
+      if (match) return match;
+      if (response.orders.length === 0) return null;
+      if (pageSize === 0) pageSize = response.orders.length;
+      const totalPages = Math.max(
+        1,
+        Math.ceil(response.totalOrders / pageSize),
+      );
+      if (page >= totalPages) return null;
+      page += 1;
+    }
+    return null;
+  };
+
+  const activeMatch = await searchOrders("active");
+  if (activeMatch) return activeMatch;
+  return await searchOrders("history");
+}
+
+async function pollJupiterTriggerOrderTerminal(input: {
+  jupiter: JupiterClient;
+  trackedOrder: JupiterTrackedTriggerOrder;
+}): Promise<{
+  orderRecord: JupiterTriggerOrderRecord | null;
+  summary: ReturnType<typeof summarizeJupiterTriggerOrder>;
+}> {
+  let orderRecord: JupiterTriggerOrderRecord | null = null;
+  let summary = summarizeJupiterTriggerOrder(null);
+  for (
+    let attempt = 0;
+    attempt < JUPITER_TRIGGER_SMOKE_POLL_ATTEMPTS;
+    attempt += 1
+  ) {
+    orderRecord = await fetchJupiterTriggerOrder({
+      jupiter: input.jupiter,
+      trackedOrder: input.trackedOrder,
+    });
+    summary = summarizeJupiterTriggerOrder(orderRecord);
+    if (summary.terminalReason) {
+      return {
+        orderRecord,
+        summary,
+      };
+    }
+    if (attempt < JUPITER_TRIGGER_SMOKE_POLL_ATTEMPTS - 1) {
+      await sleep(JUPITER_TRIGGER_SMOKE_POLL_DELAY_MS);
+    }
+  }
+  return {
+    orderRecord,
+    summary,
+  };
+}
+
+async function pollJupiterTriggerOrderVisible(input: {
+  jupiter: JupiterClient;
+  trackedOrder: JupiterTrackedTriggerOrder;
+}): Promise<{
+  orderRecord: JupiterTriggerOrderRecord | null;
+  summary: ReturnType<typeof summarizeJupiterTriggerOrder>;
+}> {
+  let orderRecord: JupiterTriggerOrderRecord | null = null;
+  let summary = summarizeJupiterTriggerOrder(null);
+  for (
+    let attempt = 0;
+    attempt < JUPITER_TRIGGER_SMOKE_POLL_ATTEMPTS;
+    attempt += 1
+  ) {
+    orderRecord = await fetchJupiterTriggerOrder({
+      jupiter: input.jupiter,
+      trackedOrder: input.trackedOrder,
+    });
+    summary = summarizeJupiterTriggerOrder(orderRecord);
+    if (summary.terminalReason || summary.lifecycle.orderState === "open") {
+      return {
+        orderRecord,
+        summary,
+      };
+    }
+    if (attempt < JUPITER_TRIGGER_SMOKE_POLL_ATTEMPTS - 1) {
+      await sleep(JUPITER_TRIGGER_SMOKE_POLL_DELAY_MS);
+    }
+  }
+  return {
+    orderRecord,
+    summary,
   };
 }
 
@@ -641,8 +894,679 @@ async function finalizeReadinessCanaryRun(
             runPatch && "errorMessage" in runPatch
               ? (runPatch.errorMessage as string | undefined)
               : undefined,
-        }),
+    }),
   };
+}
+
+async function runJupiterConditionalSpotSmoke(input: {
+  env: Env;
+  request: RuntimeResearchReadinessCanaryRequest;
+  runId: string;
+  context: CanaryPairContext;
+  wallet: StrategyLabReadinessCanaryWallet;
+  submissionPath: CanarySubmissionPath;
+  quoteSummary: Awaited<ReturnType<typeof fetchCanaryQuote>>;
+  policy: ReturnType<typeof normalizePolicy>;
+  config: StrategyLabReadinessCanaryConfig;
+  rpc: SolanaRpc;
+  jupiter: JupiterClient;
+  referenceGuard: Awaited<ReturnType<typeof evaluateOracleReferencePriceGuard>>;
+}): Promise<RuntimeResearchReadinessCanaryWorkflowResult> {
+  if (input.context.venueKey !== "jupiter") {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "strategy-lab-readiness-canary-unsupported-smoke-intent",
+        errorMessage: `strategy-lab-readiness-canary-unsupported-smoke-intent:${input.context.venueKey}:conditional_spot_order`,
+        metadata: {
+          submissionPath: input.submissionPath,
+        },
+      },
+    });
+  }
+
+  const referencePriceMetadata = buildReferencePriceMetadata(
+    input.referenceGuard,
+  );
+  const smokeOrderSide = readSmokeOrderSide(input.request);
+  const orderInputMint =
+    smokeOrderSide === "buy"
+      ? input.context.inputMint
+      : input.context.outputMint;
+  const orderOutputMint =
+    smokeOrderSide === "buy"
+      ? input.context.outputMint
+      : input.context.inputMint;
+  const orderQuantityAtomic =
+    smokeOrderSide === "buy"
+      ? input.quoteSummary.amountAtomic
+      : input.quoteSummary.quotedOutAtomic;
+
+  let triggerPriceAtomic: string;
+  try {
+    triggerPriceAtomic = deriveJupiterTriggerSmokePriceAtomic({
+      context: input.context,
+      quoteSummary: input.quoteSummary,
+      side: smokeOrderSide,
+    });
+  } catch (error) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "strategy-lab-readiness-canary-trigger-price-failed",
+        errorMessage: executionErrorMessage(error),
+        metadata: {
+          submissionPath: input.submissionPath,
+          quote: asJsonObject(input.quoteSummary.quoteResponse),
+          ...(referencePriceMetadata
+            ? { referencePrice: referencePriceMetadata }
+            : {}),
+        },
+      },
+    });
+  }
+
+  const runtimeBalancePolicy = await evaluatePrivyRuntimeBalancePolicy({
+    env: input.env,
+    lane: "safe",
+    walletAddress: input.wallet.walletAddress,
+    inputMint: orderInputMint,
+    amountAtomic: orderQuantityAtomic,
+    minSolReserveLamports: input.config.minSolReserveLamports,
+    rpc: input.rpc,
+    runtimeDefaults: null,
+  });
+  if (!runtimeBalancePolicy.ok) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: runtimeBalancePolicy.reason,
+        metadata: {
+          submissionPath: input.submissionPath,
+          runtimePolicy: runtimeBalancePolicy.metadata,
+          smokeOrderSide,
+        },
+      },
+    });
+  }
+
+  const beforeBalances = await readBalances({
+    rpc: input.rpc,
+    walletAddress: input.wallet.walletAddress,
+    inputMint: orderInputMint,
+    outputMint: orderOutputMint,
+  });
+  let trackedOrder: JupiterTrackedTriggerOrder | null = null;
+  let visibleOrder: JupiterTriggerOrderRecord | null = null;
+  let visibleOrderSummary = summarizeJupiterTriggerOrder(null);
+
+  try {
+    const createResult = await executeIntentViaRouter({
+      env: input.env,
+      venueKey: input.context.venueKey,
+      runtimeMode: "live",
+      requireVenueRouting: true,
+      subjectControlBypassReason: "strategy_lab_readiness_canary",
+      execution: {
+        adapter: input.submissionPath.adapter,
+        params: {
+          lane: input.submissionPath.lane,
+          requireSimulation: true,
+        },
+      },
+      policy: input.policy,
+      rpc: input.rpc,
+      jupiter: input.jupiter,
+      intent: {
+        family: "conditional_spot_order",
+        wallet: input.wallet.walletAddress,
+        venueKey: input.context.venueKey,
+        marketType: "spot",
+        instrumentId: input.context.pairSymbol,
+        side: smokeOrderSide,
+        quantityAtomic: orderQuantityAtomic,
+        params: {
+          orderType: "trigger",
+          timeInForce: "gtc",
+          limitPriceAtomic: triggerPriceAtomic,
+          triggerPriceAtomic,
+        },
+      },
+      privyWalletId: input.wallet.walletId,
+      log(level, message, meta) {
+        console[level]("strategy_lab.readiness_canary", {
+          runId: input.runId,
+          message,
+          ...(meta ?? {}),
+        });
+      },
+    });
+
+    if (
+      createResult.status !== "processed" &&
+      createResult.status !== "confirmed" &&
+      createResult.status !== "finalized"
+    ) {
+      const failure = classifyExecutionFailure(
+        createResult.status,
+        createResult.err,
+      );
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: failure.status,
+        runPatch: {
+          errorCode: failure.errorCode,
+          errorMessage: failure.errorMessage,
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              landingStatus: createResult.status,
+            },
+            quote: asJsonObject(input.quoteSummary.quoteResponse),
+            executionMeta: asJsonObject(createResult.executionMeta),
+            triggerPriceAtomic,
+            ...(referencePriceMetadata
+              ? { referencePrice: referencePriceMetadata }
+              : {}),
+          },
+        },
+      });
+    }
+
+    const orderId = readOptionalString(
+      createResult.executionMeta?.venueSessionId,
+    );
+    if (!orderId) {
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: "failed",
+        runPatch: {
+          errorCode: "strategy-lab-readiness-canary-trigger-order-missing",
+          errorMessage: "strategy-lab-readiness-canary-trigger-order-missing",
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              landingStatus: createResult.status,
+            },
+            executionMeta: asJsonObject(createResult.executionMeta),
+            triggerPriceAtomic,
+          },
+        },
+      });
+    }
+
+    trackedOrder = {
+      maker: input.wallet.walletAddress,
+      order: orderId,
+      requestId:
+        readOptionalString(createResult.executionMeta?.intentId) ?? null,
+      inputMint: orderInputMint,
+      outputMint: orderOutputMint,
+    };
+    const visibleResult = await pollJupiterTriggerOrderVisible({
+      jupiter: input.jupiter,
+      trackedOrder,
+    });
+    visibleOrder = visibleResult.orderRecord;
+    visibleOrderSummary = visibleResult.summary;
+    if (!visibleOrder) {
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: "failed",
+        runPatch: {
+          signature: createResult.signature ?? undefined,
+          errorCode: "strategy-lab-readiness-canary-trigger-order-not-visible",
+          errorMessage:
+            "strategy-lab-readiness-canary-trigger-order-not-visible",
+          evidenceRefs: [
+            {
+              kind: "live_canary",
+              ref: `signature:${createResult.signature ?? "missing"}`,
+            },
+            {
+              kind: "venue_order",
+              ref: `jupiter-trigger:${trackedOrder.order}`,
+            },
+          ],
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              createLandingStatus: createResult.status,
+            },
+            executionMeta: asJsonObject(createResult.executionMeta),
+            venueOrderId: trackedOrder.order,
+            triggerPriceAtomic,
+            smokeOrderSide,
+            triggerLifecycle: asJsonObject(visibleOrderSummary.lifecycle),
+          },
+        },
+      });
+    }
+
+    trackedOrder.order =
+      readOptionalString(visibleOrder.order) ??
+      readOptionalString(visibleOrder.orderKey) ??
+      trackedOrder.order;
+    if (visibleOrderSummary.terminalReason) {
+      const closeSignature =
+        readOptionalString(visibleOrder.closeTx) ??
+        readOptionalString(visibleOrderSummary.signature);
+      const createTransaction =
+        createResult.signature !== null
+          ? await input.rpc.getTransactionParsed(createResult.signature, {
+              commitment: "confirmed",
+            })
+          : null;
+      const closeTransaction =
+        closeSignature && closeSignature !== createResult.signature
+          ? await input.rpc.getTransactionParsed(closeSignature, {
+              commitment: "confirmed",
+            })
+          : null;
+      const afterBalances = await readBalances({
+        rpc: input.rpc,
+        walletAddress: input.wallet.walletAddress,
+        inputMint: orderInputMint,
+        outputMint: orderOutputMint,
+      });
+      const createFeeLamports =
+        readReconciliationFeeLamports(createTransaction);
+      const closeFeeLamports = closeTransaction
+        ? readReconciliationFeeLamports(closeTransaction)
+        : 0n;
+      const totalFeeLamports = createFeeLamports + closeFeeLamports;
+      const inputDeltaAtomic =
+        afterBalances.inputAtomic - beforeBalances.inputAtomic;
+      const outputDeltaAtomic =
+        afterBalances.outputAtomic - beforeBalances.outputAtomic;
+      const solDeltaLamports =
+        afterBalances.solLamports - beforeBalances.solLamports;
+      const reconciliationPassed =
+        visibleOrderSummary.terminalReason === "filled" ||
+        visibleOrderSummary.terminalReason === "cancelled";
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: reconciliationPassed ? "success" : "failed",
+        runPatch: {
+          receiptId: `receipt_${input.runId.slice(-16)}`,
+          signature: createResult.signature ?? undefined,
+          errorCode: reconciliationPassed
+            ? undefined
+            : "strategy-lab-readiness-canary-trigger-terminal-before-cancel",
+          errorMessage: reconciliationPassed
+            ? undefined
+            : "strategy-lab-readiness-canary-trigger-terminal-before-cancel",
+          reconciliation: {
+            status: reconciliationPassed ? "passed" : "failed",
+            notes: [
+              `createStatus=${createResult.status}`,
+              `smokeOrderSide=${smokeOrderSide}`,
+              `orderTerminalReason=${visibleOrderSummary.terminalReason}`,
+              `inputDeltaAtomic=${inputDeltaAtomic.toString()}`,
+              `outputDeltaAtomic=${outputDeltaAtomic.toString()}`,
+              `solDeltaLamports=${solDeltaLamports.toString()}`,
+            ],
+          },
+          evidenceRefs: [
+            {
+              kind: "live_canary",
+              ref: `signature:${createResult.signature ?? "missing"}`,
+            },
+            ...(closeSignature && closeSignature !== createResult.signature
+              ? [
+                  {
+                    kind: "live_canary_close",
+                    ref: `signature:${closeSignature}`,
+                  },
+                ]
+              : []),
+            {
+              kind: "venue_order",
+              ref: `jupiter-trigger:${trackedOrder.order}`,
+            },
+          ],
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              createLandingStatus: createResult.status,
+            },
+            executionMeta: asJsonObject(createResult.executionMeta),
+            venueOrderId: trackedOrder.order,
+            smokeOrderSide,
+            triggerPriceAtomic,
+            feeLamports: {
+              create: createFeeLamports.toString(),
+              close: closeFeeLamports.toString(),
+              total: totalFeeLamports.toString(),
+            },
+            beforeBalances: {
+              inputAtomic: beforeBalances.inputAtomic.toString(),
+              outputAtomic: beforeBalances.outputAtomic.toString(),
+              solLamports: beforeBalances.solLamports.toString(),
+            },
+            afterBalances: {
+              inputAtomic: afterBalances.inputAtomic.toString(),
+              outputAtomic: afterBalances.outputAtomic.toString(),
+              solLamports: afterBalances.solLamports.toString(),
+            },
+            triggerLifecycle: asJsonObject(visibleOrderSummary.lifecycle),
+            triggerOrder: asJsonObject(visibleOrder),
+            ...(closeSignature ? { closeSignature } : {}),
+          },
+        },
+      });
+    }
+
+    if (visibleOrderSummary.lifecycle.orderState !== "open") {
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: "failed",
+        runPatch: {
+          signature: createResult.signature ?? undefined,
+          errorCode:
+            "strategy-lab-readiness-canary-trigger-order-not-open-before-cancel",
+          errorMessage:
+            "strategy-lab-readiness-canary-trigger-order-not-open-before-cancel",
+          evidenceRefs: [
+            {
+              kind: "live_canary",
+              ref: `signature:${createResult.signature ?? "missing"}`,
+            },
+            {
+              kind: "venue_order",
+              ref: `jupiter-trigger:${trackedOrder.order}`,
+            },
+          ],
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              createLandingStatus: createResult.status,
+            },
+            executionMeta: asJsonObject(createResult.executionMeta),
+            venueOrderId: trackedOrder.order,
+            smokeOrderSide,
+            triggerPriceAtomic,
+            triggerLifecycle: asJsonObject(visibleOrderSummary.lifecycle),
+            triggerOrder: asJsonObject(visibleOrder),
+          },
+        },
+      });
+    }
+
+    const cancelResponse = await input.jupiter.cancelTriggerOrder({
+      maker: input.wallet.walletAddress,
+      order: trackedOrder.order,
+    });
+    const signedCancelBase64 = await signTransactionWithPrivyById(
+      input.env,
+      input.wallet.walletId,
+      cancelResponse.transaction,
+    );
+    const safeEvaluation = evaluateSafeLaneTransaction({
+      env: input.env,
+      signedTransactionBase64: signedCancelBase64,
+    });
+    if (!safeEvaluation.ok) {
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: "blocked",
+        runPatch: {
+          signature: createResult.signature ?? undefined,
+          errorCode: "policy-denied",
+          errorMessage: safeEvaluation.reason,
+          evidenceRefs: [
+            {
+              kind: "live_canary",
+              ref: `signature:${createResult.signature ?? "missing"}`,
+            },
+            {
+              kind: "venue_order",
+              ref: `jupiter-trigger:${trackedOrder.order}`,
+            },
+          ],
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              createLandingStatus: createResult.status,
+            },
+            executionMeta: asJsonObject(createResult.executionMeta),
+            venueOrderId: trackedOrder.order,
+            triggerOrder: asJsonObject(visibleOrder),
+            triggerPriceAtomic,
+          },
+        },
+      });
+    }
+
+    const cancelSimulation = await input.rpc.simulateTransactionBase64(
+      signedCancelBase64,
+      {
+        commitment: input.policy.commitment,
+        sigVerify: true,
+      },
+    );
+    if (cancelSimulation.err) {
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: "blocked",
+        runPatch: {
+          signature: createResult.signature ?? undefined,
+          errorCode: "policy-denied",
+          errorMessage: "safe-lane-simulation-failed",
+          evidenceRefs: [
+            {
+              kind: "live_canary",
+              ref: `signature:${createResult.signature ?? "missing"}`,
+            },
+            {
+              kind: "venue_order",
+              ref: `jupiter-trigger:${trackedOrder.order}`,
+            },
+          ],
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              createLandingStatus: createResult.status,
+            },
+            executionMeta: asJsonObject(createResult.executionMeta),
+            venueOrderId: trackedOrder.order,
+            triggerOrder: asJsonObject(visibleOrder),
+            triggerPriceAtomic,
+          },
+        },
+      });
+    }
+
+    const cancelSignature = await input.rpc.sendTransactionBase64(
+      signedCancelBase64,
+      {
+        preflightCommitment: input.policy.commitment,
+        skipPreflight: false,
+      },
+    );
+    const cancelConfirmation = await input.rpc.confirmSignature(
+      cancelSignature,
+      {
+        commitment: input.policy.commitment,
+      },
+    );
+    if (!cancelConfirmation.ok) {
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: "failed",
+        runPatch: {
+          signature: createResult.signature ?? undefined,
+          errorCode: "submission-failed",
+          errorMessage: "conditional-order-cancel-confirmation-failed",
+          evidenceRefs: [
+            {
+              kind: "live_canary",
+              ref: `signature:${createResult.signature ?? "missing"}`,
+            },
+            {
+              kind: "live_canary_cancel",
+              ref: `signature:${cancelSignature}`,
+            },
+            {
+              kind: "venue_order",
+              ref: `jupiter-trigger:${trackedOrder.order}`,
+            },
+          ],
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              createLandingStatus: createResult.status,
+              cancelLandingStatus: "error",
+            },
+            executionMeta: asJsonObject(createResult.executionMeta),
+            venueOrderId: trackedOrder.order,
+            cancelSignature,
+            cancelRequestId: cancelResponse.requestId,
+            triggerOrder: asJsonObject(visibleOrder),
+            triggerPriceAtomic,
+          },
+        },
+      });
+    }
+
+    const terminal = await pollJupiterTriggerOrderTerminal({
+      jupiter: input.jupiter,
+      trackedOrder,
+    });
+    const createTransaction =
+      createResult.signature !== null
+        ? await input.rpc.getTransactionParsed(createResult.signature, {
+            commitment: "confirmed",
+          })
+        : null;
+    const cancelTransaction = await input.rpc.getTransactionParsed(
+      cancelSignature,
+      {
+        commitment: "confirmed",
+      },
+    );
+    const afterBalances = await readBalances({
+      rpc: input.rpc,
+      walletAddress: input.wallet.walletAddress,
+      inputMint: orderInputMint,
+      outputMint: orderOutputMint,
+    });
+    const createFeeLamports = readReconciliationFeeLamports(createTransaction);
+    const cancelFeeLamports = readReconciliationFeeLamports(cancelTransaction);
+    const totalFeeLamports = createFeeLamports + cancelFeeLamports;
+    const inputDeltaAtomic =
+      afterBalances.inputAtomic - beforeBalances.inputAtomic;
+    const outputDeltaAtomic =
+      afterBalances.outputAtomic - beforeBalances.outputAtomic;
+    const solDeltaLamports =
+      afterBalances.solLamports - beforeBalances.solLamports;
+    const reconciliationPassed =
+      terminal.summary.terminalReason === "cancelled";
+
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: reconciliationPassed ? "success" : "failed",
+      runPatch: {
+        receiptId: `receipt_${input.runId.slice(-16)}`,
+        signature: createResult.signature ?? undefined,
+        errorCode: reconciliationPassed
+          ? undefined
+          : "strategy-lab-readiness-canary-trigger-reconciliation-failed",
+        errorMessage: reconciliationPassed
+          ? undefined
+          : "strategy-lab-readiness-canary-trigger-reconciliation-failed",
+        reconciliation: {
+          status: reconciliationPassed ? "passed" : "failed",
+          notes: [
+            `createStatus=${createResult.status}`,
+            `cancelStatus=${cancelConfirmation.status ?? "confirmed"}`,
+            `smokeOrderSide=${smokeOrderSide}`,
+            `orderTerminalReason=${terminal.summary.terminalReason ?? "pending"}`,
+            `inputDeltaAtomic=${inputDeltaAtomic.toString()}`,
+            `outputDeltaAtomic=${outputDeltaAtomic.toString()}`,
+            `solDeltaLamports=${solDeltaLamports.toString()}`,
+          ],
+        },
+        evidenceRefs: [
+          {
+            kind: "live_canary",
+            ref: `signature:${createResult.signature ?? "missing"}`,
+          },
+          {
+            kind: "live_canary_cancel",
+            ref: `signature:${cancelSignature}`,
+          },
+          {
+            kind: "venue_order",
+            ref: `jupiter-trigger:${trackedOrder.order}`,
+          },
+        ],
+        metadata: {
+          submissionPath: {
+            ...input.submissionPath,
+            createLandingStatus: createResult.status,
+            cancelLandingStatus: cancelConfirmation.status ?? "confirmed",
+          },
+          quote: asJsonObject(input.quoteSummary.quoteResponse),
+          executionMeta: asJsonObject(createResult.executionMeta),
+          venueOrderId: trackedOrder.order,
+          cancelSignature,
+          cancelRequestId: cancelResponse.requestId,
+          cancelVenueOrderId: cancelResponse.order,
+          smokeOrderSide,
+          triggerPriceAtomic,
+          feeLamports: {
+            create: createFeeLamports.toString(),
+            cancel: cancelFeeLamports.toString(),
+            total: totalFeeLamports.toString(),
+          },
+          beforeBalances: {
+            inputAtomic: beforeBalances.inputAtomic.toString(),
+            outputAtomic: beforeBalances.outputAtomic.toString(),
+            solLamports: beforeBalances.solLamports.toString(),
+          },
+          afterBalances: {
+            inputAtomic: afterBalances.inputAtomic.toString(),
+            outputAtomic: afterBalances.outputAtomic.toString(),
+            solLamports: afterBalances.solLamports.toString(),
+          },
+          triggerLifecycle: asJsonObject(terminal.summary.lifecycle),
+          triggerOrder: asJsonObject(terminal.orderRecord),
+          ...(referencePriceMetadata
+            ? { referencePrice: referencePriceMetadata }
+            : {}),
+        },
+      },
+    });
+  } catch (error) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: normalizeExecutionErrorCode({
+          error,
+          fallback: "submission-failed",
+        }),
+        errorMessage: executionErrorMessage(error),
+        metadata: {
+          submissionPath: input.submissionPath,
+          ...(trackedOrder
+            ? { venueOrderId: trackedOrder.order, triggerOrder: trackedOrder }
+            : {}),
+          ...(visibleOrder
+            ? {
+                triggerLifecycle: asJsonObject(visibleOrderSummary.lifecycle),
+                triggerOrderRecord: asJsonObject(visibleOrder),
+              }
+            : {}),
+        },
+      },
+    });
+  }
 }
 
 function stubWalletAddress(): string {
@@ -661,6 +1585,8 @@ function buildStubCanaryMetadata(input: {
     source: "stub",
     requestedBy: input.request.requestedBy,
     proofMode: readProofMode(input.request),
+    smokeIntentFamily: readSmokeIntentFamily(input.request),
+    smokeOrderSide: readSmokeOrderSide(input.request),
     tightenOnFailure: shouldTightenOnFailure(input.request),
     failureControlMode: readFailureControlMode(input.request),
     killDrillNotes: readStringArray(input.request.killDrillNotes),
@@ -785,6 +1711,8 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
     metadata: {
       requestedBy: input.request.requestedBy,
       proofMode: readProofMode(input.request),
+      smokeIntentFamily: readSmokeIntentFamily(input.request),
+      smokeOrderSide: readSmokeOrderSide(input.request),
       tightenOnFailure: shouldTightenOnFailure(input.request),
       failureControlMode: readFailureControlMode(input.request),
       killDrillNotes: readStringArray(input.request.killDrillNotes),
@@ -854,7 +1782,7 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       },
     });
   }
-  const submissionPath = {
+  const submissionPath: CanarySubmissionPath = {
     venueKey: context.venueKey,
     adapterKey: context.adapterKey,
     lane: laneResolution.lane,
@@ -906,31 +1834,6 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
     maxTradeAmountAtomic: quoteSummary.amountAtomic,
   });
 
-  const runtimeBalancePolicy = await evaluatePrivyRuntimeBalancePolicy({
-    env: input.env,
-    lane: "safe",
-    walletAddress: wallet.walletAddress,
-    inputMint: context.inputMint,
-    amountAtomic: quoteSummary.amountAtomic,
-    minSolReserveLamports: config.minSolReserveLamports,
-    rpc,
-    runtimeDefaults: null,
-  });
-  if (!runtimeBalancePolicy.ok) {
-    return await finalizeReadinessCanaryRun(input.env, {
-      runId,
-      status: "blocked",
-      runPatch: {
-        errorCode: "policy-denied",
-        errorMessage: runtimeBalancePolicy.reason,
-        metadata: {
-          submissionPath,
-          runtimePolicy: runtimeBalancePolicy.metadata,
-        },
-      },
-    });
-  }
-
   try {
     enforcePolicy(policy, quoteSummary.quoteResponse);
   } catch (error) {
@@ -969,6 +1872,49 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
             executionDivergenceBps: referenceGuard.executionDivergenceBps,
             snapshot: referenceGuard.snapshot,
           },
+        },
+      },
+    });
+  }
+  const referencePriceMetadata = buildReferencePriceMetadata(referenceGuard);
+
+  if (readSmokeIntentFamily(input.request) === "conditional_spot_order") {
+    return await runJupiterConditionalSpotSmoke({
+      env: input.env,
+      request: input.request,
+      runId,
+      context,
+      wallet,
+      submissionPath,
+      quoteSummary,
+      policy,
+      config,
+      rpc,
+      jupiter,
+      referenceGuard,
+    });
+  }
+
+  const runtimeBalancePolicy = await evaluatePrivyRuntimeBalancePolicy({
+    env: input.env,
+    lane: "safe",
+    walletAddress: wallet.walletAddress,
+    inputMint: context.inputMint,
+    amountAtomic: quoteSummary.amountAtomic,
+    minSolReserveLamports: config.minSolReserveLamports,
+    rpc,
+    runtimeDefaults: null,
+  });
+  if (!runtimeBalancePolicy.ok) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: runtimeBalancePolicy.reason,
+        metadata: {
+          submissionPath,
+          runtimePolicy: runtimeBalancePolicy.metadata,
         },
       },
     });
@@ -1035,16 +1981,9 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
             },
             quote: asJsonObject(quoteSummary.quoteResponse),
             executionMeta: asJsonObject(result.executionMeta),
-            ...(referenceGuard.enabled
+            ...(referencePriceMetadata
               ? {
-                  referencePrice: {
-                    verdict: referenceGuard.verdict,
-                    reason: referenceGuard.reason,
-                    executionPrice: referenceGuard.executionPrice,
-                    executionDivergenceBps:
-                      referenceGuard.executionDivergenceBps,
-                    snapshot: referenceGuard.snapshot,
-                  },
+                  referencePrice: referencePriceMetadata,
                 }
               : {}),
           },
@@ -1111,15 +2050,9 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
           quote: asJsonObject(quoteSummary.quoteResponse),
           executionMeta: asJsonObject(result.executionMeta),
           feeLamports: feeLamports.toString(),
-          ...(referenceGuard.enabled
+          ...(referencePriceMetadata
             ? {
-                referencePrice: {
-                  verdict: referenceGuard.verdict,
-                  reason: referenceGuard.reason,
-                  executionPrice: referenceGuard.executionPrice,
-                  executionDivergenceBps: referenceGuard.executionDivergenceBps,
-                  snapshot: referenceGuard.snapshot,
-                },
+                referencePrice: referencePriceMetadata,
               }
             : {}),
           beforeBalances: {

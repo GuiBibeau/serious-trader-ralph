@@ -409,6 +409,105 @@ describe("worker runtime research readiness routes", () => {
     }
   });
 
+  test("runs a Jupiter trigger venue tx smoke and records the smoke intent", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "jupiter",
+              requestedBy: "codex",
+              venueKey: "jupiter",
+              assetKey: "SOL",
+              pairSymbol: "SOL/USDC",
+              smokeIntentFamily: "conditional_spot_order",
+              smokeOrderSide: "sell",
+              killDrillNotes: ["Create and cancel a bounded trigger order."],
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        markdown: string;
+        run: {
+          metadata?: Record<string, unknown>;
+          evidenceRefs: Array<{ kind: string }>;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.status).toBe("success");
+      expect(payload.markdown).toContain(
+        "Smoke intent: conditional_spot_order",
+      );
+      expect(payload.markdown).toContain("Smoke order side: sell");
+      expect(payload.run.metadata?.smokeIntentFamily).toBe(
+        "conditional_spot_order",
+      );
+      expect(payload.run.metadata?.smokeOrderSide).toBe("sell");
+      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("blocks conditional venue smoke on a live adapter that does not support trigger intents", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "jupiter",
+              requestedBy: "codex",
+              venueKey: "jupiter",
+              assetKey: "SOL",
+              pairSymbol: "SOL/USDC",
+              adapterKey: "jito_bundle",
+              smokeIntentFamily: "conditional_spot_order",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        error?: string;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.status).toBe("blocked");
+      expect(payload.error).toContain(
+        "strategy-lab-readiness-canary-adapter-unavailable",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("tightens the venue on tx smoke failure", async () => {
     const { env, sqlite } = createOpsEnv({
       STRATEGY_LAB_READINESS_CANARY_DAILY_CAP_USD: "1",

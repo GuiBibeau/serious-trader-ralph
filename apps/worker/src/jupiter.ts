@@ -69,7 +69,9 @@ export type JupiterTriggerOrderStatusRequest = "active" | "history";
 
 export type JupiterTriggerOrderTrade = {
   inputAmount?: string;
+  rawInputAmount?: string;
   outputAmount?: string;
+  rawOutputAmount?: string;
   tx?: string | null;
   txUrl?: string | null;
   createdAt?: string | null;
@@ -78,15 +80,21 @@ export type JupiterTriggerOrderTrade = {
 };
 
 export type JupiterTriggerOrderRecord = {
-  order: string;
+  order?: string | null;
+  orderKey?: string | null;
   maker?: string | null;
+  userPubkey?: string | null;
   payer?: string | null;
   inputMint?: string | null;
   outputMint?: string | null;
   makingAmount?: string | null;
+  rawMakingAmount?: string | null;
   takingAmount?: string | null;
+  rawTakingAmount?: string | null;
   remainingMakingAmount?: string | null;
+  rawRemainingMakingAmount?: string | null;
   remainingTakingAmount?: string | null;
+  rawRemainingTakingAmount?: string | null;
   status?: string | null;
   openTx?: string | null;
   closeTx?: string | null;
@@ -115,7 +123,7 @@ export type JupiterTriggerCreateOrderRequest = {
     makingAmount: string;
     takingAmount: string;
     triggerCondition: JupiterTriggerCondition;
-    slippageBps?: number;
+    slippageBps?: string | number;
     expiredAt?: number;
     feeBps?: number;
   };
@@ -143,6 +151,7 @@ export type JupiterTriggerCancelOrderResponse = {
 
 export type JupiterGetTriggerOrdersRequest = {
   maker: string;
+  user?: string;
   orderStatus: JupiterTriggerOrderStatusRequest;
   inputMint?: string;
   outputMint?: string;
@@ -515,7 +524,11 @@ export class JupiterClient {
     request: JupiterGetTriggerOrdersRequest,
   ): Promise<JupiterTriggerOrdersResponse> {
     const url = new URL("/trigger/v1/getTriggerOrders", this.baseUrl);
-    url.searchParams.set("maker", request.maker);
+    const user = String(request.user ?? request.maker ?? "").trim();
+    if (!user) {
+      throw new Error("Jupiter trigger getTriggerOrders requires user");
+    }
+    url.searchParams.set("user", user);
     url.searchParams.set("orderStatus", request.orderStatus);
     if (request.inputMint) url.searchParams.set("inputMint", request.inputMint);
     if (request.outputMint) {
@@ -548,12 +561,30 @@ export class JupiterClient {
       throw new Error("Jupiter trigger getTriggerOrders invalid response");
     }
     const orders = Array.isArray(payload.orders)
-      ? payload.orders.filter(
-          (value): value is JupiterTriggerOrderRecord =>
-            Boolean(value) &&
-            typeof value === "object" &&
-            !Array.isArray(value),
-        )
+      ? payload.orders
+          .filter(
+            (value): value is JupiterTriggerOrderRecord =>
+              Boolean(value) &&
+              typeof value === "object" &&
+              !Array.isArray(value),
+          )
+          .map((order) => ({
+            ...order,
+            order:
+              typeof order.order === "string" && order.order.trim()
+                ? order.order
+                : typeof order.orderKey === "string" && order.orderKey.trim()
+                  ? order.orderKey
+                  : "",
+            maker:
+              typeof order.maker === "string" && order.maker.trim()
+                ? order.maker
+                : typeof order.userPubkey === "string" &&
+                    order.userPubkey.trim()
+                  ? order.userPubkey
+                  : null,
+          }))
+          .filter((order) => Boolean(order.order))
       : [];
     return {
       orders,
