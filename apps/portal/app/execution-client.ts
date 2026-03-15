@@ -214,6 +214,118 @@ export type ExecutionSpotPreview = {
   priceImpactPct: number | null;
 };
 
+export type ExecutionPerpMarket = {
+  venueKey: TerminalVenueKey;
+  instrumentId: string;
+  instrumentLabel: string;
+  marketIndex: number | null;
+  oracle: string | null;
+  oracleSource: string | null;
+  status: string | null;
+  contractType: string | null;
+  initialMarginRatio: number | null;
+  maintenanceMarginRatio: number | null;
+  fundingRate1hBps: number | null;
+  oraclePrice: number | null;
+  markPrice: number | null;
+  sourceTs: string | null;
+  swiftConfigured: boolean;
+  routeSummary: string | null;
+};
+
+export type ExecutionPerpPreview = {
+  venueKey: TerminalVenueKey;
+  provider: string;
+  instrumentId: string;
+  instrumentLabel: string;
+  side: "long" | "short" | "close_long" | "close_short";
+  orderType: "market" | "limit" | "trigger";
+  timeInForce: "gtc" | "ioc" | "fok";
+  reduceOnly: boolean;
+  quantityAtomic: string;
+  quantityUi: string | null;
+  collateralAtomic: string | null;
+  collateralUi: string | null;
+  limitPriceAtomic: string | null;
+  triggerPriceAtomic: string | null;
+  markPrice: number | null;
+  oraclePrice: number | null;
+  oracle: string | null;
+  oracleSource: string | null;
+  fundingRate1hBps: number | null;
+  initialMarginRatio: number | null;
+  maintenanceMarginRatio: number | null;
+  swiftSupported: boolean;
+  currentSignedQuantityAtomic: string | null;
+  currentSignedQuantityUi: string | null;
+  currentCollateralAtomic: string | null;
+  currentCollateralUi: string | null;
+  currentAverageEntryPrice: number | null;
+  projectedSignedQuantityAtomic: string | null;
+  projectedSignedQuantityUi: string | null;
+  projectedCollateralAtomic: string | null;
+  projectedCollateralUi: string | null;
+  projectedNotionalQuote: number | null;
+  requiredInitialMarginQuote: number | null;
+  requiredMaintenanceQuote: number | null;
+  projectedLeverage: number | null;
+  projectedLiquidationBufferPct: number | null;
+  projectedRiskLevel: "low" | "warning" | "critical" | null;
+  routeSummary: string | null;
+  notes: string[];
+};
+
+export type ExecutionPerpResult = {
+  requestId: string;
+  status: string;
+  terminal: boolean;
+  updatedAt: string | null;
+  receiptId: string | null;
+  provider: string | null;
+  instrumentId: string | null;
+  instrumentLabel: string | null;
+  side: "long" | "short" | "close_long" | "close_short" | null;
+  quantityAtomic: string | null;
+  collateralAtomic: string | null;
+  markPrice: number | null;
+  oraclePrice: number | null;
+  fundingRate1hBps: number | null;
+};
+
+export type ExecutionPerpPosition = {
+  key: string;
+  venueKey: TerminalVenueKey;
+  instrumentId: string;
+  instrumentLabel: string;
+  side: "long" | "short" | "flat";
+  positionState: "open" | "closed";
+  signedQuantityAtomic: string;
+  signedQuantityUi: string;
+  absoluteQuantityUi: string;
+  averageEntryPrice: number | null;
+  markPrice: number | null;
+  oraclePrice: number | null;
+  fundingRate1hBps: number | null;
+  collateralAtomic: string;
+  collateralUi: string;
+  notionalQuote: number | null;
+  unrealizedPnlQuote: number | null;
+  leverage: number | null;
+  equityQuote: number | null;
+  usedMarginQuote: number | null;
+  maintenanceRequirementQuote: number | null;
+  freeCollateralQuote: number | null;
+  initialMarginRatio: number | null;
+  maintenanceMarginRatio: number | null;
+  liquidationBufferPct: number | null;
+  riskLevel: "low" | "warning" | "critical";
+  oracle: string | null;
+  oracleSource: string | null;
+  lastRequestId: string | null;
+  lastUpdatedAt: string | null;
+  notes: string[];
+};
+
 export type ExecutionPredictionMarket = {
   venueKey: TerminalVenueKey;
   marketId: string;
@@ -782,6 +894,323 @@ function parseSpotPreviewSnapshot(payload: unknown): ExecutionSpotPreview {
   };
 }
 
+function parsePerpSide(
+  value: unknown,
+): "long" | "short" | "close_long" | "close_short" | null {
+  return value === "long" ||
+    value === "short" ||
+    value === "close_long" ||
+    value === "close_short"
+    ? value
+    : null;
+}
+
+function parsePerpRiskLevel(
+  value: unknown,
+): "low" | "warning" | "critical" | null {
+  return value === "low" || value === "warning" || value === "critical"
+    ? value
+    : null;
+}
+
+function parsePerpPositionSide(
+  value: unknown,
+): "long" | "short" | "flat" | null {
+  return value === "long" || value === "short" || value === "flat"
+    ? value
+    : null;
+}
+
+function parsePerpMarketSnapshot(value: unknown): ExecutionPerpMarket | null {
+  if (!isRecord(value)) return null;
+  const venueKey = parseTerminalVenueKey(value.venueKey);
+  const instrumentId = parseOptionalString(value.instrumentId);
+  const instrumentLabel = parseOptionalString(value.instrumentLabel);
+  if (!venueKey || !instrumentId || !instrumentLabel) return null;
+  return {
+    venueKey,
+    instrumentId,
+    instrumentLabel,
+    marketIndex: parseOptionalInt(value.marketIndex),
+    oracle: parseOptionalString(value.oracle),
+    oracleSource: parseOptionalString(value.oracleSource),
+    status: parseOptionalString(value.status),
+    contractType: parseOptionalString(value.contractType),
+    initialMarginRatio: parseOptionalFiniteNumber(value.initialMarginRatio),
+    maintenanceMarginRatio: parseOptionalFiniteNumber(
+      value.maintenanceMarginRatio,
+    ),
+    fundingRate1hBps: parseOptionalFiniteNumber(value.fundingRate1hBps),
+    oraclePrice: parseOptionalFiniteNumber(value.oraclePrice),
+    markPrice: parseOptionalFiniteNumber(value.markPrice),
+    sourceTs: parseOptionalString(value.sourceTs),
+    swiftConfigured: value.swiftConfigured === true,
+    routeSummary: parseOptionalString(value.routeSummary),
+  };
+}
+
+function parsePerpMarketsSnapshot(payload: unknown): ExecutionPerpMarket[] {
+  if (!isRecord(payload) || payload.ok !== true) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-perp-markets-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  return Array.isArray(payload.markets)
+    ? payload.markets
+        .map((entry) => parsePerpMarketSnapshot(entry))
+        .filter((entry): entry is ExecutionPerpMarket => entry !== null)
+    : [];
+}
+
+function parsePerpPreviewSnapshot(payload: unknown): ExecutionPerpPreview {
+  if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.preview)) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-perp-preview-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  const preview = payload.preview;
+  const venueKey = parseTerminalVenueKey(preview.venueKey);
+  const provider = parseOptionalString(preview.provider);
+  const instrumentId = parseOptionalString(preview.instrumentId);
+  const instrumentLabel = parseOptionalString(preview.instrumentLabel);
+  const side = parsePerpSide(preview.side);
+  const orderType =
+    preview.orderType === "market" ||
+    preview.orderType === "limit" ||
+    preview.orderType === "trigger"
+      ? preview.orderType
+      : null;
+  const timeInForce =
+    preview.timeInForce === "gtc" ||
+    preview.timeInForce === "ioc" ||
+    preview.timeInForce === "fok"
+      ? preview.timeInForce
+      : null;
+  const quantityAtomic = parseOptionalAtomicString(preview.quantityAtomic);
+  if (
+    !venueKey ||
+    !provider ||
+    !instrumentId ||
+    !instrumentLabel ||
+    !side ||
+    !orderType ||
+    !timeInForce ||
+    !quantityAtomic
+  ) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-perp-preview-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  return {
+    venueKey,
+    provider,
+    instrumentId,
+    instrumentLabel,
+    side,
+    orderType,
+    timeInForce,
+    reduceOnly: preview.reduceOnly === true,
+    quantityAtomic,
+    quantityUi: parseOptionalString(preview.quantityUi),
+    collateralAtomic: parseOptionalAtomicString(preview.collateralAtomic),
+    collateralUi: parseOptionalString(preview.collateralUi),
+    limitPriceAtomic: parseOptionalAtomicString(preview.limitPriceAtomic),
+    triggerPriceAtomic: parseOptionalAtomicString(preview.triggerPriceAtomic),
+    markPrice: parseOptionalFiniteNumber(preview.markPrice),
+    oraclePrice: parseOptionalFiniteNumber(preview.oraclePrice),
+    oracle: parseOptionalString(preview.oracle),
+    oracleSource: parseOptionalString(preview.oracleSource),
+    fundingRate1hBps: parseOptionalFiniteNumber(preview.fundingRate1hBps),
+    initialMarginRatio: parseOptionalFiniteNumber(preview.initialMarginRatio),
+    maintenanceMarginRatio: parseOptionalFiniteNumber(
+      preview.maintenanceMarginRatio,
+    ),
+    swiftSupported: preview.swiftSupported === true,
+    currentSignedQuantityAtomic: parseOptionalString(
+      preview.currentSignedQuantityAtomic,
+    ),
+    currentSignedQuantityUi: parseOptionalString(
+      preview.currentSignedQuantityUi,
+    ),
+    currentCollateralAtomic: parseOptionalAtomicString(
+      preview.currentCollateralAtomic,
+    ),
+    currentCollateralUi: parseOptionalString(preview.currentCollateralUi),
+    currentAverageEntryPrice: parseOptionalFiniteNumber(
+      preview.currentAverageEntryPrice,
+    ),
+    projectedSignedQuantityAtomic: parseOptionalString(
+      preview.projectedSignedQuantityAtomic,
+    ),
+    projectedSignedQuantityUi: parseOptionalString(
+      preview.projectedSignedQuantityUi,
+    ),
+    projectedCollateralAtomic: parseOptionalAtomicString(
+      preview.projectedCollateralAtomic,
+    ),
+    projectedCollateralUi: parseOptionalString(preview.projectedCollateralUi),
+    projectedNotionalQuote: parseOptionalFiniteNumber(
+      preview.projectedNotionalQuote,
+    ),
+    requiredInitialMarginQuote: parseOptionalFiniteNumber(
+      preview.requiredInitialMarginQuote,
+    ),
+    requiredMaintenanceQuote: parseOptionalFiniteNumber(
+      preview.requiredMaintenanceQuote,
+    ),
+    projectedLeverage: parseOptionalFiniteNumber(preview.projectedLeverage),
+    projectedLiquidationBufferPct: parseOptionalFiniteNumber(
+      preview.projectedLiquidationBufferPct,
+    ),
+    projectedRiskLevel: parsePerpRiskLevel(preview.projectedRiskLevel),
+    routeSummary: parseOptionalString(preview.routeSummary),
+    notes: parseStringArray(preview.notes) ?? [],
+  };
+}
+
+function parsePerpResultSnapshot(payload: unknown): ExecutionPerpResult {
+  if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.result)) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-perp-result-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  const result = payload.result;
+  const requestId = parseOptionalString(result.requestId);
+  const status = parseOptionalString(result.status);
+  if (!requestId || !status) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-perp-result-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  return {
+    requestId,
+    status,
+    terminal: result.terminal === true,
+    updatedAt: parseOptionalString(result.updatedAt),
+    receiptId: parseOptionalString(result.receiptId),
+    provider: parseOptionalString(result.provider),
+    instrumentId: parseOptionalString(result.instrumentId),
+    instrumentLabel: parseOptionalString(result.instrumentLabel),
+    side: parsePerpSide(result.side),
+    quantityAtomic: parseOptionalAtomicString(result.quantityAtomic),
+    collateralAtomic: parseOptionalAtomicString(result.collateralAtomic),
+    markPrice: parseOptionalFiniteNumber(result.markPrice),
+    oraclePrice: parseOptionalFiniteNumber(result.oraclePrice),
+    fundingRate1hBps: parseOptionalFiniteNumber(result.fundingRate1hBps),
+  };
+}
+
+function parsePerpPositionSnapshot(
+  value: unknown,
+): ExecutionPerpPosition | null {
+  if (!isRecord(value)) return null;
+  const key = parseOptionalString(value.key);
+  const venueKey = parseTerminalVenueKey(value.venueKey);
+  const instrumentId = parseOptionalString(value.instrumentId);
+  const instrumentLabel = parseOptionalString(value.instrumentLabel);
+  const positionState =
+    value.positionState === "open" || value.positionState === "closed"
+      ? value.positionState
+      : null;
+  const side = parsePerpPositionSide(value.side);
+  const signedQuantityAtomic = parseOptionalString(value.signedQuantityAtomic);
+  const signedQuantityUi = parseOptionalString(value.signedQuantityUi);
+  const absoluteQuantityUi = parseOptionalString(value.absoluteQuantityUi);
+  const collateralAtomic = parseOptionalAtomicString(value.collateralAtomic);
+  const collateralUi = parseOptionalString(value.collateralUi);
+  const riskLevel = parsePerpRiskLevel(value.riskLevel);
+  if (
+    !key ||
+    !venueKey ||
+    !instrumentId ||
+    !instrumentLabel ||
+    !positionState ||
+    !side ||
+    !signedQuantityAtomic ||
+    !signedQuantityUi ||
+    !absoluteQuantityUi ||
+    !collateralAtomic ||
+    !collateralUi ||
+    !riskLevel
+  ) {
+    return null;
+  }
+  return {
+    key,
+    venueKey,
+    instrumentId,
+    instrumentLabel,
+    side,
+    positionState,
+    signedQuantityAtomic,
+    signedQuantityUi,
+    absoluteQuantityUi,
+    averageEntryPrice: parseOptionalFiniteNumber(value.averageEntryPrice),
+    markPrice: parseOptionalFiniteNumber(value.markPrice),
+    oraclePrice: parseOptionalFiniteNumber(value.oraclePrice),
+    fundingRate1hBps: parseOptionalFiniteNumber(value.fundingRate1hBps),
+    collateralAtomic,
+    collateralUi,
+    notionalQuote: parseOptionalFiniteNumber(value.notionalQuote),
+    unrealizedPnlQuote: parseOptionalFiniteNumber(value.unrealizedPnlQuote),
+    leverage: parseOptionalFiniteNumber(value.leverage),
+    equityQuote: parseOptionalFiniteNumber(value.equityQuote),
+    usedMarginQuote: parseOptionalFiniteNumber(value.usedMarginQuote),
+    maintenanceRequirementQuote: parseOptionalFiniteNumber(
+      value.maintenanceRequirementQuote,
+    ),
+    freeCollateralQuote: parseOptionalFiniteNumber(value.freeCollateralQuote),
+    initialMarginRatio: parseOptionalFiniteNumber(value.initialMarginRatio),
+    maintenanceMarginRatio: parseOptionalFiniteNumber(
+      value.maintenanceMarginRatio,
+    ),
+    liquidationBufferPct: parseOptionalFiniteNumber(value.liquidationBufferPct),
+    riskLevel,
+    oracle: parseOptionalString(value.oracle),
+    oracleSource: parseOptionalString(value.oracleSource),
+    lastRequestId: parseOptionalString(value.lastRequestId),
+    lastUpdatedAt: parseOptionalString(value.lastUpdatedAt),
+    notes: parseStringArray(value.notes) ?? [],
+  };
+}
+
+function parsePerpPositionsSnapshot(payload: unknown): ExecutionPerpPosition[] {
+  if (!isRecord(payload) || payload.ok !== true) {
+    throw new ExecutionClientError({
+      message: "invalid-terminal-perp-positions-response",
+      code: "unknown",
+      status: 500,
+      retryable: false,
+      data: payload,
+    });
+  }
+  return Array.isArray(payload.positions)
+    ? payload.positions
+        .map((entry) => parsePerpPositionSnapshot(entry))
+        .filter((entry): entry is ExecutionPerpPosition => entry !== null)
+    : [];
+}
+
 function parseOptionalFiniteNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -1307,6 +1736,105 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     return parseOpenOrdersSnapshot(response);
   }
 
+  async function listPerpMarkets(
+    input?: {
+      venueKey?: TerminalVenueKey;
+      limit?: number;
+    },
+    options?: RequestOptions,
+  ): Promise<ExecutionPerpMarket[]> {
+    const params = new URLSearchParams();
+    if (input?.venueKey) params.set("venueKey", input.venueKey);
+    if (typeof input?.limit === "number" && Number.isFinite(input.limit)) {
+      params.set("limit", String(Math.max(1, Math.floor(input.limit))));
+    }
+    const response = await requestJson({
+      path: `/api/terminal/perp-markets${params.size > 0 ? `?${params.toString()}` : ""}`,
+      method: "GET",
+      signal: options?.signal,
+      headers: options?.headers,
+    });
+    return parsePerpMarketsSnapshot(response);
+  }
+
+  async function previewPerpOrder(
+    input: {
+      venueKey: TerminalVenueKey;
+      instrumentId: string;
+      instrumentLabel?: string;
+      side: "long" | "short" | "close_long" | "close_short";
+      quantityAtomic: string;
+      collateralAtomic?: string;
+      orderType?: "market" | "limit" | "trigger";
+      timeInForce?: "gtc" | "ioc" | "fok";
+      reduceOnly?: boolean;
+      limitPriceAtomic?: string;
+      triggerPriceAtomic?: string;
+      currentPosition?: Pick<
+        ExecutionPerpPosition,
+        | "instrumentId"
+        | "signedQuantityAtomic"
+        | "collateralAtomic"
+        | "averageEntryPrice"
+      > | null;
+    },
+    options?: RequestOptions,
+  ): Promise<ExecutionPerpPreview> {
+    const response = await requestJson({
+      path: "/api/terminal/perp-preview",
+      method: "POST",
+      signal: options?.signal,
+      headers: options?.headers,
+      body: input,
+    });
+    return parsePerpPreviewSnapshot(response);
+  }
+
+  async function submitPerpOrder(
+    input: {
+      venueKey: TerminalVenueKey;
+      instrumentId: string;
+      instrumentLabel?: string;
+      side: "long" | "short" | "close_long" | "close_short";
+      quantityAtomic: string;
+      collateralAtomic?: string;
+      orderType?: "market" | "limit" | "trigger";
+      timeInForce?: "gtc" | "ioc" | "fok";
+      reduceOnly?: boolean;
+      limitPriceAtomic?: string;
+      triggerPriceAtomic?: string;
+      source?: string;
+      reason?: string;
+    },
+    options?: SubmitOptions,
+  ): Promise<ExecutionPerpResult> {
+    const response = await requestJson({
+      path: "/api/terminal/perp-orders",
+      method: "POST",
+      signal: options?.signal,
+      headers: {
+        ...(options?.idempotencyKey
+          ? { "idempotency-key": options.idempotencyKey }
+          : {}),
+        ...(options?.headers ?? {}),
+      },
+      body: input,
+    });
+    return parsePerpResultSnapshot(response);
+  }
+
+  async function listPerpPositions(
+    options?: RequestOptions,
+  ): Promise<ExecutionPerpPosition[]> {
+    const response = await requestJson({
+      path: "/api/terminal/perp-positions",
+      method: "GET",
+      signal: options?.signal,
+      headers: options?.headers,
+    });
+    return parsePerpPositionsSnapshot(response);
+  }
+
   async function listPredictionMarkets(
     input?: {
       venueKey?: TerminalVenueKey;
@@ -1543,11 +2071,15 @@ export function createExecutionClient(options: ExecutionClientOptions) {
     status,
     receipt,
     listOpenOrders,
+    listPerpMarkets,
     listPredictionMarkets,
     previewSpotOrder,
+    previewPerpOrder,
     previewPredictionOrder,
+    submitPerpOrder,
     submitPredictionOrder,
     cancelOpenOrder,
+    listPerpPositions,
     listPredictionPositions,
     settlePredictionPosition,
     waitForTerminalReceipt,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { ExecutionPerpResult } from "../../execution-client";
 import { BTN_PRIMARY, BTN_SECONDARY } from "../../lib";
 import {
   buildAccountRiskSnapshot,
@@ -8,6 +9,8 @@ import {
 } from "../../terminal/components/account-risk";
 import { ExecutionInspectorDrawer } from "../../terminal/components/execution-inspector-drawer";
 import { MarketChart } from "../../terminal/components/market-chart";
+import { createPerpTradeIntent } from "../../terminal/components/perp-intent";
+import { PerpTicketModal } from "../../terminal/components/perp-ticket-modal";
 import type {
   MarketPoint,
   MarketState,
@@ -73,10 +76,13 @@ function buildProofMarketState(): MarketState {
 
 export default function BrowserProofPage() {
   const [tradeOpen, setTradeOpen] = useState(false);
+  const [perpTradeOpen, setPerpTradeOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [completion, setCompletion] = useState<TradeTicketCompletion | null>(
     null,
   );
+  const [perpCompletion, setPerpCompletion] =
+    useState<ExecutionPerpResult | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -93,6 +99,16 @@ export default function BrowserProofPage() {
         reason: "Deterministic browser proof flow",
         amountUi: "50",
         slippageBps: 50,
+      }),
+    [],
+  );
+  const perpIntent = useMemo(
+    () =>
+      createPerpTradeIntent("long", "BROWSER_PROOF", "SOL-PERP", {
+        instrumentLabel: "SOL-PERP",
+        reason: "Deterministic perp browser proof flow",
+        quantityUi: "2",
+        collateralUi: "100",
       }),
     [],
   );
@@ -146,6 +162,17 @@ export default function BrowserProofPage() {
                 type="button"
               >
                 Open trade ticket
+              </button>
+              <button
+                className={BTN_SECONDARY}
+                data-testid="proof-open-perp"
+                onClick={() => {
+                  setPerpCompletion(null);
+                  setPerpTradeOpen(true);
+                }}
+                type="button"
+              >
+                Open perp ticket
               </button>
             </div>
           </div>
@@ -235,6 +262,55 @@ export default function BrowserProofPage() {
             )}
           </section>
         </div>
+
+        <section className="card p-6" data-testid="proof-perp-card">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-[680px]">
+              <p className="label">PERP_PROOF</p>
+              <h2 className="mt-2">Drift paper order proof</h2>
+              <p className="mt-3 text-muted">
+                Deterministic proof surface for the perps ticket. The modal hits
+                the real preview and submit client paths while Playwright routes
+                stub the terminal perps APIs.
+              </p>
+            </div>
+            <button
+              className={BTN_PRIMARY}
+              onClick={() => {
+                setPerpCompletion(null);
+                setPerpTradeOpen(true);
+              }}
+              type="button"
+            >
+              Run perp proof
+            </button>
+          </div>
+
+          {perpCompletion ? (
+            <div
+              className="mt-4 rounded border border-emerald-500/40 bg-emerald-500/10 p-4"
+              data-testid="proof-perp-completion"
+            >
+              <p className="label">PERP_COMPLETE</p>
+              <p className="mt-2 font-mono text-sm">
+                {perpCompletion.requestId} • {perpCompletion.status}
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                provider {perpCompletion.provider ?? "--"} • receipt{" "}
+                {perpCompletion.receiptId ?? "--"}
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                {perpCompletion.instrumentLabel ?? perpCompletion.instrumentId}{" "}
+                • {perpCompletion.side ?? "--"}
+              </p>
+            </div>
+          ) : (
+            <div className="mt-4 rounded border border-dashed border-border p-4 text-sm text-muted">
+              No perp execution captured yet. Open the perp ticket to run the
+              deterministic proof flow.
+            </div>
+          )}
+        </section>
       </section>
 
       <TradeTicketModal
@@ -255,6 +331,17 @@ export default function BrowserProofPage() {
         open={inspectorOpen}
         requestId={completion?.requestId ?? null}
         onClose={() => setInspectorOpen(false)}
+      />
+      <PerpTicketModal
+        open={perpTradeOpen}
+        intent={perpIntent}
+        walletAddress={PROOF_WALLET}
+        currentPosition={null}
+        getAccessToken={async () => "proof-access-token"}
+        onClose={() => setPerpTradeOpen(false)}
+        onOrderComplete={(result) => {
+          setPerpCompletion(result);
+        }}
       />
     </main>
   );

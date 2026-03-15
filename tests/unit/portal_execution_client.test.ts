@@ -213,6 +213,236 @@ describe("portal execution client", () => {
     expect(preview.priceImpactPct).toBe(0.0025);
   });
 
+  test("parses perp markets, preview, submit, and position responses", async () => {
+    const client = createExecutionClient({
+      transport: async (input) => {
+        if (
+          input.path === "/api/terminal/perp-markets?venueKey=drift&limit=4"
+        ) {
+          return {
+            status: 200,
+            payload: {
+              ok: true,
+              markets: [
+                {
+                  venueKey: "drift",
+                  instrumentId: "SOL-PERP",
+                  instrumentLabel: "SOL-PERP",
+                  marketIndex: 2,
+                  oracle: "oracle-sol",
+                  oracleSource: "pyth",
+                  status: "active",
+                  contractType: "perp",
+                  initialMarginRatio: 0.1,
+                  maintenanceMarginRatio: 0.05,
+                  fundingRate1hBps: 1.2,
+                  oraclePrice: 153.25,
+                  markPrice: 153.3,
+                  sourceTs: "2026-03-14T18:00:00.000Z",
+                  swiftConfigured: false,
+                  routeSummary: "Drift Perps",
+                },
+              ],
+            },
+          };
+        }
+        if (input.path === "/api/terminal/perp-preview") {
+          expect(JSON.parse(String(input.body ?? ""))).toEqual({
+            venueKey: "drift",
+            instrumentId: "SOL-PERP",
+            side: "long",
+            quantityAtomic: "2",
+            collateralAtomic: "100000000",
+            orderType: "limit",
+            limitPriceAtomic: "155000000",
+            currentPosition: {
+              instrumentId: "SOL-PERP",
+              signedQuantityAtomic: "1",
+              collateralAtomic: "50000000",
+              averageEntryPrice: 149.5,
+            },
+          });
+          return {
+            status: 200,
+            payload: {
+              ok: true,
+              preview: {
+                venueKey: "drift",
+                provider: "drift",
+                instrumentId: "SOL-PERP",
+                instrumentLabel: "SOL-PERP",
+                side: "long",
+                orderType: "limit",
+                timeInForce: "gtc",
+                reduceOnly: false,
+                quantityAtomic: "2",
+                quantityUi: "2.0",
+                collateralAtomic: "100000000",
+                collateralUi: "100.0",
+                limitPriceAtomic: "155000000",
+                triggerPriceAtomic: null,
+                markPrice: 153.3,
+                oraclePrice: 153.25,
+                oracle: "oracle-sol",
+                oracleSource: "pyth",
+                fundingRate1hBps: 1.2,
+                initialMarginRatio: 0.1,
+                maintenanceMarginRatio: 0.05,
+                swiftSupported: false,
+                currentSignedQuantityAtomic: "0",
+                currentSignedQuantityUi: "0.0",
+                currentCollateralAtomic: "0",
+                currentCollateralUi: "0.0",
+                currentAverageEntryPrice: null,
+                projectedSignedQuantityAtomic: "2",
+                projectedSignedQuantityUi: "2.0",
+                projectedCollateralAtomic: "100000000",
+                projectedCollateralUi: "100.0",
+                projectedNotionalQuote: 306.6,
+                requiredInitialMarginQuote: 30.66,
+                requiredMaintenanceQuote: 15.33,
+                projectedLeverage: 3.066,
+                projectedLiquidationBufferPct: 84.67,
+                projectedRiskLevel: "low",
+                routeSummary: "Drift Perps",
+                notes: ["LIMIT GTC", "exposure-expanding", "paper-mode only"],
+              },
+            },
+          };
+        }
+        if (input.path === "/api/terminal/perp-orders") {
+          expect(JSON.parse(String(input.body ?? ""))).toEqual({
+            venueKey: "drift",
+            instrumentId: "SOL-PERP",
+            side: "long",
+            quantityAtomic: "2",
+            collateralAtomic: "100000000",
+            orderType: "market",
+            source: "PERPS_PANEL",
+            reason: "Open tactical long",
+          });
+          expect(input.headers["idempotency-key"]).toBe("perp-client-idem");
+          return {
+            status: 200,
+            payload: {
+              ok: true,
+              result: {
+                requestId: "execreq_perp_123",
+                status: "finalized",
+                terminal: true,
+                updatedAt: "2026-03-14T18:05:00.000Z",
+                receiptId: "execrcpt_perp_123",
+                provider: "drift",
+                instrumentId: "SOL-PERP",
+                instrumentLabel: "SOL-PERP",
+                side: "long",
+                quantityAtomic: "2",
+                collateralAtomic: "100000000",
+                markPrice: 153.3,
+                oraclePrice: 153.25,
+                fundingRate1hBps: 1.2,
+              },
+            },
+          };
+        }
+        if (input.path === "/api/terminal/perp-positions") {
+          return {
+            status: 200,
+            payload: {
+              ok: true,
+              positions: [
+                {
+                  key: "drift:SOL-PERP",
+                  venueKey: "drift",
+                  instrumentId: "SOL-PERP",
+                  instrumentLabel: "SOL-PERP",
+                  side: "long",
+                  positionState: "open",
+                  signedQuantityAtomic: "2",
+                  signedQuantityUi: "2.0",
+                  absoluteQuantityUi: "2.0",
+                  averageEntryPrice: 153.3,
+                  markPrice: 153.3,
+                  oraclePrice: 153.25,
+                  fundingRate1hBps: 1.2,
+                  collateralAtomic: "100000000",
+                  collateralUi: "100.0",
+                  notionalQuote: 306.6,
+                  unrealizedPnlQuote: 0,
+                  leverage: 3.066,
+                  equityQuote: 100,
+                  usedMarginQuote: 30.66,
+                  maintenanceRequirementQuote: 15.33,
+                  freeCollateralQuote: 69.34,
+                  initialMarginRatio: 0.1,
+                  maintenanceMarginRatio: 0.05,
+                  liquidationBufferPct: 84.67,
+                  riskLevel: "low",
+                  oracle: "oracle-sol",
+                  oracleSource: "pyth",
+                  lastRequestId: "execreq_perp_123",
+                  lastUpdatedAt: "2026-03-14T18:05:00.000Z",
+                  notes: ["drift:market:gtc"],
+                },
+              ],
+            },
+          };
+        }
+        return {
+          status: 404,
+          payload: { ok: false, error: { code: "not-found", message: "nf" } },
+        };
+      },
+    });
+
+    const markets = await client.listPerpMarkets({
+      venueKey: "drift",
+      limit: 4,
+    });
+    expect(markets[0]?.instrumentId).toBe("SOL-PERP");
+    expect(markets[0]?.initialMarginRatio).toBe(0.1);
+
+    const preview = await client.previewPerpOrder({
+      venueKey: "drift",
+      instrumentId: "SOL-PERP",
+      side: "long",
+      quantityAtomic: "2",
+      collateralAtomic: "100000000",
+      orderType: "limit",
+      limitPriceAtomic: "155000000",
+      currentPosition: {
+        instrumentId: "SOL-PERP",
+        signedQuantityAtomic: "1",
+        collateralAtomic: "50000000",
+        averageEntryPrice: 149.5,
+      },
+    });
+    expect(preview.projectedNotionalQuote).toBe(306.6);
+    expect(preview.projectedRiskLevel).toBe("low");
+
+    const submit = await client.submitPerpOrder(
+      {
+        venueKey: "drift",
+        instrumentId: "SOL-PERP",
+        side: "long",
+        quantityAtomic: "2",
+        collateralAtomic: "100000000",
+        orderType: "market",
+        source: "PERPS_PANEL",
+        reason: "Open tactical long",
+      },
+      { idempotencyKey: "perp-client-idem" },
+    );
+    expect(submit.requestId).toBe("execreq_perp_123");
+    expect(submit.status).toBe("finalized");
+    expect(submit.provider).toBe("drift");
+
+    const positions = await client.listPerpPositions();
+    expect(positions[0]?.key).toBe("drift:SOL-PERP");
+    expect(positions[0]?.positionState).toBe("open");
+    expect(positions[0]?.riskLevel).toBe("low");
+  });
+
   test("parses prediction market, preview, and position responses", async () => {
     const client = createExecutionClient({
       transport: async (input) => {
