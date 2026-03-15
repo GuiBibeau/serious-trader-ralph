@@ -12,9 +12,12 @@ import {
 import {
   SOL_MINT,
   SUPPORTED_TRADING_PAIRS,
+  SUPPORTED_TRADING_TOKENS,
   TRADING_TOKEN_BY_MINT,
   USDC_MINT,
 } from "./defaults";
+import { DriftClient } from "./drift";
+import type { DriftLiveAccountSnapshot } from "./drift_live";
 import {
   type CanonicalExecutionErrorCode,
   normalizeExecutionErrorCode,
@@ -34,6 +37,7 @@ import {
 } from "./execution/router";
 import { evaluateSafeLaneTransaction } from "./execution/safe_lane_policy";
 import { quoteSpotSwap } from "./execution/spot_venues";
+import type { ExecuteSwapResult } from "./execution/types";
 import type {
   JupiterQuoteResponse,
   JupiterTriggerOrderRecord,
@@ -103,6 +107,9 @@ type CanaryPairContext = {
   adapterKey: string;
   inputMint: string;
   outputMint: string;
+  marketType: "spot" | "perp";
+  intentFamily: "spot_swap" | "perp_order";
+  instrumentId?: string;
 };
 
 type CanarySubmissionPath = {
@@ -111,6 +118,15 @@ type CanarySubmissionPath = {
   lane: string;
   adapter: string;
 };
+
+type DriftLiveModule = typeof import("./drift_live");
+
+let driftLiveModulePromise: Promise<DriftLiveModule> | null = null;
+
+async function loadDriftLiveModule(): Promise<DriftLiveModule> {
+  driftLiveModulePromise ??= import("./drift_live");
+  return await driftLiveModulePromise;
+}
 
 export type RuntimeResearchReadinessCanaryWorkflowResult = {
   ok: boolean;
@@ -222,6 +238,43 @@ function parseBigIntLike(value: unknown): bigint | null {
   } catch {
     return null;
   }
+}
+
+function parseSignedBigIntLike(value: unknown): bigint | null {
+  if (typeof value === "bigint") return value;
+  const raw = String(value ?? "").trim();
+  if (!raw || !/^-?[0-9]+$/.test(raw)) return null;
+  try {
+    return BigInt(raw);
+  } catch {
+    return null;
+  }
+}
+
+function absoluteAtomic(value: unknown): string | null {
+  const parsed = parseSignedBigIntLike(value);
+  if (parsed === null) return null;
+  return (parsed < 0n ? -parsed : parsed).toString();
+}
+
+function resolveDriftSmokeUnderlyingMintForCanary(
+  instrumentId: string,
+): string {
+  const symbol = instrumentId
+    .trim()
+    .toUpperCase()
+    .replace(/-PERP$/, "");
+  if (symbol === "SOL") return SOL_MINT;
+  const token =
+    SUPPORTED_TRADING_TOKENS.find(
+      (entry) => entry.symbol.toUpperCase() === symbol,
+    ) ?? null;
+  if (!token) {
+    throw new Error(
+      `strategy-lab-readiness-canary-drift-underlying-mint-unresolved:${instrumentId}`,
+    );
+  }
+  return token.mint;
 }
 
 function parseUsdAtomic(value: unknown): bigint {
@@ -368,6 +421,9 @@ function allowsVenueTxSmokeLiveBypass(
     return false;
   }
   const smokeIntentFamily = readSmokeIntentFamily(request);
+  if (venueKey === "drift") {
+    return true;
+  }
   if (smokeIntentFamily === "spot_swap") {
     return venueKey === "raydium" || venueKey === "orca";
   }
@@ -461,6 +517,49 @@ function resolveCanaryPairContext(
   const venueKey =
     request.venueKey ??
     (request.subjectKind === "venue" ? request.subjectKey : "jupiter");
+  const capability = requireRuntimeVenueCapability(venueKey);
+  const allowSmokeLiveBypass = allowsVenueTxSmokeLiveBypass(request, venueKey);
+  if (!runtimeVenueSupportsMode(capability, "live") && !allowSmokeLiveBypass) {
+    throw new Error(`strategy-lab-readiness-canary-venue-not-live:${venueKey}`);
+  }
+
+  if (venueKey === "drift") {
+    const instrumentId =
+      request.pairSymbol ??
+      (request.subjectKind === "asset"
+        ? `${request.subjectKey}-PERP`
+        : "SOL-PERP");
+    const outputMint = resolveDriftSmokeUnderlyingMintForCanary(instrumentId);
+    const assetKey =
+      request.assetKey ??
+      (request.subjectKind === "asset"
+        ? request.subjectKey
+        : (TRADING_TOKEN_BY_MINT[outputMint]?.symbol ??
+          instrumentId.replace(/-PERP$/i, "")));
+    if (!assetKey || assetKey === "USDC") {
+      throw new Error("strategy-lab-readiness-canary-asset-unresolved");
+    }
+    const adapterKey =
+      request.adapterKey ??
+      capability.adapterKeys.find((candidate) => candidate === "drift");
+    if (!adapterKey) {
+      throw new Error(
+        `strategy-lab-readiness-canary-adapter-unavailable:${venueKey}`,
+      );
+    }
+    return {
+      venueKey,
+      assetKey,
+      pairSymbol: instrumentId,
+      adapterKey,
+      inputMint: USDC_MINT,
+      outputMint,
+      marketType: "perp",
+      intentFamily: "perp_order",
+      instrumentId,
+    };
+  }
+
   const pairSymbol =
     request.pairSymbol ??
     (request.subjectKind === "asset"
@@ -502,15 +601,10 @@ function resolveCanaryPairContext(
     throw new Error("strategy-lab-readiness-canary-asset-unresolved");
   }
 
-  const capability = requireRuntimeVenueCapability(venueKey);
-  const allowSmokeLiveBypass = allowsVenueTxSmokeLiveBypass(request, venueKey);
   if (!runtimeVenueSupportsIntentFamily(capability, smokeIntentFamily)) {
     throw new Error(
       `strategy-lab-readiness-canary-intent-family-unsupported:${venueKey}:${smokeIntentFamily}`,
     );
-  }
-  if (!runtimeVenueSupportsMode(capability, "live") && !allowSmokeLiveBypass) {
-    throw new Error(`strategy-lab-readiness-canary-venue-not-live:${venueKey}`);
   }
 
   const requestedAdapterKey = readOptionalString(request.adapterKey);
@@ -552,6 +646,8 @@ function resolveCanaryPairContext(
     adapterKey,
     inputMint,
     outputMint: effectiveOutputMint,
+    marketType: "spot",
+    intentFamily: "spot_swap",
   };
 }
 
@@ -919,6 +1015,34 @@ function mergeMetadata(
   return {
     ...(isRecord(current) ? current : {}),
     ...patch,
+  };
+}
+
+function executionSucceeded(
+  status: ExecuteSwapResult["status"],
+): status is Extract<
+  ExecuteSwapResult["status"],
+  "processed" | "confirmed" | "finalized"
+> {
+  return (
+    status === "processed" || status === "confirmed" || status === "finalized"
+  );
+}
+
+function readDriftExecutionAccountState(result: ExecuteSwapResult): {
+  before: DriftLiveAccountSnapshot | null;
+  after: DriftLiveAccountSnapshot | null;
+  setupSignature: string | null;
+  setupAction: string | null;
+} | null {
+  const executionMeta = asJsonObject(result.executionMeta);
+  const driftAccount = asJsonObject(executionMeta?.driftAccount);
+  if (!driftAccount) return null;
+  return {
+    before: (driftAccount.before ?? null) as DriftLiveAccountSnapshot | null,
+    after: (driftAccount.after ?? null) as DriftLiveAccountSnapshot | null,
+    setupSignature: readOptionalString(driftAccount.setupSignature) ?? null,
+    setupAction: readOptionalString(driftAccount.setupAction) ?? null,
   };
 }
 
@@ -1781,6 +1905,585 @@ function classifyExecutionFailure(
   };
 }
 
+async function runDriftVenueSmoke(input: {
+  env: Env;
+  request: RuntimeResearchReadinessCanaryRequest;
+  runId: string;
+  context: CanaryPairContext;
+  wallet: StrategyLabReadinessCanaryWallet;
+  targetNotionalUsd: string;
+  config: StrategyLabReadinessCanaryConfig;
+  lane: string;
+  submissionPath: {
+    venueKey: string;
+    adapterKey: string;
+    lane: string;
+    adapter: string;
+  };
+  rpc: SolanaRpc;
+  jupiter: JupiterClient;
+  drift: DriftClient;
+}): Promise<RuntimeResearchReadinessCanaryWorkflowResult> {
+  const instrumentId = input.context.instrumentId;
+  if (!instrumentId) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "submission-failed",
+        errorMessage: "strategy-lab-readiness-canary-drift-instrument-missing",
+      },
+    });
+  }
+
+  const rpcEndpoint = String(input.env.RPC_ENDPOINT ?? "").trim();
+  if (!rpcEndpoint) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "submission-failed",
+        errorMessage: "rpc-endpoint-missing",
+      },
+    });
+  }
+
+  const driftLive = await loadDriftLiveModule();
+  const preflightSnapshot = await driftLive
+    .readDriftLiveAccountSnapshot({
+      rpcEndpoint,
+      walletPublicKey: input.wallet.walletAddress,
+      instrumentId,
+    })
+    .catch(() => null);
+  if (preflightSnapshot && preflightSnapshot.positionDirection !== "flat") {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: "strategy-lab-readiness-canary-drift-position-not-flat",
+        metadata: {
+          submissionPath: input.submissionPath,
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
+  let preview: Awaited<ReturnType<DriftClient["describePerpIntent"]>>;
+  try {
+    preview = await input.drift.describePerpIntent({
+      instrumentId,
+      side: "long",
+      quantityAtomic: "1",
+      collateralAtomic: "5000000",
+      options: {
+        orderType: "market",
+        timeInForce: "ioc",
+      },
+      executionAdapter: input.context.adapterKey,
+    });
+  } catch (error) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "strategy-lab-readiness-canary-quote-failed",
+        errorMessage: executionErrorMessage(error),
+        metadata: {
+          submissionPath: input.submissionPath,
+        },
+      },
+    });
+  }
+
+  const referencePrice =
+    preview.funding?.markPrice ?? preview.funding?.oraclePrice ?? null;
+  if (referencePrice === null) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "strategy-lab-readiness-canary-quote-failed",
+        errorMessage:
+          "strategy-lab-readiness-canary-drift-reference-price-unavailable",
+        metadata: {
+          submissionPath: input.submissionPath,
+          driftPreview: asJsonObject(preview),
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
+  let smokeIntent: ReturnType<typeof driftLive.buildDriftSmokeIntent>;
+  try {
+    smokeIntent = driftLive.buildDriftSmokeIntent({
+      instrumentId,
+      side: "long",
+      targetNotionalUsd: input.targetNotionalUsd,
+      referencePrice,
+      collateralAtomic: "5000000",
+    });
+  } catch (error) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "strategy-lab-readiness-canary-quote-failed",
+        errorMessage: executionErrorMessage(error),
+        metadata: {
+          submissionPath: input.submissionPath,
+          driftPreview: asJsonObject(preview),
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
+  const collateralAtomic = smokeIntent.collateralAtomic ?? "5000000";
+  const policy = normalizePolicy({
+    allowedMints: [input.context.inputMint, input.context.outputMint],
+    slippageBps: input.config.maxSlippageBps,
+    minSolReserveLamports: input.config.minSolReserveLamports,
+    simulateOnly: false,
+    dryRun: false,
+    commitment: "finalized",
+    maxTradeAmountAtomic: smokeIntent.quantityAtomic,
+  });
+
+  const runtimeBalancePolicy = await evaluatePrivyRuntimeBalancePolicy({
+    env: input.env,
+    lane: "safe",
+    walletAddress: input.wallet.walletAddress,
+    inputMint: input.context.inputMint,
+    amountAtomic: collateralAtomic,
+    minSolReserveLamports: input.config.minSolReserveLamports,
+    rpc: input.rpc,
+    runtimeDefaults: null,
+  });
+  if (!runtimeBalancePolicy.ok) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: runtimeBalancePolicy.reason,
+        metadata: {
+          submissionPath: input.submissionPath,
+          runtimePolicy: runtimeBalancePolicy.metadata,
+          driftPreview: asJsonObject(preview),
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
+  const executeIntent = async (intent: {
+    side: "long" | "short" | "close_long" | "close_short";
+    quantityAtomic: string;
+    collateralAtomic: string | null;
+    reduceOnly?: boolean;
+  }): Promise<ExecuteSwapResult> =>
+    await executeIntentViaRouter({
+      env: input.env,
+      venueKey: input.context.venueKey,
+      runtimeMode: "live",
+      experimentalLiveModeBypass:
+        readProofMode(input.request) === "venue_tx_smoke"
+          ? "venue_tx_smoke"
+          : undefined,
+      requireVenueRouting: true,
+      subjectControlBypassReason: "strategy_lab_readiness_canary",
+      execution: {
+        adapter: input.context.adapterKey,
+        params: {
+          lane: input.lane,
+          requireSimulation: true,
+        },
+      },
+      policy,
+      rpc: input.rpc,
+      jupiter: input.jupiter,
+      drift: input.drift,
+      privyWalletId: input.wallet.walletId,
+      log(level, message, meta) {
+        console[level]("strategy_lab.readiness_canary", {
+          runId: input.runId,
+          message,
+          ...(meta ?? {}),
+        });
+      },
+      intent: {
+        family: "perp_order",
+        wallet: input.wallet.walletAddress,
+        venueKey: input.context.venueKey,
+        marketType: "perp",
+        instrumentId,
+        side: intent.side,
+        quantityAtomic: intent.quantityAtomic,
+        collateralAtomic: intent.collateralAtomic,
+        params: {
+          orderType: "market",
+          timeInForce: "ioc",
+          ...(intent.reduceOnly ? { reduceOnly: true } : {}),
+        },
+      },
+    });
+
+  const openResult = await executeIntent({
+    side: "long",
+    quantityAtomic: smokeIntent.quantityAtomic,
+    collateralAtomic,
+  });
+  if (!executionSucceeded(openResult.status)) {
+    const failure = classifyExecutionFailure(openResult.status, openResult.err);
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: failure.status,
+      runPatch: {
+        errorCode: failure.errorCode,
+        errorMessage: failure.errorMessage,
+        metadata: {
+          submissionPath: {
+            ...input.submissionPath,
+            landingStatus: openResult.status,
+          },
+          driftPreview: asJsonObject(preview),
+          executionMeta: asJsonObject(openResult.executionMeta),
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
+  const openState = readDriftExecutionAccountState(openResult);
+  const openAfter = openState?.after ?? null;
+  const openedQuantityAtomic =
+    absoluteAtomic(openAfter?.baseAssetAmountAtomic) ?? null;
+  const openOrderCount = openAfter?.openOrders ?? 0;
+  if (
+    !openAfter ||
+    openAfter.positionDirection === "flat" ||
+    !openedQuantityAtomic ||
+    openedQuantityAtomic === "0"
+  ) {
+    if (
+      openAfter &&
+      openAfter.positionDirection === "flat" &&
+      openOrderCount > 0
+    ) {
+      let cancelPlan: Awaited<
+        ReturnType<DriftLiveModule["prepareDriftLiveCancelOrders"]>
+      >;
+      try {
+        cancelPlan = await driftLive.prepareDriftLiveCancelOrders({
+          rpcEndpoint,
+          walletPublicKey: input.wallet.walletAddress,
+          instrumentId,
+        });
+      } catch (error) {
+        return await finalizeReadinessCanaryRun(input.env, {
+          runId: input.runId,
+          status: "failed",
+          runPatch: {
+            receiptId: `receipt_${input.runId.slice(-16)}`,
+            signature: openResult.signature ?? undefined,
+            errorCode: "strategy-lab-readiness-canary-reconciliation-failed",
+            errorMessage:
+              "strategy-lab-readiness-canary-drift-open-order-cancel-plan-failed",
+            reconciliation: {
+              status: "failed",
+              actualOutputAtomic: "0",
+              minExpectedOutAtomic: "0",
+              notes: [`openStatus=${openResult.status}`],
+            },
+            evidenceRefs: [
+              {
+                kind: "live_canary",
+                ref: `signature:${openResult.signature ?? "missing"}`,
+              },
+            ],
+            metadata: {
+              submissionPath: {
+                ...input.submissionPath,
+                landingStatus: openResult.status,
+              },
+              driftPreview: asJsonObject(preview),
+              openExecutionMeta: asJsonObject(openResult.executionMeta),
+              preflightSnapshot,
+              cancelPlanError: executionErrorMessage(error),
+            },
+          },
+        });
+      }
+
+      const cancelResult = await submitPrivyManagedTransactionPlan({
+        env: input.env,
+        rpc: input.rpc,
+        walletId: input.wallet.walletId,
+        unsignedTransactionBase64: cancelPlan.cancelTransactionBase64,
+        label: "drift-cancel-orders",
+      });
+      if (!cancelResult.ok) {
+        return await finalizeReadinessCanaryRun(input.env, {
+          runId: input.runId,
+          status: "failed",
+          runPatch: {
+            receiptId: `receipt_${input.runId.slice(-16)}`,
+            signature: openResult.signature ?? undefined,
+            errorCode: cancelResult.errorCode,
+            errorMessage: cancelResult.errorMessage,
+            reconciliation: {
+              status: "failed",
+              actualOutputAtomic: "0",
+              minExpectedOutAtomic: "0",
+              notes: [
+                `openStatus=${openResult.status}`,
+                `openOrdersBeforeCancel=${openOrderCount}`,
+              ],
+            },
+            evidenceRefs: [
+              {
+                kind: "live_canary",
+                ref: `signature:${openResult.signature ?? "missing"}`,
+              },
+            ],
+            metadata: {
+              submissionPath: {
+                ...input.submissionPath,
+                landingStatus: openResult.status,
+              },
+              driftPreview: asJsonObject(preview),
+              openExecutionMeta: asJsonObject(openResult.executionMeta),
+              cancelSnapshotBefore: cancelPlan.snapshotBefore,
+              preflightSnapshot,
+            },
+          },
+        });
+      }
+
+      const cancelSnapshotAfter = await driftLive
+        .readDriftLiveAccountSnapshot({
+          rpcEndpoint,
+          walletPublicKey: input.wallet.walletAddress,
+          instrumentId,
+        })
+        .catch(() => null);
+      const cancelled =
+        cancelSnapshotAfter?.positionDirection === "flat" &&
+        (cancelSnapshotAfter?.openOrders ?? -1) === 0;
+
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: cancelled ? "success" : "failed",
+        runPatch: {
+          receiptId: `receipt_${input.runId.slice(-16)}`,
+          signature: openResult.signature ?? undefined,
+          errorCode: cancelled
+            ? undefined
+            : "strategy-lab-readiness-canary-reconciliation-failed",
+          errorMessage: cancelled
+            ? undefined
+            : "strategy-lab-readiness-canary-drift-cancel-not-observed",
+          reconciliation: {
+            status: cancelled ? "passed" : "failed",
+            actualOutputAtomic: "0",
+            minExpectedOutAtomic: "0",
+            notes: [
+              `openStatus=${openResult.status}`,
+              `cancelStatus=${cancelResult.status}`,
+              `openOrdersBeforeCancel=${openOrderCount}`,
+              `openOrdersAfterCancel=${cancelSnapshotAfter?.openOrders ?? "missing"}`,
+            ],
+          },
+          evidenceRefs: [
+            {
+              kind: "live_canary",
+              ref: `signature:${openResult.signature ?? "missing"}`,
+            },
+            {
+              kind: "live_canary_cancel",
+              ref: `signature:${cancelResult.signature}`,
+            },
+          ],
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              landingStatus: cancelResult.status,
+            },
+            driftPreview: asJsonObject(preview),
+            openExecutionMeta: asJsonObject(openResult.executionMeta),
+            preflightSnapshot,
+            cancelSnapshotBefore: cancelPlan.snapshotBefore,
+            cancelSnapshotAfter,
+            cancelSignature: cancelResult.signature,
+          },
+        },
+      });
+    }
+
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        receiptId: `receipt_${input.runId.slice(-16)}`,
+        signature: openResult.signature ?? undefined,
+        errorCode: "strategy-lab-readiness-canary-reconciliation-failed",
+        errorMessage: "strategy-lab-readiness-canary-drift-open-not-observed",
+        reconciliation: {
+          status: "failed",
+          actualOutputAtomic: "0",
+          minExpectedOutAtomic: smokeIntent.quantityAtomic,
+          notes: [`openStatus=${openResult.status}`],
+        },
+        evidenceRefs: [
+          {
+            kind: "live_canary",
+            ref: `signature:${openResult.signature ?? "missing"}`,
+          },
+        ],
+        metadata: {
+          submissionPath: {
+            ...input.submissionPath,
+            landingStatus: openResult.status,
+          },
+          driftPreview: asJsonObject(preview),
+          openExecutionMeta: asJsonObject(openResult.executionMeta),
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
+  const closeSide =
+    openAfter.positionDirection === "short" ? "close_short" : "close_long";
+  const closeResult = await executeIntent({
+    side: closeSide,
+    quantityAtomic: openedQuantityAtomic,
+    collateralAtomic: null,
+    reduceOnly: true,
+  });
+  if (!executionSucceeded(closeResult.status)) {
+    const failure = classifyExecutionFailure(
+      closeResult.status,
+      closeResult.err,
+    );
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: failure.status,
+      runPatch: {
+        receiptId: `receipt_${input.runId.slice(-16)}`,
+        signature: openResult.signature ?? undefined,
+        errorCode: failure.errorCode,
+        errorMessage: failure.errorMessage,
+        evidenceRefs: [
+          {
+            kind: "live_canary",
+            ref: `signature:${openResult.signature ?? "missing"}`,
+          },
+          ...(closeResult.signature
+            ? [
+                {
+                  kind: "live_canary" as const,
+                  ref: `signature:${closeResult.signature}`,
+                },
+              ]
+            : []),
+        ],
+        metadata: {
+          submissionPath: {
+            ...input.submissionPath,
+            landingStatus: closeResult.status,
+          },
+          driftPreview: asJsonObject(preview),
+          openExecutionMeta: asJsonObject(openResult.executionMeta),
+          closeExecutionMeta: asJsonObject(closeResult.executionMeta),
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
+  const closeState = readDriftExecutionAccountState(closeResult);
+  const closeAfter = closeState?.after ?? null;
+  const closed =
+    closeAfter?.positionDirection === "flat" &&
+    absoluteAtomic(closeAfter.baseAssetAmountAtomic) === "0";
+  const [openTransaction, closeTransaction] = await Promise.all([
+    openResult.signature
+      ? input.rpc.getTransactionParsed(openResult.signature, {
+          commitment: "confirmed",
+        })
+      : Promise.resolve(null),
+    closeResult.signature
+      ? input.rpc.getTransactionParsed(closeResult.signature, {
+          commitment: "confirmed",
+        })
+      : Promise.resolve(null),
+  ]);
+  const totalFeeLamports = (
+    readReconciliationFeeLamports(openTransaction) +
+    readReconciliationFeeLamports(closeTransaction)
+  ).toString();
+  return await finalizeReadinessCanaryRun(input.env, {
+    runId: input.runId,
+    status: closed ? "success" : "failed",
+    runPatch: {
+      receiptId: `receipt_${input.runId.slice(-16)}`,
+      signature: openResult.signature ?? undefined,
+      errorCode: closed
+        ? undefined
+        : "strategy-lab-readiness-canary-reconciliation-failed",
+      errorMessage: closed
+        ? undefined
+        : "strategy-lab-readiness-canary-drift-close-not-flat",
+      reconciliation: {
+        status: closed ? "passed" : "failed",
+        actualOutputAtomic: openedQuantityAtomic,
+        minExpectedOutAtomic: smokeIntent.quantityAtomic,
+        notes: [
+          `openStatus=${openResult.status}`,
+          `closeStatus=${closeResult.status}`,
+          `closePositionState=${closeAfter?.positionDirection ?? "missing"}`,
+        ],
+      },
+      evidenceRefs: [
+        {
+          kind: "live_canary",
+          ref: `signature:${openResult.signature ?? "missing"}`,
+        },
+        {
+          kind: "live_canary",
+          ref: `signature:${closeResult.signature ?? "missing"}`,
+        },
+        ...(openState?.setupSignature
+          ? [
+              {
+                kind: "live_canary" as const,
+                ref: `signature:${openState.setupSignature}`,
+              },
+            ]
+          : []),
+      ],
+      metadata: {
+        submissionPath: {
+          ...input.submissionPath,
+          landingStatus: closeResult.status,
+        },
+        driftPreview: asJsonObject(preview),
+        preflightSnapshot,
+        openExecutionMeta: asJsonObject(openResult.executionMeta),
+        closeExecutionMeta: asJsonObject(closeResult.executionMeta),
+        setupSignature: openState?.setupSignature ?? null,
+        setupAction: openState?.setupAction ?? null,
+        totalFeeLamports,
+      },
+    },
+  });
+}
+
 async function runOpenBookVenueTxSmoke(input: {
   env: Env;
   request: RuntimeResearchReadinessCanaryRequest;
@@ -2315,6 +3018,8 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       "https://lite-api.jup.ag",
     input.env.JUPITER_API_KEY,
   );
+  const drift =
+    context.venueKey === "drift" ? new DriftClient(input.env) : undefined;
   const raydium =
     context.venueKey === "raydium" ? new RaydiumClient() : undefined;
   const orca =
@@ -2323,6 +3028,22 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
           String(input.env.RPC_ENDPOINT ?? "").trim(),
         )
       : undefined;
+  if (context.marketType === "perp" && context.venueKey === "drift" && drift) {
+    return await runDriftVenueSmoke({
+      env: input.env,
+      request: input.request,
+      runId,
+      context,
+      wallet,
+      targetNotionalUsd,
+      config,
+      lane: laneResolution.lane,
+      submissionPath,
+      rpc,
+      jupiter,
+      drift,
+    });
+  }
   if (smokeIntentFamily === "clob_order") {
     try {
       return await runOpenBookVenueTxSmoke({

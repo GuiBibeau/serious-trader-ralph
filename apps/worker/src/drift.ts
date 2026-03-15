@@ -68,6 +68,16 @@ function readFiniteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function readScaledNumber(
+  value: unknown,
+  threshold: number,
+  scale: number,
+): number | null {
+  const parsed = readFiniteNumber(value);
+  if (parsed === null) return null;
+  return Math.abs(parsed) >= threshold ? parsed / scale : parsed;
+}
+
 function readPositiveAtomic(value: unknown): string | null {
   const normalized = String(value ?? "").trim();
   return /^[1-9][0-9]*$/.test(normalized) ? normalized : null;
@@ -109,6 +119,15 @@ function normalizeReduceOnly(side: string, reduceOnly: unknown): boolean {
   return reduceOnly === true;
 }
 
+function normalizeDirection(
+  side: "long" | "short" | "close_long" | "close_short",
+): "long" | "short" {
+  if (side === "short" || side === "close_long") {
+    return "short";
+  }
+  return "long";
+}
+
 function readContractsPayload(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) {
     return value.filter(isRecord);
@@ -142,6 +161,7 @@ function mapContractSnapshot(
 ): DriftContractSnapshot | null {
   const marketName =
     normalizeMarketName(record.marketName) ??
+    normalizeMarketName(record.ticker_id) ??
     normalizeMarketName(record.symbol) ??
     normalizeMarketName(record.contractName);
   if (!marketName) return null;
@@ -149,15 +169,19 @@ function mapContractSnapshot(
     marketName,
     marketIndex:
       readFiniteNumber(record.marketIndex) ??
+      readFiniteNumber(record.contract_index) ??
       readFiniteNumber(record.index) ??
       null,
     oracle: readTrimmedString(record.oracle),
     oracleSource:
       readTrimmedString(record.oracleSource) ??
       readTrimmedString(record.oracleSourceName),
-    status: readTrimmedString(record.status),
+    status:
+      readTrimmedString(record.status) ??
+      (readTrimmedString(record.end_timestamp) ? "active" : null),
     contractType:
       readTrimmedString(record.contractType) ??
+      readTrimmedString(record.product_type) ??
       readTrimmedString(record.marketType),
     initialMarginRatio:
       readFiniteNumber(record.initialMarginRatio) ??
@@ -173,9 +197,10 @@ function mapFundingRateSnapshot(
   record: Record<string, unknown>,
 ): DriftFundingRateSnapshot {
   const fundingRate1h =
-    readFiniteNumber(record.fundingRate) ??
+    readScaledNumber(record.fundingRate, 100, 1_000_000_000) ??
     readFiniteNumber(record.fundingRateHour) ??
-    readFiniteNumber(record.hourlyFundingRate);
+    readFiniteNumber(record.hourlyFundingRate) ??
+    readFiniteNumber(record.next_funding_rate);
   return {
     marketName,
     fundingRate1h,
@@ -185,10 +210,10 @@ function mapFundingRateSnapshot(
         : Number((fundingRate1h * 10_000).toFixed(4)),
     oraclePrice:
       readFiniteNumber(record.oraclePrice) ??
-      readFiniteNumber(record.oraclePriceTwap),
+      readScaledNumber(record.oraclePriceTwap, 100_000, 1_000_000),
     markPrice:
       readFiniteNumber(record.markPrice) ??
-      readFiniteNumber(record.markPriceTwap),
+      readScaledNumber(record.markPriceTwap, 100_000, 1_000_000),
     sourceTs:
       readTrimmedString(record.ts) ??
       readTrimmedString(record.timestamp) ??
@@ -324,10 +349,7 @@ export class DriftClient {
       instrument,
       funding,
       side: input.side,
-      direction:
-        input.side === "short" || input.side === "close_short"
-          ? "short"
-          : "long",
+      direction: normalizeDirection(input.side),
       reduceOnly: normalizeReduceOnly(input.side, options?.reduceOnly),
       orderType: normalizeOrderType(options?.orderType),
       timeInForce: normalizeTimeInForce(options?.timeInForce),

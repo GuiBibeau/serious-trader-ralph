@@ -145,4 +145,266 @@ describe("worker Drift perp execution adapter", () => {
       }),
     ).rejects.toThrow(/drift-live-mode-not-supported/);
   });
+
+  test("allows bounded live smoke through the readiness bypass", async () => {
+    let prepareCallCount = 0;
+    const result = await executeDriftPerpOrder(
+      {
+        env: {
+          RPC_ENDPOINT: "https://rpc.test",
+        } as Env,
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        policy: normalizePolicy({ commitment: "confirmed" }),
+        rpc: {
+          sendTransactionBase64: async (transaction) =>
+            transaction.includes("setup") ? "sig-setup" : "sig-order",
+          confirmSignature: async () => ({
+            ok: true,
+            status: "confirmed" as const,
+          }),
+        } as never,
+        jupiter: {} as never,
+        drift: {
+          swiftConfigured: () => false,
+          describePerpIntent: async () => buildPreview(),
+          buildSyntheticQuote: () => ({
+            inputMint: "SOL-PERP",
+            outputMint: "SOL-PERP",
+            inAmount: "250000",
+            outAmount: "1000000",
+            priceImpactPct: 0,
+            routePlan: [{ poolId: "SOL-PERP", swapInfo: { label: "Drift" } }],
+          }),
+        } as never,
+        privyWalletId: "wallet_strategy_lab",
+        intent: buildIntent(),
+        log: () => {},
+      },
+      {
+        prepareDriftLivePerpOrder: async () => {
+          prepareCallCount += 1;
+          if (prepareCallCount === 1) {
+            return {
+              marketIndex: 2,
+              userAccountAddress: "drift-user-account",
+              spotCollateralMint:
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              setupAction: "deposit",
+              setupAmountAtomic: "250000",
+              setupTransactionBase64: "setup-tx",
+              orderTransactionBase64: null,
+              lastValidBlockHeight: 88,
+              snapshotBefore: null,
+            };
+          }
+          return {
+            marketIndex: 2,
+            userAccountAddress: "drift-user-account",
+            spotCollateralMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            setupAction: null,
+            setupAmountAtomic: null,
+            setupTransactionBase64: null,
+            orderTransactionBase64: "order-tx",
+            lastValidBlockHeight: 99,
+            snapshotBefore: {
+              userAccountAddress: "drift-user-account",
+              marketIndex: 2,
+              positionDirection: "flat",
+              baseAssetAmountAtomic: "0",
+              quoteAssetAmountAtomic: "0",
+              quoteEntryAmountAtomic: "0",
+              quoteBreakEvenAmountAtomic: "0",
+              settledPnlAtomic: "0",
+              collateralAtomic: "250000",
+              freeCollateralAtomic: "250000",
+              totalCollateralAtomic: "250000",
+              initialMarginRequirementAtomic: "0",
+              maintenanceMarginRequirementAtomic: "0",
+              leverageTenThousand: "0",
+              health: 100,
+              openOrders: 0,
+            },
+          };
+        },
+        readDriftLiveAccountSnapshot: async () => ({
+          userAccountAddress: "drift-user-account",
+          marketIndex: 2,
+          positionDirection: "long",
+          baseAssetAmountAtomic: "1000000",
+          quoteAssetAmountAtomic: "-153300000",
+          quoteEntryAmountAtomic: "-153300000",
+          quoteBreakEvenAmountAtomic: "-153300000",
+          settledPnlAtomic: "0",
+          collateralAtomic: "250000",
+          freeCollateralAtomic: "100000",
+          totalCollateralAtomic: "250000",
+          initialMarginRequirementAtomic: "50000",
+          maintenanceMarginRequirementAtomic: "25000",
+          leverageTenThousand: "500",
+          health: 92,
+          openOrders: 0,
+        }),
+        signTransactionWithPrivyById: async (_env, _walletId, transaction) =>
+          `signed:${transaction}`,
+      },
+    );
+
+    expect(result.status).toBe("confirmed");
+    expect(result.signature).toBe("sig-order");
+    expect(result.executionMeta?.classification).toBe("confirmed");
+    expect(result.executionMeta?.lifecycle?.positionState).toBe("open");
+    expect(
+      (result.executionMeta as Record<string, unknown> | undefined)
+        ?.driftAccount,
+    ).toBeDefined();
+  });
+
+  test("uses confirmed preflight for live smoke even when policy commitment is finalized", async () => {
+    const simulateCommitments: string[] = [];
+    const preflightCommitments: string[] = [];
+
+    const result = await executeDriftPerpOrder(
+      {
+        env: {
+          RPC_ENDPOINT: "https://rpc.test",
+        } as Env,
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        execution: {
+          params: {
+            lane: "safe",
+          },
+        },
+        policy: normalizePolicy({ commitment: "finalized" }),
+        rpc: {
+          simulateTransactionBase64: async (_transaction, options) => {
+            simulateCommitments.push(String(options.commitment ?? ""));
+            return { err: null };
+          },
+          sendTransactionBase64: async (_transaction, options) => {
+            preflightCommitments.push(
+              String(options.preflightCommitment ?? ""),
+            );
+            return "sig-order";
+          },
+          confirmSignature: async () => ({
+            ok: true,
+            status: "finalized" as const,
+          }),
+        } as never,
+        jupiter: {} as never,
+        drift: {
+          swiftConfigured: () => false,
+          describePerpIntent: async () => buildPreview(),
+          buildSyntheticQuote: () => ({
+            inputMint: "SOL-PERP",
+            outputMint: "SOL-PERP",
+            inAmount: "250000",
+            outAmount: "1000000",
+            priceImpactPct: 0,
+            routePlan: [{ poolId: "SOL-PERP", swapInfo: { label: "Drift" } }],
+          }),
+        } as never,
+        privyWalletId: "wallet_strategy_lab",
+        intent: buildIntent(),
+        log: () => {},
+      },
+      {
+        prepareDriftLivePerpOrder: async () => ({
+          marketIndex: 2,
+          userAccountAddress: "drift-user-account",
+          spotCollateralMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          setupAction: null,
+          setupAmountAtomic: null,
+          setupTransactionBase64: null,
+          orderTransactionBase64: "order-tx",
+          lastValidBlockHeight: 99,
+          snapshotBefore: null,
+        }),
+        readDriftLiveAccountSnapshot: async () => null,
+        signTransactionWithPrivyById: async (_env, _walletId, transaction) =>
+          `signed:${transaction}`,
+        evaluateSafeLaneTransaction: () => ({
+          ok: true,
+          profile: "default",
+        }),
+      },
+    );
+
+    expect(result.status).toBe("finalized");
+    expect(simulateCommitments).toEqual(["confirmed"]);
+    expect(preflightCommitments).toEqual(["confirmed"]);
+  });
+
+  test("preserves a landed live result when the post-submit snapshot read fails", async () => {
+    const result = await executeDriftPerpOrder(
+      {
+        env: {
+          RPC_ENDPOINT: "https://rpc.test",
+        } as Env,
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        policy: normalizePolicy({ commitment: "confirmed" }),
+        rpc: {
+          sendTransactionBase64: async () => "sig-order",
+          confirmSignature: async () => ({
+            ok: true,
+            status: "confirmed" as const,
+          }),
+        } as never,
+        jupiter: {} as never,
+        drift: {
+          swiftConfigured: () => false,
+          describePerpIntent: async () => buildPreview(),
+          buildSyntheticQuote: () => ({
+            inputMint: "SOL-PERP",
+            outputMint: "SOL-PERP",
+            inAmount: "250000",
+            outAmount: "1000000",
+            priceImpactPct: 0,
+            routePlan: [{ poolId: "SOL-PERP", swapInfo: { label: "Drift" } }],
+          }),
+        } as never,
+        privyWalletId: "wallet_strategy_lab",
+        intent: buildIntent(),
+        log: () => {},
+      },
+      {
+        prepareDriftLivePerpOrder: async () => ({
+          marketIndex: 2,
+          userAccountAddress: "drift-user-account",
+          spotCollateralMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          setupAction: null,
+          setupAmountAtomic: null,
+          setupTransactionBase64: null,
+          orderTransactionBase64: "order-tx",
+          lastValidBlockHeight: 99,
+          snapshotBefore: null,
+        }),
+        readDriftLiveAccountSnapshot: async () => {
+          throw new Error("snapshot-rpc-temporary-failure");
+        },
+        signTransactionWithPrivyById: async (_env, _walletId, transaction) =>
+          `signed:${transaction}`,
+      },
+    );
+
+    expect(result.status).toBe("confirmed");
+    expect(result.signature).toBe("sig-order");
+    expect(result.executionMeta?.classification).toBe("confirmed");
+    expect(result.executionMeta?.lifecycle?.notes).toContain(
+      "snapshotReadError:snapshot-rpc-temporary-failure",
+    );
+    expect(
+      (
+        result.executionMeta as
+          | { driftAccount?: { snapshotReadError?: string | null } }
+          | undefined
+      )?.driftAccount?.snapshotReadError,
+    ).toBe("snapshot-rpc-temporary-failure");
+  });
 });

@@ -462,6 +462,57 @@ describe("worker runtime research readiness routes", () => {
     }
   });
 
+  test("allows bounded Drift venue smoke even though the venue is not generally live-enabled", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "drift",
+              requestedBy: "codex",
+              venueKey: "drift",
+              assetKey: "SOL",
+              pairSymbol: "SOL-PERP",
+              proofMode: "venue_tx_smoke",
+              tightenOnFailure: true,
+              failureControlMode: "disable_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        run: {
+          venueKey: string;
+          pairSymbol: string;
+          metadata?: Record<string, unknown>;
+          evidenceRefs: Array<{ kind: string }>;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.status).toBe("success");
+      expect(payload.run.venueKey).toBe("drift");
+      expect(payload.run.pairSymbol).toBe("SOL-PERP");
+      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+      expect(payload.run.metadata?.proofMode).toBe("venue_tx_smoke");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("uses the quote mint for OpenBook buy smoke on USDC/USDT", async () => {
     const { env, sqlite } = createOpsEnv();
     try {

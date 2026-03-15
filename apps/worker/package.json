@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
+    "@drift-labs/sdk": "^2.159.0-beta.2",
     "@noble/hashes": "^1.8.0",
     "@openbook-dex/openbook-v2": "^0.2.10",
     "@orca-so/common-sdk": "^0.7.0",

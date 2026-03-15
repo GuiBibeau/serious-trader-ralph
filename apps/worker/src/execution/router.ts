@@ -277,7 +277,7 @@ function allowsVenueTxSmokeLiveBypass(input: {
   if (input.intentFamily === "clob_order") {
     return input.venueKey === "openbook";
   }
-  return false;
+  return input.intentFamily === "perp_order" && input.venueKey === "drift";
 }
 
 async function resolveExecutionAdapterForIntent(input: {

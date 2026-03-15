@@ -661,6 +661,134 @@ describe("worker execution router", () => {
     expect(result.executionMeta?.lifecycle?.positionState).toBe("opening");
   });
 
+  test("fails closed when Drift perp orders are requested in live mode", async () => {
+    await expect(
+      executeIntentViaRouter({
+        env: {} as never,
+        venueKey: "drift",
+        runtimeMode: "live",
+        requireVenueRouting: true,
+        execution: { adapter: "drift" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        drift: {
+          swiftConfigured: () => false,
+          describePerpIntent: async () => ({
+            instrument: {
+              marketName: "SOL-PERP",
+              marketIndex: 2,
+              oracle: "oracle-sol",
+              oracleSource: "pyth",
+              status: "active",
+              contractType: "perp",
+              initialMarginRatio: 1000,
+              maintenanceMarginRatio: 500,
+            },
+            funding: null,
+            side: "long",
+            direction: "long",
+            reduceOnly: false,
+            orderType: "market",
+            timeInForce: "ioc",
+            quantityAtomic: "1000000",
+            collateralAtomic: "250000",
+            limitPriceAtomic: null,
+            triggerPriceAtomic: null,
+            swiftSupported: false,
+          }),
+          buildSyntheticQuote: () => ({
+            inputMint: "SOL-PERP",
+            outputMint: "SOL-PERP",
+            inAmount: "250000",
+            outAmount: "1000000",
+            priceImpactPct: 0,
+            routePlan: [{ poolId: "SOL-PERP", swapInfo: { label: "Drift" } }],
+          }),
+        } as never,
+        intent: {
+          family: "perp_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "drift",
+          marketType: "perp",
+          instrumentId: "SOL-PERP",
+          side: "long",
+          quantityAtomic: "1000000",
+          collateralAtomic: "250000",
+        },
+        log: () => {},
+      }),
+    ).rejects.toThrow(/runtime-venue-mode-not-supported:drift:live/);
+  });
+
+  test("allows Drift live venue smoke only through the bounded readiness bypass", async () => {
+    const { env, sqlite } = await createLiveRouterEnv();
+    try {
+      const result = await executeIntentViaRouter({
+        env,
+        venueKey: "drift",
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        requireVenueRouting: true,
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        execution: { adapter: "drift" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        drift: {
+          swiftConfigured: () => false,
+          describePerpIntent: async () => ({
+            instrument: {
+              marketName: "SOL-PERP",
+              marketIndex: 2,
+              oracle: "oracle-sol",
+              oracleSource: "pyth",
+              status: "active",
+              contractType: "perp",
+              initialMarginRatio: 1000,
+              maintenanceMarginRatio: 500,
+            },
+            funding: null,
+            side: "long",
+            direction: "long",
+            reduceOnly: false,
+            orderType: "market",
+            timeInForce: "ioc",
+            quantityAtomic: "1000000",
+            collateralAtomic: "250000",
+            limitPriceAtomic: null,
+            triggerPriceAtomic: null,
+            swiftSupported: false,
+          }),
+          buildSyntheticQuote: () => ({
+            inputMint: "SOL-PERP",
+            outputMint: "SOL-PERP",
+            inAmount: "250000",
+            outAmount: "1000000",
+            priceImpactPct: 0,
+            routePlan: [{ poolId: "SOL-PERP", swapInfo: { label: "Drift" } }],
+          }),
+        } as never,
+        intent: {
+          family: "perp_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "drift",
+          marketType: "perp",
+          instrumentId: "SOL-PERP",
+          side: "long",
+          quantityAtomic: "1000000",
+          collateralAtomic: "250000",
+        },
+        log: () => {},
+      });
+
+      expect(result.status).toBe("dry_run");
+      expect(result.executionMeta?.route).toBe("drift");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("routes Mango spot margin orders through the Mango executor in paper mode", async () => {
     const result = await executeIntentViaRouter({
       env: {} as never,
