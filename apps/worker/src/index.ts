@@ -22,6 +22,7 @@ import {
   USDC_MINT,
 } from "./defaults";
 import { DFlowClient } from "./dflow";
+import { DriftClient } from "./drift";
 import {
   enforceExecSubmitAbuseGuard,
   readExecSubmitPayloadWithLimits,
@@ -5596,6 +5597,153 @@ const worker = {
 
       if (
         request.method === "GET" &&
+        url.pathname === "/api/terminal/perp-markets"
+      ) {
+        await requireOnboardedUser(request, env);
+        const venueKey =
+          readTrimmedString(url.searchParams.get("venueKey"))?.toLowerCase() ??
+          "drift";
+        const limit = toBoundedInt(url.searchParams.get("limit"), 8, 1, 24);
+        if (venueKey !== "drift") {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error: `unsupported-terminal-perp-markets:${venueKey}`,
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+        try {
+          const markets = await listTerminalPerpMarkets({
+            env,
+            venueKey: "drift",
+            limit,
+          });
+          return withCors(json({ ok: true, markets }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "terminal-perp-markets-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/terminal/perp-preview"
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        try {
+          const preview = await previewTerminalPerpOrder({
+            env,
+            actorId: user.id,
+            payload: await readPayload(request),
+          });
+          return withCors(json({ ok: true, preview }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "terminal-perp-preview-failed",
+              },
+              {
+                status:
+                  error instanceof Error &&
+                  error.message.startsWith("invalid-terminal-perp")
+                    ? 400
+                    : 503,
+              },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/terminal/perp-orders"
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        if (!user.walletAddress || !user.privyWalletId) {
+          return withCors(
+            json({ ok: false, error: "user-wallet-missing" }, { status: 503 }),
+            env,
+          );
+        }
+        try {
+          const result = await submitTerminalPerpOrder({
+            request,
+            env,
+            user,
+            payload: await readPayload(request),
+          });
+          return withCors(json({ ok: true, result }), env);
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "terminal-perp-submit-failed";
+          const status =
+            error instanceof Error &&
+            (message.startsWith("invalid-terminal-perp") ||
+              message === "missing-idempotency-key")
+              ? 400
+              : message === "rpc-endpoint-missing"
+                ? 503
+                : 409;
+          return withCors(json({ ok: false, error: message }, { status }), env);
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/terminal/perp-positions"
+      ) {
+        let user = await requireOnboardedUser(request, env);
+        user = await ensureUserWallet(env, user);
+        try {
+          const positions = await listTerminalPerpPositionsForActor({
+            env,
+            actorId: user.id,
+          });
+          return withCors(json({ ok: true, positions }), env);
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "terminal-perp-positions-failed",
+              },
+              { status: 503 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
         url.pathname === "/api/terminal/prediction-markets"
       ) {
         await requireOnboardedUser(request, env);
@@ -7413,6 +7561,1319 @@ function buildTerminalOpenBookOrderView(input: {
           }
         : null,
   };
+}
+
+const TERMINAL_PERP_COLLATERAL_DECIMALS = 6;
+const TERMINAL_PERP_QUANTITY_DECIMALS = 0;
+
+type TerminalPerpOrderSide = "long" | "short" | "close_long" | "close_short";
+
+type TerminalPerpPositionView = {
+  key: string;
+  venueKey: "drift";
+  instrumentId: string;
+  instrumentLabel: string;
+  side: "long" | "short" | "flat";
+  positionState: "open" | "closed";
+  signedQuantityAtomic: string;
+  signedQuantityUi: string;
+  absoluteQuantityUi: string;
+  averageEntryPrice: number | null;
+  markPrice: number | null;
+  oraclePrice: number | null;
+  fundingRate1hBps: number | null;
+  collateralAtomic: string;
+  collateralUi: string;
+  notionalQuote: number | null;
+  unrealizedPnlQuote: number | null;
+  leverage: number | null;
+  equityQuote: number | null;
+  usedMarginQuote: number | null;
+  maintenanceRequirementQuote: number | null;
+  freeCollateralQuote: number | null;
+  initialMarginRatio: number | null;
+  maintenanceMarginRatio: number | null;
+  liquidationBufferPct: number | null;
+  riskLevel: "low" | "warning" | "critical";
+  oracle: string | null;
+  oracleSource: string | null;
+  lastRequestId: string | null;
+  lastUpdatedAt: string | null;
+  notes: string[];
+};
+
+function absBigInt(value: bigint): bigint {
+  return value < 0n ? -value : value;
+}
+
+function roundFiniteNumber(value: number | null, digits = 6): number | null {
+  if (!Number.isFinite(value)) return null;
+  return Number((value as number).toFixed(digits));
+}
+
+function ratioToFraction(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  if (parsed > 1) return parsed / 10_000;
+  return parsed;
+}
+
+function bigintToSignedDisplay(value: bigint, decimals: number): string {
+  const sign = value < 0n ? "-" : "";
+  return `${sign}${formatAtomicDisplay(absBigInt(value), decimals)}`;
+}
+
+function parseTerminalPerpOrderSide(
+  value: unknown,
+): TerminalPerpOrderSide | null {
+  const normalized = readTrimmedString(value)?.toLowerCase();
+  if (
+    normalized === "long" ||
+    normalized === "short" ||
+    normalized === "close_long" ||
+    normalized === "close_short"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function parseTerminalPerpOrderType(
+  value: unknown,
+): "market" | "limit" | "trigger" {
+  const normalized = readTrimmedString(value)?.toLowerCase();
+  if (normalized === "limit") return "limit";
+  if (normalized === "trigger") return "trigger";
+  return "market";
+}
+
+function parseTerminalPerpTimeInForce(value: unknown): "gtc" | "ioc" | "fok" {
+  const normalized = readTrimmedString(value)?.toLowerCase();
+  if (normalized === "ioc" || normalized === "fok") return normalized;
+  return "gtc";
+}
+
+function readPerpReferenceSnapshot(
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>,
+): Record<string, unknown> | null {
+  const providerResponse = isRecord(latest?.latestAttempt?.providerResponse)
+    ? latest.latestAttempt.providerResponse
+    : null;
+  const executionMeta = isRecord(providerResponse?.executionMeta)
+    ? providerResponse.executionMeta
+    : null;
+  const referencePrice = isRecord(executionMeta?.referencePrice)
+    ? executionMeta.referencePrice
+    : null;
+  return isRecord(referencePrice?.snapshot) ? referencePrice.snapshot : null;
+}
+
+function readPerpExecutionPrice(input: {
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>;
+  snapshot: Record<string, unknown> | null;
+}): number | null {
+  const providerResponse = isRecord(
+    input.latest?.latestAttempt?.providerResponse,
+  )
+    ? input.latest.latestAttempt.providerResponse
+    : null;
+  const executionMeta = isRecord(providerResponse?.executionMeta)
+    ? providerResponse.executionMeta
+    : null;
+  const referencePrice = isRecord(executionMeta?.referencePrice)
+    ? executionMeta.referencePrice
+    : null;
+  const executionPrice = Number(referencePrice?.executionPrice);
+  if (Number.isFinite(executionPrice) && executionPrice > 0) {
+    return executionPrice;
+  }
+  const markPrice = Number(input.snapshot?.markPrice);
+  if (Number.isFinite(markPrice) && markPrice > 0) return markPrice;
+  const oraclePrice = Number(input.snapshot?.oraclePrice);
+  return Number.isFinite(oraclePrice) && oraclePrice > 0 ? oraclePrice : null;
+}
+
+function classifyPerpRisk(input: {
+  leverage: number | null;
+  liquidationBufferPct: number | null;
+  freeCollateralQuote: number | null;
+}): "low" | "warning" | "critical" {
+  if (
+    (input.freeCollateralQuote !== null && input.freeCollateralQuote < 0) ||
+    (input.liquidationBufferPct !== null && input.liquidationBufferPct <= 5)
+  ) {
+    return "critical";
+  }
+  if (
+    (input.liquidationBufferPct !== null && input.liquidationBufferPct <= 15) ||
+    (input.leverage !== null && input.leverage >= 3)
+  ) {
+    return "warning";
+  }
+  return "low";
+}
+
+function applyPerpOrderToState(input: {
+  currentSignedQuantityAtomic: bigint;
+  currentCollateralAtomic: bigint;
+  currentAverageEntryPrice: number | null;
+  side: TerminalPerpOrderSide;
+  quantityAtomic: bigint;
+  collateralAtomic: bigint | null;
+  executionPrice: number | null;
+}): {
+  signedQuantityAtomic: bigint;
+  collateralAtomic: bigint;
+  averageEntryPrice: number | null;
+} {
+  const currentQuantity = input.currentSignedQuantityAtomic;
+  const currentAbs = absBigInt(currentQuantity);
+  const quantityAtomic = absBigInt(input.quantityAtomic);
+  const addCollateral = input.collateralAtomic ?? 0n;
+  let nextQuantity = currentQuantity;
+  let nextCollateral = input.currentCollateralAtomic;
+  let nextAverageEntryPrice = input.currentAverageEntryPrice;
+
+  const reduceCollateral = (closedAbs: bigint): void => {
+    if (currentAbs <= 0n || nextCollateral <= 0n || closedAbs <= 0n) return;
+    const remaining = currentAbs > closedAbs ? currentAbs - closedAbs : 0n;
+    nextCollateral =
+      remaining <= 0n ? 0n : (nextCollateral * remaining) / currentAbs;
+  };
+
+  const weightedAverage = (existingAbs: bigint, addedAbs: bigint): void => {
+    if (
+      input.executionPrice === null ||
+      !Number.isFinite(input.executionPrice) ||
+      input.executionPrice <= 0
+    ) {
+      return;
+    }
+    const existingWeight = Number(existingAbs);
+    const addedWeight = Number(addedAbs);
+    if (existingWeight <= 0 || nextAverageEntryPrice === null) {
+      nextAverageEntryPrice = input.executionPrice;
+      return;
+    }
+    nextAverageEntryPrice =
+      (nextAverageEntryPrice * existingWeight +
+        input.executionPrice * addedWeight) /
+      (existingWeight + addedWeight);
+  };
+
+  if (input.side === "close_long") {
+    if (currentQuantity <= 0n) {
+      return {
+        signedQuantityAtomic: currentQuantity,
+        collateralAtomic: nextCollateral,
+        averageEntryPrice: nextAverageEntryPrice,
+      };
+    }
+    const closed = quantityAtomic >= currentAbs ? currentAbs : quantityAtomic;
+    nextQuantity = currentQuantity - closed;
+    reduceCollateral(closed);
+    if (nextQuantity === 0n) nextAverageEntryPrice = null;
+    return {
+      signedQuantityAtomic: nextQuantity,
+      collateralAtomic: nextCollateral,
+      averageEntryPrice: nextAverageEntryPrice,
+    };
+  }
+
+  if (input.side === "close_short") {
+    if (currentQuantity >= 0n) {
+      return {
+        signedQuantityAtomic: currentQuantity,
+        collateralAtomic: nextCollateral,
+        averageEntryPrice: nextAverageEntryPrice,
+      };
+    }
+    const closed = quantityAtomic >= currentAbs ? currentAbs : quantityAtomic;
+    nextQuantity = currentQuantity + closed;
+    reduceCollateral(closed);
+    if (nextQuantity === 0n) nextAverageEntryPrice = null;
+    return {
+      signedQuantityAtomic: nextQuantity,
+      collateralAtomic: nextCollateral,
+      averageEntryPrice: nextAverageEntryPrice,
+    };
+  }
+
+  if (input.side === "long") {
+    if (currentQuantity >= 0n) {
+      nextQuantity = currentQuantity + quantityAtomic;
+      nextCollateral += addCollateral;
+      weightedAverage(currentAbs, quantityAtomic);
+    } else if (quantityAtomic < currentAbs) {
+      nextQuantity = currentQuantity + quantityAtomic;
+      reduceCollateral(quantityAtomic);
+    } else if (quantityAtomic === currentAbs) {
+      nextQuantity = 0n;
+      nextCollateral = 0n;
+      nextAverageEntryPrice = null;
+    } else {
+      const remainder = quantityAtomic - currentAbs;
+      nextQuantity = remainder;
+      nextCollateral = addCollateral;
+      nextAverageEntryPrice = input.executionPrice;
+    }
+    return {
+      signedQuantityAtomic: nextQuantity,
+      collateralAtomic: nextCollateral,
+      averageEntryPrice: nextAverageEntryPrice,
+    };
+  }
+
+  if (currentQuantity <= 0n) {
+    nextQuantity = currentQuantity - quantityAtomic;
+    nextCollateral += addCollateral;
+    weightedAverage(currentAbs, quantityAtomic);
+  } else if (quantityAtomic < currentAbs) {
+    nextQuantity = currentQuantity - quantityAtomic;
+    reduceCollateral(quantityAtomic);
+  } else if (quantityAtomic === currentAbs) {
+    nextQuantity = 0n;
+    nextCollateral = 0n;
+    nextAverageEntryPrice = null;
+  } else {
+    const remainder = quantityAtomic - currentAbs;
+    nextQuantity = -remainder;
+    nextCollateral = addCollateral;
+    nextAverageEntryPrice = input.executionPrice;
+  }
+
+  return {
+    signedQuantityAtomic: nextQuantity,
+    collateralAtomic: nextCollateral,
+    averageEntryPrice: nextAverageEntryPrice,
+  };
+}
+
+function buildTerminalPerpMarketView(input: {
+  venueKey: "drift";
+  contract: {
+    marketName: string;
+    marketIndex: number | null;
+    oracle: string | null;
+    oracleSource: string | null;
+    status: string | null;
+    contractType: string | null;
+    initialMarginRatio: number | null;
+    maintenanceMarginRatio: number | null;
+  };
+  funding: {
+    fundingRate1hBps: number | null;
+    oraclePrice: number | null;
+    markPrice: number | null;
+    sourceTs: string | null;
+  } | null;
+  swiftConfigured: boolean;
+}): Record<string, unknown> {
+  return {
+    venueKey: input.venueKey,
+    instrumentId: input.contract.marketName,
+    instrumentLabel: input.contract.marketName,
+    marketIndex: input.contract.marketIndex,
+    oracle: input.contract.oracle,
+    oracleSource: input.contract.oracleSource,
+    status: input.contract.status,
+    contractType: input.contract.contractType,
+    initialMarginRatio: ratioToFraction(input.contract.initialMarginRatio),
+    maintenanceMarginRatio: ratioToFraction(
+      input.contract.maintenanceMarginRatio,
+    ),
+    fundingRate1hBps: input.funding?.fundingRate1hBps ?? null,
+    oraclePrice: input.funding?.oraclePrice ?? null,
+    markPrice: input.funding?.markPrice ?? null,
+    sourceTs: input.funding?.sourceTs ?? null,
+    swiftConfigured: input.swiftConfigured,
+    routeSummary: input.swiftConfigured ? "Drift Swift" : "Drift Perps",
+  };
+}
+
+function parseTerminalPerpOrderPayload(input: {
+  payload: Record<string, unknown>;
+  requireReason?: boolean;
+}): {
+  venueKey: "drift";
+  instrumentId: string;
+  instrumentLabel: string;
+  side: TerminalPerpOrderSide;
+  quantityAtomic: string;
+  collateralAtomic: string | null;
+  orderType: "market" | "limit" | "trigger";
+  timeInForce: "gtc" | "ioc" | "fok";
+  reduceOnly: boolean;
+  limitPriceAtomic: string | null;
+  triggerPriceAtomic: string | null;
+  source: string;
+  reason: string;
+} {
+  const venueKey =
+    readTrimmedString(input.payload.venueKey)?.toLowerCase() ?? "drift";
+  if (venueKey !== "drift") {
+    throw new Error(`invalid-terminal-perp-venue:${venueKey}`);
+  }
+  const instrumentId = readTrimmedString(input.payload.instrumentId);
+  const instrumentLabel =
+    readTrimmedString(input.payload.instrumentLabel) ?? instrumentId;
+  const side = parseTerminalPerpOrderSide(input.payload.side);
+  const quantityAtomic = readTrimmedString(input.payload.quantityAtomic);
+  const collateralAtomic = readTrimmedString(input.payload.collateralAtomic);
+  const orderType = parseTerminalPerpOrderType(input.payload.orderType);
+  const timeInForce = parseTerminalPerpTimeInForce(input.payload.timeInForce);
+  const limitPriceAtomic = readTrimmedString(input.payload.limitPriceAtomic);
+  const triggerPriceAtomic = readTrimmedString(
+    input.payload.triggerPriceAtomic,
+  );
+  const reduceOnly =
+    input.payload.reduceOnly === true ||
+    side === "close_long" ||
+    side === "close_short";
+  const source = readTrimmedString(input.payload.source) ?? "PERPS_TERMINAL";
+  const reason =
+    readTrimmedString(input.payload.reason) ??
+    `${side ?? "perp"}:${instrumentId ?? "instrument"}`;
+  if (
+    !instrumentId ||
+    !instrumentLabel ||
+    !side ||
+    !quantityAtomic ||
+    readAtomicBigInt(quantityAtomic) === null
+  ) {
+    throw new Error("invalid-terminal-perp-order");
+  }
+  if (
+    (side === "long" || side === "short") &&
+    (!collateralAtomic || readAtomicBigInt(collateralAtomic) === null)
+  ) {
+    throw new Error("invalid-terminal-perp-collateral");
+  }
+  if (collateralAtomic && readAtomicBigInt(collateralAtomic) === null) {
+    throw new Error("invalid-terminal-perp-collateral");
+  }
+  if (
+    orderType === "limit" &&
+    (!limitPriceAtomic || readAtomicBigInt(limitPriceAtomic) === null)
+  ) {
+    throw new Error("invalid-terminal-perp-limit-price");
+  }
+  if (
+    orderType === "trigger" &&
+    (!triggerPriceAtomic || readAtomicBigInt(triggerPriceAtomic) === null)
+  ) {
+    throw new Error("invalid-terminal-perp-trigger-price");
+  }
+  if (input.requireReason && !reason) {
+    throw new Error("invalid-terminal-perp-reason");
+  }
+  return {
+    venueKey: "drift",
+    instrumentId,
+    instrumentLabel,
+    side,
+    quantityAtomic,
+    collateralAtomic:
+      side === "long" || side === "short" ? collateralAtomic : null,
+    orderType,
+    timeInForce,
+    reduceOnly,
+    limitPriceAtomic:
+      orderType === "limit" && limitPriceAtomic ? limitPriceAtomic : null,
+    triggerPriceAtomic:
+      orderType === "trigger" && triggerPriceAtomic ? triggerPriceAtomic : null,
+    source,
+    reason,
+  };
+}
+
+async function listTerminalPerpMarkets(input: {
+  env: Env;
+  venueKey: "drift";
+  limit: number;
+}): Promise<Record<string, unknown>[]> {
+  const drift = new DriftClient(input.env);
+  const contracts = (await drift.listContracts())
+    .filter((contract) => {
+      const contractType = readTrimmedString(
+        contract.contractType,
+      )?.toLowerCase();
+      return contractType === null || contractType === "perp";
+    })
+    .sort((a, b) => a.marketName.localeCompare(b.marketName))
+    .slice(0, input.limit);
+  return await Promise.all(
+    contracts.map(async (contract) =>
+      buildTerminalPerpMarketView({
+        venueKey: input.venueKey,
+        contract,
+        funding:
+          (
+            await drift.getFundingRates(contract.marketName).catch(() => [])
+          )[0] ?? null,
+        swiftConfigured: drift.swiftConfigured(),
+      }),
+    ),
+  );
+}
+
+async function listTerminalPerpRequestsForActor(input: {
+  env: Env;
+  actorId: string;
+}): Promise<ExecutionRequestRecord[]> {
+  const requests: ExecutionRequestRecord[] = [];
+  const pageSize = 200;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await listExecutionRequestsByActor(input.env.WAITLIST_DB, {
+      actorId: input.actorId,
+      mode: "privy_execute",
+      limit: pageSize,
+      offset,
+    });
+    requests.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return requests;
+}
+
+function isSuccessfulTerminalPerpRequest(
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>,
+): boolean {
+  const terminalStatus = readTrimmedString(
+    latest?.receipt?.finalizedStatus ?? latest?.request.status,
+  )?.toLowerCase();
+  return terminalStatus === "landed" || terminalStatus === "finalized";
+}
+
+async function listTerminalPerpPositionsForActor(input: {
+  env: Env;
+  actorId: string;
+}): Promise<TerminalPerpPositionView[]> {
+  const requests = (await listTerminalPerpRequestsForActor(input))
+    .filter((entry) => {
+      const intent = isRecord(entry.metadata?.intent)
+        ? entry.metadata.intent
+        : null;
+      return (
+        readTrimmedString(intent?.family) === "perp_order" &&
+        readTrimmedString(intent?.venueKey)?.toLowerCase() === "drift"
+      );
+    })
+    .sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)));
+
+  const groups = new Map<
+    string,
+    {
+      key: string;
+      instrumentId: string;
+      instrumentLabel: string;
+      signedQuantityAtomic: bigint;
+      collateralAtomic: bigint;
+      averageEntryPrice: number | null;
+      markPrice: number | null;
+      oraclePrice: number | null;
+      fundingRate1hBps: number | null;
+      initialMarginRatio: number | null;
+      maintenanceMarginRatio: number | null;
+      oracle: string | null;
+      oracleSource: string | null;
+      lastRequestId: string | null;
+      lastUpdatedAt: string | null;
+      notes: string[];
+    }
+  >();
+
+  for (const request of requests) {
+    const latest = await getExecutionLatestStatus(
+      input.env.WAITLIST_DB,
+      request.requestId,
+    );
+    if (!latest || !isSuccessfulTerminalPerpRequest(latest)) continue;
+    const intent = isRecord(latest.request.metadata?.intent)
+      ? latest.request.metadata.intent
+      : null;
+    const instrumentId = readTrimmedString(intent?.instrumentId);
+    const instrumentLabel =
+      readTrimmedString(intent?.instrumentLabel) ?? instrumentId;
+    const side = parseTerminalPerpOrderSide(intent?.side);
+    const quantityAtomic = readAtomicBigInt(intent?.quantityAtomic);
+    if (!instrumentId || !instrumentLabel || !side || quantityAtomic === null) {
+      continue;
+    }
+    const snapshot = readPerpReferenceSnapshot(latest);
+    const executionPrice = readPerpExecutionPrice({ latest, snapshot });
+    const key = `drift:${instrumentId}`;
+    const group = groups.get(key) ?? {
+      key,
+      instrumentId,
+      instrumentLabel,
+      signedQuantityAtomic: 0n,
+      collateralAtomic: 0n,
+      averageEntryPrice: null,
+      markPrice: null,
+      oraclePrice: null,
+      fundingRate1hBps: null,
+      initialMarginRatio: null,
+      maintenanceMarginRatio: null,
+      oracle: null,
+      oracleSource: null,
+      lastRequestId: null,
+      lastUpdatedAt: null,
+      notes: [],
+    };
+
+    const applied = applyPerpOrderToState({
+      currentSignedQuantityAtomic: group.signedQuantityAtomic,
+      currentCollateralAtomic: group.collateralAtomic,
+      currentAverageEntryPrice: group.averageEntryPrice,
+      side,
+      quantityAtomic,
+      collateralAtomic: readAtomicBigInt(intent?.collateralAtomic),
+      executionPrice,
+    });
+
+    group.signedQuantityAtomic = applied.signedQuantityAtomic;
+    group.collateralAtomic = applied.collateralAtomic;
+    group.averageEntryPrice = applied.averageEntryPrice;
+    group.markPrice = roundFiniteNumber(Number(snapshot?.markPrice));
+    group.oraclePrice = roundFiniteNumber(Number(snapshot?.oraclePrice));
+    group.fundingRate1hBps = roundFiniteNumber(
+      Number(snapshot?.fundingRate1hBps),
+      4,
+    );
+    group.initialMarginRatio =
+      ratioToFraction(snapshot?.initialMarginRatio) ?? group.initialMarginRatio;
+    group.maintenanceMarginRatio =
+      ratioToFraction(snapshot?.maintenanceMarginRatio) ??
+      group.maintenanceMarginRatio;
+    group.oracle = readTrimmedString(snapshot?.oracle) ?? group.oracle;
+    group.oracleSource =
+      readTrimmedString(snapshot?.oracleSource) ?? group.oracleSource;
+    group.lastRequestId = latest.request.requestId;
+    group.lastUpdatedAt =
+      latest.request.updatedAt ??
+      latest.request.receivedAt ??
+      group.lastUpdatedAt;
+    const lifecycleNotes =
+      readStringArray(readPersistedExecutionLifecycle({ latest })?.notes) ?? [];
+    group.notes = Array.from(new Set([...group.notes, ...lifecycleNotes]));
+    groups.set(key, group);
+  }
+
+  const positions: TerminalPerpPositionView[] = [];
+  for (const group of groups.values()) {
+    const absoluteQuantityAtomic = absBigInt(group.signedQuantityAtomic);
+    const absoluteQuantityUi = atomicToDecimalNumber(
+      absoluteQuantityAtomic.toString(),
+      TERMINAL_PERP_QUANTITY_DECIMALS,
+    );
+    const collateralQuote = atomicToDecimalNumber(
+      group.collateralAtomic.toString(),
+      TERMINAL_PERP_COLLATERAL_DECIMALS,
+    );
+    const markPrice =
+      group.markPrice !== null && Number.isFinite(group.markPrice)
+        ? group.markPrice
+        : null;
+    const notionalQuote =
+      absoluteQuantityUi !== null && markPrice !== null
+        ? roundFiniteNumber(absoluteQuantityUi * markPrice, 4)
+        : null;
+    const signedQuantityUiNumber =
+      absoluteQuantityUi === null
+        ? null
+        : group.signedQuantityAtomic < 0n
+          ? -absoluteQuantityUi
+          : absoluteQuantityUi;
+    const unrealizedPnlQuote =
+      signedQuantityUiNumber !== null &&
+      markPrice !== null &&
+      group.averageEntryPrice !== null
+        ? roundFiniteNumber(
+            (markPrice - group.averageEntryPrice) * signedQuantityUiNumber,
+            4,
+          )
+        : null;
+    const equityQuote =
+      collateralQuote !== null
+        ? roundFiniteNumber(collateralQuote + (unrealizedPnlQuote ?? 0), 4)
+        : unrealizedPnlQuote;
+    const usedMarginQuote =
+      notionalQuote !== null && group.initialMarginRatio !== null
+        ? roundFiniteNumber(notionalQuote * group.initialMarginRatio, 4)
+        : null;
+    const maintenanceRequirementQuote =
+      notionalQuote !== null && group.maintenanceMarginRatio !== null
+        ? roundFiniteNumber(notionalQuote * group.maintenanceMarginRatio, 4)
+        : null;
+    const freeCollateralQuote =
+      equityQuote !== null && usedMarginQuote !== null
+        ? roundFiniteNumber(equityQuote - usedMarginQuote, 4)
+        : null;
+    const leverage =
+      notionalQuote !== null &&
+      equityQuote !== null &&
+      equityQuote > 0 &&
+      Number.isFinite(equityQuote)
+        ? roundFiniteNumber(notionalQuote / equityQuote, 4)
+        : null;
+    const liquidationBufferPct =
+      equityQuote !== null &&
+      maintenanceRequirementQuote !== null &&
+      equityQuote > 0 &&
+      Number.isFinite(equityQuote)
+        ? roundFiniteNumber(
+            ((equityQuote - maintenanceRequirementQuote) / equityQuote) * 100,
+            2,
+          )
+        : null;
+    const riskLevel = classifyPerpRisk({
+      leverage,
+      liquidationBufferPct,
+      freeCollateralQuote,
+    });
+    positions.push({
+      key: group.key,
+      venueKey: "drift",
+      instrumentId: group.instrumentId,
+      instrumentLabel: group.instrumentLabel,
+      side:
+        group.signedQuantityAtomic > 0n
+          ? "long"
+          : group.signedQuantityAtomic < 0n
+            ? "short"
+            : "flat",
+      positionState: group.signedQuantityAtomic === 0n ? "closed" : "open",
+      signedQuantityAtomic: group.signedQuantityAtomic.toString(),
+      signedQuantityUi: bigintToSignedDisplay(
+        group.signedQuantityAtomic,
+        TERMINAL_PERP_QUANTITY_DECIMALS,
+      ),
+      absoluteQuantityUi: formatAtomicDisplay(
+        absoluteQuantityAtomic,
+        TERMINAL_PERP_QUANTITY_DECIMALS,
+      ),
+      averageEntryPrice: roundFiniteNumber(group.averageEntryPrice, 4),
+      markPrice,
+      oraclePrice: group.oraclePrice,
+      fundingRate1hBps: group.fundingRate1hBps,
+      collateralAtomic: group.collateralAtomic.toString(),
+      collateralUi: formatAtomicDisplay(
+        group.collateralAtomic,
+        TERMINAL_PERP_COLLATERAL_DECIMALS,
+      ),
+      notionalQuote,
+      unrealizedPnlQuote,
+      leverage,
+      equityQuote,
+      usedMarginQuote,
+      maintenanceRequirementQuote,
+      freeCollateralQuote,
+      initialMarginRatio: group.initialMarginRatio,
+      maintenanceMarginRatio: group.maintenanceMarginRatio,
+      liquidationBufferPct,
+      riskLevel,
+      oracle: group.oracle,
+      oracleSource: group.oracleSource,
+      lastRequestId: group.lastRequestId,
+      lastUpdatedAt: group.lastUpdatedAt,
+      notes: group.notes,
+    });
+  }
+
+  return positions.sort((a, b) =>
+    String(b.lastUpdatedAt ?? "").localeCompare(String(a.lastUpdatedAt ?? "")),
+  );
+}
+
+async function previewTerminalPerpOrder(input: {
+  env: Env;
+  actorId: string;
+  payload: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  const parsed = parseTerminalPerpOrderPayload({
+    payload: input.payload,
+  });
+  const drift = new DriftClient(input.env);
+  const preview = await drift.describePerpIntent({
+    instrumentId: parsed.instrumentId,
+    side: parsed.side,
+    quantityAtomic: parsed.quantityAtomic,
+    collateralAtomic: parsed.collateralAtomic,
+    options: {
+      orderType: parsed.orderType,
+      timeInForce: parsed.timeInForce,
+      reduceOnly: parsed.reduceOnly,
+      ...(parsed.limitPriceAtomic
+        ? { limitPriceAtomic: parsed.limitPriceAtomic }
+        : {}),
+      ...(parsed.triggerPriceAtomic
+        ? { triggerPriceAtomic: parsed.triggerPriceAtomic }
+        : {}),
+    },
+    executionAdapter: "drift",
+  });
+  const currentPosition =
+    (
+      await listTerminalPerpPositionsForActor({
+        env: input.env,
+        actorId: input.actorId,
+      })
+    ).find((position) => position.instrumentId === parsed.instrumentId) ?? null;
+  const projected = applyPerpOrderToState({
+    currentSignedQuantityAtomic:
+      readAtomicBigInt(currentPosition?.signedQuantityAtomic) ?? 0n,
+    currentCollateralAtomic:
+      readAtomicBigInt(currentPosition?.collateralAtomic) ?? 0n,
+    currentAverageEntryPrice: currentPosition?.averageEntryPrice ?? null,
+    side: parsed.side,
+    quantityAtomic: readAtomicBigInt(parsed.quantityAtomic) ?? 0n,
+    collateralAtomic: readAtomicBigInt(parsed.collateralAtomic),
+    executionPrice:
+      preview.funding?.markPrice ?? preview.funding?.oraclePrice ?? null,
+  });
+  const projectedAbsQuantity = absBigInt(projected.signedQuantityAtomic);
+  const projectedQuantityUi = atomicToDecimalNumber(
+    projectedAbsQuantity.toString(),
+    TERMINAL_PERP_QUANTITY_DECIMALS,
+  );
+  const markPrice =
+    preview.funding?.markPrice ?? preview.funding?.oraclePrice ?? null;
+  const projectedCollateralQuote = atomicToDecimalNumber(
+    projected.collateralAtomic.toString(),
+    TERMINAL_PERP_COLLATERAL_DECIMALS,
+  );
+  const initialMarginRatio = ratioToFraction(
+    preview.instrument.initialMarginRatio,
+  );
+  const maintenanceMarginRatio = ratioToFraction(
+    preview.instrument.maintenanceMarginRatio,
+  );
+  const projectedNotionalQuote =
+    projectedQuantityUi !== null && markPrice !== null
+      ? roundFiniteNumber(projectedQuantityUi * markPrice, 4)
+      : null;
+  const requiredInitialMarginQuote =
+    projectedNotionalQuote !== null && initialMarginRatio !== null
+      ? roundFiniteNumber(projectedNotionalQuote * initialMarginRatio, 4)
+      : null;
+  const requiredMaintenanceQuote =
+    projectedNotionalQuote !== null && maintenanceMarginRatio !== null
+      ? roundFiniteNumber(projectedNotionalQuote * maintenanceMarginRatio, 4)
+      : null;
+  const projectedLeverage =
+    projectedNotionalQuote !== null &&
+    projectedCollateralQuote !== null &&
+    projectedCollateralQuote > 0
+      ? roundFiniteNumber(projectedNotionalQuote / projectedCollateralQuote, 4)
+      : null;
+  const projectedLiquidationBufferPct =
+    projectedCollateralQuote !== null &&
+    requiredMaintenanceQuote !== null &&
+    projectedCollateralQuote > 0
+      ? roundFiniteNumber(
+          ((projectedCollateralQuote - requiredMaintenanceQuote) /
+            projectedCollateralQuote) *
+            100,
+          2,
+        )
+      : null;
+  const projectedRiskLevel = classifyPerpRisk({
+    leverage: projectedLeverage,
+    liquidationBufferPct: projectedLiquidationBufferPct,
+    freeCollateralQuote:
+      projectedCollateralQuote !== null && requiredInitialMarginQuote !== null
+        ? projectedCollateralQuote - requiredInitialMarginQuote
+        : null,
+  });
+
+  return {
+    venueKey: parsed.venueKey,
+    provider: preview.swiftSupported ? "drift_swift" : "drift",
+    instrumentId: parsed.instrumentId,
+    instrumentLabel: parsed.instrumentLabel,
+    side: parsed.side,
+    orderType: parsed.orderType,
+    timeInForce: parsed.timeInForce,
+    reduceOnly: preview.reduceOnly,
+    quantityAtomic: parsed.quantityAtomic,
+    quantityUi: formatAtomicDisplay(
+      parsed.quantityAtomic,
+      TERMINAL_PERP_QUANTITY_DECIMALS,
+    ),
+    collateralAtomic: parsed.collateralAtomic,
+    collateralUi: parsed.collateralAtomic
+      ? formatAtomicDisplay(
+          parsed.collateralAtomic,
+          TERMINAL_PERP_COLLATERAL_DECIMALS,
+        )
+      : null,
+    limitPriceAtomic: parsed.limitPriceAtomic,
+    triggerPriceAtomic: parsed.triggerPriceAtomic,
+    markPrice: preview.funding?.markPrice ?? null,
+    oraclePrice: preview.funding?.oraclePrice ?? null,
+    oracle: preview.instrument.oracle,
+    oracleSource: preview.instrument.oracleSource,
+    fundingRate1hBps: preview.funding?.fundingRate1hBps ?? null,
+    initialMarginRatio,
+    maintenanceMarginRatio,
+    swiftSupported: preview.swiftSupported,
+    currentSignedQuantityAtomic: currentPosition?.signedQuantityAtomic ?? "0",
+    currentSignedQuantityUi: currentPosition?.signedQuantityUi ?? "0.0",
+    currentCollateralAtomic: currentPosition?.collateralAtomic ?? "0",
+    currentCollateralUi: currentPosition?.collateralUi ?? "0.0",
+    currentAverageEntryPrice: currentPosition?.averageEntryPrice ?? null,
+    projectedSignedQuantityAtomic: projected.signedQuantityAtomic.toString(),
+    projectedSignedQuantityUi: bigintToSignedDisplay(
+      projected.signedQuantityAtomic,
+      TERMINAL_PERP_QUANTITY_DECIMALS,
+    ),
+    projectedCollateralAtomic: projected.collateralAtomic.toString(),
+    projectedCollateralUi: formatAtomicDisplay(
+      projected.collateralAtomic,
+      TERMINAL_PERP_COLLATERAL_DECIMALS,
+    ),
+    projectedNotionalQuote,
+    requiredInitialMarginQuote,
+    requiredMaintenanceQuote,
+    projectedLeverage,
+    projectedLiquidationBufferPct,
+    projectedRiskLevel,
+    routeSummary: preview.swiftSupported ? "Drift Swift" : "Drift Perps",
+    notes: Array.from(
+      new Set([
+        `${parsed.orderType.toUpperCase()} ${parsed.timeInForce.toUpperCase()}`,
+        parsed.reduceOnly ? "reduce-only" : "exposure-expanding",
+        "paper-mode only",
+      ]),
+    ),
+  };
+}
+
+function buildTerminalPerpRequestSummary(
+  latest: Awaited<ReturnType<typeof getExecutionLatestStatus>>,
+): Record<string, unknown> | null {
+  if (!latest) return null;
+  const intent = isRecord(latest.request.metadata?.intent)
+    ? latest.request.metadata.intent
+    : null;
+  if (
+    readTrimmedString(intent?.family) !== "perp_order" ||
+    readTrimmedString(intent?.venueKey)?.toLowerCase() !== "drift"
+  ) {
+    return null;
+  }
+  const snapshot = readPerpReferenceSnapshot(latest);
+  return {
+    requestId: latest.request.requestId,
+    status: latest.request.status,
+    terminal: Boolean(latest.request.terminalAt),
+    updatedAt: latest.request.updatedAt ?? latest.request.receivedAt,
+    receiptId: latest.receipt?.receiptId ?? null,
+    provider:
+      latest.receipt?.provider ?? latest.latestAttempt?.provider ?? "drift",
+    instrumentId: readTrimmedString(intent?.instrumentId),
+    instrumentLabel:
+      readTrimmedString(intent?.instrumentLabel) ??
+      readTrimmedString(intent?.instrumentId),
+    side: parseTerminalPerpOrderSide(intent?.side),
+    quantityAtomic: readTrimmedString(intent?.quantityAtomic),
+    collateralAtomic: readTrimmedString(intent?.collateralAtomic),
+    markPrice: roundFiniteNumber(Number(snapshot?.markPrice), 4),
+    oraclePrice: roundFiniteNumber(Number(snapshot?.oraclePrice), 4),
+    fundingRate1hBps: roundFiniteNumber(Number(snapshot?.fundingRate1hBps), 4),
+  };
+}
+
+async function submitTerminalPerpOrder(input: {
+  request: Request;
+  env: Env;
+  user: UserRow;
+  payload: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  const parsed = parseTerminalPerpOrderPayload({
+    payload: input.payload,
+    requireReason: true,
+  });
+  const requestPayload = {
+    schemaVersion: "v2",
+    mode: "privy_execute",
+    lane: "safe",
+    metadata: {
+      source: parsed.source,
+      reason: parsed.reason,
+    },
+    privyExecute: {
+      wallet: input.user.walletAddress,
+      intent: {
+        family: "perp_order",
+        venueKey: parsed.venueKey,
+        marketType: "perp",
+        instrumentId: parsed.instrumentId,
+        instrumentLabel: parsed.instrumentLabel,
+        side: parsed.side,
+        quantityAtomic: parsed.quantityAtomic,
+        ...(parsed.collateralAtomic
+          ? { collateralAtomic: parsed.collateralAtomic }
+          : {}),
+      },
+      options: {
+        orderType: parsed.orderType,
+        timeInForce: parsed.timeInForce,
+        reduceOnly: parsed.reduceOnly,
+        ...(parsed.limitPriceAtomic
+          ? { limitPriceAtomic: parsed.limitPriceAtomic }
+          : {}),
+        ...(parsed.triggerPriceAtomic
+          ? { triggerPriceAtomic: parsed.triggerPriceAtomic }
+          : {}),
+      },
+    },
+  };
+  const payloadHash = await hashExecutionSubmitPayload(requestPayload);
+  const idempotencyKey =
+    readIdempotencyKey(input.request) ?? `perp-${crypto.randomUUID()}`;
+  const metadata = {
+    source: parsed.source,
+    reason: parsed.reason,
+    intent: {
+      family: "perp_order",
+      marketType: "perp",
+      venueKey: parsed.venueKey,
+      instrumentId: parsed.instrumentId,
+      instrumentLabel: parsed.instrumentLabel,
+      side: parsed.side,
+      quantityAtomic: parsed.quantityAtomic,
+      ...(parsed.collateralAtomic
+        ? { collateralAtomic: parsed.collateralAtomic }
+        : {}),
+    },
+    terminal: {
+      workflow: "perps",
+      executionMode: "paper",
+    },
+  } as const;
+  const reservation = await reserveExecutionSubmitRequest({
+    db: input.env.WAITLIST_DB,
+    requestId: newExecRequestId(),
+    idempotencyKey,
+    actorType: "privy_user",
+    actorId: input.user.id,
+    mode: "privy_execute",
+    lane: "safe",
+    payloadHash,
+    metadata,
+  });
+  if (reservation.result === "conflict") {
+    throw new Error(reservation.error);
+  }
+  if (reservation.result === "replay") {
+    const latest = await getExecutionLatestStatus(
+      input.env.WAITLIST_DB,
+      reservation.request.requestId,
+    );
+    return (
+      buildTerminalPerpRequestSummary(latest) ?? {
+        requestId: reservation.request.requestId,
+        status: reservation.request.status,
+        terminal: Boolean(reservation.request.terminalAt),
+      }
+    );
+  }
+
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "received",
+    reason: null,
+    details: null,
+  });
+  await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "validated",
+    statusReason: null,
+  });
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "validated",
+    reason: null,
+    details: null,
+  });
+
+  const rpcEndpoint = String(input.env.RPC_ENDPOINT ?? "").trim();
+  if (!rpcEndpoint) {
+    throw new Error("rpc-endpoint-missing");
+  }
+
+  const attemptId = newExecutionAttemptId();
+  const attemptStartedAt = new Date().toISOString();
+  const quality = {
+    lane: "safe",
+    orderType: parsed.orderType,
+    timeInForce: parsed.timeInForce,
+    reduceOnly: parsed.reduceOnly,
+    limitPriceAtomic: parsed.limitPriceAtomic,
+    triggerPriceAtomic: parsed.triggerPriceAtomic,
+  };
+  await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "dispatched",
+    statusReason: null,
+  });
+  await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+    requestId: reservation.request.requestId,
+    status: "dispatched",
+    reason: null,
+    details: {
+      provider: "drift",
+      attempt: 1,
+    },
+    createdAt: attemptStartedAt,
+  });
+  await createExecutionAttemptIdempotent(input.env.WAITLIST_DB, {
+    attemptId,
+    requestId: reservation.request.requestId,
+    attemptNo: 1,
+    lane: "safe",
+    provider: "drift",
+    status: "dispatched",
+    providerResponse: {
+      route: "drift",
+      lane: "safe",
+      mode: "privy_execute",
+      quality,
+    },
+    startedAt: attemptStartedAt,
+  });
+
+  try {
+    const drift = new DriftClient(input.env);
+    const route = drift.swiftConfigured() ? "drift_swift" : "drift";
+    const rpc = new SolanaRpc(rpcEndpoint);
+    const jupiter = new JupiterClient(
+      String(input.env.JUPITER_BASE_URL ?? "").trim() ||
+        X402_READ_JUPITER_BASE_URL,
+      input.env.JUPITER_API_KEY,
+    );
+    const result = await executeIntentViaRouter({
+      env: input.env,
+      venueKey: parsed.venueKey,
+      runtimeMode: "paper",
+      requireVenueRouting: true,
+      execution: {
+        adapter: route,
+        params: quality,
+      },
+      policy: normalizePolicy({
+        allowedMints: [USDC_MINT],
+        commitment: "confirmed",
+      }),
+      rpc,
+      jupiter,
+      drift,
+      intent: {
+        family: "perp_order",
+        wallet: input.user.walletAddress,
+        venueKey: parsed.venueKey,
+        marketType: "perp",
+        instrumentId: parsed.instrumentId,
+        side: parsed.side,
+        quantityAtomic: parsed.quantityAtomic,
+        ...(parsed.collateralAtomic
+          ? { collateralAtomic: parsed.collateralAtomic }
+          : {}),
+        params: {
+          orderType: parsed.orderType,
+          timeInForce: parsed.timeInForce,
+          reduceOnly: parsed.reduceOnly,
+          ...(parsed.limitPriceAtomic
+            ? { limitPriceAtomic: parsed.limitPriceAtomic }
+            : {}),
+          ...(parsed.triggerPriceAtomic
+            ? { triggerPriceAtomic: parsed.triggerPriceAtomic }
+            : {}),
+        },
+      },
+      privyWalletId: input.user.privyWalletId ?? undefined,
+      log(level, message, meta) {
+        console[level]("terminal.perps.submit", {
+          requestId: reservation.request.requestId,
+          message,
+          ...(meta ?? {}),
+        });
+      },
+    });
+    const completedAt = new Date().toISOString();
+    const provider = readTrimmedString(result.executionMeta?.route) ?? route;
+    const providerResponse = {
+      route: provider,
+      lane: "safe",
+      mode: "privy_execute",
+      quality,
+      executionMeta:
+        result.executionMeta &&
+        typeof result.executionMeta === "object" &&
+        !Array.isArray(result.executionMeta)
+          ? result.executionMeta
+          : null,
+      perpOrder: {
+        instrumentId: parsed.instrumentId,
+        instrumentLabel: parsed.instrumentLabel,
+        side: parsed.side,
+        quantityAtomic: parsed.quantityAtomic,
+        collateralAtomic: parsed.collateralAtomic,
+      },
+    };
+    await finalizeExecutionAttempt(input.env.WAITLIST_DB, {
+      attemptId,
+      status: result.status,
+      providerResponse,
+      errorCode: null,
+      errorMessage: null,
+      completedAt,
+    });
+    const receiptId = newExecutionReceiptId();
+    await upsertExecutionReceiptIdempotent(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      receiptId,
+      finalizedStatus: "finalized",
+      lane: "safe",
+      provider,
+      signature: result.signature,
+      slot: null,
+      errorCode: null,
+      errorMessage: null,
+      receipt: {
+        mode: "privy_execute",
+        route: provider,
+        resultStatus: result.status,
+        outcome: "finalized",
+        lifecycle: {
+          ...(result.executionMeta?.lifecycle ?? {}),
+          fillState: "filled",
+          settlementState: "confirmed",
+        },
+        quality,
+        perp: {
+          instrumentId: parsed.instrumentId,
+          instrumentLabel: parsed.instrumentLabel,
+          side: parsed.side,
+          quantityAtomic: parsed.quantityAtomic,
+          collateralAtomic: parsed.collateralAtomic,
+        },
+        quote: {
+          inputMint: USDC_MINT,
+          outputMint: parsed.instrumentId,
+          inAmount:
+            parsed.collateralAtomic ??
+            readTrimmedString(result.usedQuote.inAmount) ??
+            "0",
+          outAmount:
+            readTrimmedString(result.usedQuote.outAmount) ??
+            parsed.quantityAtomic,
+        },
+      },
+      readyAt: completedAt,
+    });
+    await terminalizeExecutionRequest(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      status: "landed",
+      statusReason: null,
+      details: {
+        provider,
+        attempt: 1,
+      },
+      nowIso: completedAt,
+    });
+    await updateExecutionRequestStatus(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      status: "finalized",
+      statusReason: null,
+      nowIso: completedAt,
+    });
+    await appendExecutionStatusEvent(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      status: "finalized",
+      reason: null,
+      details: {
+        provider,
+        attempt: 1,
+      },
+      createdAt: completedAt,
+    });
+    const latest = await getExecutionLatestStatus(
+      input.env.WAITLIST_DB,
+      reservation.request.requestId,
+    );
+    return (
+      buildTerminalPerpRequestSummary(latest) ?? {
+        requestId: reservation.request.requestId,
+        status: "finalized",
+        terminal: true,
+        receiptId,
+        provider,
+      }
+    );
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    const deniedReason = policyDeniedReason(error);
+    const terminalStatus = deniedReason ? "rejected" : "failed";
+    const errorCode = deniedReason
+      ? "policy-denied"
+      : normalizeExecutionErrorCode({
+          error,
+          fallback: "submission-failed",
+        });
+    const errorMessage =
+      executionErrorMessage(error) ?? "terminal-perp-submit-failed";
+    await finalizeExecutionAttempt(input.env.WAITLIST_DB, {
+      attemptId,
+      status: terminalStatus,
+      providerResponse: {
+        route: "drift",
+        lane: "safe",
+        mode: "privy_execute",
+        quality,
+      },
+      errorCode,
+      errorMessage,
+      completedAt: failedAt,
+    });
+    await upsertExecutionReceiptIdempotent(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      receiptId: newExecutionReceiptId(),
+      finalizedStatus: terminalStatus,
+      lane: "safe",
+      provider: "drift",
+      signature: null,
+      slot: null,
+      errorCode,
+      errorMessage,
+      receipt: {
+        mode: "privy_execute",
+        route: "drift",
+        outcome: terminalStatus,
+        lifecycle: {
+          positionState: "closed",
+          settlementState: "failed",
+          notes: [errorMessage],
+        },
+        quality,
+      },
+      readyAt: failedAt,
+    });
+    await terminalizeExecutionRequest(input.env.WAITLIST_DB, {
+      requestId: reservation.request.requestId,
+      status: terminalStatus,
+      statusReason: errorCode,
+      details: {
+        provider: "drift",
+        attempt: 1,
+        errorMessage,
+      },
+      nowIso: failedAt,
+    });
+    throw error instanceof Error ? error : new Error(errorCode);
+  }
 }
 
 const TERMINAL_PREDICTION_DECIMALS = 6;

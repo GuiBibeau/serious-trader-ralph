@@ -9,6 +9,9 @@ import {
   createExecutionClient,
   describeExecutionClientError,
   type ExecutionOpenOrderSnapshot,
+  type ExecutionPerpMarket,
+  type ExecutionPerpPosition,
+  type ExecutionPerpResult,
 } from "../execution-client";
 import {
   type AccountWallet,
@@ -58,6 +61,10 @@ import {
   type OpenOrderStatus,
 } from "./components/open-orders";
 import { buildOrderbookLadder } from "./components/orderbook-ladder";
+import {
+  createPerpTradeIntent,
+  type PerpTradeIntent,
+} from "./components/perp-intent";
 import { PredictionMarketsPanel } from "./components/prediction-markets-panel";
 import {
   type RealtimeTradeTick,
@@ -257,6 +264,12 @@ const TradeTicketModal = dynamic(
     import("./components/trade-ticket-modal").then(
       (mod) => mod.TradeTicketModal,
     ),
+  { ssr: false },
+);
+
+const PerpTicketModal = dynamic(
+  () =>
+    import("./components/perp-ticket-modal").then((mod) => mod.PerpTicketModal),
   { ssr: false },
 );
 
@@ -537,6 +550,9 @@ function ControlRoom() {
   const [fundOpen, setFundOpen] = useState(false);
   const [tradeOpen, setTradeOpen] = useState(false);
   const [tradeIntent, setTradeIntent] = useState<TradeIntent | null>(null);
+  const [perpTradeOpen, setPerpTradeOpen] = useState(false);
+  const [perpTradeIntent, setPerpTradeIntent] =
+    useState<PerpTradeIntent | null>(null);
   const [selectedPairId, setSelectedPairId] = useState<PairId>(DEFAULT_PAIR_ID);
   const [gridRevision, setGridRevision] = useState(0);
   const [hasCustomGridLayout, setHasCustomGridLayout] = useState(false);
@@ -554,6 +570,11 @@ function ControlRoom() {
     ExecutionActivityRow[]
   >([]);
   const [openOrders, setOpenOrders] = useState<OpenOrderRow[]>([]);
+  const [perpMarkets, setPerpMarkets] = useState<ExecutionPerpMarket[]>([]);
+  const [perpPositions, setPerpPositions] = useState<ExecutionPerpPosition[]>(
+    [],
+  );
+  const [perpMessage, setPerpMessage] = useState<string | null>(null);
   const [ladderPrefill, setLadderPrefill] = useState<LadderPrefill | null>(
     null,
   );
@@ -586,6 +607,9 @@ function ControlRoom() {
       }),
     [userProfile],
   );
+  const driftPerpsEnabled =
+    terminalVenueRolloutPolicy.enabledVenues.includes("drift") &&
+    terminalVenueRolloutPolicy.enabledFamilies.includes("perp_order");
   const modeCapabilities = getTerminalModeCapabilities(terminalMode);
   const activeCustomWorkspace = useMemo(
     () => resolveActiveWorkspace(customWorkspaceStore),
@@ -684,9 +708,9 @@ function ControlRoom() {
   }, []);
 
   useEffect(() => {
-    if (!tradeOpen) return;
+    if (!tradeOpen && !perpTradeOpen) return;
     setCommandPaletteOpen(false);
-  }, [tradeOpen]);
+  }, [perpTradeOpen, tradeOpen]);
 
   const resetDashboardLayout = useCallback(() => {
     clearDashboardGridLayouts(layoutStorageKey);
@@ -1195,6 +1219,57 @@ function ControlRoom() {
     }
   }, [authenticated, getAccessToken]);
 
+  const refreshPerpMarkets = useCallback(async (): Promise<void> => {
+    if (!authenticated || !driftPerpsEnabled) {
+      setPerpMarkets([]);
+      return;
+    }
+    const token = await getAccessToken();
+    if (!token) {
+      setPerpMarkets([]);
+      return;
+    }
+    try {
+      const executionClient = createExecutionClient({
+        authToken: token,
+      });
+      const markets = await executionClient.listPerpMarkets({
+        venueKey: "drift",
+        limit: 8,
+      });
+      setPerpMarkets(markets);
+      setPerpMessage(null);
+    } catch (error) {
+      setPerpMessage(
+        describeExecutionClientError(error, "perp-markets-refresh-failed"),
+      );
+    }
+  }, [authenticated, driftPerpsEnabled, getAccessToken]);
+
+  const refreshPerpPositions = useCallback(async (): Promise<void> => {
+    if (!authenticated || !driftPerpsEnabled) {
+      setPerpPositions([]);
+      return;
+    }
+    const token = await getAccessToken();
+    if (!token) {
+      setPerpPositions([]);
+      return;
+    }
+    try {
+      const executionClient = createExecutionClient({
+        authToken: token,
+      });
+      const positions = await executionClient.listPerpPositions();
+      setPerpPositions(positions);
+      setPerpMessage(null);
+    } catch (error) {
+      setPerpMessage(
+        describeExecutionClientError(error, "perp-positions-refresh-failed"),
+      );
+    }
+  }, [authenticated, driftPerpsEnabled, getAccessToken]);
+
   const openTradeTicket = useCallback(
     (intent: TradeIntent): void => {
       if (!hasWallet) {
@@ -1203,6 +1278,18 @@ function ControlRoom() {
       }
       setTradeIntent(intent);
       setTradeOpen(true);
+    },
+    [hasWallet],
+  );
+
+  const openPerpTradeTicket = useCallback(
+    (intent: PerpTradeIntent): void => {
+      if (!hasWallet) {
+        setMessage("wallet-unavailable");
+        return;
+      }
+      setPerpTradeIntent(intent);
+      setPerpTradeOpen(true);
     },
     [hasWallet],
   );
@@ -1531,6 +1618,14 @@ function ControlRoom() {
     [applyOptimisticTradeBalances, refreshWalletBalances],
   );
 
+  const handlePerpTradeComplete = useCallback(
+    (_result: ExecutionPerpResult): void => {
+      void refreshPerpPositions();
+      void refreshPerpMarkets();
+    },
+    [refreshPerpMarkets, refreshPerpPositions],
+  );
+
   useEffect(() => {
     if (!wallet) return;
     const timer = window.setInterval(() => {
@@ -1550,6 +1645,26 @@ function ControlRoom() {
     }, 2500);
     return () => window.clearInterval(timer);
   }, [authenticated, refreshOpenOrders, wallet]);
+
+  useEffect(() => {
+    if (!authenticated || !wallet || !driftPerpsEnabled) {
+      setPerpMarkets([]);
+      setPerpPositions([]);
+      return;
+    }
+    void refreshPerpMarkets();
+    void refreshPerpPositions();
+    const timer = window.setInterval(() => {
+      void refreshPerpPositions();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [
+    authenticated,
+    driftPerpsEnabled,
+    refreshPerpMarkets,
+    refreshPerpPositions,
+    wallet,
+  ]);
 
   const {
     setWalletBalances: setGlobalWalletBalances,
@@ -1759,6 +1874,22 @@ function ControlRoom() {
           onClose={() => setTradeOpen(false)}
           onTradeComplete={handleTradeComplete}
           onOrderQueued={handleOrderQueued}
+        />
+      ) : null}
+      {perpTradeOpen && perpTradeIntent ? (
+        <PerpTicketModal
+          open
+          intent={perpTradeIntent}
+          walletAddress={wallet?.walletAddress ?? null}
+          currentPosition={
+            perpPositions.find(
+              (position) =>
+                position.instrumentId === perpTradeIntent.instrumentId,
+            ) ?? null
+          }
+          getAccessToken={getAccessToken}
+          onClose={() => setPerpTradeOpen(false)}
+          onOrderComplete={handlePerpTradeComplete}
         />
       ) : null}
       <TerminalCommandPalette
@@ -2025,12 +2156,17 @@ function ControlRoom() {
                       <PositionsOrdersFillsPanel
                         entries={recentExecutions}
                         openOrders={openOrders}
+                        perpMarkets={perpMarkets}
+                        perpPositions={perpPositions}
+                        perpMessage={perpMessage}
+                        driftPerpsEnabled={driftPerpsEnabled}
                         terminalVenueRolloutPolicy={terminalVenueRolloutPolicy}
                         selectedPairId={selectedPairId}
                         selectedPairMark={marketFeed.latestPrice}
                         tokenBalancesByMint={tokenBalancesByMint}
                         tradingEnabled={canQuickTrade}
                         onQuickAction={openTradeTicket}
+                        onOpenPerpAction={openPerpTradeTicket}
                         onCancelOrder={cancelOpenOrder}
                         onCancelAllOrders={cancelAllOpenOrders}
                       />
@@ -2886,6 +3022,10 @@ const PositionsOrdersFillsPanel = memo(
   function PositionsOrdersFillsPanel(props: {
     entries: ExecutionActivityRow[];
     openOrders: OpenOrderRow[];
+    perpMarkets: ExecutionPerpMarket[];
+    perpPositions: ExecutionPerpPosition[];
+    perpMessage: string | null;
+    driftPerpsEnabled: boolean;
     terminalVenueRolloutPolicy: ReturnType<
       typeof resolveTerminalVenueRolloutPolicy
     >;
@@ -2894,18 +3034,24 @@ const PositionsOrdersFillsPanel = memo(
     tokenBalancesByMint: Record<string, string>;
     tradingEnabled: boolean;
     onQuickAction: (intent: TradeIntent) => void;
+    onOpenPerpAction: (intent: PerpTradeIntent) => void;
     onCancelOrder: (orderId: string) => void;
     onCancelAllOrders: () => void;
   }) {
     const {
       entries,
       openOrders,
+      perpMarkets,
+      perpPositions,
+      perpMessage,
+      driftPerpsEnabled,
       terminalVenueRolloutPolicy,
       selectedPairId,
       selectedPairMark,
       tokenBalancesByMint,
       tradingEnabled,
       onQuickAction,
+      onOpenPerpAction,
       onCancelOrder,
       onCancelAllOrders,
     } = props;
@@ -3001,6 +3147,10 @@ const PositionsOrdersFillsPanel = memo(
       if (value === null || !Number.isFinite(value)) return "--";
       const sign = value >= 0 ? "+" : "";
       return `${sign}${value.toFixed(2)}`;
+    }, []);
+    const formatMetric = useCallback((value: number | null, digits = 2) => {
+      if (value === null || !Number.isFinite(value)) return "--";
+      return value.toFixed(digits);
     }, []);
 
     const riskBadgeClass = useCallback(
@@ -3110,6 +3260,76 @@ const PositionsOrdersFillsPanel = memo(
     const closeInspector = useCallback(() => {
       setInspectorOpen(false);
     }, []);
+    const openPerpLongIntent = useCallback(
+      (market: ExecutionPerpMarket) => {
+        if (!tradingEnabled) return;
+        onOpenPerpAction(
+          createPerpTradeIntent("long", "PERPS_PANEL", market.instrumentId, {
+            instrumentLabel: market.instrumentLabel,
+            collateralUi: "25",
+            quantityUi: "1",
+          }),
+        );
+      },
+      [onOpenPerpAction, tradingEnabled],
+    );
+    const openPerpShortIntent = useCallback(
+      (market: ExecutionPerpMarket) => {
+        if (!tradingEnabled) return;
+        onOpenPerpAction(
+          createPerpTradeIntent("short", "PERPS_PANEL", market.instrumentId, {
+            instrumentLabel: market.instrumentLabel,
+            collateralUi: "25",
+            quantityUi: "1",
+          }),
+        );
+      },
+      [onOpenPerpAction, tradingEnabled],
+    );
+    const openPerpReduceIntent = useCallback(
+      (position: ExecutionPerpPosition) => {
+        if (!tradingEnabled) return;
+        const absoluteSize = Number(position.absoluteQuantityUi);
+        const nextQuantity =
+          Number.isFinite(absoluteSize) && absoluteSize > 0
+            ? Math.max(Math.ceil(absoluteSize * 0.25), 1).toString()
+            : "1";
+        onOpenPerpAction(
+          createPerpTradeIntent(
+            position.side === "long" ? "close_long" : "close_short",
+            "PERPS_PANEL",
+            position.instrumentId,
+            {
+              instrumentLabel: position.instrumentLabel,
+              quantityUi: nextQuantity,
+              collateralUi: "0",
+              reason: "Reduce 25% perp position",
+            },
+          ),
+        );
+      },
+      [onOpenPerpAction, tradingEnabled],
+    );
+    const openPerpCloseIntent = useCallback(
+      (position: ExecutionPerpPosition) => {
+        if (!tradingEnabled) return;
+        onOpenPerpAction(
+          createPerpTradeIntent(
+            position.side === "long" ? "close_long" : "close_short",
+            "PERPS_PANEL",
+            position.instrumentId,
+            {
+              instrumentLabel: position.instrumentLabel,
+              quantityUi:
+                position.absoluteQuantityUi.replace(/\.0$/, "") || "1",
+              collateralUi: "0",
+              reason: "Close full perp position",
+            },
+          ),
+        );
+      },
+      [onOpenPerpAction, tradingEnabled],
+    );
 
     return (
       <>
@@ -3145,6 +3365,164 @@ const PositionsOrdersFillsPanel = memo(
             >
               Realized: {formatSignedPnl(totals.realizedPnl)} USDC
             </p>
+          </div>
+          <div className="rounded border border-border bg-subtle p-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                Drift Perps
+              </p>
+              <span className="text-[10px] text-muted">
+                {driftPerpsEnabled ? "paper enabled" : "rollout gated"}
+              </span>
+            </div>
+            {perpMessage ? (
+              <p className="mt-2 text-[10px] text-red-300">{perpMessage}</p>
+            ) : null}
+            <div className="mt-2 space-y-1.5">
+              {!driftPerpsEnabled ? (
+                <p className="text-muted">
+                  Drift perps are not enabled in the current rollout profile.
+                </p>
+              ) : null}
+              {driftPerpsEnabled && perpMarkets.length === 0 ? (
+                <p className="text-muted">No perp markets loaded yet.</p>
+              ) : null}
+              {perpMarkets.slice(0, 6).map((market) => (
+                <div
+                  key={`perp-market-${market.instrumentId}`}
+                  className="rounded border border-border/60 px-2 py-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-mono text-[11px] text-ink">
+                        {market.instrumentLabel}
+                      </p>
+                      <p className="text-[10px] text-muted">
+                        Mark {formatMetric(market.markPrice, 4)} • Funding{" "}
+                        {formatMetric(market.fundingRate1hBps, 2)} bps
+                      </p>
+                      <p className="text-[10px] text-muted">
+                        Init{" "}
+                        {market.initialMarginRatio !== null
+                          ? `${(market.initialMarginRatio * 100).toFixed(1)}%`
+                          : "--"}{" "}
+                        • Maint{" "}
+                        {market.maintenanceMarginRatio !== null
+                          ? `${(market.maintenanceMarginRatio * 100).toFixed(1)}%`
+                          : "--"}
+                      </p>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        className={cn(
+                          BTN_SECONDARY,
+                          "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                          !tradingEnabled && "opacity-60 pointer-events-none",
+                        )}
+                        onClick={() => openPerpLongIntent(market)}
+                        type="button"
+                        disabled={!tradingEnabled}
+                      >
+                        Long
+                      </button>
+                      <button
+                        className={cn(
+                          BTN_SECONDARY,
+                          "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                          !tradingEnabled && "opacity-60 pointer-events-none",
+                        )}
+                        onClick={() => openPerpShortIntent(market)}
+                        type="button"
+                        disabled={!tradingEnabled}
+                      >
+                        Short
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded border border-border bg-subtle p-2">
+            <p className="text-[10px] uppercase tracking-wider text-muted">
+              Perp Positions
+            </p>
+            <div className="mt-2 space-y-1.5">
+              {perpPositions.length === 0 ? (
+                <p className="text-muted">No perp paper positions yet.</p>
+              ) : null}
+              {perpPositions.map((position) => (
+                <div
+                  key={position.key}
+                  className="rounded border border-border/60 px-2 py-1.5 space-y-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-mono text-[11px] text-ink truncate">
+                        {position.instrumentLabel} •{" "}
+                        {position.side.toUpperCase()}
+                      </p>
+                      <p className="text-[10px] text-muted">
+                        Size {position.signedQuantityUi} • Entry{" "}
+                        {formatMetric(position.averageEntryPrice, 4)} • Mark{" "}
+                        {formatMetric(position.markPrice, 4)}
+                      </p>
+                      <p className="text-[10px] text-muted">
+                        Equity {formatMetric(position.equityQuote)} • Free{" "}
+                        {formatMetric(position.freeCollateralQuote)} • Buffer{" "}
+                        {formatMetric(position.liquidationBufferPct)}%
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        "rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                        position.riskLevel === "critical"
+                          ? "border-red-500/40 bg-red-500/10 text-red-300"
+                          : position.riskLevel === "warning"
+                            ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+                      )}
+                    >
+                      {position.riskLevel}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                        (!tradingEnabled ||
+                          position.positionState !== "open") &&
+                          "opacity-60 pointer-events-none",
+                      )}
+                      onClick={() => openPerpReduceIntent(position)}
+                      type="button"
+                      disabled={
+                        !tradingEnabled || position.positionState !== "open"
+                      }
+                    >
+                      Reduce 25%
+                    </button>
+                    <button
+                      className={cn(
+                        BTN_SECONDARY,
+                        "h-6 rounded px-2 text-[10px] uppercase tracking-wider",
+                        (!tradingEnabled ||
+                          position.positionState !== "open") &&
+                          "opacity-60 pointer-events-none",
+                      )}
+                      onClick={() => openPerpCloseIntent(position)}
+                      type="button"
+                      disabled={
+                        !tradingEnabled || position.positionState !== "open"
+                      }
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
           <div className="rounded border border-border bg-subtle p-2">
             <div className="flex items-center justify-between gap-2">

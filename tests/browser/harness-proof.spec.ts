@@ -5,6 +5,8 @@ import { expect, type Page, test } from "@playwright/test";
 const REQUEST_ID = "execreq_proof_001";
 const RECEIPT_ID = "execrcpt_proof_001";
 const SIGNATURE = "5N9B8fQ1harnessProofReceiptSignature1111111111111111111111";
+const PERP_REQUEST_ID = "execreq_perp_proof_001";
+const PERP_RECEIPT_ID = "execrcpt_perp_proof_001";
 
 function screenshotPath(name: string): string | null {
   const screenshotDir = process.env.PLAYWRIGHT_PROOF_SCREENSHOT_DIR?.trim();
@@ -160,6 +162,91 @@ test.beforeEach(async ({ page }) => {
       }),
     });
   });
+
+  await page.route("**/api/terminal/perp-preview", async (route) => {
+    const payload = (route.request().postDataJSON() ?? {}) as {
+      instrumentId?: string;
+      side?: string;
+      orderType?: string;
+      timeInForce?: string;
+      quantityAtomic?: string;
+      collateralAtomic?: string;
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        preview: {
+          venueKey: "drift",
+          provider: "drift",
+          instrumentId: String(payload.instrumentId ?? "SOL-PERP"),
+          instrumentLabel: "SOL-PERP",
+          side: String(payload.side ?? "long"),
+          orderType: String(payload.orderType ?? "market"),
+          timeInForce: String(payload.timeInForce ?? "gtc"),
+          reduceOnly: false,
+          quantityAtomic: String(payload.quantityAtomic ?? "2"),
+          quantityUi: "2.0",
+          collateralAtomic: String(payload.collateralAtomic ?? "100000000"),
+          collateralUi: "100.0",
+          limitPriceAtomic: null,
+          triggerPriceAtomic: null,
+          markPrice: 153.3,
+          oraclePrice: 153.25,
+          oracle: "oracle-sol",
+          oracleSource: "pyth",
+          fundingRate1hBps: 1.2,
+          initialMarginRatio: 0.1,
+          maintenanceMarginRatio: 0.05,
+          swiftSupported: false,
+          currentSignedQuantityAtomic: "0",
+          currentSignedQuantityUi: "0.0",
+          currentCollateralAtomic: "0",
+          currentCollateralUi: "0.0",
+          currentAverageEntryPrice: null,
+          projectedSignedQuantityAtomic: "2",
+          projectedSignedQuantityUi: "2.0",
+          projectedCollateralAtomic: "100000000",
+          projectedCollateralUi: "100.0",
+          projectedNotionalQuote: 306.6,
+          requiredInitialMarginQuote: 30.66,
+          requiredMaintenanceQuote: 15.33,
+          projectedLeverage: 3.066,
+          projectedLiquidationBufferPct: 84.67,
+          projectedRiskLevel: "low",
+          routeSummary: "Drift Perps",
+          notes: ["MARKET GTC", "exposure-expanding", "paper-mode only"],
+        },
+      }),
+    });
+  });
+
+  await page.route("**/api/terminal/perp-orders", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        result: {
+          requestId: PERP_REQUEST_ID,
+          status: "finalized",
+          terminal: true,
+          updatedAt: "2026-03-06T20:46:00.000Z",
+          receiptId: PERP_RECEIPT_ID,
+          provider: "drift",
+          instrumentId: "SOL-PERP",
+          instrumentLabel: "SOL-PERP",
+          side: "long",
+          quantityAtomic: "2",
+          collateralAtomic: "100000000",
+          markPrice: 153.3,
+          oraclePrice: 153.25,
+          fundingRate1hBps: 1.2,
+        },
+      }),
+    });
+  });
 });
 
 test("login page renders", async ({ page }) => {
@@ -235,6 +322,24 @@ test("proof route exercises market render, trade validation, and receipt drilldo
   await expect(inspector.getByText(`signature: ${SIGNATURE}`)).toBeVisible();
   await expect(inspector.getByText(/venue Jupiter/i)).toBeVisible();
   await captureCheckpoint(page, "receipt-drawer.png");
+  await page.getByRole("button", { name: "Close execution inspector" }).click();
+  await expect(inspector).toBeHidden();
+
+  await page.getByTestId("proof-open-perp").click();
+  await expect(page.getByTestId("perp-ticket-modal")).toBeVisible();
+  await expect(page.getByTestId("perp-ticket-preview-route")).toContainText(
+    "Drift Perps",
+  );
+  await expect(page.getByTestId("perp-ticket-preview-risk")).toContainText(
+    "LOW",
+  );
+  await captureCheckpoint(page, "perp-proof.png");
+
+  await page.getByTestId("perp-ticket-submit").click();
+  await expect(page.getByTestId("proof-perp-completion")).toContainText(
+    PERP_REQUEST_ID,
+  );
+  await captureCheckpoint(page, "perp-complete.png");
 });
 
 test("runtime operator proof shows deployment detail and control affordances", async ({
