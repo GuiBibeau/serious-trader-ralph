@@ -515,8 +515,8 @@ function resolveCanaryPairContext(
     assetKey,
     pairSymbol,
     adapterKey,
-      inputMint,
-      outputMint: effectiveOutputMint,
+    inputMint,
+    outputMint: effectiveOutputMint,
   };
 }
 
