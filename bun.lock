@@ -82,6 +82,7 @@
     },
   },
   "patchedDependencies": {
+    "@drift-labs/sdk@2.159.0-beta.2": "patches/@drift-labs%2Fsdk@2.159.0-beta.2.patch",
     "@orca-so/common-sdk@0.7.0": "patches/@orca-so%2Fcommon-sdk@0.7.0.patch",
   },
   "packages": {

@@ -1998,14 +1998,50 @@ async function runDriftVenueSmoke(input: {
     });
   }
 
-  const smokeIntent = driftLive.buildDriftSmokeIntent({
-    instrumentId,
-    side: "long",
-    targetNotionalUsd: input.targetNotionalUsd,
-    referencePrice:
-      preview.funding?.markPrice ?? preview.funding?.oraclePrice ?? null,
-    collateralAtomic: "5000000",
-  });
+  const referencePrice =
+    preview.funding?.markPrice ?? preview.funding?.oraclePrice ?? null;
+  if (referencePrice === null) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "strategy-lab-readiness-canary-quote-failed",
+        errorMessage:
+          "strategy-lab-readiness-canary-drift-reference-price-unavailable",
+        metadata: {
+          submissionPath: input.submissionPath,
+          driftPreview: asJsonObject(preview),
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
+  let smokeIntent: ReturnType<typeof driftLive.buildDriftSmokeIntent>;
+  try {
+    smokeIntent = driftLive.buildDriftSmokeIntent({
+      instrumentId,
+      side: "long",
+      targetNotionalUsd: input.targetNotionalUsd,
+      referencePrice,
+      collateralAtomic: "5000000",
+    });
+  } catch (error) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "strategy-lab-readiness-canary-quote-failed",
+        errorMessage: executionErrorMessage(error),
+        metadata: {
+          submissionPath: input.submissionPath,
+          driftPreview: asJsonObject(preview),
+          preflightSnapshot,
+        },
+      },
+    });
+  }
+
   const collateralAtomic = smokeIntent.collateralAtomic ?? "5000000";
   const policy = normalizePolicy({
     allowedMints: [input.context.inputMint, input.context.outputMint],

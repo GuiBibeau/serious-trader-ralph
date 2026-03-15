@@ -338,4 +338,73 @@ describe("worker Drift perp execution adapter", () => {
     expect(simulateCommitments).toEqual(["confirmed"]);
     expect(preflightCommitments).toEqual(["confirmed"]);
   });
+
+  test("preserves a landed live result when the post-submit snapshot read fails", async () => {
+    const result = await executeDriftPerpOrder(
+      {
+        env: {
+          RPC_ENDPOINT: "https://rpc.test",
+        } as Env,
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        policy: normalizePolicy({ commitment: "confirmed" }),
+        rpc: {
+          sendTransactionBase64: async () => "sig-order",
+          confirmSignature: async () => ({
+            ok: true,
+            status: "confirmed" as const,
+          }),
+        } as never,
+        jupiter: {} as never,
+        drift: {
+          swiftConfigured: () => false,
+          describePerpIntent: async () => buildPreview(),
+          buildSyntheticQuote: () => ({
+            inputMint: "SOL-PERP",
+            outputMint: "SOL-PERP",
+            inAmount: "250000",
+            outAmount: "1000000",
+            priceImpactPct: 0,
+            routePlan: [{ poolId: "SOL-PERP", swapInfo: { label: "Drift" } }],
+          }),
+        } as never,
+        privyWalletId: "wallet_strategy_lab",
+        intent: buildIntent(),
+        log: () => {},
+      },
+      {
+        prepareDriftLivePerpOrder: async () => ({
+          marketIndex: 2,
+          userAccountAddress: "drift-user-account",
+          spotCollateralMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          setupAction: null,
+          setupAmountAtomic: null,
+          setupTransactionBase64: null,
+          orderTransactionBase64: "order-tx",
+          lastValidBlockHeight: 99,
+          snapshotBefore: null,
+        }),
+        readDriftLiveAccountSnapshot: async () => {
+          throw new Error("snapshot-rpc-temporary-failure");
+        },
+        signTransactionWithPrivyById: async (_env, _walletId, transaction) =>
+          `signed:${transaction}`,
+      },
+    );
+
+    expect(result.status).toBe("confirmed");
+    expect(result.signature).toBe("sig-order");
+    expect(result.executionMeta?.classification).toBe("confirmed");
+    expect(result.executionMeta?.lifecycle?.notes).toContain(
+      "snapshotReadError:snapshot-rpc-temporary-failure",
+    );
+    expect(
+      (
+        result.executionMeta as
+          | { driftAccount?: { snapshotReadError?: string | null } }
+          | undefined
+      )?.driftAccount?.snapshotReadError,
+    ).toBe("snapshot-rpc-temporary-failure");
+  });
 });

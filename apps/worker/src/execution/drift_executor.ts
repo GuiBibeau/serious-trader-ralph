@@ -441,14 +441,21 @@ export async function executeDriftPerpOrder(
     plan.orderTransactionBase64,
   );
   const orderResult = await submitSignedTransaction(signedOrder);
-  const snapshotAfter =
-    orderResult.signature === null
-      ? null
-      : await readLiveAccountSnapshot({
-          rpcEndpoint,
-          walletPublicKey: input.intent.wallet,
-          instrumentId: preview.instrument.marketName,
-        });
+  let snapshotAfter: Awaited<ReturnType<ReadDriftLiveAccountSnapshot>> | null =
+    null;
+  let snapshotReadError: string | null = null;
+  if (orderResult.signature !== null) {
+    try {
+      snapshotAfter = await readLiveAccountSnapshot({
+        rpcEndpoint,
+        walletPublicKey: input.intent.wallet,
+        instrumentId: preview.instrument.marketName,
+      });
+    } catch (error) {
+      snapshotReadError =
+        error instanceof Error ? error.message : String(error ?? "unknown");
+    }
+  }
   const afterDirection = snapshotAfter?.positionDirection ?? null;
   const classification =
     orderResult.status === "finalized"
@@ -482,6 +489,9 @@ export async function executeDriftPerpOrder(
           `marketIndex:${plan.marketIndex}`,
           ...(setupSignature ? [`setupSignature:${setupSignature}`] : []),
           ...(setupAction ? [`setupAction:${setupAction}`] : []),
+          ...(snapshotReadError
+            ? [`snapshotReadError:${snapshotReadError}`]
+            : []),
         ],
       }),
       referencePrice: {
@@ -500,6 +510,7 @@ export async function executeDriftPerpOrder(
         after: snapshotAfter,
         setupSignature,
         setupAction,
+        snapshotReadError,
       } as Record<string, unknown>,
     },
   };
