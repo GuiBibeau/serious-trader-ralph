@@ -807,6 +807,9 @@ export async function POST(request: Request) {
         payload.smokeIntentFamily === "conditional_spot_order"
           ? { smokeIntentFamily: payload.smokeIntentFamily }
           : {}),
+        ...(payload.smokeOrderSide === "buy" || payload.smokeOrderSide === "sell"
+          ? { smokeOrderSide: payload.smokeOrderSide }
+          : {}),
         ...(typeof payload.tightenOnFailure === "boolean"
           ? { tightenOnFailure: payload.tightenOnFailure }
           : {}),
