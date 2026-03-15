@@ -1,0 +1,24 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "raydium",
+  "targetState": "limited_live_ready",
+  "requestedBy": "operator@example.com",
+  "venueKey": "raydium",
+  "assetKey": "SOL",
+  "pairSymbol": "SOL/USDC",
+  "adapterKey": "raydium",
+  "evidenceRefs": [
+    {
+      "kind": "paper_scorecard",
+      "ref": "scorecard:raydium_sol_usdc_paper"
+    },
+    {
+      "kind": "bounded_canary_plan",
+      "ref": "plan:raydium_sol_usdc_live_smoke"
+    }
+  ],
+  "metadata": {
+    "issueNumber": 413,
+    "notes": "Bounded venue readiness evaluation ahead of venue-specific live smoke proof."
+  }
+}

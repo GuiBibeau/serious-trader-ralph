@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import {
+  listRuntimeVenueProgramMatrix,
+  RUNTIME_VENUE_PROGRAM_NEXT_ISSUES,
+} from "../../terminal/runtime/program-matrix";
 import { RuntimeOperatorView } from "../../terminal/runtime/runtime-operator-view";
 import type { RuntimeOperatorApiPayload } from "../../terminal/runtime/types";
 
@@ -145,6 +149,10 @@ function buildPayload(selectedDeploymentId: string): RuntimeOperatorApiPayload {
         ],
       },
       error: null,
+    },
+    program: {
+      matrix: listRuntimeVenueProgramMatrix(),
+      nextIssueOrder: [...RUNTIME_VENUE_PROGRAM_NEXT_ISSUES],
     },
     selectedDeploymentId: deployment.deploymentId,
     detail: {

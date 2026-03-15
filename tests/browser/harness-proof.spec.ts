@@ -251,6 +251,14 @@ test("runtime operator proof shows deployment detail and control affordances", a
       name: /Latest hypotheses, sources, experiments, and evidence bundles/i,
     }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: /Readiness targets, canary posture, and disable drills by venue/i,
+    }),
+  ).toBeVisible();
+  await expect(page.getByTestId("runtime-program-jupiter")).toContainText(
+    "Jupiter",
+  );
   await captureCheckpoint(page, "runtime-operator-home.png");
 
   await page.getByRole("button", { name: /mean_reversion/i }).click();

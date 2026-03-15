@@ -3,6 +3,9 @@ import type {
   RuntimeLedgerSnapshot,
   RuntimeRunRecord,
 } from "../../../lib/runtime-contracts";
+import type { RuntimeOperatorProgramMatrixEntry } from "./program-matrix";
+
+export type { RuntimeOperatorProgramMatrixEntry } from "./program-matrix";
 
 export type RuntimeControlAction = "pause" | "resume" | "kill";
 export type RuntimeSubjectKind = "venue" | "asset";
@@ -97,6 +100,10 @@ export type RuntimeOperatorDetail = {
 export type RuntimeOperatorApiPayload = {
   ok: boolean;
   runtime: RuntimeOperatorSnapshot;
+  program: {
+    matrix: RuntimeOperatorProgramMatrixEntry[];
+    nextIssueOrder: number[];
+  };
   selectedDeploymentId: string | null;
   detail: RuntimeOperatorDetail | null;
   detailError: string | null;
