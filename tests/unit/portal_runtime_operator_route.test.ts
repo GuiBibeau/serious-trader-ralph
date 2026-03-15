@@ -229,6 +229,10 @@ describe("portal runtime operator route", () => {
               health: {
                 status: "healthy",
               },
+              routes: {
+                health: "/api/internal/runtime/health",
+                deployments: "/api/internal/runtime/deployments",
+              },
               deployments: [runtimeDeploymentFixture()],
               controls: {
                 enabled: true,
@@ -473,6 +477,10 @@ describe("portal runtime operator route", () => {
       selectedDeploymentId: "runtime_canary_live_dca",
       runtime: {
         ok: true,
+        routes: {
+          health: "/api/internal/runtime/health",
+          deployments: "/api/internal/runtime/deployments",
+        },
         deployments: [
           {
             deploymentId: "runtime_canary_live_dca",
