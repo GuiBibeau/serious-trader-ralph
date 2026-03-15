@@ -94,6 +94,7 @@ export type RuntimeAdminSnapshot = {
     serviceName: string;
   };
   health: Record<string, unknown> | null;
+  routes: Record<string, unknown> | null;
   deployments: RuntimeDeploymentRecord[];
   leaderboard: Record<string, unknown> | null;
   error: string | null;
@@ -2086,6 +2087,7 @@ export async function readRuntimeAdminSnapshot(
       source: "worker",
       integration,
       health: null,
+      routes: null,
       deployments: [],
       leaderboard: null,
       error: runtimeErrorFromPayload(
@@ -2100,6 +2102,9 @@ export async function readRuntimeAdminSnapshot(
     : integration.stubModeEnabled
       ? createRuntimeHealthFixture()
       : null;
+  const routes = isRecord(healthResult.payload.routes)
+    ? healthResult.payload.routes
+    : null;
   const source =
     readStringOrNull(healthResult.payload.source) ??
     (integration.stubModeEnabled ? "stub" : "runtime-rs");
@@ -2115,6 +2120,7 @@ export async function readRuntimeAdminSnapshot(
       source,
       integration,
       health,
+      routes,
       deployments: [],
       leaderboard: isRecord(leaderboardResult.payload.leaderboard)
         ? leaderboardResult.payload.leaderboard
@@ -2133,6 +2139,7 @@ export async function readRuntimeAdminSnapshot(
     source: readStringOrNull(deploymentsResult.payload.source) ?? source,
     integration,
     health,
+    routes,
     deployments: parseRuntimeDeploymentList(
       deploymentsResult.payload.deployments,
     ),

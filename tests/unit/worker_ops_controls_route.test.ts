@@ -287,6 +287,9 @@ describe("worker ops controls routes", () => {
               maxFeatureAgeMs: expect.any(Number),
             },
           },
+          routes: {
+            health: "/api/internal/runtime/health",
+          },
           deployments: [
             {
               deploymentId: "deployment_shadow_fixture",

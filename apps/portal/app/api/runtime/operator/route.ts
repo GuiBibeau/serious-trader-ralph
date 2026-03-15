@@ -235,6 +235,7 @@ function normalizeRuntimeSnapshot(payload: Record<string, unknown>) {
     source: readString(runtime.source) ?? "worker",
     integration: isRecord(runtime.integration) ? runtime.integration : {},
     health: isRecord(runtime.health) ? runtime.health : null,
+    routes: isRecord(runtime.routes) ? runtime.routes : null,
     deployments: parseDeployments(runtime.deployments),
     controls: normalizeControls(runtime.controls),
     canary: isRecord(runtime.canary) ? runtime.canary : null,

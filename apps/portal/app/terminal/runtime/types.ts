@@ -37,6 +37,7 @@ export type RuntimeOperatorSnapshot = {
   source: string;
   integration: Record<string, unknown>;
   health: Record<string, unknown> | null;
+  routes: Record<string, unknown> | null;
   deployments: RuntimeDeploymentRecord[];
   controls: RuntimeOperatorControls;
   canary: Record<string, unknown> | null;
