@@ -96,6 +96,7 @@ type ExecuteIntentInputBase = {
   env: Env;
   venueKey?: string;
   runtimeMode?: RuntimeMode;
+  experimentalLiveModeBypass?: "venue_tx_smoke";
   requireVenueRouting?: boolean;
   subjectControlBypassReason?: "strategy_lab_readiness_canary";
   execution?: ExecutionConfig;
@@ -129,6 +130,7 @@ export type ExecuteSwapInput = {
   env: Env;
   venueKey?: string;
   runtimeMode?: RuntimeMode;
+  experimentalLiveModeBypass?: "venue_tx_smoke";
   requireVenueRouting?: boolean;
   subjectControlBypassReason?: "strategy_lab_readiness_canary";
   execution?: ExecutionConfig;

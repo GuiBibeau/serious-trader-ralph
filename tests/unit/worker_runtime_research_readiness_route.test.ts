@@ -311,6 +311,104 @@ describe("worker runtime research readiness routes", () => {
     }
   });
 
+  test("allows bounded Raydium venue smoke even though the venue is not generally live-enabled", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "raydium",
+              requestedBy: "codex",
+              venueKey: "raydium",
+              assetKey: "SOL",
+              pairSymbol: "SOL/USDC",
+              proofMode: "venue_tx_smoke",
+              tightenOnFailure: true,
+              failureControlMode: "disable_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        run: {
+          venueKey: string;
+          metadata?: Record<string, unknown>;
+          evidenceRefs: Array<{ kind: string }>;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.status).toBe("success");
+      expect(payload.run.venueKey).toBe("raydium");
+      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+      expect(payload.run.metadata?.proofMode).toBe("venue_tx_smoke");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("allows bounded Orca venue smoke even though the venue is not generally live-enabled", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "orca",
+              requestedBy: "codex",
+              venueKey: "orca",
+              assetKey: "SOL",
+              pairSymbol: "SOL/USDC",
+              proofMode: "venue_tx_smoke",
+              tightenOnFailure: true,
+              failureControlMode: "disable_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        run: {
+          venueKey: string;
+          metadata?: Record<string, unknown>;
+          evidenceRefs: Array<{ kind: string }>;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.status).toBe("success");
+      expect(payload.run.venueKey).toBe("orca");
+      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+      expect(payload.run.metadata?.proofMode).toBe("venue_tx_smoke");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("tightens the venue on tx smoke failure", async () => {
     const { env, sqlite } = createOpsEnv({
       STRATEGY_LAB_READINESS_CANARY_DAILY_CAP_USD: "1",

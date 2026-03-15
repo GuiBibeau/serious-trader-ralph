@@ -166,4 +166,46 @@ describe("worker raydium execution adapter", () => {
     expect(result.signature).toBeNull();
     expect(result.executionMeta?.classification).toBe("error");
   });
+
+  test("passes the associated token account for non-SOL inputs", async () => {
+    const buildSwapTransactions = mock(
+      async (request: { inputAccount?: string; outputAccount?: string }) => {
+        expect(request.inputAccount).toBe(
+          "2Rjjtn1VxWg7oJn6ys5oNFxqwEv2QakUr4HBtizhi7zu",
+        );
+        expect(request.outputAccount).toBeUndefined();
+        return {
+          envelope: { success: true, data: [{ transaction: "unsigned-1" }] },
+          transactions: ["unsigned-1"],
+          computeUnitPriceMicroLamports: "10000",
+        };
+      },
+    );
+
+    const result = await executeRaydiumSwap(
+      {
+        env: {} as Env,
+        policy: normalizePolicy({ dryRun: false, simulateOnly: true }),
+        rpc: {
+          simulateTransactionBase64: mock(async () => ({ err: null })),
+        } as never,
+        jupiter: {} as never,
+        raydium: { buildSwapTransactions } as never,
+        quoteResponse: {
+          ...buildQuoteResponse(),
+          inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          outputMint: "So11111111111111111111111111111111111111112",
+        },
+        userPublicKey: "BxWgMM6mmfskJyN8r8jWdSb5uSmqkCsqxHjb97RmjcQk",
+        privyWalletId: "wallet-id",
+        log: () => {},
+      },
+      {
+        signTransactionWithPrivyById: mock(async () => "signed-1"),
+      },
+    );
+
+    expect(result.status).toBe("simulated");
+    expect(buildSwapTransactions).toHaveBeenCalledTimes(1);
+  });
 });

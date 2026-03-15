@@ -737,6 +737,47 @@ describe("worker execution router", () => {
     ).rejects.toThrow(/runtime-venue-mode-not-supported:raydium:live/);
   });
 
+  test("allows Raydium live venue smoke only through the bounded readiness bypass", async () => {
+    const { env, sqlite } = await createLiveRouterEnv();
+    try {
+      const result = await executeSwapViaRouter({
+        env,
+        venueKey: "raydium",
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        requireVenueRouting: true,
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        execution: { adapter: "raydium" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+          raydiumQuoteEnvelope: {
+            id: "quote-1",
+            success: true,
+            data: {
+              inputMint: "A",
+              outputMint: "B",
+              inputAmount: "1",
+              outputAmount: "2",
+            },
+          },
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      });
+
+      expect(result.status).toBe("dry_run");
+      expect(result.executionMeta?.route).toBe("raydium");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("fails closed when Orca spot swaps are requested in live mode", async () => {
     await expect(
       executeSwapViaRouter({
@@ -761,6 +802,40 @@ describe("worker execution router", () => {
         log: () => {},
       }),
     ).rejects.toThrow(/runtime-venue-mode-not-supported:orca:live/);
+  });
+
+  test("allows Orca live venue smoke only through the bounded readiness bypass", async () => {
+    const { env, sqlite } = await createLiveRouterEnv();
+    try {
+      const result = await executeSwapViaRouter({
+        env,
+        venueKey: "orca",
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        requireVenueRouting: true,
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        execution: { adapter: "orca" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        quoteResponse: {
+          inputMint: "A",
+          outputMint: "B",
+          inAmount: "1",
+          outAmount: "2",
+          orcaPoolSnapshot: {
+            address: "orca-pool-1",
+          },
+        },
+        userPublicKey: "11111111111111111111111111111111",
+        log: () => {},
+      });
+
+      expect(result.status).toBe("dry_run");
+      expect(result.executionMeta?.route).toBe("orca");
+    } finally {
+      sqlite.close();
+    }
   });
 
   test("fails closed when adapter is not allowlisted for the runtime venue", async () => {

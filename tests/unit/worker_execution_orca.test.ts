@@ -119,6 +119,72 @@ describe("worker orca execution adapter", () => {
     expect(confirmSignature).toHaveBeenCalledTimes(1);
   });
 
+  test("uses confirmed preflight when the policy commitment is finalized", async () => {
+    const buildSwapTransaction = mock(async () => ({
+      unsignedTransactionBase64: "unsigned",
+      additionalSignerCount: 1,
+      lastValidBlockHeight: 42,
+    }));
+    const simulateTransactionBase64 = mock(async () => ({ err: null }));
+    const sendTransactionBase64 = mock(async () => "sig-finalized");
+    const confirmSignature = mock(async () => ({
+      ok: true,
+      status: "finalized",
+    }));
+
+    const result = await executeOrcaSwap(
+      {
+        env: {} as Env,
+        policy: normalizePolicy({ commitment: "finalized" }),
+        execution: { params: { lane: "safe" } },
+        rpc: {
+          simulateTransactionBase64,
+          sendTransactionBase64,
+          confirmSignature,
+        } as never,
+        jupiter: {} as never,
+        orca: { buildSwapTransaction } as never,
+        quoteResponse: buildQuoteResponse(),
+        userPublicKey: "11111111111111111111111111111111",
+        privyWalletId: "wallet-id",
+        log: () => {},
+      },
+      {
+        signTransactionWithPrivyById: mock(async () => "signed"),
+        evaluateSafeLaneTransaction: mock(() => ({
+          ok: true,
+          profile: {
+            txSizeBytes: 512,
+            instructionCount: 4,
+            accountKeyCount: 12,
+            addressTableLookupCount: 0,
+            signatureCount: 2,
+            computeUnitLimit: null,
+            computeUnitPriceMicroLamports: null,
+            estimatedFeeLamports: "10000",
+          },
+          limits: {
+            maxTxBytes: 1232,
+            maxInstructionCount: 24,
+            maxAccountKeys: 96,
+            maxComputeUnitLimit: 1_400_000,
+            maxEstimatedFeeLamports: "2000000",
+          },
+        })),
+      },
+    );
+
+    expect(result.status).toBe("finalized");
+    expect(simulateTransactionBase64).toHaveBeenCalledWith("signed", {
+      commitment: "confirmed",
+      sigVerify: true,
+    });
+    expect(sendTransactionBase64).toHaveBeenCalledWith("signed", {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+    });
+  });
+
   test("fails closed when Orca simulation fails", async () => {
     const buildSwapTransaction = mock(async () => ({
       unsignedTransactionBase64: "unsigned",

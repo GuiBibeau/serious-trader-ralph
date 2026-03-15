@@ -1,3 +1,10 @@
+import { BN } from "@coral-xyz/anchor";
+import { Percentage, ReadOnlyWallet } from "@orca-so/common-sdk";
+import {
+  buildWhirlpoolClient,
+  swapQuoteByInputToken,
+  WhirlpoolContext,
+} from "@orca-so/whirlpools-sdk";
 import {
   Connection,
   PublicKey,
@@ -97,10 +104,6 @@ export type OrcaSdkFacade = {
     walletPublicKey: string;
   }): Promise<OrcaBuiltSwapTransaction>;
 };
-
-async function importOrcaRuntimeModule<T>(specifier: string): Promise<T> {
-  return (await import(specifier)) as T;
-}
 
 function normalizeOrcaPath(pathname: string): string {
   return pathname.startsWith("/") ? pathname : `/${pathname}`;
@@ -292,20 +295,6 @@ export function createOrcaSdkFacade(): OrcaSdkFacade {
     slippageBps: number;
     walletPublicKey: string;
   }) {
-    const [{ BN }, { Percentage, ReadOnlyWallet }, whirlpoolSdk] =
-      await Promise.all([
-        importOrcaRuntimeModule<typeof import("@coral-xyz/anchor")>(
-          "@coral-xyz/anchor",
-        ),
-        importOrcaRuntimeModule<typeof import("@orca-so/common-sdk")>(
-          "@orca-so/common-sdk",
-        ),
-        importOrcaRuntimeModule<typeof import("@orca-so/whirlpools-sdk")>(
-          "@orca-so/whirlpools-sdk",
-        ),
-      ]);
-    const { buildWhirlpoolClient, swapQuoteByInputToken, WhirlpoolContext } =
-      whirlpoolSdk;
     const connection = new Connection(input.rpcEndpoint, "confirmed");
     const wallet = new ReadOnlyWallet(new PublicKey(input.walletPublicKey));
     const ctx = WhirlpoolContext.from(connection, wallet);
@@ -377,7 +366,10 @@ export class OrcaClient {
       sdk?: OrcaSdkFacade;
     },
   ) {
-    this.fetchImpl = deps?.fetch ?? fetch;
+    const fetchImpl = deps?.fetch;
+    this.fetchImpl = fetchImpl
+      ? (input, init) => fetchImpl(input, init)
+      : (input, init) => fetch(input, init);
     this.sdk = deps?.sdk ?? createOrcaSdkFacade();
   }
 
