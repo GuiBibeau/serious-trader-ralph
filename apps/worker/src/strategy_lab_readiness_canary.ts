@@ -35,7 +35,6 @@ import {
   readOpsControlSnapshot,
 } from "./ops_controls";
 import { evaluateOracleReferencePriceGuard } from "./oracle_reference";
-import type { OpenBookClient } from "./openbook";
 import type { OrcaClient } from "./orca";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import {
@@ -613,7 +612,10 @@ function computeOpenBookQuantityAtomic(input: {
   }
   const targetNotionalAtomic = parseUsdAtomic(input.targetNotionalUsd);
   const priceAtomic = BigInt(
-    Math.max(1, Math.round(referencePriceUi * 10 ** input.market.quoteDecimals)),
+    Math.max(
+      1,
+      Math.round(referencePriceUi * 10 ** input.market.quoteDecimals),
+    ),
   );
   const targetQuantityAtomic = ceilDiv(
     targetNotionalAtomic * pow10(input.market.baseDecimals),
@@ -623,9 +625,10 @@ function computeOpenBookQuantityAtomic(input: {
     input.market.minOrderSizeUi,
     input.market.baseDecimals,
   );
-  return (targetQuantityAtomic > minOrderAtomic
-    ? targetQuantityAtomic
-    : minOrderAtomic
+  return (
+    targetQuantityAtomic > minOrderAtomic
+      ? targetQuantityAtomic
+      : minOrderAtomic
   ).toString();
 }
 
@@ -921,9 +924,10 @@ async function runOpenBookVenueTxSmoke(input: {
   jupiter: JupiterClient;
 }): Promise<RuntimeResearchReadinessCanaryWorkflowResult> {
   const smokeOrderSide = readSmokeOrderSide(input.request);
-  const openbook = new (
-    await import("./openbook")
-  ).OpenBookClient(String(input.env.RPC_ENDPOINT ?? "").trim(), undefined);
+  const openbook = new (await import("./openbook")).OpenBookClient(
+    String(input.env.RPC_ENDPOINT ?? "").trim(),
+    undefined,
+  );
   const summaryBefore = await openbook.listOpenOrders({
     walletPublicKey: input.wallet.walletAddress,
     instrumentId: input.context.pairSymbol,
@@ -1155,7 +1159,9 @@ async function runOpenBookVenueTxSmoke(input: {
   });
   const actualOutputAtomic =
     input.context.outputMint === SOL_MINT
-      ? afterBalances.outputAtomic - beforeBalances.outputAtomic + totalFeeLamports
+      ? afterBalances.outputAtomic -
+        beforeBalances.outputAtomic +
+        totalFeeLamports
       : afterBalances.outputAtomic - beforeBalances.outputAtomic;
   const terminalLifecycleReached =
     openOrderAfterFinal === undefined && cancelError === null;
@@ -1436,9 +1442,9 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
     context.venueKey === "raydium" ? new RaydiumClient() : undefined;
   const orca =
     context.venueKey === "orca"
-      ? new (
-          await import("./orca")
-        ).OrcaClient(String(input.env.RPC_ENDPOINT ?? "").trim())
+      ? new (await import("./orca")).OrcaClient(
+          String(input.env.RPC_ENDPOINT ?? "").trim(),
+        )
       : undefined;
   const smokeIntentFamily = readSmokeIntentFamily(input.request);
 

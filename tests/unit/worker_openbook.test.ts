@@ -3,8 +3,8 @@ import { PublicKey } from "@solana/web3.js";
 import {
   buildOpenBookMarketAccountFilters,
   buildOpenBookSyntheticQuote,
-  OpenBookClient,
   OPENBOOK_MARKET_ACCOUNT_LAYOUT,
+  OpenBookClient,
   resolveOpenBookOrderRequest,
 } from "../../apps/worker/src/openbook";
 
