@@ -72,11 +72,18 @@ export type RuntimeResearchReadinessCanaryRequest = {
   triggerSource?: "manual" | "promotion";
   targetNotionalUsd?: string;
   proofMode?: "readiness_canary" | "venue_tx_smoke";
+  smokeIntentFamily?: RuntimeResearchVenueTxSmokeIntentFamily;
+  smokeOrderSide?: "buy" | "sell";
   tightenOnFailure?: boolean;
   failureControlMode?: "disable_live" | "engage_kill_switch";
   killDrillNotes?: string[];
   metadata?: Record<string, unknown>;
 };
+
+export type RuntimeResearchVenueTxSmokeIntentFamily =
+  | "spot_swap"
+  | "conditional_spot_order"
+  | "clob_order";
 
 type ReadinessContext = {
   subjectKind: "venue" | "asset";
@@ -359,6 +366,27 @@ export function parseRuntimeResearchReadinessCanaryRequest(
   ) {
     throw new Error("invalid-runtime-research-readiness-canary-proof-mode");
   }
+  const smokeIntentFamilyValue = readOptionalString(input.smokeIntentFamily);
+  if (
+    smokeIntentFamilyValue &&
+    smokeIntentFamilyValue !== "spot_swap" &&
+    smokeIntentFamilyValue !== "conditional_spot_order" &&
+    smokeIntentFamilyValue !== "clob_order"
+  ) {
+    throw new Error(
+      "invalid-runtime-research-readiness-canary-smoke-intent-family",
+    );
+  }
+  const smokeOrderSideValue = readOptionalString(input.smokeOrderSide);
+  if (
+    smokeOrderSideValue &&
+    smokeOrderSideValue !== "buy" &&
+    smokeOrderSideValue !== "sell"
+  ) {
+    throw new Error(
+      "invalid-runtime-research-readiness-canary-smoke-order-side",
+    );
+  }
   const failureControlModeValue = readOptionalString(input.failureControlMode);
   if (
     failureControlModeValue &&
@@ -372,6 +400,16 @@ export function parseRuntimeResearchReadinessCanaryRequest(
   const proofMode =
     proofModeValue === "readiness_canary" || proofModeValue === "venue_tx_smoke"
       ? proofModeValue
+      : undefined;
+  const smokeIntentFamily =
+    smokeIntentFamilyValue === "spot_swap" ||
+    smokeIntentFamilyValue === "conditional_spot_order" ||
+    smokeIntentFamilyValue === "clob_order"
+      ? smokeIntentFamilyValue
+      : undefined;
+  const smokeOrderSide =
+    smokeOrderSideValue === "buy" || smokeOrderSideValue === "sell"
+      ? smokeOrderSideValue
       : undefined;
   const failureControlMode =
     failureControlModeValue === "disable_live" ||
@@ -400,6 +438,8 @@ export function parseRuntimeResearchReadinessCanaryRequest(
       ? { targetNotionalUsd: readOptionalString(input.targetNotionalUsd) }
       : {}),
     ...(proofMode ? { proofMode } : {}),
+    ...(smokeIntentFamily ? { smokeIntentFamily } : {}),
+    ...(smokeOrderSide ? { smokeOrderSide } : {}),
     ...(readOptionalBoolean(input.tightenOnFailure) !== undefined
       ? { tightenOnFailure: readOptionalBoolean(input.tightenOnFailure) }
       : {}),
@@ -872,6 +912,26 @@ export function buildRuntimeResearchReadinessCanaryMarkdown(
   if (submissionPath) {
     lines.push(
       `- Submission path: ${readOptionalString(submissionPath.adapter) ?? "unknown adapter"} on ${readOptionalString(submissionPath.lane) ?? "unknown lane"}`,
+    );
+  }
+  if (proofMode === "venue_tx_smoke") {
+    lines.push(
+      `- Smoke intent: ${readOptionalString(metadata?.smokeIntentFamily) ?? "spot_swap"}`,
+    );
+  }
+  if (readOptionalString(metadata?.smokeOrderSide)) {
+    lines.push(
+      `- Smoke order side: ${readOptionalString(metadata?.smokeOrderSide)}`,
+    );
+  }
+  if (readOptionalString(metadata?.venueOrderId)) {
+    lines.push(
+      `- Venue order id: ${readOptionalString(metadata?.venueOrderId)}`,
+    );
+  }
+  if (readOptionalString(metadata?.cancelSignature)) {
+    lines.push(
+      `- Cancel signature: ${readOptionalString(metadata?.cancelSignature)}`,
     );
   }
 

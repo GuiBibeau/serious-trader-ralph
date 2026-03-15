@@ -2,9 +2,11 @@ import {
   buildRuntimeResearchReadinessCanaryMarkdown,
   buildRuntimeStrategyLabSubjectControlRecord,
   type RuntimeResearchReadinessCanaryRequest,
+  type RuntimeResearchVenueTxSmokeIntentFamily,
 } from "../../../src/runtime/research/readiness.js";
 import {
   requireRuntimeVenueCapability,
+  runtimeVenueSupportsIntentFamily,
   runtimeVenueSupportsMode,
 } from "../../../src/runtime/venues/catalog.js";
 import {
@@ -20,9 +22,11 @@ import {
 import { resolveExecutionLane } from "./execution/lane_resolver";
 import { evaluatePrivyRuntimeBalancePolicy } from "./execution/policy_engine";
 import {
+  executeIntentViaRouter,
   executeSwapViaRouter,
   resolveExecutionAdapterRegistration,
 } from "./execution/router";
+import { evaluateSafeLaneTransaction } from "./execution/safe_lane_policy";
 import { quoteSpotSwap } from "./execution/spot_venues";
 import type { JupiterQuoteResponse } from "./jupiter";
 import { JupiterClient } from "./jupiter";
@@ -31,9 +35,14 @@ import {
   readOpsControlSnapshot,
 } from "./ops_controls";
 import { evaluateOracleReferencePriceGuard } from "./oracle_reference";
-import { OrcaClient } from "./orca";
+import type { OpenBookClient } from "./openbook";
+import type { OrcaClient } from "./orca";
 import { enforcePolicy, normalizePolicy } from "./policy";
-import { createPrivySolanaWallet, getPrivyWalletAddressById } from "./privy";
+import {
+  createPrivySolanaWallet,
+  getPrivyWalletAddressById,
+  signTransactionWithPrivyById,
+} from "./privy";
 import { RaydiumClient } from "./raydium";
 import { SolanaRpc } from "./solana_rpc";
 import {
@@ -137,6 +146,43 @@ function readStringArray(value: unknown): string[] {
     .filter((entry): entry is string => Boolean(entry));
 }
 
+function readSmokeIntentFamily(
+  request: RuntimeResearchReadinessCanaryRequest | Record<string, unknown>,
+): RuntimeResearchVenueTxSmokeIntentFamily {
+  const raw =
+    "smokeIntentFamily" in request
+      ? readOptionalString(request.smokeIntentFamily)
+      : undefined;
+  if (raw === "conditional_spot_order") return "conditional_spot_order";
+  if (raw === "clob_order") return "clob_order";
+  return "spot_swap";
+}
+
+function readSmokeOrderSide(
+  request: RuntimeResearchReadinessCanaryRequest | Record<string, unknown>,
+): "buy" | "sell" {
+  const raw =
+    "smokeOrderSide" in request
+      ? readOptionalString(request.smokeOrderSide)
+      : undefined;
+  return raw === "sell" ? "sell" : "buy";
+}
+
+function pow10(exp: number): bigint {
+  return 10n ** BigInt(Math.max(0, Math.floor(exp)));
+}
+
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  if (denominator <= 0n) {
+    throw new Error("invalid-readiness-canary-denominator");
+  }
+  return (numerator + denominator - 1n) / denominator;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function readNumberEnv(
   value: unknown,
   fallback: number,
@@ -184,6 +230,15 @@ function formatUsdAtomic(value: bigint): string {
 function executionErrorMessage(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (value instanceof Error) return value.message.slice(0, 2_000);
+  if (isRecord(value)) {
+    const message = readOptionalString(value.message);
+    if (message) return message.slice(0, 2_000);
+    try {
+      return JSON.stringify(value).slice(0, 2_000);
+    } catch {
+      return null;
+    }
+  }
   const text = String(value).trim();
   return text ? text.slice(0, 2_000) : null;
 }
@@ -293,7 +348,14 @@ function allowsVenueTxSmokeLiveBypass(
   if (readProofMode(request) !== "venue_tx_smoke") {
     return false;
   }
-  return venueKey === "raydium" || venueKey === "orca";
+  const smokeIntentFamily = readSmokeIntentFamily(request);
+  if (smokeIntentFamily === "spot_swap") {
+    return venueKey === "raydium" || venueKey === "orca";
+  }
+  if (smokeIntentFamily === "clob_order") {
+    return venueKey === "openbook";
+  }
+  return false;
 }
 
 function readFailureControlMode(
@@ -375,6 +437,8 @@ function resolveDefaultPairForAsset(assetKey: string): string | null {
 function resolveCanaryPairContext(
   request: RuntimeResearchReadinessCanaryRequest,
 ): CanaryPairContext {
+  const smokeIntentFamily = readSmokeIntentFamily(request);
+  const smokeOrderSide = readSmokeOrderSide(request);
   const venueKey =
     request.venueKey ??
     (request.subjectKind === "venue" ? request.subjectKey : "jupiter");
@@ -398,6 +462,14 @@ function resolveCanaryPairContext(
 
   const outputMint =
     pair.baseMint === USDC_MINT ? pair.quoteMint : pair.baseMint;
+  const inputMint =
+    smokeIntentFamily === "clob_order" && smokeOrderSide === "sell"
+      ? outputMint
+      : USDC_MINT;
+  const effectiveOutputMint =
+    smokeIntentFamily === "clob_order" && smokeOrderSide === "sell"
+      ? USDC_MINT
+      : outputMint;
   const assetKey =
     request.assetKey ??
     (request.subjectKind === "asset"
@@ -409,6 +481,11 @@ function resolveCanaryPairContext(
 
   const capability = requireRuntimeVenueCapability(venueKey);
   const allowSmokeLiveBypass = allowsVenueTxSmokeLiveBypass(request, venueKey);
+  if (!runtimeVenueSupportsIntentFamily(capability, smokeIntentFamily)) {
+    throw new Error(
+      `strategy-lab-readiness-canary-intent-family-unsupported:${venueKey}:${smokeIntentFamily}`,
+    );
+  }
   if (!runtimeVenueSupportsMode(capability, "live") && !allowSmokeLiveBypass) {
     throw new Error(`strategy-lab-readiness-canary-venue-not-live:${venueKey}`);
   }
@@ -420,6 +497,7 @@ function resolveCanaryPairContext(
       return (
         registration !== null &&
         registration.venueKey === venueKey &&
+        registration.supportedIntentFamilies.includes(smokeIntentFamily) &&
         (registration.supportedModes.includes("live") || allowSmokeLiveBypass)
       );
     });
@@ -434,8 +512,8 @@ function resolveCanaryPairContext(
     assetKey,
     pairSymbol,
     adapterKey,
-    inputMint: USDC_MINT,
-    outputMint,
+    inputMint,
+    outputMint: effectiveOutputMint,
   };
 }
 
@@ -501,6 +579,128 @@ async function fetchCanaryQuote(input: {
     quoteResponse,
     quotedOutAtomic: quotedOutAtomic.toString(),
     minExpectedOutAtomic,
+  };
+}
+
+function parseUiDecimalToAtomic(value: string, decimals: number): bigint {
+  const normalized = value.trim();
+  const match = normalized.match(/^([0-9]+)(?:\.([0-9]+))?$/);
+  if (!match) {
+    throw new Error("openbook-ui-decimal-invalid");
+  }
+  const whole = BigInt(match[1] ?? "0");
+  const fraction = (match[2] ?? "").padEnd(decimals, "0").slice(0, decimals);
+  return whole * pow10(decimals) + BigInt(fraction || "0");
+}
+
+function computeOpenBookQuantityAtomic(input: {
+  targetNotionalUsd: string;
+  side: "buy" | "sell";
+  market: {
+    bestBidPriceUi: number | null;
+    bestAskPriceUi: number | null;
+    minOrderSizeUi: string;
+    baseDecimals: number;
+    quoteDecimals: number;
+  };
+}): string {
+  const referencePriceUi =
+    input.side === "buy"
+      ? input.market.bestAskPriceUi
+      : input.market.bestBidPriceUi;
+  if (!referencePriceUi || referencePriceUi <= 0) {
+    throw new Error("openbook-orderbook-liquidity-missing");
+  }
+  const targetNotionalAtomic = parseUsdAtomic(input.targetNotionalUsd);
+  const priceAtomic = BigInt(
+    Math.max(1, Math.round(referencePriceUi * 10 ** input.market.quoteDecimals)),
+  );
+  const targetQuantityAtomic = ceilDiv(
+    targetNotionalAtomic * pow10(input.market.baseDecimals),
+    priceAtomic,
+  );
+  const minOrderAtomic = parseUiDecimalToAtomic(
+    input.market.minOrderSizeUi,
+    input.market.baseDecimals,
+  );
+  return (targetQuantityAtomic > minOrderAtomic
+    ? targetQuantityAtomic
+    : minOrderAtomic
+  ).toString();
+}
+
+function findOpenBookOrderByClientOrderId(input: {
+  summary: { orders: Array<{ clientOrderId: string }> };
+  clientOrderId: string;
+}): { clientOrderId: string } | undefined {
+  return input.summary.orders.find(
+    (order) => String(order.clientOrderId) === input.clientOrderId,
+  );
+}
+
+async function submitPrivyManagedTransactionPlan(input: {
+  env: Env;
+  rpc: SolanaRpc;
+  walletId: string;
+  unsignedTransactionBase64: string;
+  label: string;
+}): Promise<
+  | { ok: true; signature: string; status: "confirmed" | "finalized" }
+  | { ok: false; errorCode: CanonicalExecutionErrorCode; errorMessage: string }
+> {
+  const signedBase64 = await signTransactionWithPrivyById(
+    input.env,
+    input.walletId,
+    input.unsignedTransactionBase64,
+  );
+  const safeEvaluation = evaluateSafeLaneTransaction({
+    env: input.env,
+    signedTransactionBase64: signedBase64,
+  });
+  if (!safeEvaluation.ok) {
+    return {
+      ok: false,
+      errorCode: "policy-denied",
+      errorMessage: `${input.label}:${safeEvaluation.reason}`,
+    };
+  }
+  const simulation = await input.rpc.simulateTransactionBase64(signedBase64, {
+    commitment: "confirmed",
+    sigVerify: true,
+  });
+  if (simulation.err) {
+    return {
+      ok: false,
+      errorCode: normalizeExecutionErrorCode({
+        error: simulation.err,
+        fallback: "simulation-failed",
+      }),
+      errorMessage: executionErrorMessage(simulation.err) ?? input.label,
+    };
+  }
+  const signature = await input.rpc.sendTransactionBase64(signedBase64, {
+    skipPreflight: false,
+    preflightCommitment: "confirmed",
+  });
+  const confirmation = await input.rpc.confirmSignature(signature, {
+    commitment: "finalized",
+  });
+  if (!confirmation.ok) {
+    return {
+      ok: false,
+      errorCode: normalizeExecutionErrorCode({
+        error: confirmation.err,
+        fallback: "submission-failed",
+      }),
+      errorMessage:
+        executionErrorMessage(confirmation.err) ??
+        `${input.label}:confirmation-failed`,
+    };
+  }
+  return {
+    ok: true,
+    signature,
+    status: confirmation.status === "confirmed" ? "confirmed" : "finalized",
   };
 }
 
@@ -661,6 +861,8 @@ function buildStubCanaryMetadata(input: {
     source: "stub",
     requestedBy: input.request.requestedBy,
     proofMode: readProofMode(input.request),
+    smokeIntentFamily: readSmokeIntentFamily(input.request),
+    smokeOrderSide: readSmokeOrderSide(input.request),
     tightenOnFailure: shouldTightenOnFailure(input.request),
     failureControlMode: readFailureControlMode(input.request),
     killDrillNotes: readStringArray(input.request.killDrillNotes),
@@ -698,6 +900,367 @@ function classifyExecutionFailure(
     }),
     errorMessage: message,
   };
+}
+
+async function runOpenBookVenueTxSmoke(input: {
+  env: Env;
+  request: RuntimeResearchReadinessCanaryRequest;
+  context: CanaryPairContext;
+  config: StrategyLabReadinessCanaryConfig;
+  wallet: StrategyLabReadinessCanaryWallet;
+  runId: string;
+  targetNotionalUsd: string;
+  submissionPath: {
+    venueKey: string;
+    adapterKey: string;
+    lane: string;
+    adapter: string;
+  };
+  laneResolution: { lane: string };
+  rpc: SolanaRpc;
+  jupiter: JupiterClient;
+}): Promise<RuntimeResearchReadinessCanaryWorkflowResult> {
+  const smokeOrderSide = readSmokeOrderSide(input.request);
+  const openbook = new (
+    await import("./openbook")
+  ).OpenBookClient(String(input.env.RPC_ENDPOINT ?? "").trim(), undefined);
+  const summaryBefore = await openbook.listOpenOrders({
+    walletPublicKey: input.wallet.walletAddress,
+    instrumentId: input.context.pairSymbol,
+  });
+  const quantityAtomic = computeOpenBookQuantityAtomic({
+    targetNotionalUsd: input.targetNotionalUsd,
+    side: smokeOrderSide,
+    market: summaryBefore.market,
+  });
+  const intent = {
+    family: "clob_order" as const,
+    wallet: input.wallet.walletAddress,
+    venueKey: "openbook" as const,
+    marketType: "spot" as const,
+    instrumentId: input.context.pairSymbol,
+    side: smokeOrderSide,
+    quantityAtomic,
+    params: {
+      orderType: "limit",
+      timeInForce: "ioc",
+      quantityMode: "base",
+    },
+  };
+  const plan = await openbook.buildPlaceOrderPlan({
+    walletPublicKey: input.wallet.walletAddress,
+    instrumentId: input.context.pairSymbol,
+    side: smokeOrderSide,
+    quantityAtomic,
+    options: intent.params,
+  });
+  const inputAmountAtomic =
+    smokeOrderSide === "buy"
+      ? String(plan.quotePreview.inAmount ?? "")
+      : quantityAtomic;
+  const policy = normalizePolicy({
+    allowedMints: [input.context.inputMint, input.context.outputMint],
+    slippageBps: input.config.maxSlippageBps,
+    maxPriceImpactPct: 0.05,
+    minSolReserveLamports: input.config.minSolReserveLamports,
+    simulateOnly: false,
+    dryRun: false,
+    commitment: "finalized",
+    maxTradeAmountAtomic: inputAmountAtomic,
+  });
+  const runtimeBalancePolicy = await evaluatePrivyRuntimeBalancePolicy({
+    env: input.env,
+    lane: "safe",
+    walletAddress: input.wallet.walletAddress,
+    inputMint: input.context.inputMint,
+    amountAtomic: inputAmountAtomic,
+    minSolReserveLamports: input.config.minSolReserveLamports,
+    rpc: input.rpc,
+    runtimeDefaults: null,
+  });
+  if (!runtimeBalancePolicy.ok) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: runtimeBalancePolicy.reason,
+        metadata: {
+          submissionPath: input.submissionPath,
+          smokeIntentFamily: "clob_order",
+          smokeOrderSide,
+          runtimePolicy: runtimeBalancePolicy.metadata,
+        },
+      },
+    });
+  }
+  const referenceGuard = await evaluateOracleReferencePriceGuard({
+    env: input.env,
+    mode: "live",
+    inputMint: input.context.inputMint,
+    outputMint: input.context.outputMint,
+    inputAmountAtomic,
+    expectedOutputAmountAtomic: String(plan.quotePreview.outAmount ?? ""),
+    jupiter: input.jupiter,
+  });
+  if (referenceGuard.enabled && referenceGuard.verdict !== "allow") {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: referenceGuard.reason ?? "reference-price-policy-denied",
+        metadata: {
+          smokeIntentFamily: "clob_order",
+          smokeOrderSide,
+          referencePrice: {
+            verdict: referenceGuard.verdict,
+            reason: referenceGuard.reason,
+            executionPrice: referenceGuard.executionPrice,
+            executionDivergenceBps: referenceGuard.executionDivergenceBps,
+            snapshot: referenceGuard.snapshot,
+          },
+        },
+      },
+    });
+  }
+
+  const beforeBalances = await readBalances({
+    rpc: input.rpc,
+    walletAddress: input.wallet.walletAddress,
+    inputMint: input.context.inputMint,
+    outputMint: input.context.outputMint,
+  });
+
+  const result = await executeIntentViaRouter({
+    env: input.env,
+    venueKey: input.context.venueKey,
+    runtimeMode: "live",
+    experimentalLiveModeBypass: "venue_tx_smoke",
+    requireVenueRouting: true,
+    subjectControlBypassReason: "strategy_lab_readiness_canary",
+    execution: {
+      adapter: input.context.adapterKey,
+      params: {
+        lane: input.laneResolution.lane,
+        requireSimulation: true,
+      },
+    },
+    policy,
+    rpc: input.rpc,
+    jupiter: input.jupiter,
+    openbook,
+    intent,
+    privyWalletId: input.wallet.walletId,
+    log(level, message, meta) {
+      console[level]("strategy_lab.readiness_canary", {
+        runId: input.runId,
+        message,
+        ...(meta ?? {}),
+      });
+    },
+  });
+  if (
+    result.status !== "processed" &&
+    result.status !== "confirmed" &&
+    result.status !== "finalized"
+  ) {
+    const failure = classifyExecutionFailure(result.status, result.err);
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: failure.status,
+      runPatch: {
+        errorCode: failure.errorCode,
+        errorMessage: failure.errorMessage,
+        metadata: {
+          submissionPath: {
+            ...input.submissionPath,
+            landingStatus: result.status,
+          },
+          smokeIntentFamily: "clob_order",
+          smokeOrderSide,
+          executionMeta: asJsonObject(result.executionMeta),
+        },
+      },
+    });
+  }
+
+  const clientOrderId =
+    readOptionalString(result.executionMeta?.intentId) ??
+    plan.request.clientOrderId;
+  await sleep(2_000);
+  const summaryAfterPlace = await openbook.listOpenOrders({
+    walletPublicKey: input.wallet.walletAddress,
+    instrumentId: input.context.pairSymbol,
+  });
+  const openOrderAfterPlace = findOpenBookOrderByClientOrderId({
+    summary: summaryAfterPlace,
+    clientOrderId,
+  });
+
+  let cancelSignature: string | null = null;
+  let cancelStatus: string | null = null;
+  let cancelError: string | null = null;
+  let summaryAfterCancel = summaryAfterPlace;
+  if (openOrderAfterPlace) {
+    const cancelPlan = await openbook.buildCancelOrderPlan({
+      walletPublicKey: input.wallet.walletAddress,
+      instrumentId: input.context.pairSymbol,
+      clientOrderId,
+    });
+    const cancelResult = await submitPrivyManagedTransactionPlan({
+      env: input.env,
+      rpc: input.rpc,
+      walletId: input.wallet.walletId,
+      unsignedTransactionBase64: cancelPlan.unsignedTransactionBase64,
+      label: "openbook-cancel",
+    });
+    if (!cancelResult.ok) {
+      cancelError = cancelResult.errorMessage;
+    } else {
+      cancelSignature = cancelResult.signature;
+      cancelStatus = cancelResult.status;
+      await sleep(2_000);
+      summaryAfterCancel = await openbook.listOpenOrders({
+        walletPublicKey: input.wallet.walletAddress,
+        instrumentId: input.context.pairSymbol,
+      });
+    }
+  }
+
+  const openOrderAfterFinal = findOpenBookOrderByClientOrderId({
+    summary: summaryAfterCancel,
+    clientOrderId,
+  });
+  const placeTransaction =
+    result.signature !== null
+      ? await input.rpc.getTransactionParsed(result.signature, {
+          commitment: "confirmed",
+        })
+      : null;
+  const cancelTransaction =
+    cancelSignature !== null
+      ? await input.rpc.getTransactionParsed(cancelSignature, {
+          commitment: "confirmed",
+        })
+      : null;
+  const placeFeeLamports = readReconciliationFeeLamports(placeTransaction);
+  const cancelFeeLamports = readReconciliationFeeLamports(cancelTransaction);
+  const totalFeeLamports = placeFeeLamports + cancelFeeLamports;
+  const afterBalances = await readBalances({
+    rpc: input.rpc,
+    walletAddress: input.wallet.walletAddress,
+    inputMint: input.context.inputMint,
+    outputMint: input.context.outputMint,
+  });
+  const actualOutputAtomic =
+    input.context.outputMint === SOL_MINT
+      ? afterBalances.outputAtomic - beforeBalances.outputAtomic + totalFeeLamports
+      : afterBalances.outputAtomic - beforeBalances.outputAtomic;
+  const terminalLifecycleReached =
+    openOrderAfterFinal === undefined && cancelError === null;
+  const reconciliationPassed =
+    readTransactionError(placeTransaction) === null &&
+    readTransactionError(cancelTransaction) === null &&
+    terminalLifecycleReached;
+  const venueOrderState =
+    actualOutputAtomic > 0n
+      ? "filled_or_partially_filled"
+      : openOrderAfterPlace
+        ? "cancelled"
+        : "ioc_terminal";
+
+  return await finalizeReadinessCanaryRun(input.env, {
+    runId: input.runId,
+    status: reconciliationPassed ? "success" : "failed",
+    runPatch: {
+      receiptId: `receipt_${input.runId.slice(-16)}`,
+      signature: result.signature ?? undefined,
+      ...(reconciliationPassed
+        ? {}
+        : {
+            errorCode: "strategy-lab-readiness-canary-reconciliation-failed",
+            errorMessage:
+              cancelError ??
+              "strategy-lab-readiness-canary-reconciliation-failed",
+          }),
+      reconciliation: {
+        status: reconciliationPassed ? "passed" : "failed",
+        actualOutputAtomic: actualOutputAtomic.toString(),
+        minExpectedOutAtomic: "0",
+        notes: [
+          `status=${result.status}`,
+          `smokeOrderSide=${smokeOrderSide}`,
+          `venueOrderState=${venueOrderState}`,
+          `ordersBefore=${summaryBefore.orderCount}`,
+          `ordersAfterPlace=${summaryAfterPlace.orderCount}`,
+          `ordersAfterFinal=${summaryAfterCancel.orderCount}`,
+          ...(cancelStatus ? [`cancelStatus=${cancelStatus}`] : []),
+        ],
+      },
+      evidenceRefs: [
+        {
+          kind: "live_canary",
+          ref: `signature:${result.signature ?? "missing"}`,
+        },
+        ...(cancelSignature
+          ? [
+              {
+                kind: "cancel_tx",
+                ref: `signature:${cancelSignature}`,
+              },
+            ]
+          : []),
+      ],
+      metadata: {
+        submissionPath: {
+          ...input.submissionPath,
+          landingStatus: result.status,
+          ...(cancelStatus ? { cancelLandingStatus: cancelStatus } : {}),
+        },
+        smokeIntentFamily: "clob_order",
+        smokeOrderSide,
+        venueOrderId: clientOrderId,
+        ...(cancelSignature ? { cancelSignature } : {}),
+        executionMeta: asJsonObject(result.executionMeta),
+        feeLamports: totalFeeLamports.toString(),
+        placeFeeLamports: placeFeeLamports.toString(),
+        cancelFeeLamports: cancelFeeLamports.toString(),
+        ...(referenceGuard.enabled
+          ? {
+              referencePrice: {
+                verdict: referenceGuard.verdict,
+                reason: referenceGuard.reason,
+                executionPrice: referenceGuard.executionPrice,
+                executionDivergenceBps: referenceGuard.executionDivergenceBps,
+                snapshot: referenceGuard.snapshot,
+              },
+            }
+          : {}),
+        beforeBalances: {
+          inputAtomic: beforeBalances.inputAtomic.toString(),
+          outputAtomic: beforeBalances.outputAtomic.toString(),
+          solLamports: beforeBalances.solLamports.toString(),
+        },
+        afterBalances: {
+          inputAtomic: afterBalances.inputAtomic.toString(),
+          outputAtomic: afterBalances.outputAtomic.toString(),
+          solLamports: afterBalances.solLamports.toString(),
+        },
+        openOrders: {
+          before: {
+            orderCount: summaryBefore.orderCount,
+          },
+          afterPlace: {
+            orderCount: summaryAfterPlace.orderCount,
+          },
+          afterFinal: {
+            orderCount: summaryAfterCancel.orderCount,
+          },
+        },
+      },
+    },
+  });
 }
 
 export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
@@ -785,6 +1348,8 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
     metadata: {
       requestedBy: input.request.requestedBy,
       proofMode: readProofMode(input.request),
+      smokeIntentFamily: readSmokeIntentFamily(input.request),
+      smokeOrderSide: readSmokeOrderSide(input.request),
       tightenOnFailure: shouldTightenOnFailure(input.request),
       failureControlMode: readFailureControlMode(input.request),
       killDrillNotes: readStringArray(input.request.killDrillNotes),
@@ -871,8 +1436,46 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
     context.venueKey === "raydium" ? new RaydiumClient() : undefined;
   const orca =
     context.venueKey === "orca"
-      ? new OrcaClient(String(input.env.RPC_ENDPOINT ?? "").trim())
+      ? new (
+          await import("./orca")
+        ).OrcaClient(String(input.env.RPC_ENDPOINT ?? "").trim())
       : undefined;
+  const smokeIntentFamily = readSmokeIntentFamily(input.request);
+
+  if (smokeIntentFamily === "clob_order") {
+    try {
+      return await runOpenBookVenueTxSmoke({
+        env: input.env,
+        request: input.request,
+        context,
+        config,
+        wallet,
+        runId,
+        targetNotionalUsd,
+        submissionPath,
+        laneResolution: { lane: laneResolution.lane },
+        rpc,
+        jupiter,
+      });
+    } catch (error) {
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId,
+        status: "failed",
+        runPatch: {
+          errorCode: normalizeExecutionErrorCode({
+            error,
+            fallback: "submission-failed",
+          }),
+          errorMessage: executionErrorMessage(error),
+          metadata: {
+            submissionPath,
+            smokeIntentFamily,
+            smokeOrderSide: readSmokeOrderSide(input.request),
+          },
+        },
+      });
+    }
+  }
 
   let quoteSummary: Awaited<ReturnType<typeof fetchCanaryQuote>>;
   try {

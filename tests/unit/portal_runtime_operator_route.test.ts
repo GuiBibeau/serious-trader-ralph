@@ -801,14 +801,16 @@ describe("portal runtime operator route", () => {
         body: JSON.stringify({
           action: "run_venue_tx_smoke",
           subjectKind: "venue",
-          subjectKey: "jupiter",
-          venueKey: "jupiter",
+          subjectKey: "openbook",
+          venueKey: "openbook",
           assetKey: "SOL",
           pairSymbol: "SOL/USDC",
           targetNotionalUsd: "5.00",
+          smokeIntentFamily: "clob_order",
+          smokeOrderSide: "buy",
           tightenOnFailure: true,
           failureControlMode: "disable_live",
-          killDrillNotes: ["Disable Jupiter only."],
+          killDrillNotes: ["Disable OpenBook only."],
         }),
       }),
     );
@@ -816,17 +818,19 @@ describe("portal runtime operator route", () => {
     expect(response.status).toBe(200);
     expect(JSON.parse(capturedBody)).toMatchObject({
       subjectKind: "venue",
-      subjectKey: "jupiter",
-      venueKey: "jupiter",
+      subjectKey: "openbook",
+      venueKey: "openbook",
       assetKey: "SOL",
       pairSymbol: "SOL/USDC",
       targetNotionalUsd: "5.00",
       requestedBy: "operator@example.com",
       triggerSource: "manual",
       proofMode: "venue_tx_smoke",
+      smokeIntentFamily: "clob_order",
+      smokeOrderSide: "buy",
       tightenOnFailure: true,
       failureControlMode: "disable_live",
-      killDrillNotes: ["Disable Jupiter only."],
+      killDrillNotes: ["Disable OpenBook only."],
     });
     await expect(response.json()).resolves.toMatchObject({
       ok: true,

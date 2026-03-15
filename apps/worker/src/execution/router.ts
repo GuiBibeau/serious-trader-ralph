@@ -266,13 +266,18 @@ function allowsVenueTxSmokeLiveBypass(input: {
 }): boolean {
   if (
     input.runtimeMode !== "live" ||
-    input.intentFamily !== "spot_swap" ||
     input.experimentalLiveModeBypass !== "venue_tx_smoke" ||
     input.subjectControlBypassReason !== "strategy_lab_readiness_canary"
   ) {
     return false;
   }
-  return input.venueKey === "raydium" || input.venueKey === "orca";
+  if (input.intentFamily === "spot_swap") {
+    return input.venueKey === "raydium" || input.venueKey === "orca";
+  }
+  if (input.intentFamily === "clob_order") {
+    return input.venueKey === "openbook";
+  }
+  return false;
 }
 
 async function resolveExecutionAdapterForIntent(input: {

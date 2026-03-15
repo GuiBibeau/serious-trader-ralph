@@ -176,4 +176,70 @@ describe("worker OpenBook execution adapter", () => {
       }),
     ).rejects.toThrow(/openbook-live-mode-not-supported/);
   });
+
+  test("submits OpenBook venue smoke in live mode through the bounded bypass", async () => {
+    const buildPlaceOrderPlan = mock(async () => buildPlan());
+    const simulateTransactionBase64 = mock(async () => ({ err: null }));
+    const sendTransactionBase64 = mock(async () => "sig-openbook");
+    const confirmSignature = mock(async () => ({
+      ok: true,
+      status: "finalized",
+    }));
+
+    const result = await executeOpenBookClobOrder(
+      {
+        env: { RPC_ENDPOINT: "https://rpc.test" } as Env,
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        execution: {
+          params: { lane: "safe", requireSimulation: true },
+        },
+        policy: normalizePolicy({ commitment: "finalized" }),
+        rpc: {
+          simulateTransactionBase64,
+          sendTransactionBase64,
+          confirmSignature,
+        } as never,
+        jupiter: {} as never,
+        openbook: { buildPlaceOrderPlan } as never,
+        intent: buildIntent(),
+        privyWalletId: "wallet-1",
+        log: () => {},
+      },
+      {
+        signTransactionWithPrivyById: mock(async () => "signed-openbook"),
+        evaluateSafeLaneTransaction: mock(() => ({
+          ok: true,
+          profile: {
+            txSizeBytes: 512,
+            instructionCount: 4,
+            accountKeyCount: 12,
+            addressTableLookupCount: 0,
+            signatureCount: 2,
+            computeUnitLimit: null,
+            computeUnitPriceMicroLamports: null,
+            estimatedFeeLamports: "10000",
+          },
+          limits: {
+            maxTxBytes: 1232,
+            maxInstructionCount: 24,
+            maxAccountKeys: 96,
+            maxComputeUnitLimit: 1_400_000,
+            maxEstimatedFeeLamports: "2000000",
+          },
+        })),
+      },
+    );
+
+    expect(result.status).toBe("finalized");
+    expect(simulateTransactionBase64).toHaveBeenCalledWith("signed-openbook", {
+      commitment: "confirmed",
+      sigVerify: true,
+    });
+    expect(sendTransactionBase64).toHaveBeenCalledWith("signed-openbook", {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+    });
+  });
 });

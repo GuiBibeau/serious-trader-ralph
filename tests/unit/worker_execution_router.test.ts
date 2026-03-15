@@ -474,6 +474,121 @@ describe("worker execution router", () => {
     expect(result.executionMeta?.route).toBe("openbook_v2");
   });
 
+  test("fails closed when OpenBook clob orders are requested in live mode", async () => {
+    await expect(
+      executeIntentViaRouter({
+        env: {} as never,
+        venueKey: "openbook",
+        runtimeMode: "live",
+        requireVenueRouting: true,
+        execution: { adapter: "openbook_v2" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        intent: {
+          family: "clob_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "openbook",
+          marketType: "spot",
+          instrumentId: "SOL/USDC",
+          side: "buy",
+          quantityAtomic: "1000000000",
+        },
+        log: () => {},
+      }),
+    ).rejects.toThrow(/runtime-venue-mode-not-supported:openbook:live/);
+  });
+
+  test("allows OpenBook live venue smoke only through the bounded readiness bypass", async () => {
+    const { env, sqlite } = await createLiveRouterEnv();
+    try {
+      const result = await executeIntentViaRouter({
+        env: {
+          ...env,
+          RPC_ENDPOINT: "https://rpc.test",
+        } as never,
+        venueKey: "openbook",
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        requireVenueRouting: true,
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        execution: { adapter: "openbook_v2" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        openbook: {
+          buildPlaceOrderPlan: async () => ({
+            ...{
+              unsignedTransactionBase64: "unsigned",
+              lastValidBlockHeight: 42,
+            },
+            market: {
+              instrumentId: "SOL/USDC",
+              marketAddress: "market-1",
+              baseMint: "mint-base",
+              quoteMint: "mint-quote",
+              baseDecimals: 9,
+              quoteDecimals: 6,
+              bestBidPriceUi: 149.5,
+              bestAskPriceUi: 150,
+              bestBidSizeUi: 2,
+              bestAskSizeUi: 3,
+              spreadBps: 33,
+              tickSizeUi: "0.01",
+              minOrderSizeUi: "0.001",
+              openOrdersAdminRequired: false,
+              consumeEventsAdminRequired: false,
+              closeMarketAdminRequired: false,
+            },
+            prerequisites: {
+              openOrdersIndexer: "indexer-1",
+              openOrdersAccount: "oo-1",
+              userBaseAccount: "base-ata",
+              userQuoteAccount: "quote-ata",
+              userFundingAccount: "quote-ata",
+              createdOpenOrdersIndexer: true,
+              createdOpenOrdersAccount: true,
+            },
+            request: {
+              side: "buy",
+              quantityAtomic: "1000000000",
+              quantityBaseUi: 1,
+              orderType: "limit",
+              timeInForce: "ioc",
+              postOnly: false,
+              limitPriceAtomic: "151000000",
+              limitPriceUi: 151,
+              clientOrderId: "42",
+              estimatedQuoteUi: 151,
+              estimatedQuoteAtomic: "151000000",
+            },
+            quotePreview: {
+              inputMint: "mint-quote",
+              outputMint: "mint-base",
+              inAmount: "151000000",
+              outAmount: "1000000000",
+            },
+          }),
+        } as never,
+        intent: {
+          family: "clob_order",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "openbook",
+          marketType: "spot",
+          instrumentId: "SOL/USDC",
+          side: "buy",
+          quantityAtomic: "1000000000",
+        },
+        log: () => {},
+      });
+
+      expect(result.status).toBe("dry_run");
+      expect(result.executionMeta?.route).toBe("openbook_v2");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("routes Drift perp intents through the Drift executor in paper mode", async () => {
     const result = await executeIntentViaRouter({
       env: {} as never,
