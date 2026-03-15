@@ -736,7 +736,8 @@ describe("portal runtime operator route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(JSON.parse(capturedBody)).toMatchObject({
+    const parsedBody = JSON.parse(capturedBody) as Record<string, unknown>;
+    expect(parsedBody).toMatchObject({
       subjectKind: "asset",
       subjectKey: "SOL",
       venueKey: "jupiter",
@@ -745,6 +746,7 @@ describe("portal runtime operator route", () => {
       requestedBy: "operator@example.com",
       triggerSource: "manual",
     });
+    expect(parsedBody).not.toHaveProperty("proofMode");
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       run: {

@@ -749,7 +749,6 @@ export async function POST(request: Request) {
         subjectKey,
         requestedBy: operatorActor,
         triggerSource: "manual",
-        proofMode: "venue_tx_smoke",
         ...(readString(payload.venueKey)
           ? { venueKey: readString(payload.venueKey) }
           : {}),
