@@ -102,6 +102,11 @@ function buildPayload(selectedDeploymentId: string): RuntimeOperatorApiPayload {
           maxFeatureAgeMs: 2600,
         },
       },
+      routes: {
+        health: "/api/internal/runtime/health",
+        deployments: "/api/internal/runtime/deployments",
+        research: "/api/internal/runtime/research",
+      },
       deployments: [...DEPLOYMENTS],
       controls: {
         enabled: true,
