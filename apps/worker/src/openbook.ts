@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -11,7 +12,6 @@ import {
   SelfTradeBehaviorUtils,
   SideUtils,
 } from "@openbook-dex/openbook-v2";
-import { createHash } from "node:crypto";
 import {
   Connection,
   PublicKey,
@@ -351,8 +351,7 @@ export function buildOpenBookMarketAccountFilters(input: {
   baseMintAddress: PublicKey;
   quoteMintAddress: PublicKey;
 }): Array<
-  | { dataSize: number }
-  | { memcmp: { offset: number; bytes: string } }
+  { dataSize: number } | { memcmp: { offset: number; bytes: string } }
 > {
   return [
     {
