@@ -63,7 +63,7 @@
     "8004-solana": "^0.7.8",
     "@coral-xyz/anchor": "^0.32.1",
     "@ellipsis-labs/phoenix-sdk": "^2.0.3",
-    "@noble/hashes": "^2.0.1",
+    "@noble/hashes": "^1.8.0",
     "@openbook-dex/openbook-v2": "^0.2.10",
     "@orca-so/common-sdk": "^0.7.0",
     "@orca-so/whirlpools-sdk": "^0.20.0",
