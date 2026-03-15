@@ -55,6 +55,8 @@ export async function executeOrcaSwap(
   const route = "orca";
   const { policy, rpc, quoteResponse, log, guardEnabled } = input;
   const safeLane = isSafeLaneExecution(input);
+  const preflightCommitment =
+    policy.commitment === "finalized" ? "confirmed" : policy.commitment;
 
   if (policy.dryRun) {
     return {
@@ -151,7 +153,7 @@ export async function executeOrcaSwap(
   let simulatedAt: string | undefined;
   if (requiresSimulation) {
     const simulation = await rpc.simulateTransactionBase64(signedBase64, {
-      commitment: policy.commitment,
+      commitment: preflightCommitment,
       sigVerify: true,
     });
     simulatedAt = nowIso();
@@ -234,7 +236,7 @@ export async function executeOrcaSwap(
 
   const signature = await rpc.sendTransactionBase64(signedBase64, {
     skipPreflight: policy.skipPreflight,
-    preflightCommitment: policy.commitment,
+    preflightCommitment,
   });
   const sentAt = nowIso();
   log("info", "orca tx submitted", {

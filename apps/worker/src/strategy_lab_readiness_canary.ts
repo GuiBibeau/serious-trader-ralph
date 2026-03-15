@@ -23,6 +23,7 @@ import {
   executeSwapViaRouter,
   resolveExecutionAdapterRegistration,
 } from "./execution/router";
+import { quoteSpotSwap } from "./execution/spot_venues";
 import type { JupiterQuoteResponse } from "./jupiter";
 import { JupiterClient } from "./jupiter";
 import {
@@ -30,8 +31,10 @@ import {
   readOpsControlSnapshot,
 } from "./ops_controls";
 import { evaluateOracleReferencePriceGuard } from "./oracle_reference";
+import { OrcaClient } from "./orca";
 import { enforcePolicy, normalizePolicy } from "./policy";
 import { createPrivySolanaWallet, getPrivyWalletAddressById } from "./privy";
+import { RaydiumClient } from "./raydium";
 import { SolanaRpc } from "./solana_rpc";
 import {
   createStrategyLabReadinessCanaryRun,
@@ -283,6 +286,16 @@ function readProofMode(
     : "readiness_canary";
 }
 
+function allowsVenueTxSmokeLiveBypass(
+  request: RuntimeResearchReadinessCanaryRequest,
+  venueKey: string,
+): boolean {
+  if (readProofMode(request) !== "venue_tx_smoke") {
+    return false;
+  }
+  return venueKey === "raydium" || venueKey === "orca";
+}
+
 function readFailureControlMode(
   request: RuntimeResearchReadinessCanaryRequest | Record<string, unknown>,
 ): "disable_live" | "engage_kill_switch" {
@@ -395,7 +408,8 @@ function resolveCanaryPairContext(
   }
 
   const capability = requireRuntimeVenueCapability(venueKey);
-  if (!runtimeVenueSupportsMode(capability, "live")) {
+  const allowSmokeLiveBypass = allowsVenueTxSmokeLiveBypass(request, venueKey);
+  if (!runtimeVenueSupportsMode(capability, "live") && !allowSmokeLiveBypass) {
     throw new Error(`strategy-lab-readiness-canary-venue-not-live:${venueKey}`);
   }
 
@@ -406,7 +420,7 @@ function resolveCanaryPairContext(
       return (
         registration !== null &&
         registration.venueKey === venueKey &&
-        registration.supportedModes.includes("live")
+        (registration.supportedModes.includes("live") || allowSmokeLiveBypass)
       );
     });
   if (!adapterKey) {
@@ -449,6 +463,8 @@ async function readBalances(input: {
 
 async function fetchCanaryQuote(input: {
   jupiter: JupiterClient;
+  orca?: OrcaClient;
+  raydium?: RaydiumClient;
   context: CanaryPairContext;
   config: StrategyLabReadinessCanaryConfig;
   targetNotionalUsd: string;
@@ -459,12 +475,15 @@ async function fetchCanaryQuote(input: {
   minExpectedOutAtomic: string;
 }> {
   const amountAtomic = parseUsdAtomic(input.targetNotionalUsd).toString();
-  const quoteResponse = await input.jupiter.quote({
+  const { quoteResponse } = await quoteSpotSwap({
+    venueKey: input.context.venueKey,
     inputMint: input.context.inputMint,
     outputMint: input.context.outputMint,
-    amount: amountAtomic,
+    amountAtomic,
     slippageBps: input.config.maxSlippageBps,
-    swapMode: "ExactIn",
+    jupiter: input.jupiter,
+    orca: input.orca,
+    raydium: input.raydium,
   });
   const quotedOutAtomic = parseBigIntLike(quoteResponse.outAmount);
   if (!quotedOutAtomic || quotedOutAtomic <= 0n) {
@@ -839,7 +858,7 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
     venueKey: context.venueKey,
     adapterKey: context.adapterKey,
     lane: laneResolution.lane,
-    adapter: laneResolution.adapter,
+    adapter: context.adapterKey,
   };
 
   const rpc = SolanaRpc.fromEnv(input.env);
@@ -848,11 +867,19 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       "https://lite-api.jup.ag",
     input.env.JUPITER_API_KEY,
   );
+  const raydium =
+    context.venueKey === "raydium" ? new RaydiumClient() : undefined;
+  const orca =
+    context.venueKey === "orca"
+      ? new OrcaClient(String(input.env.RPC_ENDPOINT ?? "").trim())
+      : undefined;
 
   let quoteSummary: Awaited<ReturnType<typeof fetchCanaryQuote>>;
   try {
     quoteSummary = await fetchCanaryQuote({
       jupiter,
+      raydium,
+      orca,
       context,
       config,
       targetNotionalUsd,
@@ -959,10 +986,14 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       env: input.env,
       venueKey: context.venueKey,
       runtimeMode: "live",
+      experimentalLiveModeBypass:
+        readProofMode(input.request) === "venue_tx_smoke"
+          ? "venue_tx_smoke"
+          : undefined,
       requireVenueRouting: true,
       subjectControlBypassReason: "strategy_lab_readiness_canary",
       execution: {
-        adapter: laneResolution.adapter,
+        adapter: context.adapterKey,
         params: {
           lane: laneResolution.lane,
           requireSimulation: true,
@@ -971,6 +1002,8 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       policy,
       rpc,
       jupiter,
+      raydium,
+      orca,
       quoteResponse: quoteSummary.quoteResponse,
       userPublicKey: wallet.walletAddress,
       privyWalletId: wallet.walletId,

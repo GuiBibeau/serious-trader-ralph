@@ -1,3 +1,4 @@
+import { PublicKey } from "@solana/web3.js";
 import { SOL_MINT } from "../defaults";
 import { signTransactionWithPrivyById } from "../privy";
 import type { RaydiumApiEnvelope, RaydiumQuoteResponse } from "../raydium";
@@ -8,6 +9,13 @@ type RaydiumExecutorDeps = {
   signTransactionWithPrivyById?: typeof signTransactionWithPrivyById;
   evaluateSafeLaneTransaction?: typeof evaluateSafeLaneTransaction;
 };
+
+const TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -62,6 +70,23 @@ function readRaydiumQuoteEnvelope(
   return envelope as RaydiumApiEnvelope<RaydiumQuoteResponse>;
 }
 
+function maybeDeriveAssociatedTokenAccount(input: {
+  wallet: string;
+  mint: string;
+}): string | undefined {
+  try {
+    const wallet = new PublicKey(input.wallet);
+    const mint = new PublicKey(input.mint);
+    const [ata] = PublicKey.findProgramAddressSync(
+      [wallet.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+    );
+    return ata.toBase58();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function executeRaydiumSwap(
   input: ExecuteSwapInput,
   deps: RaydiumExecutorDeps = {},
@@ -103,6 +128,22 @@ export async function executeRaydiumSwap(
     wallet: input.userPublicKey,
     wrapSol: input.quoteResponse.inputMint === SOL_MINT,
     unwrapSol: input.quoteResponse.outputMint === SOL_MINT,
+    ...(input.quoteResponse.inputMint !== SOL_MINT
+      ? {
+          inputAccount: maybeDeriveAssociatedTokenAccount({
+            wallet: input.userPublicKey,
+            mint: input.quoteResponse.inputMint,
+          }),
+        }
+      : {}),
+    ...(input.quoteResponse.outputMint !== SOL_MINT
+      ? {
+          outputAccount: maybeDeriveAssociatedTokenAccount({
+            wallet: input.userPublicKey,
+            mint: input.quoteResponse.outputMint,
+          }),
+        }
+      : {}),
     computeUnitPriceMicroLamports,
     txVersion: "V0",
   });
