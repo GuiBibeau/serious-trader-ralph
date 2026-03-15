@@ -7,6 +7,10 @@ import {
   safeParseRuntimeLedgerSnapshot,
   safeParseRuntimeRunRecord,
 } from "../../../../lib/runtime-contracts";
+import {
+  listRuntimeVenueProgramMatrix,
+  RUNTIME_VENUE_PROGRAM_NEXT_ISSUES,
+} from "../../../terminal/runtime/program-matrix";
 
 const LOCAL_EDGE_API_BASE = "http://127.0.0.1:8888";
 const BEARER_RE = /^bearer\s+/i;
@@ -603,6 +607,10 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     runtime,
+    program: {
+      matrix: listRuntimeVenueProgramMatrix(),
+      nextIssueOrder: [...RUNTIME_VENUE_PROGRAM_NEXT_ISSUES],
+    },
     selectedDeploymentId,
     detail,
     detailError,

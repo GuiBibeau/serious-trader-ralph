@@ -1,0 +1,16 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "raydium",
+  "requestedBy": "operator@example.com",
+  "venueKey": "raydium",
+  "assetKey": "SOL",
+  "pairSymbol": "SOL/USDC",
+  "adapterKey": "raydium",
+  "triggerSource": "manual",
+  "targetNotionalUsd": "5.00",
+  "metadata": {
+    "issueNumber": 413,
+    "purpose": "venue-live-smoke",
+    "notes": "Manual tiny-notional venue landing proof without enabling a strategy loop."
+  }
+}

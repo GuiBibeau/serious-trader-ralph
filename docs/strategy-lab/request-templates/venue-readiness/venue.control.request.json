@@ -1,0 +1,13 @@
+{
+  "subjectKind": "venue",
+  "subjectKey": "raydium",
+  "liveAllowed": false,
+  "killSwitchEnabled": true,
+  "disabledReason": "operator-drill-raydium-disable",
+  "updatedBy": "operator@example.com",
+  "metadata": {
+    "issueNumber": 380,
+    "drill": "isolated-venue-disable",
+    "notes": "Disable Raydium without affecting Jupiter, Orca, or runtime-wide controls."
+  }
+}

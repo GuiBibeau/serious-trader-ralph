@@ -15,6 +15,7 @@ import type {
   RuntimeControlAction,
   RuntimeOperatorApiPayload,
   RuntimeOperatorDetail,
+  RuntimeOperatorProgramMatrixEntry,
   RuntimeOperatorReadinessCanaryInput,
   RuntimeOperatorSnapshot,
   RuntimeOperatorSubjectControlInput,
@@ -114,6 +115,108 @@ function renderBadge(status: string, label?: string) {
     >
       {(label ?? status).replaceAll("_", " ")}
     </span>
+  );
+}
+
+function renderProgramMatrix(
+  matrix: RuntimeOperatorProgramMatrixEntry[],
+  nextIssueOrder: number[],
+) {
+  if (matrix.length === 0) {
+    return (
+      <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
+        Venue program matrix is not available yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4" data-testid="runtime-operator-program-matrix">
+      <div className="rounded border border-border bg-paper/70 p-4">
+        <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+          Next issue order
+        </p>
+        <p className="mt-2 text-sm text-muted">
+          {nextIssueOrder.length > 0
+            ? nextIssueOrder
+                .map((issueNumber) => `#${issueNumber}`)
+                .join(" -> ")
+            : "No queued follow-up issues."}
+        </p>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {matrix.map((entry) => (
+          <article
+            key={entry.subjectKey}
+            className="rounded border border-border bg-surface/80 p-4"
+            data-testid={`runtime-program-${entry.subjectKey}`}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  {entry.programFamily} venue
+                </p>
+                <h3 className="mt-2 text-sm font-medium text-ink">
+                  {entry.displayName}
+                </h3>
+              </div>
+              {renderBadge(entry.currentState, entry.currentState)}
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {summaryItem("Current state", entry.currentState)}
+              {summaryItem("Target state", entry.targetState)}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-[1.1fr_0.9fr]">
+              <div className="rounded border border-border bg-paper/70 p-3">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  Evidence target
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  {entry.evidenceTarget}
+                </p>
+                <p className="mt-3 text-xs text-muted">
+                  Markets: {entry.marketLabels.join(", ")}. Modes:{" "}
+                  {entry.supportedModes.length > 0
+                    ? entry.supportedModes.join(", ")
+                    : "n/a"}
+                  .
+                </p>
+              </div>
+              <div className="rounded border border-border bg-paper/70 p-3">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  Controls
+                </p>
+                <p className="mt-2 text-sm text-muted">{entry.disableDrill}</p>
+                <p className="mt-3 text-xs text-muted">
+                  Canary: {entry.canaryPlan}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 text-xs text-muted sm:grid-cols-2">
+              <p>
+                Issues #{entry.integrationIssueNumber}
+                {entry.terminalIssueNumber
+                  ? ` · #${entry.terminalIssueNumber}`
+                  : ""}
+                {entry.liveSmokeIssueNumber
+                  ? ` · #${entry.liveSmokeIssueNumber}`
+                  : ""}
+              </p>
+              <p>
+                Agent-ready after{" "}
+                {entry.nextReadyIssueNumbers.length > 0
+                  ? entry.nextReadyIssueNumbers
+                      .map((issueNumber) => `#${issueNumber}`)
+                      .join(", ")
+                  : "current queue"}
+              </p>
+            </div>
+            <p className="mt-3 text-sm text-muted">{entry.notes}</p>
+          </article>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1586,6 +1689,21 @@ export function RuntimeOperatorView({
               </h2>
             </div>
             {renderLeaderboard(runtime)}
+          </section>
+
+          <section className="card p-5">
+            <div className="mb-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                Venue program matrix
+              </p>
+              <h2 className="mt-2 text-lg font-semibold text-ink">
+                Readiness targets, canary posture, and disable drills by venue
+              </h2>
+            </div>
+            {renderProgramMatrix(
+              payload?.program.matrix ?? [],
+              payload?.program.nextIssueOrder ?? [],
+            )}
           </section>
 
           <section className="card p-5">

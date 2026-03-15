@@ -472,7 +472,8 @@ describe("portal runtime operator route", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const payload = (await response.json()) as Record<string, unknown>;
+    expect(payload).toMatchObject({
       ok: true,
       selectedDeploymentId: "runtime_canary_live_dca",
       runtime: {
@@ -526,6 +527,23 @@ describe("portal runtime operator route", () => {
         },
       },
     });
+    const program = payload.program as {
+      matrix?: Array<Record<string, unknown>>;
+      nextIssueOrder?: number[];
+    };
+    expect(program.nextIssueOrder?.slice(0, 3)).toEqual([389, 380, 392]);
+    expect(
+      program.matrix?.some(
+        (entry) =>
+          entry.subjectKey === "jupiter" && entry.liveSmokeIssueNumber === 412,
+      ),
+    ).toBe(true);
+    expect(
+      program.matrix?.some(
+        (entry) =>
+          entry.subjectKey === "drift" && entry.terminalIssueNumber === 389,
+      ),
+    ).toBe(true);
     expect(seenAuthHeaders[0]).toBe("Bearer user-token");
     expect(seenAuthHeaders.slice(1)).toHaveLength(12);
     expect(
