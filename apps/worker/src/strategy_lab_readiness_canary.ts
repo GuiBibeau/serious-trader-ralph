@@ -12,17 +12,12 @@ import {
 import {
   SOL_MINT,
   SUPPORTED_TRADING_PAIRS,
+  SUPPORTED_TRADING_TOKENS,
   TRADING_TOKEN_BY_MINT,
   USDC_MINT,
 } from "./defaults";
 import { DriftClient } from "./drift";
-import {
-  buildDriftSmokeIntent,
-  type DriftLiveAccountSnapshot,
-  prepareDriftLiveCancelOrders,
-  readDriftLiveAccountSnapshot,
-  resolveDriftSmokeUnderlyingMint,
-} from "./drift_live";
+import type { DriftLiveAccountSnapshot } from "./drift_live";
 import {
   type CanonicalExecutionErrorCode,
   normalizeExecutionErrorCode,
@@ -123,6 +118,15 @@ type CanarySubmissionPath = {
   lane: string;
   adapter: string;
 };
+
+type DriftLiveModule = typeof import("./drift_live");
+
+let driftLiveModulePromise: Promise<DriftLiveModule> | null = null;
+
+async function loadDriftLiveModule(): Promise<DriftLiveModule> {
+  driftLiveModulePromise ??= import("./drift_live");
+  return await driftLiveModulePromise;
+}
 
 export type RuntimeResearchReadinessCanaryWorkflowResult = {
   ok: boolean;
@@ -251,6 +255,26 @@ function absoluteAtomic(value: unknown): string | null {
   const parsed = parseSignedBigIntLike(value);
   if (parsed === null) return null;
   return (parsed < 0n ? -parsed : parsed).toString();
+}
+
+function resolveDriftSmokeUnderlyingMintForCanary(
+  instrumentId: string,
+): string {
+  const symbol = instrumentId
+    .trim()
+    .toUpperCase()
+    .replace(/-PERP$/, "");
+  if (symbol === "SOL") return SOL_MINT;
+  const token =
+    SUPPORTED_TRADING_TOKENS.find(
+      (entry) => entry.symbol.toUpperCase() === symbol,
+    ) ?? null;
+  if (!token) {
+    throw new Error(
+      `strategy-lab-readiness-canary-drift-underlying-mint-unresolved:${instrumentId}`,
+    );
+  }
+  return token.mint;
 }
 
 function parseUsdAtomic(value: unknown): bigint {
@@ -505,7 +529,7 @@ function resolveCanaryPairContext(
       (request.subjectKind === "asset"
         ? `${request.subjectKey}-PERP`
         : "SOL-PERP");
-    const outputMint = resolveDriftSmokeUnderlyingMint(instrumentId);
+    const outputMint = resolveDriftSmokeUnderlyingMintForCanary(instrumentId);
     const assetKey =
       request.assetKey ??
       (request.subjectKind === "asset"
@@ -1924,11 +1948,14 @@ async function runDriftVenueSmoke(input: {
     });
   }
 
-  const preflightSnapshot = await readDriftLiveAccountSnapshot({
-    rpcEndpoint,
-    walletPublicKey: input.wallet.walletAddress,
-    instrumentId,
-  }).catch(() => null);
+  const driftLive = await loadDriftLiveModule();
+  const preflightSnapshot = await driftLive
+    .readDriftLiveAccountSnapshot({
+      rpcEndpoint,
+      walletPublicKey: input.wallet.walletAddress,
+      instrumentId,
+    })
+    .catch(() => null);
   if (preflightSnapshot && preflightSnapshot.positionDirection !== "flat") {
     return await finalizeReadinessCanaryRun(input.env, {
       runId: input.runId,
@@ -1971,7 +1998,7 @@ async function runDriftVenueSmoke(input: {
     });
   }
 
-  const smokeIntent = buildDriftSmokeIntent({
+  const smokeIntent = driftLive.buildDriftSmokeIntent({
     instrumentId,
     side: "long",
     targetNotionalUsd: input.targetNotionalUsd,
@@ -2111,9 +2138,11 @@ async function runDriftVenueSmoke(input: {
       openAfter.positionDirection === "flat" &&
       openOrderCount > 0
     ) {
-      let cancelPlan: Awaited<ReturnType<typeof prepareDriftLiveCancelOrders>>;
+      let cancelPlan: Awaited<
+        ReturnType<DriftLiveModule["prepareDriftLiveCancelOrders"]>
+      >;
       try {
-        cancelPlan = await prepareDriftLiveCancelOrders({
+        cancelPlan = await driftLive.prepareDriftLiveCancelOrders({
           rpcEndpoint,
           walletPublicKey: input.wallet.walletAddress,
           instrumentId,
@@ -2199,11 +2228,13 @@ async function runDriftVenueSmoke(input: {
         });
       }
 
-      const cancelSnapshotAfter = await readDriftLiveAccountSnapshot({
-        rpcEndpoint,
-        walletPublicKey: input.wallet.walletAddress,
-        instrumentId,
-      }).catch(() => null);
+      const cancelSnapshotAfter = await driftLive
+        .readDriftLiveAccountSnapshot({
+          rpcEndpoint,
+          walletPublicKey: input.wallet.walletAddress,
+          instrumentId,
+        })
+        .catch(() => null);
       const cancelled =
         cancelSnapshotAfter?.positionDirection === "flat" &&
         (cancelSnapshotAfter?.openOrders ?? -1) === 0;

@@ -1,8 +1,4 @@
 import { DriftClient, type DriftOrderOptions } from "../drift";
-import {
-  prepareDriftLivePerpOrder,
-  readDriftLiveAccountSnapshot,
-} from "../drift_live";
 import { signTransactionWithPrivyById } from "../privy";
 import { evaluateSafeLaneTransaction } from "./safe_lane_policy";
 import type {
@@ -15,12 +11,24 @@ type ExecuteDriftPerpOrderInput = ExecuteIntentInput & {
   intent: NonSwapExecutionIntent;
 };
 
+type DriftLiveModule = typeof import("../drift_live");
+type PrepareDriftLivePerpOrder = DriftLiveModule["prepareDriftLivePerpOrder"];
+type ReadDriftLiveAccountSnapshot =
+  DriftLiveModule["readDriftLiveAccountSnapshot"];
+
 type DriftExecutorDeps = {
-  prepareDriftLivePerpOrder?: typeof prepareDriftLivePerpOrder;
-  readDriftLiveAccountSnapshot?: typeof readDriftLiveAccountSnapshot;
+  prepareDriftLivePerpOrder?: PrepareDriftLivePerpOrder;
+  readDriftLiveAccountSnapshot?: ReadDriftLiveAccountSnapshot;
   signTransactionWithPrivyById?: typeof signTransactionWithPrivyById;
   evaluateSafeLaneTransaction?: typeof evaluateSafeLaneTransaction;
 };
+
+let driftLiveModulePromise: Promise<DriftLiveModule> | null = null;
+
+async function loadDriftLiveModule(): Promise<DriftLiveModule> {
+  driftLiveModulePromise ??= import("../drift_live");
+  return await driftLiveModulePromise;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -242,10 +250,19 @@ export async function executeDriftPerpOrder(
   if (!rpcEndpoint) {
     throw new Error("rpc-endpoint-missing");
   }
+  const driftLiveModule =
+    deps.prepareDriftLivePerpOrder && deps.readDriftLiveAccountSnapshot
+      ? null
+      : await loadDriftLiveModule();
   const prepareLiveOrder =
-    deps.prepareDriftLivePerpOrder ?? prepareDriftLivePerpOrder;
+    deps.prepareDriftLivePerpOrder ??
+    driftLiveModule?.prepareDriftLivePerpOrder;
   const readLiveAccountSnapshot =
-    deps.readDriftLiveAccountSnapshot ?? readDriftLiveAccountSnapshot;
+    deps.readDriftLiveAccountSnapshot ??
+    driftLiveModule?.readDriftLiveAccountSnapshot;
+  if (!prepareLiveOrder || !readLiveAccountSnapshot) {
+    throw new Error("drift-live-module-unavailable");
+  }
   const signWithPrivy =
     deps.signTransactionWithPrivyById ?? signTransactionWithPrivyById;
   const evaluateSafeLane =
