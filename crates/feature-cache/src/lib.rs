@@ -522,13 +522,29 @@ fn latest_spot_samples_by_pair<'a>(
         }
         let key = (latest.base_mint.as_str(), latest.quote_mint.as_str());
         match latest_by_pair.get(&key) {
-            Some(existing) if existing.sequence >= latest.sequence => {}
+            Some(existing) if !market_sample_is_newer(latest, existing) => {}
             _ => {
                 latest_by_pair.insert(key, latest);
             }
         }
     }
     latest_by_pair
+}
+
+fn market_sample_is_newer(candidate: &MarketSample, existing: &MarketSample) -> bool {
+    (
+        candidate.observed_at_ts,
+        candidate.received_at_ts,
+        candidate.sequence,
+        candidate.source.as_str(),
+        candidate.symbol.as_str(),
+    ) > (
+        existing.observed_at_ts,
+        existing.received_at_ts,
+        existing.sequence,
+        existing.source.as_str(),
+        existing.symbol.as_str(),
+    )
 }
 
 fn reference_spot_price_bps(
@@ -726,6 +742,77 @@ mod tests {
         }
     }
 
+    fn mixed_multi_source_spot_and_perp_fixture() -> FeedReplayFixture {
+        FeedReplayFixture {
+            schema_version: "v1".to_string(),
+            market_events: vec![
+                MarketFeedEvent {
+                    source: "fixture.jupiter".to_string(),
+                    symbol: "SOL/USDC".to_string(),
+                    base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                    quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    price_usd: "99.0000".to_string(),
+                    bid_price_usd: Some("98.9900".to_string()),
+                    ask_price_usd: Some("99.0100".to_string()),
+                    funding_rate_bps: None,
+                    open_interest_usd: None,
+                    observed_at: "2026-03-07T00:00:00Z".to_string(),
+                    received_at: "2026-03-07T00:00:00Z".to_string(),
+                    sequence: 1,
+                },
+                MarketFeedEvent {
+                    source: "fixture.birdeye".to_string(),
+                    symbol: "SOL/USDC".to_string(),
+                    base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                    quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    price_usd: "98.0000".to_string(),
+                    bid_price_usd: Some("97.9900".to_string()),
+                    ask_price_usd: Some("98.0100".to_string()),
+                    funding_rate_bps: None,
+                    open_interest_usd: None,
+                    observed_at: "2026-03-07T00:00:15Z".to_string(),
+                    received_at: "2026-03-07T00:00:15Z".to_string(),
+                    sequence: 500,
+                },
+                MarketFeedEvent {
+                    source: "fixture.jupiter".to_string(),
+                    symbol: "SOL/USDC".to_string(),
+                    base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                    quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    price_usd: "100.0000".to_string(),
+                    bid_price_usd: Some("99.9900".to_string()),
+                    ask_price_usd: Some("100.0100".to_string()),
+                    funding_rate_bps: None,
+                    open_interest_usd: None,
+                    observed_at: "2026-03-07T00:00:20Z".to_string(),
+                    received_at: "2026-03-07T00:00:20Z".to_string(),
+                    sequence: 5,
+                },
+                MarketFeedEvent {
+                    source: "fixture.drift".to_string(),
+                    symbol: "SOL-PERP".to_string(),
+                    base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                    quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    price_usd: "100.5000".to_string(),
+                    bid_price_usd: Some("100.4900".to_string()),
+                    ask_price_usd: Some("100.5100".to_string()),
+                    funding_rate_bps: Some("12.5000".to_string()),
+                    open_interest_usd: Some("103000.0000".to_string()),
+                    observed_at: "2026-03-07T00:00:20Z".to_string(),
+                    received_at: "2026-03-07T00:00:20Z".to_string(),
+                    sequence: 6,
+                },
+            ],
+            slot_events: vec![SlotFeedEvent {
+                source: "fixture.slot".to_string(),
+                commitment: SlotCommitment::Processed,
+                slot: 310_000_002,
+                observed_at: "2026-03-07T00:00:20Z".to_string(),
+                sequence: 3,
+            }],
+        }
+    }
+
     #[test]
     fn derives_features_deterministically_from_replay() {
         let fixture = FeedReplayFixture::load_from_path(fixture_path()).expect("fixture to load");
@@ -845,5 +932,25 @@ mod tests {
         );
         assert_eq!(spot_stream.basis_bps, None);
         assert_eq!(snapshot.total_market_samples, 6);
+    }
+
+    #[test]
+    fn prefers_latest_spot_reference_by_timestamp_across_sources() {
+        let mut cache = FeatureCache::new(cache_config());
+        cache
+            .apply_replay_fixture(&mixed_multi_source_spot_and_perp_fixture())
+            .expect("fixture replay to succeed");
+
+        let snapshot = cache.snapshot_at(
+            OffsetDateTime::parse("2026-03-07T00:00:20Z", &Rfc3339).expect("snapshot time"),
+        );
+        let perp_stream = snapshot
+            .feature_streams
+            .iter()
+            .find(|stream| stream.symbol == "SOL-PERP")
+            .expect("perp stream to exist");
+
+        assert_eq!(perp_stream.basis_bps.as_deref(), Some("50.0000"));
+        assert_eq!(snapshot.total_market_samples, 4);
     }
 }

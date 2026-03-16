@@ -582,19 +582,42 @@ fn build_perp_slice(
     } else {
         ((decision.notional_cents as f64) / 100.0) / mid_price
     };
-    let quantity_atomic = atomic_from_token_amount(quantity, base_decimals);
+    let requested_quantity_atomic = atomic_from_token_amount(quantity, base_decimals)
+        .parse::<u128>()
+        .unwrap_or(0);
+    let requested_input_amount_atomic =
+        atomic_from_usd_cents(decision.notional_cents, quote_decimals)
+            .parse::<u128>()
+            .unwrap_or(0);
+    let current_signed_quantity_atomic =
+        current_position_signed_atomic(&input.ledger_snapshot, &input.deployment.pair.symbol);
+    let reduce_only = match decision.action {
+        RuntimeExecutionAction::Buy => current_signed_quantity_atomic < 0,
+        RuntimeExecutionAction::Sell => current_signed_quantity_atomic > 0,
+        RuntimeExecutionAction::Rebalance => false,
+    };
+    let effective_quantity_atomic = if reduce_only {
+        requested_quantity_atomic.min(current_signed_quantity_atomic.unsigned_abs())
+    } else {
+        requested_quantity_atomic
+    };
+    let effective_input_amount_atomic = scale_atomic(
+        requested_input_amount_atomic,
+        effective_quantity_atomic,
+        requested_quantity_atomic,
+    );
 
     RuntimeExecutionSlice {
         slice_id: "slice_1".to_string(),
         action: decision.action.clone(),
         market_type: RuntimeVenueMarketType::Perp,
         instrument_id: Some(input.deployment.pair.symbol.clone()),
-        quantity_atomic: Some(quantity_atomic),
+        quantity_atomic: Some(effective_quantity_atomic.to_string()),
         reference_price_usd: Some(format!("{mid_price:.4}")),
-        reduce_only: false,
+        reduce_only,
         input_mint: input.deployment.pair.quote_mint.clone(),
         output_mint: input.deployment.pair.base_mint.clone(),
-        input_amount_atomic: atomic_from_usd_cents(decision.notional_cents, quote_decimals),
+        input_amount_atomic: effective_input_amount_atomic.to_string(),
         min_output_amount_atomic: None,
         notional_usd,
         slippage_bps,
@@ -1161,6 +1184,34 @@ fn atomic_from_token_amount(amount: f64, decimals: u8) -> String {
     amount.max(0.0).mul_add(scale, 0.0).floor().to_string()
 }
 
+fn scale_atomic(numerator: u128, amount: u128, denominator: u128) -> u128 {
+    if denominator == 0 {
+        0
+    } else {
+        numerator.saturating_mul(amount) / denominator
+    }
+}
+
+fn current_position_signed_atomic(snapshot: &RuntimeLedgerSnapshot, instrument_id: &str) -> i128 {
+    snapshot
+        .positions
+        .iter()
+        .find(|position| position.instrument_id == instrument_id)
+        .and_then(|position| {
+            position
+                .quantity_atomic
+                .trim()
+                .parse::<u128>()
+                .ok()
+                .map(|quantity| match position.side {
+                    RuntimePositionSide::Long => quantity as i128,
+                    RuntimePositionSide::Short => -(quantity as i128),
+                    RuntimePositionSide::Flat => 0,
+                })
+        })
+        .unwrap_or(0)
+}
+
 fn parse_decimal(field: &'static str, value: &str) -> Result<f64, ExecutionPlannerError> {
     value
         .trim()
@@ -1373,10 +1424,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use protocol::{
-        RuntimeCapital, RuntimeDeploymentState, RuntimeLedgerTotals, RuntimePair, RuntimePolicy,
-        RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason, RuntimeRiskSeverity,
-        RuntimeRunState, RuntimeStrategySpec, RuntimeTrigger, RuntimeTriggerKind,
-        RuntimeVenueAuthModel, RuntimeVenueCapability, RuntimeVenueFeeModel,
+        RuntimeCapital, RuntimeDeploymentState, RuntimeLedgerPosition, RuntimeLedgerTotals,
+        RuntimePair, RuntimePolicy, RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason,
+        RuntimeRiskSeverity, RuntimeRunState, RuntimeStrategySpec, RuntimeTrigger,
+        RuntimeTriggerKind, RuntimeVenueAuthModel, RuntimeVenueCapability, RuntimeVenueFeeModel,
         RuntimeVenueLatencyProfile, RuntimeVenueMarketType, RuntimeVenueOrderType,
         RuntimeVenuePrecision, RuntimeVenueSettlementBehavior, RuntimeVenueSizeLimits,
     };
@@ -2178,5 +2229,27 @@ mod tests {
         );
         assert_eq!(slice.input_amount_atomic, "5000000");
         assert_eq!(slice.min_output_amount_atomic, None);
+    }
+
+    #[test]
+    fn funding_carry_marks_reducing_perp_buys_reduce_only() {
+        let planner = planner("funding-carry-drift-reduce");
+        let mut input = funding_input("run_17", "-12.0", "-2.0", "-50.0");
+        input.ledger_snapshot.positions = vec![RuntimeLedgerPosition {
+            instrument_id: "SOL-PERP".to_string(),
+            side: RuntimePositionSide::Short,
+            quantity_atomic: "42000000".to_string(),
+            entry_price_usd: Some("100.00".to_string()),
+            mark_price_usd: Some("100.00".to_string()),
+            unrealized_pnl_usd: Some("0.00".to_string()),
+        }];
+
+        let result = planner.plan_and_store(&input).expect("plan to store");
+
+        let slice = &result.plan.slices[0];
+        assert_eq!(slice.action, RuntimeExecutionAction::Buy);
+        assert!(slice.reduce_only);
+        assert_eq!(slice.quantity_atomic.as_deref(), Some("42000000"));
+        assert_eq!(slice.input_amount_atomic, "4200000");
     }
 }

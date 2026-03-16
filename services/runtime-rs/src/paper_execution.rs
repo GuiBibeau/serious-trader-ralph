@@ -119,7 +119,7 @@ pub fn simulate_paper_execution(
                     simulate_perp_slice(deployment, slice, &expected_ledger, profile)?;
                 encountered_partial |= slice_result.observed_fill_bps < 10_000;
                 encountered_cancel |= slice_result.observed_quantity_atomic == 0;
-                if slice_result.expected_notional_atomic < slice_result.requested_notional_atomic {
+                if slice_result.collateral_clamped {
                     simulation_notes.push(format!("paper-balance-clamped:{}", slice.slice_id));
                 }
                 apply_simulated_perp_trade(
@@ -215,6 +215,7 @@ struct PerpSliceSimulationResult {
     observed_fill_bps: u16,
     expected_fee_atomic: u128,
     observed_fee_atomic: u128,
+    collateral_clamped: bool,
 }
 
 fn simulate_slice(
@@ -294,26 +295,59 @@ fn simulate_perp_slice(
         .map(|value| parse_atomic("plan.slices[].quantityAtomic", value))
         .transpose()?
         .unwrap_or(0);
-    let available_collateral_atomic = available_atomic(ledger_snapshot, &slice.input_mint)?;
-    let expected_notional_atomic = requested_notional_atomic.min(available_collateral_atomic);
-    let expected_quantity_atomic = scale_atomic(
+    let instrument_id = slice.instrument_id.as_deref().unwrap_or_default();
+    let current_signed_quantity_atomic =
+        current_signed_position_atomic(ledger_snapshot, instrument_id)?;
+    let reducing_quantity_atomic = reducing_quantity_atomic(
+        current_signed_quantity_atomic,
         requested_quantity_atomic,
-        expected_notional_atomic,
-        requested_notional_atomic,
+        slice,
     );
-    let observed_fill_bps = if expected_notional_atomic == 0 {
+    let opening_requested_quantity_atomic =
+        requested_quantity_atomic.saturating_sub(reducing_quantity_atomic);
+    let reducing_notional_atomic = scale_atomic(
+        requested_notional_atomic,
+        reducing_quantity_atomic,
+        requested_quantity_atomic,
+    );
+    let opening_requested_notional_atomic =
+        requested_notional_atomic.saturating_sub(reducing_notional_atomic);
+    let available_collateral_atomic = available_atomic(ledger_snapshot, &slice.input_mint)?;
+    let opening_expected_notional_atomic = if slice.reduce_only {
         0
     } else {
-        profile.fill_bps.min(10_000)
+        opening_requested_notional_atomic.min(available_collateral_atomic)
     };
-    let observed_quantity_atomic =
-        scale_bps(expected_quantity_atomic, u32::from(observed_fill_bps));
+    let expected_notional_atomic =
+        reducing_notional_atomic.saturating_add(opening_expected_notional_atomic);
+    let expected_quantity_atomic = scale_atomic(
+        opening_requested_quantity_atomic,
+        opening_expected_notional_atomic,
+        opening_requested_notional_atomic,
+    )
+    .saturating_add(reducing_quantity_atomic);
+    let opening_observed_notional_atomic = scale_bps(
+        opening_expected_notional_atomic,
+        u32::from(profile.fill_bps.min(10_000)),
+    );
+    let observed_notional_atomic =
+        reducing_notional_atomic.saturating_add(opening_observed_notional_atomic);
+    let observed_fill_bps = if requested_notional_atomic == 0 {
+        0
+    } else {
+        ((observed_notional_atomic.saturating_mul(10_000)) / requested_notional_atomic).min(10_000)
+            as u16
+    };
+    let observed_quantity_atomic = scale_atomic(
+        opening_requested_quantity_atomic,
+        opening_observed_notional_atomic,
+        opening_requested_notional_atomic,
+    )
+    .saturating_add(reducing_quantity_atomic);
     let expected_fee_atomic = scale_bps(
         expected_notional_atomic,
         u32::from(profile.fee_bps.saturating_add(profile.impact_bps)),
     );
-    let observed_notional_atomic =
-        scale_bps(expected_notional_atomic, u32::from(observed_fill_bps));
     let observed_fee_atomic = scale_bps(
         observed_notional_atomic,
         u32::from(profile.fee_bps.saturating_add(profile.impact_bps)),
@@ -327,7 +361,48 @@ fn simulate_perp_slice(
         observed_fill_bps,
         expected_fee_atomic,
         observed_fee_atomic,
+        collateral_clamped: !slice.reduce_only
+            && opening_expected_notional_atomic < opening_requested_notional_atomic,
     })
+}
+
+fn current_signed_position_atomic(
+    snapshot: &RuntimeLedgerSnapshot,
+    instrument_id: &str,
+) -> Result<i128, PaperExecutionError> {
+    snapshot
+        .positions
+        .iter()
+        .find(|position| position.instrument_id == instrument_id)
+        .map(|position| {
+            let quantity = parse_atomic(
+                "ledger.positions[].quantityAtomic",
+                &position.quantity_atomic,
+            )? as i128;
+            Ok(match position.side {
+                RuntimePositionSide::Long => quantity,
+                RuntimePositionSide::Short => -quantity,
+                RuntimePositionSide::Flat => 0,
+            })
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(0))
+}
+
+fn reducing_quantity_atomic(
+    current_signed_quantity_atomic: i128,
+    requested_quantity_atomic: u128,
+    slice: &RuntimeExecutionSlice,
+) -> u128 {
+    match slice.action {
+        RuntimeExecutionAction::Buy if current_signed_quantity_atomic < 0 => {
+            requested_quantity_atomic.min(current_signed_quantity_atomic.unsigned_abs())
+        }
+        RuntimeExecutionAction::Sell if current_signed_quantity_atomic > 0 => {
+            requested_quantity_atomic.min(current_signed_quantity_atomic as u128)
+        }
+        _ => 0,
+    }
 }
 
 fn apply_simulated_trade(
@@ -742,20 +817,7 @@ fn apply_position_delta(
         .positions
         .iter()
         .position(|position| position.instrument_id == instrument_id);
-    let current_signed = existing_index
-        .map(|index| {
-            let quantity = parse_atomic(
-                "ledger.positions[].quantityAtomic",
-                &snapshot.positions[index].quantity_atomic,
-            )? as i128;
-            Ok(match snapshot.positions[index].side {
-                RuntimePositionSide::Long => quantity,
-                RuntimePositionSide::Short => -quantity,
-                RuntimePositionSide::Flat => 0,
-            })
-        })
-        .transpose()?
-        .unwrap_or(0);
+    let current_signed = current_signed_position_atomic(snapshot, instrument_id)?;
     let next_signed = current_signed + delta_atomic;
     if next_signed == 0 {
         if let Some(index) = existing_index {
@@ -932,6 +994,7 @@ mod tests {
     }
 
     fn perp_plan(run_id: &str, action: RuntimeExecutionAction) -> RuntimeExecutionPlan {
+        let reduce_only = action == RuntimeExecutionAction::Buy;
         RuntimeExecutionPlan {
             schema_version: "v1".to_string(),
             plan_id: format!("plan_drift_{run_id}"),
@@ -953,7 +1016,7 @@ mod tests {
                 instrument_id: Some("SOL-PERP".to_string()),
                 quantity_atomic: Some("50000000".to_string()),
                 reference_price_usd: Some("100.0000".to_string()),
-                reduce_only: false,
+                reduce_only,
                 input_mint: USDC_MINT.to_string(),
                 output_mint: "So11111111111111111111111111111111111111112".to_string(),
                 input_amount_atomic: "5000000".to_string(),
@@ -1114,5 +1177,33 @@ mod tests {
             .notes
             .iter()
             .any(|note| note == "paper-profile:drift"));
+    }
+
+    #[test]
+    fn simulates_drift_perp_close_even_when_free_collateral_is_exhausted() {
+        let deployment = perp_deployment();
+        let open_plan = perp_plan("carry-low-collateral", RuntimeExecutionAction::Sell);
+
+        let opened = simulate_paper_execution(&deployment, &open_plan, &perp_ledger_snapshot())
+            .expect("perp short simulation");
+        let mut collateral_starved = opened.observed_ledger.clone();
+        let balance = collateral_starved
+            .balances
+            .iter_mut()
+            .find(|entry| entry.mint == USDC_MINT)
+            .expect("usdc balance");
+        balance.free_atomic = "0".to_string();
+        balance.reserved_atomic = "0".to_string();
+
+        let close_plan = perp_plan("carry-low-collateral", RuntimeExecutionAction::Buy);
+        let closed = simulate_paper_execution(&deployment, &close_plan, &collateral_starved)
+            .expect("perp close simulation");
+
+        assert!(closed.observed_ledger.positions.is_empty());
+        let receipt = closed.submit.receipt.expect("receipt");
+        assert!(!receipt
+            .notes
+            .iter()
+            .any(|note| note == "paper-balance-clamped:slice_1"));
     }
 }
