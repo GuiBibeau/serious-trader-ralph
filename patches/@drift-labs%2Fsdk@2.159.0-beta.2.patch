@@ -7,7 +7,7 @@ index 41a66da1474c34ab67a9deb220993c9df3fb63eb..924b6544e89e04601289615d3ce73b2a
  const oracleId_1 = require("./oracles/oracleId");
  // BN is already imported globally in this file via other imports
 -const sha256_1 = require("@noble/hashes/sha256");
-+const sha256_1 = require("@noble/hashes/sha2.js");
++const sha256_1 = require("@noble/hashes/sha2");
  const utils_3 = require("./oracles/utils");
  const orders_1 = require("./math/orders");
  const builder_1 = require("./math/builder");
@@ -20,7 +20,7 @@ index 4fb011d4758a8f19e611addf38dd0fee44d48fbb..c45c1c7f7ed62363ea95a3320316d1bc
  const tweetnacl_util_1 = require("tweetnacl-util");
  const ws_1 = __importDefault(require("ws"));
 -const sha256_1 = require("@noble/hashes/sha256");
-+const sha256_1 = require("@noble/hashes/sha2.js");
++const sha256_1 = require("@noble/hashes/sha2");
  class SwiftOrderSubscriber {
      constructor(config) {
          this.config = config;
@@ -33,7 +33,7 @@ index 41a66da1474c34ab67a9deb220993c9df3fb63eb..924b6544e89e04601289615d3ce73b2a
  const oracleId_1 = require("./oracles/oracleId");
  // BN is already imported globally in this file via other imports
 -const sha256_1 = require("@noble/hashes/sha256");
-+const sha256_1 = require("@noble/hashes/sha2.js");
++const sha256_1 = require("@noble/hashes/sha2");
  const utils_3 = require("./oracles/utils");
  const orders_1 = require("./math/orders");
  const builder_1 = require("./math/builder");
@@ -46,7 +46,7 @@ index 4fb011d4758a8f19e611addf38dd0fee44d48fbb..c45c1c7f7ed62363ea95a3320316d1bc
  const tweetnacl_util_1 = require("tweetnacl-util");
  const ws_1 = __importDefault(require("ws"));
 -const sha256_1 = require("@noble/hashes/sha256");
-+const sha256_1 = require("@noble/hashes/sha2.js");
++const sha256_1 = require("@noble/hashes/sha2");
  class SwiftOrderSubscriber {
      constructor(config) {
          this.config = config;
