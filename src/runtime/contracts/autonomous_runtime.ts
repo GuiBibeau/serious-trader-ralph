@@ -200,6 +200,11 @@ const RuntimeExecutionSliceSchema = z
   .object({
     sliceId: NON_EMPTY_STRING_SCHEMA,
     action: z.enum(["buy", "sell", "rebalance"]),
+    marketType: z.enum(["spot", "perp", "options"]).default("spot"),
+    instrumentId: NON_EMPTY_STRING_SCHEMA.optional(),
+    quantityAtomic: DECIMAL_STRING_SCHEMA.optional(),
+    referencePriceUsd: DECIMAL_STRING_SCHEMA.optional(),
+    reduceOnly: z.boolean().default(false),
     inputMint: PUBKEY_SCHEMA,
     outputMint: PUBKEY_SCHEMA,
     inputAmountAtomic: DECIMAL_STRING_SCHEMA,

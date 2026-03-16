@@ -1,0 +1,50 @@
+{
+  "sources": [
+    {
+      "schemaVersion": "v1",
+      "sourceId": "source_autoquant_funding_carry_drift",
+      "sourceKind": "paper",
+      "title": "AutoQuant: An Auditable Expert-System Framework for Execution-Constrained Auto-Tuning in Cryptocurrency Perpetual Futures",
+      "url": "https://arxiv.org/abs/2512.22476v1",
+      "canonicalUrl": "https://arxiv.org/abs/2512.22476v1",
+      "authors": ["Kaihong Deng"],
+      "publishedAt": "2025-12-27T05:46:43Z",
+      "retrievedAt": "2026-03-15T00:00:00Z",
+      "contentDigest": "sha256:autoquant-2512.22476v1",
+      "provenance": {
+        "acquisitionKind": "manual_url",
+        "collectedFrom": "https://arxiv.org/abs/2512.22476v1",
+        "hostname": "arxiv.org",
+        "publisher": "arXiv",
+        "firstSeenAt": "2026-03-15T00:00:00Z",
+        "lastSeenAt": "2026-03-15T00:00:00Z"
+      },
+      "venueKeys": ["drift"],
+      "assetKeys": ["SOL"],
+      "tags": ["pilot", "candidate", "perp", "funding_carry"]
+    }
+  ],
+  "hypotheses": [
+    {
+      "schemaVersion": "v1",
+      "hypothesisId": "hypothesis_drift_funding_carry_sol_perp_v1",
+      "strategyKey": "funding_carry",
+      "title": "Funding-rate and open-interest overlay for SOL-PERP on Drift",
+      "thesis": "Use positive expected carry only when funding edge remains favorable and open-interest expansion does not signal crowding, treating the funding model as a gating overlay on a bounded SOL perp signal rather than a standalone alpha claim.",
+      "status": "candidate",
+      "createdAt": "2026-03-15T00:05:00Z",
+      "updatedAt": "2026-03-15T00:05:00Z",
+      "venueKeys": ["drift"],
+      "assetKeys": ["SOL"],
+      "sourceCitations": [
+        {
+          "sourceId": "source_autoquant_funding_carry_drift",
+          "locator": "abstract",
+          "materialDigest": "sha256:autoquant-2512.22476v1",
+          "notes": "Published 2025-12-27. The paper frames funding-bias and execution-aware tuning as validation and governance infrastructure rather than proof of persistent alpha."
+        }
+      ],
+      "tags": ["pilot", "candidate", "perp", "funding_carry"]
+    }
+  ]
+}

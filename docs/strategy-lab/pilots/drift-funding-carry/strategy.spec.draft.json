@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "v1",
+  "strategyKey": "funding_carry",
+  "title": "Funding carry",
+  "summary": "Targets persistent perp funding and basis dislocations while filtering for crowding, liquidity, and execution drift.",
+  "category": "advanced",
+  "pluginKey": "draft::funding_carry",
+  "defaultLane": "safe",
+  "supportedModes": ["shadow", "paper"],
+  "laneEligibility": ["safe"],
+  "supportedVenues": [
+    {
+      "venueKey": "drift",
+      "onboardingState": "integrated",
+      "notes": "Drift is the only perp venue with bounded live-proof evidence through Trader Ralph today, but this strategy remains blocked at draft until the perp feature substrate lands."
+    }
+  ],
+  "assetConstraints": [
+    {
+      "role": "base",
+      "assetKeys": ["SOL"],
+      "required": true,
+      "notes": "Initial draft is intentionally scoped to the SOL underlying on Drift."
+    },
+    {
+      "role": "quote",
+      "assetKeys": ["USDC"],
+      "required": true,
+      "notes": "Collateral and risk budgeting stay USD-denominated for the first perp funding pilot."
+    }
+  ],
+  "featureRequirements": [
+    {
+      "featureKey": "funding_rate_bps",
+      "required": true,
+      "freshnessMs": 60000,
+      "notes": "Required to estimate whether expected carry is still favorable at entry time."
+    },
+    {
+      "featureKey": "basis_bps",
+      "required": true,
+      "freshnessMs": 60000,
+      "notes": "Required to compare perp dislocation against a spot reference."
+    },
+    {
+      "featureKey": "open_interest_delta_bps",
+      "required": true,
+      "freshnessMs": 60000,
+      "notes": "Required to reject crowded carry states and crowded squeezes."
+    }
+  ],
+  "regimeRequirements": ["liquidity_state", "volatility_band"],
+  "parameterSpecs": [
+    {
+      "key": "policy.max_notional_usd",
+      "label": "Max notional USD",
+      "kind": "decimal",
+      "required": true,
+      "defaultValue": "25",
+      "minValue": "0.01",
+      "allowedValues": [],
+      "notes": "Upper bound for any single carry deployment."
+    },
+    {
+      "key": "policy.max_slippage_bps",
+      "label": "Max slippage bps",
+      "kind": "bps",
+      "required": true,
+      "defaultValue": "40",
+      "minValue": "1",
+      "maxValue": "200",
+      "allowedValues": [],
+      "notes": "Execution slippage ceiling for carry entries and exits."
+    },
+    {
+      "key": "signal.min_funding_edge_bps",
+      "label": "Min funding edge bps",
+      "kind": "bps",
+      "required": true,
+      "defaultValue": "8",
+      "minValue": "1",
+      "maxValue": "100",
+      "allowedValues": [],
+      "notes": "Minimum modeled funding edge required before opening exposure."
+    }
+  ],
+  "promotionPolicy": {
+    "requiresHumanApproval": true,
+    "shadowMinRuns": 5,
+    "paperMinRuns": 7,
+    "liveLaneAllowlist": ["safe"],
+    "requiresFreshFeatures": true,
+    "limitedLiveOnly": true,
+    "notes": "Draft only. Do not promote past draft until perp feature generation, backtests, and Drift paper scorecards are real."
+  },
+  "tags": ["draft", "perp", "drift", "funding_carry"]
+}

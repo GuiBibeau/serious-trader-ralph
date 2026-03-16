@@ -2946,6 +2946,11 @@ mod tests {
             slices: vec![RuntimeExecutionSlice {
                 slice_id: "slice_1".to_string(),
                 action: RuntimeExecutionAction::Buy,
+                market_type: RuntimeVenueMarketType::Spot,
+                instrument_id: None,
+                quantity_atomic: None,
+                reference_price_usd: None,
+                reduce_only: false,
                 input_mint: deployment.pair.quote_mint.clone(),
                 output_mint: deployment.pair.base_mint.clone(),
                 input_amount_atomic: "5000000".to_string(),

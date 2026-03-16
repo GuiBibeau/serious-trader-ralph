@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [dev, main]
 
+permissions:
+  checks: read
+  contents: read
+  statuses: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -148,8 +153,10 @@ jobs:
       group: proof-bundle-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
     permissions:
+      checks: read
       contents: read
       pull-requests: write
+      statuses: read
     steps:
       - name: Ensure required artifact jobs succeeded
         run: |

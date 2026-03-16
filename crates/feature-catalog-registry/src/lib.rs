@@ -178,7 +178,7 @@ impl FeatureCatalogRegistry {
         let query = FeatureCatalogRegistryQuery {
             venue_key: Some(deployment.venue_key.clone()),
             pair_symbol: Some(deployment.pair.symbol.clone()),
-            market_type: Some(RuntimeVenueMarketType::Spot),
+            market_type: Some(deployment.pair.market_type.clone()),
             status: Some(RuntimeFeatureCatalogStatus::Active),
             ..FeatureCatalogRegistryQuery::default()
         };
@@ -941,8 +941,25 @@ fn record_applies(
 }
 
 fn pair_assets(pair_symbol: &str) -> Vec<String> {
-    pair_symbol
-        .split('/')
+    if pair_symbol.contains('/') {
+        return pair_symbol
+            .split('/')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect();
+    }
+
+    let normalized = pair_symbol.trim();
+    if let Some(base) = normalized.strip_suffix("-PERP") {
+        let base = base.trim();
+        if !base.is_empty() {
+            return vec![base.to_string()];
+        }
+    }
+
+    normalized
+        .split('-')
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
@@ -1230,6 +1247,106 @@ mod tests {
             .regime_tags
             .iter()
             .any(|record| record.regime_key == "long_trend"));
+    }
+
+    #[test]
+    fn selects_perp_catalog_for_perp_strategy() {
+        let registry = registry("select-perp");
+        let mut funding_feature = feature_definition(&FeatureDefinitionSeed {
+            feature_id: "feature_funding_rate_bps_v1",
+            feature_key: "funding_rate_bps",
+            title: "Funding rate",
+            summary: "Perp funding feature for carry overlays.",
+            input_keys: &["funding_rate_bps"],
+            derived_from_feature_keys: &[],
+            freshness_slo_ms: 60_000,
+            max_allowed_drift_bps: 100,
+            tags: &["perp", "test"],
+        });
+        funding_feature.market_type = protocol::RuntimeVenueMarketType::Perp;
+        funding_feature.venue_keys = vec!["drift".to_string()];
+        funding_feature.asset_keys = vec!["SOL".to_string()];
+        funding_feature.pair_symbols = vec!["SOL-PERP".to_string()];
+        registry
+            .upsert_feature_definition(&funding_feature)
+            .expect("upsert perp feature");
+
+        let mut perp_liquidity = regime_tag(&RegimeTagSeed {
+            regime_tag_id: "regime_perp_liquidity_state_v1",
+            regime_key: "liquidity_state",
+            title: "Perp liquidity state",
+            summary: "Perp liquidity regime for funding carry overlays.",
+            dimension: RuntimeRegimeDimension::Liquidity,
+            value: "classified",
+            source_feature_keys: &["funding_rate_bps"],
+            freshness_slo_ms: 60_000,
+            max_allowed_drift_bps: 100,
+            min_confidence_bps: 8_000,
+            tags: &["perp", "test"],
+        });
+        perp_liquidity.market_type = protocol::RuntimeVenueMarketType::Perp;
+        perp_liquidity.venue_keys = vec!["drift".to_string()];
+        perp_liquidity.asset_keys = vec!["SOL".to_string()];
+        perp_liquidity.pair_symbols = vec!["SOL-PERP".to_string()];
+        registry
+            .upsert_regime_tag(&perp_liquidity)
+            .expect("upsert perp regime");
+
+        let mut strategy_spec = strategy_core::StrategyKind::Breakout.spec();
+        strategy_spec.feature_requirements = vec![protocol::RuntimeStrategyFeatureRequirement {
+            feature_key: "funding_rate_bps".to_string(),
+            required: true,
+            freshness_ms: Some(60_000),
+            notes: Some("Required for perp funding carry tests.".to_string()),
+        }];
+        strategy_spec.regime_requirements = vec!["liquidity_state".to_string()];
+        let deployment = RuntimeDeploymentRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            deployment_id: "deployment_drift".to_string(),
+            strategy_key: "funding_carry".to_string(),
+            sleeve_id: "sleeve_alpha".to_string(),
+            owner_user_id: "user_1".to_string(),
+            venue_key: "drift".to_string(),
+            pair: protocol::RuntimePair {
+                symbol: "SOL-PERP".to_string(),
+                base_mint: "So11111111111111111111111111111111111111112".to_string(),
+                quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                market_type: protocol::RuntimeVenueMarketType::Perp,
+            },
+            mode: protocol::RuntimeMode::Paper,
+            state: protocol::RuntimeDeploymentState::Paper,
+            lane: protocol::RuntimeLane::Safe,
+            created_at: SEED_TIMESTAMP.to_string(),
+            updated_at: SEED_TIMESTAMP.to_string(),
+            promoted_at: None,
+            paused_at: None,
+            killed_at: None,
+            policy: protocol::RuntimePolicy {
+                max_notional_usd: "25.00".to_string(),
+                daily_loss_limit_usd: "10.00".to_string(),
+                max_slippage_bps: 50,
+                max_concurrent_runs: 1,
+                rebalance_tolerance_bps: 100,
+            },
+            capital: protocol::RuntimeCapital {
+                allocated_usd: "100.00".to_string(),
+                reserved_usd: "5.00".to_string(),
+                available_usd: "95.00".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let selected = registry
+            .select_for_strategy(&deployment, &strategy_spec)
+            .expect("selection");
+        assert!(selected
+            .feature_definitions
+            .iter()
+            .any(|record| record.feature_key == "funding_rate_bps"));
+        assert!(selected
+            .regime_tags
+            .iter()
+            .any(|record| record.regime_key == "liquidity_state"));
     }
 
     #[test]

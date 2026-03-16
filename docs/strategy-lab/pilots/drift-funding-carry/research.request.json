@@ -1,0 +1,15 @@
+{
+  "profile": "custom",
+  "title": "Drift funding carry overlay brief",
+  "maxSources": 1,
+  "requests": [
+    {
+      "kind": "manual_url",
+      "url": "https://arxiv.org/abs/2512.22476v1",
+      "sourceKind": "paper",
+      "venueKeys": ["drift"],
+      "assetKeys": ["SOL"],
+      "tags": ["pilot", "perp", "funding_carry"]
+    }
+  ]
+}

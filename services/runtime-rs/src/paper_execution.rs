@@ -62,7 +62,10 @@ pub fn simulate_paper_execution(
     if plan.slices.is_empty() {
         return Err(PaperExecutionError::MissingSlices);
     }
-    if deployment.pair.market_type != RuntimeVenueMarketType::Spot {
+    if !matches!(
+        deployment.pair.market_type,
+        RuntimeVenueMarketType::Spot | RuntimeVenueMarketType::Perp
+    ) {
         return Err(PaperExecutionError::UnsupportedMarketType(
             deployment.pair.market_type.clone(),
         ));
@@ -88,26 +91,58 @@ pub fn simulate_paper_execution(
     ];
 
     for slice in &plan.slices {
-        let slice_result = simulate_slice(deployment, slice, &expected_ledger, profile)?;
-        encountered_partial |= slice_result.observed_fill_bps < 10_000;
-        encountered_cancel |= slice_result.observed_input_atomic == 0;
-        if slice_result.expected_input_atomic < slice_result.requested_input_atomic {
-            simulation_notes.push(format!("paper-balance-clamped:{}", slice.slice_id));
+        match deployment.pair.market_type {
+            RuntimeVenueMarketType::Spot => {
+                let slice_result = simulate_slice(deployment, slice, &expected_ledger, profile)?;
+                encountered_partial |= slice_result.observed_fill_bps < 10_000;
+                encountered_cancel |= slice_result.observed_input_atomic == 0;
+                if slice_result.expected_input_atomic < slice_result.requested_input_atomic {
+                    simulation_notes.push(format!("paper-balance-clamped:{}", slice.slice_id));
+                }
+                apply_simulated_trade(
+                    deployment,
+                    &mut expected_ledger,
+                    slice,
+                    slice_result.expected_input_atomic,
+                    slice_result.expected_output_atomic,
+                )?;
+                apply_simulated_trade(
+                    deployment,
+                    &mut observed_ledger,
+                    slice,
+                    slice_result.observed_input_atomic,
+                    slice_result.observed_output_atomic,
+                )?;
+            }
+            RuntimeVenueMarketType::Perp => {
+                let slice_result =
+                    simulate_perp_slice(deployment, slice, &expected_ledger, profile)?;
+                encountered_partial |= slice_result.observed_fill_bps < 10_000;
+                encountered_cancel |= slice_result.observed_quantity_atomic == 0;
+                if slice_result.collateral_clamped {
+                    simulation_notes.push(format!("paper-balance-clamped:{}", slice.slice_id));
+                }
+                apply_simulated_perp_trade(
+                    deployment,
+                    &mut expected_ledger,
+                    slice,
+                    slice_result.expected_quantity_atomic,
+                    slice_result.expected_fee_atomic,
+                )?;
+                apply_simulated_perp_trade(
+                    deployment,
+                    &mut observed_ledger,
+                    slice,
+                    slice_result.observed_quantity_atomic,
+                    slice_result.observed_fee_atomic,
+                )?;
+            }
+            RuntimeVenueMarketType::Options => {
+                return Err(PaperExecutionError::UnsupportedMarketType(
+                    deployment.pair.market_type.clone(),
+                ));
+            }
         }
-        apply_simulated_trade(
-            deployment,
-            &mut expected_ledger,
-            slice,
-            slice_result.expected_input_atomic,
-            slice_result.expected_output_atomic,
-        )?;
-        apply_simulated_trade(
-            deployment,
-            &mut observed_ledger,
-            slice,
-            slice_result.observed_input_atomic,
-            slice_result.observed_output_atomic,
-        )?;
     }
 
     let observed_at = add_latency(
@@ -171,6 +206,18 @@ struct SliceSimulationResult {
     observed_fill_bps: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PerpSliceSimulationResult {
+    requested_notional_atomic: u128,
+    expected_notional_atomic: u128,
+    expected_quantity_atomic: u128,
+    observed_quantity_atomic: u128,
+    observed_fill_bps: u16,
+    expected_fee_atomic: u128,
+    observed_fee_atomic: u128,
+    collateral_clamped: bool,
+}
+
 fn simulate_slice(
     deployment: &RuntimeDeploymentRecord,
     slice: &RuntimeExecutionSlice,
@@ -230,6 +277,132 @@ fn simulate_slice(
         observed_output_atomic,
         observed_fill_bps,
     })
+}
+
+fn simulate_perp_slice(
+    _deployment: &RuntimeDeploymentRecord,
+    slice: &RuntimeExecutionSlice,
+    ledger_snapshot: &RuntimeLedgerSnapshot,
+    profile: PaperVenueProfile,
+) -> Result<PerpSliceSimulationResult, PaperExecutionError> {
+    let requested_notional_atomic = parse_atomic(
+        "plan.slices[].inputAmountAtomic",
+        &slice.input_amount_atomic,
+    )?;
+    let requested_quantity_atomic = slice
+        .quantity_atomic
+        .as_deref()
+        .map(|value| parse_atomic("plan.slices[].quantityAtomic", value))
+        .transpose()?
+        .unwrap_or(0);
+    let instrument_id = slice.instrument_id.as_deref().unwrap_or_default();
+    let current_signed_quantity_atomic =
+        current_signed_position_atomic(ledger_snapshot, instrument_id)?;
+    let reducing_quantity_atomic = reducing_quantity_atomic(
+        current_signed_quantity_atomic,
+        requested_quantity_atomic,
+        slice,
+    );
+    let opening_requested_quantity_atomic =
+        requested_quantity_atomic.saturating_sub(reducing_quantity_atomic);
+    let reducing_notional_atomic = scale_atomic(
+        requested_notional_atomic,
+        reducing_quantity_atomic,
+        requested_quantity_atomic,
+    );
+    let opening_requested_notional_atomic =
+        requested_notional_atomic.saturating_sub(reducing_notional_atomic);
+    let available_collateral_atomic = available_atomic(ledger_snapshot, &slice.input_mint)?;
+    let opening_expected_notional_atomic = if slice.reduce_only {
+        0
+    } else {
+        opening_requested_notional_atomic.min(available_collateral_atomic)
+    };
+    let expected_notional_atomic =
+        reducing_notional_atomic.saturating_add(opening_expected_notional_atomic);
+    let expected_quantity_atomic = scale_atomic(
+        opening_requested_quantity_atomic,
+        opening_expected_notional_atomic,
+        opening_requested_notional_atomic,
+    )
+    .saturating_add(reducing_quantity_atomic);
+    let opening_observed_notional_atomic = scale_bps(
+        opening_expected_notional_atomic,
+        u32::from(profile.fill_bps.min(10_000)),
+    );
+    let observed_notional_atomic =
+        reducing_notional_atomic.saturating_add(opening_observed_notional_atomic);
+    let observed_fill_bps = if requested_notional_atomic == 0 {
+        0
+    } else {
+        ((observed_notional_atomic.saturating_mul(10_000)) / requested_notional_atomic).min(10_000)
+            as u16
+    };
+    let observed_quantity_atomic = scale_atomic(
+        opening_requested_quantity_atomic,
+        opening_observed_notional_atomic,
+        opening_requested_notional_atomic,
+    )
+    .saturating_add(reducing_quantity_atomic);
+    let expected_fee_atomic = scale_bps(
+        expected_notional_atomic,
+        u32::from(profile.fee_bps.saturating_add(profile.impact_bps)),
+    );
+    let observed_fee_atomic = scale_bps(
+        observed_notional_atomic,
+        u32::from(profile.fee_bps.saturating_add(profile.impact_bps)),
+    );
+
+    Ok(PerpSliceSimulationResult {
+        requested_notional_atomic,
+        expected_notional_atomic,
+        expected_quantity_atomic,
+        observed_quantity_atomic,
+        observed_fill_bps,
+        expected_fee_atomic,
+        observed_fee_atomic,
+        collateral_clamped: !slice.reduce_only
+            && opening_expected_notional_atomic < opening_requested_notional_atomic,
+    })
+}
+
+fn current_signed_position_atomic(
+    snapshot: &RuntimeLedgerSnapshot,
+    instrument_id: &str,
+) -> Result<i128, PaperExecutionError> {
+    snapshot
+        .positions
+        .iter()
+        .find(|position| position.instrument_id == instrument_id)
+        .map(|position| {
+            let quantity = parse_atomic(
+                "ledger.positions[].quantityAtomic",
+                &position.quantity_atomic,
+            )? as i128;
+            Ok(match position.side {
+                RuntimePositionSide::Long => quantity,
+                RuntimePositionSide::Short => -quantity,
+                RuntimePositionSide::Flat => 0,
+            })
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(0))
+}
+
+fn reducing_quantity_atomic(
+    current_signed_quantity_atomic: i128,
+    requested_quantity_atomic: u128,
+    slice: &RuntimeExecutionSlice,
+) -> u128 {
+    match slice.action {
+        RuntimeExecutionAction::Buy if current_signed_quantity_atomic < 0 => {
+            requested_quantity_atomic.min(current_signed_quantity_atomic.unsigned_abs())
+        }
+        RuntimeExecutionAction::Sell if current_signed_quantity_atomic > 0 => {
+            requested_quantity_atomic.min(current_signed_quantity_atomic as u128)
+        }
+        _ => 0,
+    }
 }
 
 fn apply_simulated_trade(
@@ -307,6 +480,60 @@ fn apply_simulated_trade(
     Ok(())
 }
 
+fn apply_simulated_perp_trade(
+    deployment: &RuntimeDeploymentRecord,
+    snapshot: &mut RuntimeLedgerSnapshot,
+    slice: &RuntimeExecutionSlice,
+    quantity_atomic: u128,
+    fee_atomic: u128,
+) -> Result<(), PaperExecutionError> {
+    let (base_symbol, quote_symbol) = deployment
+        .pair
+        .symbol
+        .split_once('/')
+        .unwrap_or(("BASE", "QUOTE"));
+    let reference_price_usd = slice
+        .reference_price_usd
+        .as_deref()
+        .and_then(parse_usd_f64)
+        .unwrap_or_else(|| {
+            price_for_mint(
+                snapshot,
+                &deployment.pair.base_mint,
+                deployment,
+                base_symbol,
+                quote_symbol,
+                100.0,
+            )
+        });
+
+    if fee_atomic > 0 {
+        consume_balance(
+            snapshot,
+            &slice.input_mint,
+            symbol_for_mint(&slice.input_mint, deployment, base_symbol, quote_symbol),
+            decimals_for_mint(snapshot, &slice.input_mint),
+            fee_atomic,
+            Some(1.0),
+        )?;
+    }
+
+    let delta_atomic = match slice.action {
+        RuntimeExecutionAction::Buy => quantity_atomic as i128,
+        RuntimeExecutionAction::Sell => -(quantity_atomic as i128),
+        RuntimeExecutionAction::Rebalance => 0,
+    };
+    if delta_atomic != 0 {
+        let instrument_id = slice
+            .instrument_id
+            .as_deref()
+            .unwrap_or(&deployment.pair.symbol);
+        apply_position_delta(snapshot, instrument_id, delta_atomic, reference_price_usd)?;
+    }
+
+    Ok(())
+}
+
 fn profile_for(
     deployment: &RuntimeDeploymentRecord,
     plan: &RuntimeExecutionPlan,
@@ -316,6 +543,15 @@ fn profile_for(
         deployment.venue_key, deployment.pair.symbol, plan.run_id, plan.idempotency_key
     ));
     match deployment.venue_key.as_str() {
+        "drift" => PaperVenueProfile {
+            lifecycle: "perp-orderbook",
+            fill_bps: 9_450_u16.saturating_sub((seed % 200) as u16),
+            fee_bps: 5,
+            impact_bps: 6,
+            submit_latency_ms: 110 + (seed % 50) as i64,
+            settlement_latency_ms: 650 + (seed % 200) as i64,
+            cancel_remaining: false,
+        },
         "phoenix" => PaperVenueProfile {
             lifecycle: "orderbook-passive",
             fill_bps: 9_200_u16.saturating_sub((seed % 250) as u16),
@@ -581,26 +817,25 @@ fn apply_position_delta(
         .positions
         .iter()
         .position(|position| position.instrument_id == instrument_id);
-    let current = existing_index
-        .map(|index| {
-            parse_atomic(
-                "ledger.positions[].quantityAtomic",
-                &snapshot.positions[index].quantity_atomic,
-            )
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let next = (current as i128 + delta_atomic).max(0) as u128;
-    if next == 0 {
+    let current_signed = current_signed_position_atomic(snapshot, instrument_id)?;
+    let next_signed = current_signed + delta_atomic;
+    if next_signed == 0 {
         if let Some(index) = existing_index {
             snapshot.positions.remove(index);
         }
         return Ok(());
     }
+    let side = if next_signed > 0 {
+        RuntimePositionSide::Long
+    } else if next_signed < 0 {
+        RuntimePositionSide::Short
+    } else {
+        RuntimePositionSide::Flat
+    };
     let position = RuntimeLedgerPosition {
         instrument_id: instrument_id.to_string(),
-        side: RuntimePositionSide::Long,
-        quantity_atomic: next.to_string(),
+        side,
+        quantity_atomic: next_signed.unsigned_abs().to_string(),
         entry_price_usd: Some(format_usd(mark_price_usd)),
         mark_price_usd: Some(format_usd(mark_price_usd)),
         unrealized_pnl_usd: Some("0.00".to_string()),
@@ -715,6 +950,11 @@ mod tests {
             slices: vec![RuntimeExecutionSlice {
                 slice_id: "slice_1".to_string(),
                 action,
+                market_type: RuntimeVenueMarketType::Spot,
+                instrument_id: None,
+                quantity_atomic: None,
+                reference_price_usd: None,
+                reduce_only: false,
                 input_mint: if is_buy {
                     USDC_MINT.to_string()
                 } else {
@@ -735,6 +975,52 @@ mod tests {
                 } else {
                     "5000000".to_string()
                 }),
+                notional_usd: "5.00".to_string(),
+                slippage_bps: 50,
+            }],
+        }
+    }
+
+    fn perp_deployment() -> RuntimeDeploymentRecord {
+        let mut deployment = deployment("drift");
+        deployment.strategy_key = "funding_carry".to_string();
+        deployment.pair = protocol::RuntimePair {
+            symbol: "SOL-PERP".to_string(),
+            base_mint: "So11111111111111111111111111111111111111112".to_string(),
+            quote_mint: USDC_MINT.to_string(),
+            market_type: RuntimeVenueMarketType::Perp,
+        };
+        deployment
+    }
+
+    fn perp_plan(run_id: &str, action: RuntimeExecutionAction) -> RuntimeExecutionPlan {
+        let reduce_only = action == RuntimeExecutionAction::Buy;
+        RuntimeExecutionPlan {
+            schema_version: "v1".to_string(),
+            plan_id: format!("plan_drift_{run_id}"),
+            deployment_id: "deployment_drift_paper".to_string(),
+            venue_key: "drift".to_string(),
+            owner_user_id: Some("user_123".to_string()),
+            sleeve_id: Some("sleeve_alpha".to_string()),
+            run_id: run_id.to_string(),
+            created_at: "2026-03-11T10:00:00Z".to_string(),
+            mode: RuntimeMode::Paper,
+            lane: RuntimeLane::Safe,
+            idempotency_key: format!("paper:drift:{run_id}"),
+            simulate_only: false,
+            dry_run: true,
+            slices: vec![RuntimeExecutionSlice {
+                slice_id: "slice_1".to_string(),
+                action,
+                market_type: RuntimeVenueMarketType::Perp,
+                instrument_id: Some("SOL-PERP".to_string()),
+                quantity_atomic: Some("50000000".to_string()),
+                reference_price_usd: Some("100.0000".to_string()),
+                reduce_only,
+                input_mint: USDC_MINT.to_string(),
+                output_mint: "So11111111111111111111111111111111111111112".to_string(),
+                input_amount_atomic: "5000000".to_string(),
+                min_output_amount_atomic: None,
                 notional_usd: "5.00".to_string(),
                 slippage_bps: 50,
             }],
@@ -778,6 +1064,32 @@ mod tests {
                 equity_usd: "1000.00".to_string(),
                 reserved_usd: "5.00".to_string(),
                 available_usd: "995.00".to_string(),
+                realized_pnl_usd: "0.00".to_string(),
+                unrealized_pnl_usd: "0.00".to_string(),
+            },
+        }
+    }
+
+    fn perp_ledger_snapshot() -> RuntimeLedgerSnapshot {
+        RuntimeLedgerSnapshot {
+            schema_version: "v1".to_string(),
+            snapshot_id: "ledger_perp_1".to_string(),
+            deployment_id: "deployment_drift_paper".to_string(),
+            sleeve_id: "sleeve_alpha".to_string(),
+            as_of: "2026-03-11T10:00:00Z".to_string(),
+            balances: vec![RuntimeLedgerBalance {
+                mint: USDC_MINT.to_string(),
+                symbol: "USDC".to_string(),
+                decimals: 6,
+                free_atomic: "100000000".to_string(),
+                reserved_atomic: "0".to_string(),
+                price_usd: Some("1.00".to_string()),
+            }],
+            positions: Vec::new(),
+            totals: RuntimeLedgerTotals {
+                equity_usd: "100.00".to_string(),
+                reserved_usd: "0.00".to_string(),
+                available_usd: "100.00".to_string(),
                 realized_pnl_usd: "0.00".to_string(),
                 unrealized_pnl_usd: "0.00".to_string(),
             },
@@ -829,5 +1141,69 @@ mod tests {
             .find(|position| position.instrument_id == "SOL/USDC")
             .expect("observed position");
         assert_ne!(observed_position.quantity_atomic, "35000000");
+    }
+
+    #[test]
+    fn simulates_drift_perp_short_open_and_close_lifecycle() {
+        let deployment = perp_deployment();
+        let open_plan = perp_plan("carry", RuntimeExecutionAction::Sell);
+
+        let opened = simulate_paper_execution(&deployment, &open_plan, &perp_ledger_snapshot())
+            .expect("perp short simulation");
+
+        let opened_position = opened
+            .observed_ledger
+            .positions
+            .iter()
+            .find(|position| position.instrument_id == "SOL-PERP")
+            .expect("short position");
+        assert_eq!(opened_position.side, RuntimePositionSide::Short);
+        assert_ne!(opened_position.quantity_atomic, "0");
+        let opened_balance = opened
+            .observed_ledger
+            .balances
+            .iter()
+            .find(|balance| balance.mint == USDC_MINT)
+            .expect("usdc balance");
+        assert_ne!(opened_balance.free_atomic, "100000000");
+
+        let close_plan = perp_plan("carry", RuntimeExecutionAction::Buy);
+        let closed = simulate_paper_execution(&deployment, &close_plan, &opened.observed_ledger)
+            .expect("perp close simulation");
+
+        assert!(closed.observed_ledger.positions.is_empty());
+        let receipt = closed.submit.receipt.expect("receipt");
+        assert!(receipt
+            .notes
+            .iter()
+            .any(|note| note == "paper-profile:drift"));
+    }
+
+    #[test]
+    fn simulates_drift_perp_close_even_when_free_collateral_is_exhausted() {
+        let deployment = perp_deployment();
+        let open_plan = perp_plan("carry-low-collateral", RuntimeExecutionAction::Sell);
+
+        let opened = simulate_paper_execution(&deployment, &open_plan, &perp_ledger_snapshot())
+            .expect("perp short simulation");
+        let mut collateral_starved = opened.observed_ledger.clone();
+        let balance = collateral_starved
+            .balances
+            .iter_mut()
+            .find(|entry| entry.mint == USDC_MINT)
+            .expect("usdc balance");
+        balance.free_atomic = "0".to_string();
+        balance.reserved_atomic = "0".to_string();
+
+        let close_plan = perp_plan("carry-low-collateral", RuntimeExecutionAction::Buy);
+        let closed = simulate_paper_execution(&deployment, &close_plan, &collateral_starved)
+            .expect("perp close simulation");
+
+        assert!(closed.observed_ledger.positions.is_empty());
+        let receipt = closed.submit.receipt.expect("receipt");
+        assert!(!receipt
+            .notes
+            .iter()
+            .any(|note| note == "paper-balance-clamped:slice_1"));
     }
 }

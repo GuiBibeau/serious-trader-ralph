@@ -8,9 +8,9 @@ use std::{
 use feature_cache::DerivedMarketFeatureSnapshot;
 use protocol::{
     RuntimeDeploymentRecord, RuntimeExecutionAction, RuntimeExecutionPlan, RuntimeExecutionSlice,
-    RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerSnapshot, RuntimeMode, RuntimeRiskDecision,
-    RuntimeRiskVerdict, RuntimeRunRecord, RuntimeStrategySpec, RuntimeVenueMarketType,
-    RuntimeVenueOrderType, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerSnapshot, RuntimeMode, RuntimePositionSide,
+    RuntimeRiskDecision, RuntimeRiskVerdict, RuntimeRunRecord, RuntimeStrategySpec,
+    RuntimeVenueMarketType, RuntimeVenueOrderType, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -123,6 +123,7 @@ impl BuiltinStrategyPlugin {
                 StrategyKind::Breakout => breakout_trade_decision,
                 StrategyKind::MacroRotation => macro_rotation_trade_decision,
                 StrategyKind::VolatilityTarget => volatility_target_trade_decision,
+                StrategyKind::FundingCarry => funding_carry_trade_decision,
             },
         }
     }
@@ -465,6 +466,61 @@ fn build_plan(
     );
     let slippage_bps = input.deployment.policy.max_slippage_bps;
     let notional_usd = format_usd_cents(decision.notional_cents);
+    let idempotency_key = format!("{}:{}", input.deployment.deployment_id, input.run.run_id);
+    let slice = match input.deployment.pair.market_type {
+        RuntimeVenueMarketType::Spot => build_spot_slice(
+            input,
+            &decision,
+            mid_price,
+            quote_decimals,
+            base_decimals,
+            notional_usd.clone(),
+            slippage_bps,
+        ),
+        RuntimeVenueMarketType::Perp => build_perp_slice(
+            input,
+            &decision,
+            mid_price,
+            quote_decimals,
+            base_decimals,
+            notional_usd.clone(),
+            slippage_bps,
+        ),
+        RuntimeVenueMarketType::Options => {
+            return Err(ExecutionPlannerError::UnsupportedVenueCapability {
+                venue_key: input.deployment.venue_key.clone(),
+                reason: "options-market-not-supported".to_string(),
+            });
+        }
+    };
+
+    Ok(RuntimeExecutionPlan {
+        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+        plan_id: build_plan_id(&idempotency_key),
+        deployment_id: input.deployment.deployment_id.clone(),
+        venue_key: input.deployment.venue_key.clone(),
+        owner_user_id: Some(input.deployment.owner_user_id.clone()),
+        sleeve_id: Some(input.deployment.sleeve_id.clone()),
+        run_id: input.run.run_id.clone(),
+        created_at: now_rfc3339(),
+        mode: input.deployment.mode.clone(),
+        lane,
+        idempotency_key,
+        simulate_only,
+        dry_run,
+        slices: vec![slice],
+    })
+}
+
+fn build_spot_slice(
+    input: &ExecutionPlannerInput,
+    decision: &StrategyTradeDecision,
+    mid_price: f64,
+    quote_decimals: u8,
+    base_decimals: u8,
+    notional_usd: String,
+    slippage_bps: u16,
+) -> RuntimeExecutionSlice {
     let input_amount_atomic = match decision.direction {
         SwapDirection::BuyBase => atomic_from_usd_cents(decision.notional_cents, quote_decimals),
         SwapDirection::SellBase => {
@@ -494,33 +550,78 @@ fn build_plan(
             input.deployment.pair.quote_mint.clone(),
         ),
     };
-    let idempotency_key = format!("{}:{}", input.deployment.deployment_id, input.run.run_id);
 
-    Ok(RuntimeExecutionPlan {
-        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
-        plan_id: build_plan_id(&idempotency_key),
-        deployment_id: input.deployment.deployment_id.clone(),
-        venue_key: input.deployment.venue_key.clone(),
-        owner_user_id: Some(input.deployment.owner_user_id.clone()),
-        sleeve_id: Some(input.deployment.sleeve_id.clone()),
-        run_id: input.run.run_id.clone(),
-        created_at: now_rfc3339(),
-        mode: input.deployment.mode.clone(),
-        lane,
-        idempotency_key,
-        simulate_only,
-        dry_run,
-        slices: vec![RuntimeExecutionSlice {
-            slice_id: "slice_1".to_string(),
-            action: decision.action,
-            input_mint,
-            output_mint,
-            input_amount_atomic,
-            min_output_amount_atomic,
-            notional_usd,
-            slippage_bps,
-        }],
-    })
+    RuntimeExecutionSlice {
+        slice_id: "slice_1".to_string(),
+        action: decision.action.clone(),
+        market_type: RuntimeVenueMarketType::Spot,
+        instrument_id: None,
+        quantity_atomic: None,
+        reference_price_usd: None,
+        reduce_only: false,
+        input_mint,
+        output_mint,
+        input_amount_atomic,
+        min_output_amount_atomic,
+        notional_usd,
+        slippage_bps,
+    }
+}
+
+fn build_perp_slice(
+    input: &ExecutionPlannerInput,
+    decision: &StrategyTradeDecision,
+    mid_price: f64,
+    quote_decimals: u8,
+    base_decimals: u8,
+    notional_usd: String,
+    slippage_bps: u16,
+) -> RuntimeExecutionSlice {
+    let quantity = if mid_price <= 0.0 {
+        0.0
+    } else {
+        ((decision.notional_cents as f64) / 100.0) / mid_price
+    };
+    let requested_quantity_atomic = atomic_from_token_amount(quantity, base_decimals)
+        .parse::<u128>()
+        .unwrap_or(0);
+    let requested_input_amount_atomic =
+        atomic_from_usd_cents(decision.notional_cents, quote_decimals)
+            .parse::<u128>()
+            .unwrap_or(0);
+    let current_signed_quantity_atomic =
+        current_position_signed_atomic(&input.ledger_snapshot, &input.deployment.pair.symbol);
+    let reduce_only = match decision.action {
+        RuntimeExecutionAction::Buy => current_signed_quantity_atomic < 0,
+        RuntimeExecutionAction::Sell => current_signed_quantity_atomic > 0,
+        RuntimeExecutionAction::Rebalance => false,
+    };
+    let effective_quantity_atomic = if reduce_only {
+        requested_quantity_atomic.min(current_signed_quantity_atomic.unsigned_abs())
+    } else {
+        requested_quantity_atomic
+    };
+    let effective_input_amount_atomic = scale_atomic(
+        requested_input_amount_atomic,
+        effective_quantity_atomic,
+        requested_quantity_atomic,
+    );
+
+    RuntimeExecutionSlice {
+        slice_id: "slice_1".to_string(),
+        action: decision.action.clone(),
+        market_type: RuntimeVenueMarketType::Perp,
+        instrument_id: Some(input.deployment.pair.symbol.clone()),
+        quantity_atomic: Some(effective_quantity_atomic.to_string()),
+        reference_price_usd: Some(format!("{mid_price:.4}")),
+        reduce_only,
+        input_mint: input.deployment.pair.quote_mint.clone(),
+        output_mint: input.deployment.pair.base_mint.clone(),
+        input_amount_atomic: effective_input_amount_atomic.to_string(),
+        min_output_amount_atomic: None,
+        notional_usd,
+        slippage_bps,
+    }
 }
 
 fn strategy_trade_decision(
@@ -543,11 +644,15 @@ fn ensure_deployment_venue_support(
         venue_catalog.ensure_mode_supported(&deployment.venue_key, &deployment.mode)?;
     if !capability
         .market_types
-        .contains(&RuntimeVenueMarketType::Spot)
+        .contains(&deployment.pair.market_type)
     {
         return Err(ExecutionPlannerError::UnsupportedVenueCapability {
             venue_key: deployment.venue_key.clone(),
-            reason: "spot-market-not-supported".to_string(),
+            reason: match deployment.pair.market_type {
+                RuntimeVenueMarketType::Spot => "spot-market-not-supported".to_string(),
+                RuntimeVenueMarketType::Perp => "perp-market-not-supported".to_string(),
+                RuntimeVenueMarketType::Options => "options-market-not-supported".to_string(),
+            },
         });
     }
     if !capability
@@ -635,6 +740,18 @@ fn volatility_target_trade_decision(
     )
 }
 
+fn funding_carry_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    Ok(funding_carry_decision(
+        funding_rate_bps(input)?,
+        basis_bps(input)?,
+        open_interest_delta_bps(input)?,
+        realized_volatility_bps(input)?,
+        desired_notional_cents(&input.deployment)?,
+    ))
+}
+
 fn short_signal(input: &ExecutionPlannerInput) -> Result<f64, ExecutionPlannerError> {
     input
         .feature_snapshot
@@ -662,6 +779,35 @@ fn realized_volatility_bps(
         .realized_volatility_bps
         .as_deref()
         .map(|value| parse_decimal("featureSnapshot.realizedVolatilityBps", value))
+        .transpose()
+}
+
+fn funding_rate_bps(input: &ExecutionPlannerInput) -> Result<Option<f64>, ExecutionPlannerError> {
+    input
+        .feature_snapshot
+        .funding_rate_bps
+        .as_deref()
+        .map(|value| parse_signed_decimal("featureSnapshot.fundingRateBps", value))
+        .transpose()
+}
+
+fn basis_bps(input: &ExecutionPlannerInput) -> Result<Option<f64>, ExecutionPlannerError> {
+    input
+        .feature_snapshot
+        .basis_bps
+        .as_deref()
+        .map(|value| parse_signed_decimal("featureSnapshot.basisBps", value))
+        .transpose()
+}
+
+fn open_interest_delta_bps(
+    input: &ExecutionPlannerInput,
+) -> Result<Option<f64>, ExecutionPlannerError> {
+    input
+        .feature_snapshot
+        .open_interest_delta_bps
+        .as_deref()
+        .map(|value| parse_signed_decimal("featureSnapshot.openInterestDeltaBps", value))
         .transpose()
 }
 
@@ -859,6 +1005,46 @@ fn twap_decision(input: &ExecutionPlannerInput, notional_cents: i64) -> Strategy
     }
 }
 
+fn funding_carry_decision(
+    funding_rate_bps: Option<f64>,
+    basis_bps: Option<f64>,
+    open_interest_delta_bps: Option<f64>,
+    realized_volatility_bps: Option<f64>,
+    notional_cents: i64,
+) -> StrategyTradeDecision {
+    let Some(funding_rate_bps) = funding_rate_bps else {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    };
+    if funding_rate_bps.abs() < 8.0 {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    }
+    if open_interest_delta_bps.is_some_and(|value| value.abs() > 250.0) {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    }
+    if realized_volatility_bps.is_some_and(|value| value > VOLATILITY_TARGET_MEDIUM_THRESHOLD_BPS) {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    }
+    if basis_bps
+        .is_some_and(|value| value.abs() > 4.0 && value.signum() != funding_rate_bps.signum())
+    {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    }
+
+    if funding_rate_bps > 0.0 {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Sell,
+            direction: SwapDirection::SellBase,
+            notional_cents,
+        }
+    } else {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Buy,
+            direction: SwapDirection::BuyBase,
+            notional_cents,
+        }
+    }
+}
+
 fn noop_decision(
     action: RuntimeExecutionAction,
     direction: SwapDirection,
@@ -915,7 +1101,12 @@ fn current_base_exposure_cents(
             &position.quantity_atomic,
         )?;
         let decimals = balance_decimals(&input.ledger_snapshot.balances, base_mint, 9);
-        let quantity_tokens = quantity / 10_f64.powi(i32::from(decimals));
+        let signed_quantity = match position.side {
+            RuntimePositionSide::Long => quantity,
+            RuntimePositionSide::Short => -quantity,
+            RuntimePositionSide::Flat => 0.0,
+        };
+        let quantity_tokens = signed_quantity / 10_f64.powi(i32::from(decimals));
         let mark_price = position
             .mark_price_usd
             .as_deref()
@@ -991,6 +1182,34 @@ fn atomic_from_usd_cents(cents: i64, decimals: u8) -> String {
 fn atomic_from_token_amount(amount: f64, decimals: u8) -> String {
     let scale = 10_f64.powi(i32::from(decimals));
     amount.max(0.0).mul_add(scale, 0.0).floor().to_string()
+}
+
+fn scale_atomic(numerator: u128, amount: u128, denominator: u128) -> u128 {
+    if denominator == 0 {
+        0
+    } else {
+        numerator.saturating_mul(amount) / denominator
+    }
+}
+
+fn current_position_signed_atomic(snapshot: &RuntimeLedgerSnapshot, instrument_id: &str) -> i128 {
+    snapshot
+        .positions
+        .iter()
+        .find(|position| position.instrument_id == instrument_id)
+        .and_then(|position| {
+            position
+                .quantity_atomic
+                .trim()
+                .parse::<u128>()
+                .ok()
+                .map(|quantity| match position.side {
+                    RuntimePositionSide::Long => quantity as i128,
+                    RuntimePositionSide::Short => -(quantity as i128),
+                    RuntimePositionSide::Flat => 0,
+                })
+        })
+        .unwrap_or(0)
 }
 
 fn parse_decimal(field: &'static str, value: &str) -> Result<f64, ExecutionPlannerError> {
@@ -1205,10 +1424,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use protocol::{
-        RuntimeCapital, RuntimeDeploymentState, RuntimeLedgerTotals, RuntimePair, RuntimePolicy,
-        RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason, RuntimeRiskSeverity,
-        RuntimeRunState, RuntimeStrategySpec, RuntimeTrigger, RuntimeTriggerKind,
-        RuntimeVenueAuthModel, RuntimeVenueCapability, RuntimeVenueFeeModel,
+        RuntimeCapital, RuntimeDeploymentState, RuntimeLedgerPosition, RuntimeLedgerTotals,
+        RuntimePair, RuntimePolicy, RuntimeRiskLimits, RuntimeRiskObserved, RuntimeRiskReason,
+        RuntimeRiskSeverity, RuntimeRunState, RuntimeStrategySpec, RuntimeTrigger,
+        RuntimeTriggerKind, RuntimeVenueAuthModel, RuntimeVenueCapability, RuntimeVenueFeeModel,
         RuntimeVenueLatencyProfile, RuntimeVenueMarketType, RuntimeVenueOrderType,
         RuntimeVenuePrecision, RuntimeVenueSettlementBehavior, RuntimeVenueSizeLimits,
     };
@@ -1382,6 +1601,10 @@ mod tests {
             short_return_bps: Some(short_return_bps.to_string()),
             long_return_bps: Some("20.0".to_string()),
             realized_volatility_bps: Some("18.0".to_string()),
+            funding_rate_bps: None,
+            basis_bps: None,
+            open_interest_usd: None,
+            open_interest_delta_bps: None,
             processed_slot: Some(123),
             slot_age_ms: Some(100),
             slot_gap: Some(0),
@@ -1549,6 +1772,38 @@ mod tests {
         let mut input = input(run_id, strategy_key, mode, lane, short_return_bps);
         input.feature_snapshot.long_return_bps = None;
         input.feature_snapshot.realized_volatility_bps = None;
+        input
+    }
+
+    fn funding_input(
+        run_id: &str,
+        funding_rate_bps: &str,
+        basis_bps: &str,
+        open_interest_delta_bps: &str,
+    ) -> ExecutionPlannerInput {
+        let mut input = input(
+            run_id,
+            "funding_carry",
+            RuntimeMode::Paper,
+            RuntimeLane::Safe,
+            "0.0",
+        );
+        input.deployment.venue_key = "drift".to_string();
+        input.deployment.pair = RuntimePair {
+            symbol: "SOL-PERP".to_string(),
+            base_mint: "So11111111111111111111111111111111111111112".to_string(),
+            quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            market_type: RuntimeVenueMarketType::Perp,
+        };
+        input.feature_snapshot.cache_key = "fixture:SOL-PERP".to_string();
+        input.feature_snapshot.symbol = "SOL-PERP".to_string();
+        input.feature_snapshot.source = "fixture.drift".to_string();
+        input.feature_snapshot.mid_price_usd = "100.00".to_string();
+        input.feature_snapshot.funding_rate_bps = Some(funding_rate_bps.to_string());
+        input.feature_snapshot.basis_bps = Some(basis_bps.to_string());
+        input.feature_snapshot.open_interest_delta_bps = Some(open_interest_delta_bps.to_string());
+        input.feature_snapshot.realized_volatility_bps = Some("12.0".to_string());
+        input.ledger_snapshot.positions = Vec::new();
         input
     }
 
@@ -1953,5 +2208,48 @@ mod tests {
         );
         assert_eq!(result.plan.slices[0].input_amount_atomic, "0");
         assert_eq!(result.plan.slices[0].notional_usd, "0.00");
+    }
+
+    #[test]
+    fn funding_carry_builds_perp_execution_slices_for_drift() {
+        let planner = planner("funding-carry-drift");
+        let result = planner
+            .plan_and_store(&funding_input("run_16", "12.0", "2.0", "50.0"))
+            .expect("plan to store");
+
+        let slice = &result.plan.slices[0];
+        assert_eq!(slice.action, RuntimeExecutionAction::Sell);
+        assert_eq!(slice.market_type, RuntimeVenueMarketType::Perp);
+        assert_eq!(slice.instrument_id.as_deref(), Some("SOL-PERP"));
+        assert_eq!(slice.quantity_atomic.as_deref(), Some("50000000"));
+        assert_eq!(slice.reference_price_usd.as_deref(), Some("100.0000"));
+        assert_eq!(
+            slice.input_mint,
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        );
+        assert_eq!(slice.input_amount_atomic, "5000000");
+        assert_eq!(slice.min_output_amount_atomic, None);
+    }
+
+    #[test]
+    fn funding_carry_marks_reducing_perp_buys_reduce_only() {
+        let planner = planner("funding-carry-drift-reduce");
+        let mut input = funding_input("run_17", "-12.0", "-2.0", "-50.0");
+        input.ledger_snapshot.positions = vec![RuntimeLedgerPosition {
+            instrument_id: "SOL-PERP".to_string(),
+            side: RuntimePositionSide::Short,
+            quantity_atomic: "42000000".to_string(),
+            entry_price_usd: Some("100.00".to_string()),
+            mark_price_usd: Some("100.00".to_string()),
+            unrealized_pnl_usd: Some("0.00".to_string()),
+        }];
+
+        let result = planner.plan_and_store(&input).expect("plan to store");
+
+        let slice = &result.plan.slices[0];
+        assert_eq!(slice.action, RuntimeExecutionAction::Buy);
+        assert!(slice.reduce_only);
+        assert_eq!(slice.quantity_atomic.as_deref(), Some("42000000"));
+        assert_eq!(slice.input_amount_atomic, "4200000");
     }
 }

@@ -10,8 +10,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  checks: read
   contents: read
   pull-requests: write
+  statuses: read
 
 jobs:
   preview-smoke:
