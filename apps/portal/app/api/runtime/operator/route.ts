@@ -805,7 +805,8 @@ export async function POST(request: Request) {
           : {}),
         ...(payload.smokeIntentFamily === "spot_swap" ||
         payload.smokeIntentFamily === "conditional_spot_order" ||
-        payload.smokeIntentFamily === "clob_order"
+        payload.smokeIntentFamily === "clob_order" ||
+        payload.smokeIntentFamily === "prediction_order"
           ? { smokeIntentFamily: payload.smokeIntentFamily }
           : {}),
         ...(payload.smokeOrderSide === "buy" ||
@@ -826,6 +827,7 @@ export async function POST(request: Request) {
                 .filter((entry): entry is string => Boolean(entry)),
             }
           : {}),
+        ...(isRecord(payload.metadata) ? { metadata: payload.metadata } : {}),
       },
     });
     return NextResponse.json(result.payload, { status: result.status });

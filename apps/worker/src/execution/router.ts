@@ -277,6 +277,9 @@ function allowsVenueTxSmokeLiveBypass(input: {
   if (input.intentFamily === "clob_order") {
     return input.venueKey === "openbook";
   }
+  if (input.intentFamily === "prediction_order") {
+    return input.venueKey === "dflow";
+  }
   return input.intentFamily === "perp_order" && input.venueKey === "drift";
 }
 

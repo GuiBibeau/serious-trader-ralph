@@ -2,6 +2,8 @@ import type { Env } from "./types";
 
 const DEFAULT_DFLOW_METADATA_API_BASE =
   "https://dev-prediction-markets-api.dflow.net/api/v1";
+const DEFAULT_DFLOW_TRADE_API_BASE = "https://dev-quote-api.dflow.net";
+const DEFAULT_DFLOW_PROOF_API_BASE = "https://proof.dflow.net";
 const DEFAULT_DFLOW_NOTIONAL_DECIMALS = 6;
 const DEFAULT_DFLOW_MARKET_NOTIONAL_CAP_USD = 25;
 const DEFAULT_DFLOW_OPEN_INTEREST_SHARE_PCT = 20;
@@ -61,12 +63,32 @@ export type DFlowPredictionIntentPreview = {
   notes: string[];
 };
 
+export type DFlowPredictionVerification = {
+  verified: boolean;
+  raw: Record<string, unknown> | null;
+};
+
+export type DFlowPredictionOrderTransaction = {
+  transactionBase64: string;
+  lastValidBlockHeight: number | null;
+  executionMode: string | null;
+  inputMint: string;
+  outputMint: string;
+  inAmount: string;
+  outAmount: string | null;
+  priceImpactPct: string | null;
+  routePlan: Array<Record<string, unknown>>;
+  raw: Record<string, unknown> | null;
+};
+
 type DFlowClientDeps = {
   fetch?: typeof fetch;
 };
 
 type DFlowClientConfig = {
   metadataApiBase?: string;
+  tradeApiBase?: string;
+  proofApiBase?: string;
   apiKey?: string | null;
 };
 
@@ -93,6 +115,36 @@ function readFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readBooleanFlag(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return null;
+  if (
+    normalized === "1" ||
+    normalized === "true" ||
+    normalized === "verified" ||
+    normalized === "ok" ||
+    normalized === "yes"
+  ) {
+    return true;
+  }
+  if (
+    normalized === "0" ||
+    normalized === "false" ||
+    normalized === "unverified" ||
+    normalized === "no"
+  ) {
+    return false;
+  }
+  return null;
 }
 
 function readPositiveAtomic(value: unknown): string | null {
@@ -252,6 +304,75 @@ function atomicToNumber(value: string, decimals: number): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  if (denominator <= 0n) {
+    throw new Error("dflow-invalid-denominator");
+  }
+  return (numerator + denominator - 1n) / denominator;
+}
+
+function resolvePredictionTradeInputAmountAtomic(
+  preview: DFlowPredictionIntentPreview,
+): string {
+  const quantityAtomic = readPositiveAtomic(preview.quantityAtomic);
+  if (!quantityAtomic) {
+    throw new Error("dflow-quantity-atomic-invalid");
+  }
+  if (preview.side === "sell_yes" || preview.side === "sell_no") {
+    if (preview.quantityMode !== "base") {
+      throw new Error("dflow-live-sell-quantity-mode-unsupported");
+    }
+    return quantityAtomic;
+  }
+  if (preview.quantityMode === "notional" || preview.quantityMode === "quote") {
+    return quantityAtomic;
+  }
+  if (preview.priceQuote === null || preview.priceQuote <= 0) {
+    throw new Error("dflow-live-price-quote-unavailable");
+  }
+  const priceAtomic = BigInt(
+    Math.max(
+      1,
+      Math.ceil(preview.priceQuote * 10 ** DEFAULT_DFLOW_NOTIONAL_DECIMALS),
+    ),
+  );
+  return ceilDiv(
+    BigInt(quantityAtomic) * priceAtomic,
+    10n ** BigInt(DEFAULT_DFLOW_NOTIONAL_DECIMALS),
+  ).toString();
+}
+
+function readVerificationPayload(value: unknown): boolean | null {
+  const direct =
+    readBooleanFlag(value) ??
+    (isRecord(value)
+      ? (readBooleanFlag(value.verified) ??
+        readBooleanFlag(value.isVerified) ??
+        readBooleanFlag(value.is_verified) ??
+        readBooleanFlag(value.allowed) ??
+        readBooleanFlag(value.ok))
+      : null);
+  if (direct !== null) return direct;
+  if (!isRecord(value)) return null;
+  return (
+    readVerificationPayload(value.data) ??
+    readVerificationPayload(value.result) ??
+    readVerificationPayload(value.verification)
+  );
+}
+
+function extractOrderPayload(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const nested = isRecord(value.data)
+    ? value.data
+    : isRecord(value.order)
+      ? value.order
+      : isRecord(value.result)
+        ? value.result
+        : null;
+  return nested ?? value;
+}
+
 function isTradableStatus(value: string | null): boolean {
   const normalized = String(value ?? "")
     .trim()
@@ -392,6 +513,8 @@ function buildDFlowUrl(path: string, baseUrl: string): URL {
 export class DFlowClient {
   private readonly fetchImpl: typeof fetch;
   private readonly metadataApiBase: string;
+  private readonly tradeApiBase: string;
+  private readonly proofApiBase: string;
   private readonly apiKey: string | null;
 
   constructor(input: Env | DFlowClientConfig, deps?: DFlowClientDeps) {
@@ -401,11 +524,17 @@ export class DFlowClient {
         ? input
         : {
             metadataApiBase: input.DFLOW_METADATA_API_BASE,
+            tradeApiBase: input.DFLOW_TRADE_API_BASE,
+            proofApiBase: input.DFLOW_PROOF_API_BASE,
             apiKey: input.DFLOW_API_KEY,
           };
     this.metadataApiBase =
       readTrimmedString(config.metadataApiBase) ??
       DEFAULT_DFLOW_METADATA_API_BASE;
+    this.tradeApiBase =
+      readTrimmedString(config.tradeApiBase) ?? DEFAULT_DFLOW_TRADE_API_BASE;
+    this.proofApiBase =
+      readTrimmedString(config.proofApiBase) ?? DEFAULT_DFLOW_PROOF_API_BASE;
     this.apiKey = readTrimmedString(config.apiKey);
   }
 
@@ -606,6 +735,101 @@ export class DFlowClient {
           swapInfo: { label: "DFlow Prediction" },
         },
       ],
+    };
+  }
+
+  async verifyPredictionWallet(
+    walletAddress: string,
+  ): Promise<DFlowPredictionVerification> {
+    const normalizedWallet = readTrimmedString(walletAddress);
+    if (!normalizedWallet) {
+      throw new Error("dflow-wallet-address-required");
+    }
+    const url = buildDFlowUrl(
+      `verify/${encodeURIComponent(normalizedWallet)}`,
+      this.proofApiBase,
+    );
+    const response = await this.fetchImpl(url.toString(), {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
+      },
+    });
+    const payload = await readJson(response, "DFlow verify address");
+    const verified = readVerificationPayload(payload);
+    if (verified === null) {
+      throw new Error("dflow-verify-invalid-payload");
+    }
+    return {
+      verified,
+      raw: isRecord(payload) ? payload : null,
+    };
+  }
+
+  async buildPredictionOrderTransaction(input: {
+    walletPublicKey: string;
+    preview: DFlowPredictionIntentPreview;
+  }): Promise<DFlowPredictionOrderTransaction> {
+    const walletPublicKey = readTrimmedString(input.walletPublicKey);
+    if (!walletPublicKey) {
+      throw new Error("dflow-wallet-public-key-required");
+    }
+    if (input.preview.orderType !== "market") {
+      throw new Error("dflow-live-order-type-not-supported");
+    }
+    const amountAtomic = resolvePredictionTradeInputAmountAtomic(input.preview);
+    const inputMint =
+      input.preview.side === "buy_yes" || input.preview.side === "buy_no"
+        ? readTrimmedString(input.preview.settlementMint)
+        : input.preview.outcomeMint;
+    const outputMint =
+      input.preview.side === "buy_yes" || input.preview.side === "buy_no"
+        ? input.preview.outcomeMint
+        : readTrimmedString(input.preview.settlementMint);
+    if (!inputMint || !outputMint) {
+      throw new Error("dflow-live-order-mints-unavailable");
+    }
+    const url = buildDFlowUrl("order", this.tradeApiBase);
+    url.searchParams.set("inputMint", inputMint);
+    url.searchParams.set("outputMint", outputMint);
+    url.searchParams.set("amount", amountAtomic);
+    url.searchParams.set("userPublicKey", walletPublicKey);
+    const response = await this.fetchImpl(url.toString(), {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
+      },
+    });
+    const payload = await readJson(response, "DFlow order");
+    const order = extractOrderPayload(payload);
+    const transactionBase64 =
+      readTrimmedString(order?.transaction) ??
+      readTrimmedString(order?.serializedTransaction) ??
+      readTrimmedString(order?.tx);
+    if (!transactionBase64) {
+      throw new Error("dflow-order-transaction-missing");
+    }
+    const lastValidBlockHeight = readFiniteNumber(order?.lastValidBlockHeight);
+    return {
+      transactionBase64,
+      lastValidBlockHeight:
+        lastValidBlockHeight === null
+          ? null
+          : Math.max(0, Math.floor(lastValidBlockHeight)),
+      executionMode: readTrimmedString(order?.executionMode),
+      inputMint,
+      outputMint,
+      inAmount: readPositiveAtomic(order?.inAmount) ?? amountAtomic,
+      outAmount: readPositiveAtomic(order?.outAmount),
+      priceImpactPct:
+        readTrimmedString(order?.priceImpactPct) ??
+        readTrimmedString(order?.priceImpactBps),
+      routePlan: Array.isArray(order?.routePlan)
+        ? order.routePlan.filter(isRecord)
+        : [],
+      raw: order,
     };
   }
 }

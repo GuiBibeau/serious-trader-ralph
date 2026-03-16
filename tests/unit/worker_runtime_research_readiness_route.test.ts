@@ -513,6 +513,70 @@ describe("worker runtime research readiness routes", () => {
     }
   });
 
+  test("accepts bounded DFlow venue smoke requests with prediction metadata", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "dflow",
+              requestedBy: "codex",
+              venueKey: "dflow",
+              pairSymbol: "PRES-2028",
+              proofMode: "venue_tx_smoke",
+              smokeIntentFamily: "prediction_order",
+              smokeOrderSide: "buy",
+              metadata: {
+                instrumentId: "PRES-2028",
+                outcomeId: "YesMint1111111111111111111111111111111",
+                outcomeSide: "yes",
+              },
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        run: {
+          venueKey: string;
+          pairSymbol: string;
+          inputMint: string;
+          outputMint: string;
+          metadata?: Record<string, unknown>;
+          evidenceRefs: Array<{ kind: string }>;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.status).toBe("success");
+      expect(payload.run.venueKey).toBe("dflow");
+      expect(payload.run.pairSymbol).toBe("PRES-2028");
+      expect(payload.run.inputMint).toBe(
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      );
+      expect(payload.run.outputMint).toBe(
+        "YesMint1111111111111111111111111111111",
+      );
+      expect(payload.run.metadata?.proofMode).toBe("venue_tx_smoke");
+      expect(payload.run.metadata?.smokeIntentFamily).toBe("prediction_order");
+      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("uses the quote mint for OpenBook buy smoke on USDC/USDT", async () => {
     const { env, sqlite } = createOpsEnv();
     try {

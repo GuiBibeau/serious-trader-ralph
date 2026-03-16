@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { normalizePolicy } from "../../apps/worker/src/policy";
 import type { Env } from "../../apps/worker/src/types";
 
@@ -62,6 +62,14 @@ function buildPreview() {
     estimatedNotionalUsd: 1,
     liveReady: false,
     notes: ["prediction-market-live-requires-proof"],
+  };
+}
+
+function buildMarketPreview() {
+  return {
+    ...buildPreview(),
+    orderType: "market" as const,
+    notes: [],
   };
 }
 
@@ -139,5 +147,141 @@ describe("worker DFlow prediction execution adapter", () => {
         log: () => {},
       }),
     ).rejects.toThrow(/dflow-live-mode-not-supported/);
+  });
+
+  test("submits DFlow venue smoke in live mode through the bounded bypass", async () => {
+    const simulateTransactionBase64 = mock(async () => ({ err: null }));
+    const sendTransactionBase64 = mock(async () => "sig-dflow");
+    const confirmSignature = mock(async () => ({
+      ok: true,
+      status: "finalized",
+    }));
+
+    const result = await executeDFlowPredictionOrder(
+      {
+        env: {} as Env,
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        execution: {
+          params: { lane: "safe", requireSimulation: true },
+        },
+        policy: normalizePolicy({ commitment: "finalized" }),
+        rpc: {
+          simulateTransactionBase64,
+          sendTransactionBase64,
+          confirmSignature,
+        } as never,
+        jupiter: {} as never,
+        dflow: {
+          describePredictionIntent: async () => buildMarketPreview(),
+          buildSyntheticQuote: () => ({
+            inputMint: "USDC",
+            outputMint: "YES",
+            inAmount: "1000000",
+            outAmount: "1900000",
+            priceImpactPct: 0,
+            routePlan: [
+              { poolId: "PRES-2028", swapInfo: { label: "DFlow Prediction" } },
+            ],
+          }),
+          verifyPredictionWallet: async () => ({
+            verified: true,
+            raw: { verified: true },
+          }),
+          buildPredictionOrderTransaction: async () => ({
+            transactionBase64: "unsigned-dflow",
+            lastValidBlockHeight: 77,
+            executionMode: "sync",
+            inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            outputMint: "YesMint1111111111111111111111111111111",
+            inAmount: "1000000",
+            outAmount: "1900000",
+            priceImpactPct: "0",
+            routePlan: [
+              { poolId: "PRES-2028", swapInfo: { label: "DFlow Prediction" } },
+            ],
+            raw: { executionMode: "sync" },
+          }),
+        } as never,
+        intent: {
+          ...buildIntent(),
+          params: { orderType: "market", quantityMode: "notional" },
+        },
+        privyWalletId: "wallet_strategy_lab",
+        log: () => {},
+      },
+      {
+        signTransactionWithPrivyById: mock(async () => "signed-dflow"),
+        evaluateSafeLaneTransaction: mock(() => ({
+          ok: true,
+          profile: {
+            txSizeBytes: 512,
+            instructionCount: 4,
+            accountKeyCount: 12,
+            addressTableLookupCount: 0,
+            signatureCount: 1,
+            computeUnitLimit: null,
+            computeUnitPriceMicroLamports: null,
+            estimatedFeeLamports: "10000",
+          },
+          limits: {
+            maxTxBytes: 1232,
+            maxInstructionCount: 24,
+            maxAccountKeys: 96,
+            maxComputeUnitLimit: 1_400_000,
+            maxEstimatedFeeLamports: "2000000",
+          },
+        })),
+      },
+    );
+
+    expect(result.status).toBe("finalized");
+    expect(result.executionMeta?.classification).toBe("finalized");
+    expect(result.executionMeta?.route).toBe("dflow");
+    expect(result.executionMeta?.lifecycle?.positionState).toBe("open");
+    expect(simulateTransactionBase64).toHaveBeenCalledWith("signed-dflow", {
+      commitment: "confirmed",
+      sigVerify: true,
+    });
+    expect(sendTransactionBase64).toHaveBeenCalledWith("signed-dflow", {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+    });
+  });
+
+  test("blocks live buy orders when the receiving wallet is not Proof verified", async () => {
+    await expect(
+      executeDFlowPredictionOrder({
+        env: {} as Env,
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        policy: normalizePolicy({}),
+        rpc: {} as never,
+        jupiter: {} as never,
+        dflow: {
+          describePredictionIntent: async () => buildMarketPreview(),
+          buildSyntheticQuote: () => ({
+            inputMint: "USDC",
+            outputMint: "YES",
+            inAmount: "1000000",
+            outAmount: "1900000",
+            priceImpactPct: 0,
+            routePlan: [],
+          }),
+          verifyPredictionWallet: async () => ({
+            verified: false,
+            raw: { verified: false },
+          }),
+        } as never,
+        intent: {
+          ...buildIntent(),
+          params: { orderType: "market", quantityMode: "notional" },
+        },
+        privyWalletId: "wallet_strategy_lab",
+        log: () => {},
+      }),
+    ).rejects.toThrow(/dflow-wallet-not-verified/);
   });
 });

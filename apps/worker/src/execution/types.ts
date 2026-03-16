@@ -211,6 +211,8 @@ export type ExecuteSwapResult = {
       flashEstimatedFeeByMint?: Record<string, string>;
       settlementMint?: string | null;
     };
+    driftAccount?: Record<string, unknown>;
+    dflowOrder?: Record<string, unknown>;
     trace?: {
       txBuiltAt?: string;
       simulatedAt?: string;

@@ -16,6 +16,7 @@ import {
   TRADING_TOKEN_BY_MINT,
   USDC_MINT,
 } from "./defaults";
+import { DFlowClient } from "./dflow";
 import { DriftClient } from "./drift";
 import type { DriftLiveAccountSnapshot } from "./drift_live";
 import {
@@ -107,9 +108,11 @@ type CanaryPairContext = {
   adapterKey: string;
   inputMint: string;
   outputMint: string;
-  marketType: "spot" | "perp";
-  intentFamily: "spot_swap" | "perp_order";
+  marketType: "spot" | "perp" | "prediction";
+  intentFamily: "spot_swap" | "perp_order" | "prediction_order";
   instrumentId?: string;
+  predictionOutcomeId?: string;
+  predictionOutcomeSide?: "yes" | "no";
 };
 
 type CanarySubmissionPath = {
@@ -181,6 +184,42 @@ function readStringArray(value: unknown): string[] {
     .filter((entry): entry is string => Boolean(entry));
 }
 
+function readDFlowSmokeMetadata(input: {
+  request: RuntimeResearchReadinessCanaryRequest;
+}): {
+  instrumentId: string;
+  outcomeId: string;
+  outcomeSide: "yes" | "no";
+  settlementMint: string;
+} {
+  const metadata = isRecord(input.request.metadata)
+    ? input.request.metadata
+    : {};
+  const instrumentId =
+    readOptionalString(metadata.instrumentId) ??
+    readOptionalString(input.request.pairSymbol);
+  const outcomeId = readOptionalString(metadata.outcomeId);
+  const outcomeSideRaw =
+    readOptionalString(metadata.outcomeSide)?.toLowerCase() ?? "yes";
+  const outcomeSide = outcomeSideRaw === "no" ? "no" : "yes";
+  const settlementMint =
+    readOptionalString(metadata.settlementMint) ?? USDC_MINT;
+  if (!instrumentId) {
+    throw new Error(
+      "strategy-lab-readiness-canary-dflow-instrument-id-required",
+    );
+  }
+  if (!outcomeId) {
+    throw new Error("strategy-lab-readiness-canary-dflow-outcome-id-required");
+  }
+  return {
+    instrumentId,
+    outcomeId,
+    outcomeSide,
+    settlementMint,
+  };
+}
+
 function readSmokeIntentFamily(
   request: RuntimeResearchReadinessCanaryRequest | Record<string, unknown>,
 ): RuntimeResearchVenueTxSmokeIntentFamily {
@@ -188,6 +227,7 @@ function readSmokeIntentFamily(
     "smokeIntentFamily" in request
       ? readOptionalString(request.smokeIntentFamily)
       : undefined;
+  if (raw === "prediction_order") return "prediction_order";
   if (raw === "conditional_spot_order") return "conditional_spot_order";
   if (raw === "clob_order") return "clob_order";
   return "spot_swap";
@@ -430,6 +470,9 @@ function allowsVenueTxSmokeLiveBypass(
   if (smokeIntentFamily === "clob_order") {
     return venueKey === "openbook";
   }
+  if (smokeIntentFamily === "prediction_order") {
+    return venueKey === "dflow";
+  }
   return false;
 }
 
@@ -521,6 +564,64 @@ function resolveCanaryPairContext(
   const allowSmokeLiveBypass = allowsVenueTxSmokeLiveBypass(request, venueKey);
   if (!runtimeVenueSupportsMode(capability, "live") && !allowSmokeLiveBypass) {
     throw new Error(`strategy-lab-readiness-canary-venue-not-live:${venueKey}`);
+  }
+
+  if (venueKey === "dflow") {
+    if (smokeIntentFamily !== "prediction_order") {
+      throw new Error(
+        `strategy-lab-readiness-canary-intent-family-unsupported:${venueKey}:${smokeIntentFamily}`,
+      );
+    }
+    const prediction = readDFlowSmokeMetadata({ request });
+    const assetKey =
+      request.assetKey ??
+      (request.subjectKind === "asset"
+        ? request.subjectKey
+        : prediction.instrumentId);
+    const requestedAdapterKey = readOptionalString(request.adapterKey);
+    const adapterKey =
+      requestedAdapterKey ??
+      capability.adapterKeys.find((candidate) => {
+        const registration = resolveExecutionAdapterRegistration(candidate);
+        return (
+          registration !== null &&
+          registration.venueKey === venueKey &&
+          registration.supportedIntentFamilies.includes(smokeIntentFamily) &&
+          (registration.supportedModes.includes("live") || allowSmokeLiveBypass)
+        );
+      });
+    if (!adapterKey) {
+      throw new Error(
+        `strategy-lab-readiness-canary-adapter-unavailable:${venueKey}`,
+      );
+    }
+    if (requestedAdapterKey) {
+      const registration =
+        resolveExecutionAdapterRegistration(requestedAdapterKey);
+      if (
+        !registration ||
+        registration.venueKey !== venueKey ||
+        !registration.supportedIntentFamilies.includes(smokeIntentFamily) ||
+        (!registration.supportedModes.includes("live") && !allowSmokeLiveBypass)
+      ) {
+        throw new Error(
+          `strategy-lab-readiness-canary-adapter-unavailable:${venueKey}:${requestedAdapterKey}:${smokeIntentFamily}`,
+        );
+      }
+    }
+    return {
+      venueKey,
+      assetKey,
+      pairSymbol: prediction.instrumentId,
+      adapterKey,
+      inputMint: prediction.settlementMint,
+      outputMint: prediction.outcomeId,
+      marketType: "prediction",
+      intentFamily: "prediction_order",
+      instrumentId: prediction.instrumentId,
+      predictionOutcomeId: prediction.outcomeId,
+      predictionOutcomeSide: prediction.outcomeSide,
+    };
   }
 
   if (venueKey === "drift") {
@@ -1175,6 +1276,309 @@ async function finalizeReadinessCanaryRun(
               : undefined,
         }),
   };
+}
+
+async function runDFlowVenueSmoke(input: {
+  env: Env;
+  request: RuntimeResearchReadinessCanaryRequest;
+  runId: string;
+  context: CanaryPairContext;
+  wallet: StrategyLabReadinessCanaryWallet;
+  targetNotionalUsd: string;
+  config: StrategyLabReadinessCanaryConfig;
+  lane: string;
+  submissionPath: CanarySubmissionPath;
+  rpc: SolanaRpc;
+  jupiter: JupiterClient;
+  dflow: DFlowClient;
+}): Promise<RuntimeResearchReadinessCanaryWorkflowResult> {
+  const instrumentId = input.context.instrumentId;
+  const outcomeId =
+    input.context.predictionOutcomeId ?? input.context.outputMint;
+  const outcomeSide = input.context.predictionOutcomeSide ?? "yes";
+  if (!instrumentId || !outcomeId) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: "submission-failed",
+        errorMessage:
+          "strategy-lab-readiness-canary-dflow-market-context-missing",
+      },
+    });
+  }
+
+  const smokeOrderSide = readSmokeOrderSide(input.request);
+  const metadata = isRecord(input.request.metadata)
+    ? input.request.metadata
+    : {};
+  const side =
+    smokeOrderSide === "sell"
+      ? (`sell_${outcomeSide}` as const)
+      : (`buy_${outcomeSide}` as const);
+  const orderInputMint =
+    smokeOrderSide === "sell"
+      ? input.context.outputMint
+      : input.context.inputMint;
+  const orderOutputMint =
+    smokeOrderSide === "sell"
+      ? input.context.inputMint
+      : input.context.outputMint;
+  const quantityAtomic =
+    smokeOrderSide === "sell"
+      ? readOptionalString(metadata.quantityAtomic)
+      : parseUsdAtomic(input.targetNotionalUsd).toString();
+  if (!quantityAtomic) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "invalid-request",
+        errorMessage:
+          "strategy-lab-readiness-canary-dflow-sell-quantity-required",
+      },
+    });
+  }
+  const quantityMode = smokeOrderSide === "sell" ? "base" : "notional";
+
+  const preview = await input.dflow.describePredictionIntent({
+    instrumentId,
+    outcomeId,
+    side,
+    quantityAtomic,
+    options: {
+      orderType: "market",
+      quantityMode,
+      marketNotionalCapUsd: Number(input.targetNotionalUsd),
+    },
+  });
+  const referencePriceMetadata = {
+    verdict: "allow" as const,
+    reason: null,
+    executionPrice:
+      preview.priceQuote === null ? null : String(preview.priceQuote),
+    executionDivergenceBps: null,
+    snapshot: {
+      marketId: preview.market.marketId,
+      title: preview.market.title,
+      eventTitle: preview.market.eventTitle,
+      marketStatus: preview.market.status,
+      result: preview.market.result,
+      endTime: preview.market.endTime,
+      settleTime: preview.market.settleTime,
+      outcomeSide: preview.outcomeSide,
+      outcomeMint: preview.outcomeMint,
+      settlementMint: preview.settlementMint,
+      priceQuote: preview.priceQuote,
+      estimatedNotionalUsd: preview.estimatedNotionalUsd,
+      openInterest: preview.marketAccount.openInterest,
+      volume: preview.marketAccount.volume,
+      redemptionStatus: preview.marketAccount.redemptionStatus,
+    },
+  };
+
+  const policy = normalizePolicy({
+    allowedMints: [orderInputMint, orderOutputMint],
+    minSolReserveLamports: input.config.minSolReserveLamports,
+    simulateOnly: false,
+    dryRun: false,
+    commitment: "finalized",
+    maxTradeAmountAtomic: quantityAtomic,
+  });
+
+  const runtimeBalancePolicy = await evaluatePrivyRuntimeBalancePolicy({
+    env: input.env,
+    lane: "safe",
+    walletAddress: input.wallet.walletAddress,
+    inputMint: orderInputMint,
+    amountAtomic: quantityAtomic,
+    minSolReserveLamports: input.config.minSolReserveLamports,
+    rpc: input.rpc,
+    runtimeDefaults: null,
+  });
+  if (!runtimeBalancePolicy.ok) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: runtimeBalancePolicy.reason,
+        metadata: {
+          submissionPath: input.submissionPath,
+          runtimePolicy: runtimeBalancePolicy.metadata,
+        },
+      },
+    });
+  }
+
+  const beforeBalances = await readBalances({
+    rpc: input.rpc,
+    walletAddress: input.wallet.walletAddress,
+    inputMint: orderInputMint,
+    outputMint: orderOutputMint,
+  });
+
+  try {
+    const result = await executeIntentViaRouter({
+      env: input.env,
+      venueKey: input.context.venueKey,
+      runtimeMode: "live",
+      experimentalLiveModeBypass:
+        readProofMode(input.request) === "venue_tx_smoke"
+          ? "venue_tx_smoke"
+          : undefined,
+      requireVenueRouting: true,
+      subjectControlBypassReason: "strategy_lab_readiness_canary",
+      execution: {
+        adapter: input.context.adapterKey,
+        params: {
+          lane: input.lane,
+          requireSimulation: true,
+        },
+      },
+      policy,
+      rpc: input.rpc,
+      jupiter: input.jupiter,
+      dflow: input.dflow,
+      privyWalletId: input.wallet.walletId,
+      intent: {
+        family: "prediction_order",
+        wallet: input.wallet.walletAddress,
+        venueKey: "dflow",
+        marketType: "prediction",
+        instrumentId,
+        outcomeId,
+        side,
+        quantityAtomic,
+        params: {
+          orderType: "market",
+          quantityMode,
+          marketNotionalCapUsd: Number(input.targetNotionalUsd),
+        },
+      },
+      log(level, message, meta) {
+        console[level]("strategy_lab.readiness_canary", {
+          runId: input.runId,
+          message,
+          ...(meta ?? {}),
+        });
+      },
+    });
+
+    if (
+      result.status !== "processed" &&
+      result.status !== "confirmed" &&
+      result.status !== "finalized"
+    ) {
+      const failure = classifyExecutionFailure(result.status, result.err);
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId: input.runId,
+        status: failure.status,
+        runPatch: {
+          errorCode: failure.errorCode,
+          errorMessage: failure.errorMessage,
+          metadata: {
+            submissionPath: {
+              ...input.submissionPath,
+              landingStatus: result.status,
+            },
+            executionMeta: asJsonObject(result.executionMeta),
+            referencePrice: referencePriceMetadata,
+          },
+        },
+      });
+    }
+
+    const transaction =
+      result.signature !== null
+        ? await input.rpc.getTransactionParsed(result.signature, {
+            commitment: "confirmed",
+          })
+        : null;
+    const feeLamports = readReconciliationFeeLamports(transaction);
+    const afterBalances = await readBalances({
+      rpc: input.rpc,
+      walletAddress: input.wallet.walletAddress,
+      inputMint: orderInputMint,
+      outputMint: orderOutputMint,
+    });
+    const actualInputDelta =
+      beforeBalances.inputAtomic - afterBalances.inputAtomic;
+    const actualOutputDelta =
+      orderOutputMint === SOL_MINT
+        ? afterBalances.outputAtomic - beforeBalances.outputAtomic + feeLamports
+        : afterBalances.outputAtomic - beforeBalances.outputAtomic;
+    const reconciliationPassed =
+      readTransactionError(transaction) === null &&
+      actualInputDelta > 0n &&
+      actualOutputDelta > 0n;
+
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: reconciliationPassed ? "success" : "failed",
+      runPatch: {
+        receiptId: `receipt_${input.runId.slice(-16)}`,
+        signature: result.signature ?? undefined,
+        errorCode: reconciliationPassed
+          ? undefined
+          : "strategy-lab-readiness-canary-reconciliation-failed",
+        errorMessage: reconciliationPassed
+          ? undefined
+          : "strategy-lab-readiness-canary-reconciliation-failed",
+        reconciliation: {
+          status: reconciliationPassed ? "passed" : "failed",
+          actualOutputAtomic: actualOutputDelta.toString(),
+          minExpectedOutAtomic: "1",
+          notes: [
+            `status=${result.status}`,
+            `actualInputAtomic=${actualInputDelta.toString()}`,
+            `smokeOrderSide=${smokeOrderSide}`,
+          ],
+        },
+        evidenceRefs: [
+          {
+            kind: "live_canary",
+            ref: `signature:${result.signature ?? "missing"}`,
+          },
+        ],
+        metadata: {
+          submissionPath: {
+            ...input.submissionPath,
+            landingStatus: result.status,
+          },
+          executionMeta: asJsonObject(result.executionMeta),
+          referencePrice: referencePriceMetadata,
+          feeLamports: feeLamports.toString(),
+          beforeBalances: {
+            inputAtomic: beforeBalances.inputAtomic.toString(),
+            outputAtomic: beforeBalances.outputAtomic.toString(),
+            solLamports: beforeBalances.solLamports.toString(),
+          },
+          afterBalances: {
+            inputAtomic: afterBalances.inputAtomic.toString(),
+            outputAtomic: afterBalances.outputAtomic.toString(),
+            solLamports: afterBalances.solLamports.toString(),
+          },
+        },
+      },
+    });
+  } catch (error) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "failed",
+      runPatch: {
+        errorCode: normalizeExecutionErrorCode({
+          error,
+          fallback: "submission-failed",
+        }),
+        errorMessage: executionErrorMessage(error),
+        metadata: {
+          submissionPath: input.submissionPath,
+          referencePrice: referencePriceMetadata,
+        },
+      },
+    });
+  }
 }
 
 async function runJupiterConditionalSpotSmoke(input: {
@@ -3018,6 +3422,8 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       "https://lite-api.jup.ag",
     input.env.JUPITER_API_KEY,
   );
+  const dflow =
+    context.venueKey === "dflow" ? new DFlowClient(input.env) : undefined;
   const drift =
     context.venueKey === "drift" ? new DriftClient(input.env) : undefined;
   const raydium =
@@ -3042,6 +3448,26 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       rpc,
       jupiter,
       drift,
+    });
+  }
+  if (
+    context.marketType === "prediction" &&
+    context.venueKey === "dflow" &&
+    dflow
+  ) {
+    return await runDFlowVenueSmoke({
+      env: input.env,
+      request: input.request,
+      runId,
+      context,
+      wallet,
+      targetNotionalUsd,
+      config,
+      lane: laneResolution.lane,
+      submissionPath,
+      rpc,
+      jupiter,
+      dflow,
     });
   }
   if (smokeIntentFamily === "clob_order") {

@@ -36,11 +36,16 @@ export type RuntimeOperatorVenueTxSmokeInput = {
   pairSymbol?: string;
   adapterKey?: string;
   targetNotionalUsd?: string;
-  smokeIntentFamily?: "spot_swap" | "conditional_spot_order" | "clob_order";
+  smokeIntentFamily?:
+    | "spot_swap"
+    | "conditional_spot_order"
+    | "clob_order"
+    | "prediction_order";
   smokeOrderSide?: "buy" | "sell";
   tightenOnFailure?: boolean;
   failureControlMode?: "disable_live" | "engage_kill_switch";
   killDrillNotes?: string[];
+  metadata?: Record<string, unknown>;
 };
 
 export type RuntimeOperatorControls = {

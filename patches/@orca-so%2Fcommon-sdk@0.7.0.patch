@@ -10,7 +10,7 @@ index a1915973084b9f5c69ddad9922b8b5c8c63b46bf..e634274d137a19cb9028afa139bb36d3
  const spl_token_1 = require("@solana/spl-token");
  const web3_js_1 = require("@solana/web3.js");
 -const sha256_1 = require("@noble/hashes/sha256");
-+const sha256_1 = require("@noble/hashes/sha2.js");
++const sha256_1 = require("@noble/hashes/sha2");
  const tiny_invariant_1 = __importDefault(require("tiny-invariant"));
  const math_1 = require("../math");
  const web3_1 = require("../web3");
