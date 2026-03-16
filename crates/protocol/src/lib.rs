@@ -327,6 +327,16 @@ pub struct RuntimeRiskVerdict {
 pub struct RuntimeExecutionSlice {
     pub slice_id: String,
     pub action: RuntimeExecutionAction,
+    #[serde(default = "default_runtime_execution_slice_market_type")]
+    pub market_type: RuntimeVenueMarketType,
+    #[serde(default)]
+    pub instrument_id: Option<String>,
+    #[serde(default)]
+    pub quantity_atomic: Option<String>,
+    #[serde(default)]
+    pub reference_price_usd: Option<String>,
+    #[serde(default)]
+    pub reduce_only: bool,
     pub input_mint: String,
     pub output_mint: String,
     pub input_amount_atomic: String,
@@ -353,6 +363,10 @@ pub struct RuntimeExecutionPlan {
     pub simulate_only: bool,
     pub dry_run: bool,
     pub slices: Vec<RuntimeExecutionSlice>,
+}
+
+fn default_runtime_execution_slice_market_type() -> RuntimeVenueMarketType {
+    RuntimeVenueMarketType::Spot
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

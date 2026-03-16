@@ -69,6 +69,27 @@
             "type": "string",
             "enum": ["buy", "sell", "rebalance"]
           },
+          "marketType": {
+            "default": "spot",
+            "type": "string",
+            "enum": ["spot", "perp", "options"]
+          },
+          "instrumentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "quantityAtomic": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "referencePriceUsd": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "reduceOnly": {
+            "type": "boolean",
+            "default": false
+          },
           "inputMint": {
             "type": "string",
             "minLength": 32,

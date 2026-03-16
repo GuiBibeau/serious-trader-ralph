@@ -8,9 +8,9 @@ use std::{
 use feature_cache::DerivedMarketFeatureSnapshot;
 use protocol::{
     RuntimeDeploymentRecord, RuntimeExecutionAction, RuntimeExecutionPlan, RuntimeExecutionSlice,
-    RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerSnapshot, RuntimeMode, RuntimeRiskDecision,
-    RuntimeRiskVerdict, RuntimeRunRecord, RuntimeStrategySpec, RuntimeVenueMarketType,
-    RuntimeVenueOrderType, RUNTIME_PROTOCOL_SCHEMA_VERSION,
+    RuntimeLane, RuntimeLedgerBalance, RuntimeLedgerSnapshot, RuntimeMode, RuntimePositionSide,
+    RuntimeRiskDecision, RuntimeRiskVerdict, RuntimeRunRecord, RuntimeStrategySpec,
+    RuntimeVenueMarketType, RuntimeVenueOrderType, RUNTIME_PROTOCOL_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -466,6 +466,61 @@ fn build_plan(
     );
     let slippage_bps = input.deployment.policy.max_slippage_bps;
     let notional_usd = format_usd_cents(decision.notional_cents);
+    let idempotency_key = format!("{}:{}", input.deployment.deployment_id, input.run.run_id);
+    let slice = match input.deployment.pair.market_type {
+        RuntimeVenueMarketType::Spot => build_spot_slice(
+            input,
+            &decision,
+            mid_price,
+            quote_decimals,
+            base_decimals,
+            notional_usd.clone(),
+            slippage_bps,
+        ),
+        RuntimeVenueMarketType::Perp => build_perp_slice(
+            input,
+            &decision,
+            mid_price,
+            quote_decimals,
+            base_decimals,
+            notional_usd.clone(),
+            slippage_bps,
+        ),
+        RuntimeVenueMarketType::Options => {
+            return Err(ExecutionPlannerError::UnsupportedVenueCapability {
+                venue_key: input.deployment.venue_key.clone(),
+                reason: "options-market-not-supported".to_string(),
+            });
+        }
+    };
+
+    Ok(RuntimeExecutionPlan {
+        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+        plan_id: build_plan_id(&idempotency_key),
+        deployment_id: input.deployment.deployment_id.clone(),
+        venue_key: input.deployment.venue_key.clone(),
+        owner_user_id: Some(input.deployment.owner_user_id.clone()),
+        sleeve_id: Some(input.deployment.sleeve_id.clone()),
+        run_id: input.run.run_id.clone(),
+        created_at: now_rfc3339(),
+        mode: input.deployment.mode.clone(),
+        lane,
+        idempotency_key,
+        simulate_only,
+        dry_run,
+        slices: vec![slice],
+    })
+}
+
+fn build_spot_slice(
+    input: &ExecutionPlannerInput,
+    decision: &StrategyTradeDecision,
+    mid_price: f64,
+    quote_decimals: u8,
+    base_decimals: u8,
+    notional_usd: String,
+    slippage_bps: u16,
+) -> RuntimeExecutionSlice {
     let input_amount_atomic = match decision.direction {
         SwapDirection::BuyBase => atomic_from_usd_cents(decision.notional_cents, quote_decimals),
         SwapDirection::SellBase => {
@@ -495,33 +550,55 @@ fn build_plan(
             input.deployment.pair.quote_mint.clone(),
         ),
     };
-    let idempotency_key = format!("{}:{}", input.deployment.deployment_id, input.run.run_id);
 
-    Ok(RuntimeExecutionPlan {
-        schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
-        plan_id: build_plan_id(&idempotency_key),
-        deployment_id: input.deployment.deployment_id.clone(),
-        venue_key: input.deployment.venue_key.clone(),
-        owner_user_id: Some(input.deployment.owner_user_id.clone()),
-        sleeve_id: Some(input.deployment.sleeve_id.clone()),
-        run_id: input.run.run_id.clone(),
-        created_at: now_rfc3339(),
-        mode: input.deployment.mode.clone(),
-        lane,
-        idempotency_key,
-        simulate_only,
-        dry_run,
-        slices: vec![RuntimeExecutionSlice {
-            slice_id: "slice_1".to_string(),
-            action: decision.action,
-            input_mint,
-            output_mint,
-            input_amount_atomic,
-            min_output_amount_atomic,
-            notional_usd,
-            slippage_bps,
-        }],
-    })
+    RuntimeExecutionSlice {
+        slice_id: "slice_1".to_string(),
+        action: decision.action.clone(),
+        market_type: RuntimeVenueMarketType::Spot,
+        instrument_id: None,
+        quantity_atomic: None,
+        reference_price_usd: None,
+        reduce_only: false,
+        input_mint,
+        output_mint,
+        input_amount_atomic,
+        min_output_amount_atomic,
+        notional_usd,
+        slippage_bps,
+    }
+}
+
+fn build_perp_slice(
+    input: &ExecutionPlannerInput,
+    decision: &StrategyTradeDecision,
+    mid_price: f64,
+    quote_decimals: u8,
+    base_decimals: u8,
+    notional_usd: String,
+    slippage_bps: u16,
+) -> RuntimeExecutionSlice {
+    let quantity = if mid_price <= 0.0 {
+        0.0
+    } else {
+        ((decision.notional_cents as f64) / 100.0) / mid_price
+    };
+    let quantity_atomic = atomic_from_token_amount(quantity, base_decimals);
+
+    RuntimeExecutionSlice {
+        slice_id: "slice_1".to_string(),
+        action: decision.action.clone(),
+        market_type: RuntimeVenueMarketType::Perp,
+        instrument_id: Some(input.deployment.pair.symbol.clone()),
+        quantity_atomic: Some(quantity_atomic),
+        reference_price_usd: Some(format!("{mid_price:.4}")),
+        reduce_only: false,
+        input_mint: input.deployment.pair.quote_mint.clone(),
+        output_mint: input.deployment.pair.base_mint.clone(),
+        input_amount_atomic: atomic_from_usd_cents(decision.notional_cents, quote_decimals),
+        min_output_amount_atomic: None,
+        notional_usd,
+        slippage_bps,
+    }
 }
 
 fn strategy_trade_decision(
@@ -544,11 +621,15 @@ fn ensure_deployment_venue_support(
         venue_catalog.ensure_mode_supported(&deployment.venue_key, &deployment.mode)?;
     if !capability
         .market_types
-        .contains(&RuntimeVenueMarketType::Spot)
+        .contains(&deployment.pair.market_type)
     {
         return Err(ExecutionPlannerError::UnsupportedVenueCapability {
             venue_key: deployment.venue_key.clone(),
-            reason: "spot-market-not-supported".to_string(),
+            reason: match deployment.pair.market_type {
+                RuntimeVenueMarketType::Spot => "spot-market-not-supported".to_string(),
+                RuntimeVenueMarketType::Perp => "perp-market-not-supported".to_string(),
+                RuntimeVenueMarketType::Options => "options-market-not-supported".to_string(),
+            },
         });
     }
     if !capability
@@ -997,7 +1078,12 @@ fn current_base_exposure_cents(
             &position.quantity_atomic,
         )?;
         let decimals = balance_decimals(&input.ledger_snapshot.balances, base_mint, 9);
-        let quantity_tokens = quantity / 10_f64.powi(i32::from(decimals));
+        let signed_quantity = match position.side {
+            RuntimePositionSide::Long => quantity,
+            RuntimePositionSide::Short => -quantity,
+            RuntimePositionSide::Flat => 0.0,
+        };
+        let quantity_tokens = signed_quantity / 10_f64.powi(i32::from(decimals));
         let mark_price = position
             .mark_price_usd
             .as_deref()
@@ -1638,6 +1724,38 @@ mod tests {
         input
     }
 
+    fn funding_input(
+        run_id: &str,
+        funding_rate_bps: &str,
+        basis_bps: &str,
+        open_interest_delta_bps: &str,
+    ) -> ExecutionPlannerInput {
+        let mut input = input(
+            run_id,
+            "funding_carry",
+            RuntimeMode::Paper,
+            RuntimeLane::Safe,
+            "0.0",
+        );
+        input.deployment.venue_key = "drift".to_string();
+        input.deployment.pair = RuntimePair {
+            symbol: "SOL-PERP".to_string(),
+            base_mint: "So11111111111111111111111111111111111111112".to_string(),
+            quote_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            market_type: RuntimeVenueMarketType::Perp,
+        };
+        input.feature_snapshot.cache_key = "fixture:SOL-PERP".to_string();
+        input.feature_snapshot.symbol = "SOL-PERP".to_string();
+        input.feature_snapshot.source = "fixture.drift".to_string();
+        input.feature_snapshot.mid_price_usd = "100.00".to_string();
+        input.feature_snapshot.funding_rate_bps = Some(funding_rate_bps.to_string());
+        input.feature_snapshot.basis_bps = Some(basis_bps.to_string());
+        input.feature_snapshot.open_interest_delta_bps = Some(open_interest_delta_bps.to_string());
+        input.feature_snapshot.realized_volatility_bps = Some("12.0".to_string());
+        input.ledger_snapshot.positions = Vec::new();
+        input
+    }
+
     #[test]
     fn builds_shadow_dca_plans_deterministically() {
         let planner = planner("shadow-dca");
@@ -2039,5 +2157,26 @@ mod tests {
         );
         assert_eq!(result.plan.slices[0].input_amount_atomic, "0");
         assert_eq!(result.plan.slices[0].notional_usd, "0.00");
+    }
+
+    #[test]
+    fn funding_carry_builds_perp_execution_slices_for_drift() {
+        let planner = planner("funding-carry-drift");
+        let result = planner
+            .plan_and_store(&funding_input("run_16", "12.0", "2.0", "50.0"))
+            .expect("plan to store");
+
+        let slice = &result.plan.slices[0];
+        assert_eq!(slice.action, RuntimeExecutionAction::Sell);
+        assert_eq!(slice.market_type, RuntimeVenueMarketType::Perp);
+        assert_eq!(slice.instrument_id.as_deref(), Some("SOL-PERP"));
+        assert_eq!(slice.quantity_atomic.as_deref(), Some("50000000"));
+        assert_eq!(slice.reference_price_usd.as_deref(), Some("100.0000"));
+        assert_eq!(
+            slice.input_mint,
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        );
+        assert_eq!(slice.input_amount_atomic, "5000000");
+        assert_eq!(slice.min_output_amount_atomic, None);
     }
 }

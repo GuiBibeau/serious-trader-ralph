@@ -8,7 +8,7 @@ draft without pretending the runtime can already execute it end to end.
 - Strategy: `funding_carry`
 - Venue: `drift`
 - Instrument: `SOL-PERP`
-- Target state after this slice: `draft`
+- Target state after this slice: `shadow`
 
 ## Source basis
 
@@ -65,20 +65,24 @@ bun run strategy-lab:curate \
   `open_interest_delta_bps` from a mixed spot plus perp replay
 - the backtesting engine can evaluate `funding_carry` on a mixed Drift plus
   spot replay without polluting the observation stream with spot events
+- the runtime execution contract can now describe a bounded perp slice without
+  pretending it is a spot swap
+- the execution planner can build a Drift perp paper or shadow plan for
+  `funding_carry`
+- the runtime paper execution path can simulate a bounded Drift short open and
+  close lifecycle with ledger position updates
 
-## What is still blocked before shadow or paper testing
+## What is still blocked before paper testing
 
-- the runtime execution-plan contract is still swap-shaped, so a perp strategy
-  cannot yet progress through the same runtime execution path as spot
-- `execution-planner` still enforces spot-only venue capability checks for the
-  production runtime plan builder
-- `services/runtime-rs` paper execution is still spot-swap shaped, so there is
-  no honest repo-owned paper lifecycle for Drift perps yet
-- the replay fixture and cost model used here are synthetic test fixtures, not
-  a checked-in Drift research corpus with operator-reviewed assumptions
+- the replay fixture and cost model used here are still synthetic validation
+  fixtures, not an operator-reviewed Drift research corpus
+- the strategy still needs shadow soak evidence through the normal harness flow
+- paper activation still requires explicit operator approval under the
+  strategy-lab promotion gates
 
 ## Honest promotion verdict
 
-- Highest justified state after this slice: `draft`
-- Stronger than before: reproducible feature and backtest evidence now exists
-- Not justified yet: `shadow`, `paper`, or any money-state promotion
+- Highest justified state after this slice: `shadow`
+- Stronger than before: the repo now has reproducible feature, backtest,
+  planner, and paper-lifecycle evidence for a bounded Drift perp validation path
+- Not justified yet: `paper`, `limited_live`, or any money-state promotion

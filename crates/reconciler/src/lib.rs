@@ -994,7 +994,7 @@ mod tests {
 
     use protocol::{
         RuntimeExecutionAction, RuntimeExecutionSlice, RuntimeLane, RuntimeLedgerTotals,
-        RuntimeMode, RuntimePositionSide,
+        RuntimeMode, RuntimePositionSide, RuntimeVenueMarketType,
     };
 
     use super::*;
@@ -1038,6 +1038,11 @@ mod tests {
             slices: vec![RuntimeExecutionSlice {
                 slice_id: "slice_1".to_string(),
                 action: RuntimeExecutionAction::Buy,
+                market_type: RuntimeVenueMarketType::Spot,
+                instrument_id: None,
+                quantity_atomic: None,
+                reference_price_usd: None,
+                reduce_only: false,
                 input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
                 output_mint: "So11111111111111111111111111111111111111112".to_string(),
                 input_amount_atomic: "5000000".to_string(),
