@@ -4329,6 +4329,8 @@ mod tests {
                     price_usd: (*price).to_string(),
                     bid_price_usd: Some((*price).to_string()),
                     ask_price_usd: Some((*price).to_string()),
+                    funding_rate_bps: None,
+                    open_interest_usd: None,
                     observed_at: observed_at.clone(),
                     received_at: observed_at,
                     sequence: 100 + index as u64,

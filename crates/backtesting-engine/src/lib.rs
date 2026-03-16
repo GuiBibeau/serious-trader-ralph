@@ -7,7 +7,7 @@ use std::{
 use feature_cache::{
     DerivedMarketFeatureSnapshot, FeatureCache, FeatureCacheConfig, FeatureCacheError,
 };
-use market_adapters::{FeedGatewayError, FeedReplayFixture};
+use market_adapters::{FeedGatewayError, FeedReplayFixture, MarketFeedEvent};
 use protocol::{
     RuntimeBacktestBaseline, RuntimeBacktestBaselineComparison, RuntimeBacktestConfig,
     RuntimeBacktestFoldReport, RuntimeBacktestMetrics, RuntimeBacktestRegimeMetrics,
@@ -239,6 +239,9 @@ struct Calibration {
     confirmation_threshold_bps: f64,
     low_vol_threshold_bps: f64,
     high_vol_threshold_bps: f64,
+    funding_threshold_bps: f64,
+    basis_threshold_bps: f64,
+    open_interest_crowding_threshold_bps: f64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -575,6 +578,7 @@ fn missing_required_regime_keys(
 
 fn build_observations(
     fixture: &FeedReplayFixture,
+    config: &RuntimeBacktestConfig,
     regime_tags: &[RuntimeRegimeTagRecord],
 ) -> Result<Vec<Observation>, BacktestingEngineError> {
     let mut market_events = fixture.market_events.clone();
@@ -603,6 +607,9 @@ fn build_observations(
             slot_index += 1;
         }
         feature_cache.ingest_market_event(event.clone())?;
+        if !event_matches_backtest_market(event, config) {
+            continue;
+        }
         let snapshot = feature_cache.snapshot_at(observed_at_ts);
         let stream = snapshot
             .feature_streams
@@ -649,6 +656,21 @@ fn build_observations(
         });
     }
     Ok(observations)
+}
+
+fn event_matches_backtest_market(event: &MarketFeedEvent, config: &RuntimeBacktestConfig) -> bool {
+    if event.symbol != config.pair_symbol {
+        return false;
+    }
+    match config.market_type {
+        protocol::RuntimeVenueMarketType::Spot => !is_perp_symbol(&event.symbol),
+        protocol::RuntimeVenueMarketType::Perp => is_perp_symbol(&event.symbol),
+        protocol::RuntimeVenueMarketType::Options => false,
+    }
+}
+
+fn is_perp_symbol(symbol: &str) -> bool {
+    symbol.trim().to_ascii_uppercase().ends_with("-PERP")
 }
 
 fn classify_regime(regime_key: &str, snapshot: &DerivedMarketFeatureSnapshot) -> String {
@@ -706,6 +728,23 @@ fn calibrate_strategy(
             parse_optional_metric(record.feature.realized_volatility_bps.as_deref())
         })
         .collect::<Vec<_>>();
+    let funding_abs = observations
+        .iter()
+        .filter_map(|record| parse_optional_metric(record.feature.funding_rate_bps.as_deref()))
+        .map(f64::abs)
+        .collect::<Vec<_>>();
+    let basis_abs = observations
+        .iter()
+        .filter_map(|record| parse_optional_metric(record.feature.basis_bps.as_deref()))
+        .map(f64::abs)
+        .collect::<Vec<_>>();
+    let open_interest_abs = observations
+        .iter()
+        .filter_map(|record| {
+            parse_optional_metric(record.feature.open_interest_delta_bps.as_deref())
+        })
+        .map(f64::abs)
+        .collect::<Vec<_>>();
     let mut calibration = Calibration {
         primary_threshold_bps: percentile(short_abs.clone(), 0.5).unwrap_or(8.0).max(5.0),
         confirmation_threshold_bps: percentile(long_abs.clone(), 0.5).unwrap_or(10.0).max(8.0),
@@ -713,6 +752,11 @@ fn calibrate_strategy(
             .unwrap_or(12.0)
             .max(8.0),
         high_vol_threshold_bps: percentile(volatility, 0.66).unwrap_or(20.0).max(12.0),
+        funding_threshold_bps: percentile(funding_abs, 0.5).unwrap_or(8.0).max(4.0),
+        basis_threshold_bps: percentile(basis_abs, 0.33).unwrap_or(4.0).max(1.0),
+        open_interest_crowding_threshold_bps: percentile(open_interest_abs, 0.66)
+            .unwrap_or(250.0)
+            .max(50.0),
     };
     if strategy_spec.strategy_key == "breakout" {
         calibration.primary_threshold_bps = calibration.primary_threshold_bps.max(15.0);
@@ -732,6 +776,12 @@ fn target_exposure(
         parse_optional_metric(observation.feature.long_return_bps.as_deref()).unwrap_or(0.0);
     let realized_volatility =
         parse_optional_metric(observation.feature.realized_volatility_bps.as_deref())
+            .unwrap_or(0.0);
+    let funding_rate =
+        parse_optional_metric(observation.feature.funding_rate_bps.as_deref()).unwrap_or(0.0);
+    let basis = parse_optional_metric(observation.feature.basis_bps.as_deref()).unwrap_or(0.0);
+    let open_interest_delta =
+        parse_optional_metric(observation.feature.open_interest_delta_bps.as_deref())
             .unwrap_or(0.0);
 
     match strategy_spec.strategy_key.as_str() {
@@ -788,7 +838,41 @@ fn target_exposure(
                 base_exposure
             }
         }
+        "funding_carry" => funding_carry_exposure(
+            funding_rate,
+            basis,
+            open_interest_delta,
+            realized_volatility,
+            calibration,
+        ),
         _ => 0.0,
+    }
+}
+
+fn funding_carry_exposure(
+    funding_rate_bps: f64,
+    basis_bps: f64,
+    open_interest_delta_bps: f64,
+    realized_volatility_bps: f64,
+    calibration: &Calibration,
+) -> f64 {
+    if funding_rate_bps.abs() < calibration.funding_threshold_bps {
+        return 0.0;
+    }
+    if open_interest_delta_bps.abs() > calibration.open_interest_crowding_threshold_bps {
+        return 0.0;
+    }
+    if realized_volatility_bps > calibration.high_vol_threshold_bps {
+        return 0.0;
+    }
+
+    let funding_direction = -funding_rate_bps.signum();
+    if basis_bps.abs() <= calibration.basis_threshold_bps
+        || basis_bps.signum() == funding_rate_bps.signum()
+    {
+        funding_direction
+    } else {
+        0.0
     }
 }
 
@@ -924,7 +1008,7 @@ fn build_report(
 ) -> Result<RuntimeBacktestReport, BacktestingEngineError> {
     validate_config(&input.config)?;
     let fixture = load_replay_fixture(&input.replay_corpus)?;
-    let observations = build_observations(&fixture, &input.regime_tags)?;
+    let observations = build_observations(&fixture, &input.config, &input.regime_tags)?;
     let required_observations = input.config.training_window_observations as usize
         + input.config.purge_observations as usize
         + input.config.testing_window_observations as usize;
@@ -1248,6 +1332,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use market_adapters::{FeedReplayFixture, MarketFeedEvent, SlotFeedEvent};
     use protocol::{
         RuntimeBacktestBaseline, RuntimeBacktestWindowMode, RuntimeCodeRevisionRef,
         RuntimeDatasetSnapshotRef, RuntimeResearchCitation, RuntimeResearchExperimentStatus,
@@ -1361,6 +1446,271 @@ mod tests {
 
     fn allocation_strategy_spec() -> RuntimeStrategySpec {
         strategy_core::StrategyKind::Dca.spec()
+    }
+
+    fn funding_strategy_spec() -> RuntimeStrategySpec {
+        strategy_core::StrategyKind::FundingCarry.spec()
+    }
+
+    fn funding_fixture() -> FeedReplayFixture {
+        let base_mint = "So11111111111111111111111111111111111111112";
+        let quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let timestamps = [
+            "2026-03-07T00:00:00Z",
+            "2026-03-07T00:00:05Z",
+            "2026-03-07T00:00:10Z",
+            "2026-03-07T00:00:15Z",
+            "2026-03-07T00:00:20Z",
+            "2026-03-07T00:00:25Z",
+        ];
+        let spot_prices = [
+            "99.9500", "99.8500", "99.9500", "99.8500", "99.9500", "99.8500",
+        ];
+        let perp_prices = [
+            "100.0000", "99.8000", "100.0000", "99.8000", "100.0000", "99.8000",
+        ];
+        let funding_rates = [
+            "12.0000", "-12.0000", "12.0000", "-12.0000", "12.0000", "-12.0000",
+        ];
+        let open_interest = [
+            "100000.0000",
+            "100100.0000",
+            "100200.0000",
+            "100300.0000",
+            "100400.0000",
+            "100500.0000",
+        ];
+        let mut market_events = Vec::new();
+        let mut slot_events = Vec::new();
+        for (index, observed_at) in timestamps.iter().enumerate() {
+            let sequence = (index as u64) * 2;
+            market_events.push(MarketFeedEvent {
+                source: "fixture.jupiter".to_string(),
+                symbol: "SOL/USDC".to_string(),
+                base_mint: base_mint.to_string(),
+                quote_mint: quote_mint.to_string(),
+                price_usd: spot_prices[index].to_string(),
+                bid_price_usd: Some(format!(
+                    "{:.4}",
+                    spot_prices[index].parse::<f64>().expect("spot price") - 0.01
+                )),
+                ask_price_usd: Some(format!(
+                    "{:.4}",
+                    spot_prices[index].parse::<f64>().expect("spot price") + 0.01
+                )),
+                funding_rate_bps: None,
+                open_interest_usd: None,
+                observed_at: (*observed_at).to_string(),
+                received_at: (*observed_at).to_string(),
+                sequence: sequence + 1,
+            });
+            market_events.push(MarketFeedEvent {
+                source: "fixture.drift".to_string(),
+                symbol: "SOL-PERP".to_string(),
+                base_mint: base_mint.to_string(),
+                quote_mint: quote_mint.to_string(),
+                price_usd: perp_prices[index].to_string(),
+                bid_price_usd: Some(format!(
+                    "{:.4}",
+                    perp_prices[index].parse::<f64>().expect("perp price") - 0.01
+                )),
+                ask_price_usd: Some(format!(
+                    "{:.4}",
+                    perp_prices[index].parse::<f64>().expect("perp price") + 0.01
+                )),
+                funding_rate_bps: Some(funding_rates[index].to_string()),
+                open_interest_usd: Some(open_interest[index].to_string()),
+                observed_at: (*observed_at).to_string(),
+                received_at: (*observed_at).to_string(),
+                sequence: sequence + 2,
+            });
+            slot_events.push(SlotFeedEvent {
+                source: "fixture.slot".to_string(),
+                commitment: market_adapters::SlotCommitment::Processed,
+                slot: 310_500_000 + index as u64,
+                observed_at: (*observed_at).to_string(),
+                sequence: index as u64 + 1,
+            });
+        }
+        FeedReplayFixture {
+            schema_version: "v1".to_string(),
+            market_events,
+            slot_events,
+        }
+    }
+
+    fn write_fixture(name: &str, fixture: &FeedReplayFixture) -> String {
+        let root = std::env::temp_dir().join(format!(
+            "backtesting-engine-fixture-{name}-{}",
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join("fixture.json");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(fixture).expect("fixture json"),
+        )
+        .expect("fixture file");
+        path.display().to_string()
+    }
+
+    fn funding_dataset_snapshots(fixture_uri: &str) -> Vec<RuntimeDatasetSnapshotRef> {
+        vec![RuntimeDatasetSnapshotRef {
+            dataset_id: "dataset_feed_replay_sol_perp_market_events".to_string(),
+            snapshot_id: "snapshot_2026_03_07_funding_carry".to_string(),
+            captured_at: "2026-03-10T14:00:00.000Z".to_string(),
+            uri: Some(format!("{fixture_uri}#marketEvents")),
+            content_digest: Some("sha256:funding-fixture".to_string()),
+        }]
+    }
+
+    fn funding_experiment(fixture_uri: &str) -> RuntimeResearchExperimentRecord {
+        let mut record = experiment();
+        record.experiment_id = "experiment_perp_funding_carry_shadow".to_string();
+        record.hypothesis_id = "hypothesis_perp_funding_carry".to_string();
+        record.strategy_key = "funding_carry".to_string();
+        record.venue_keys = vec!["drift".to_string()];
+        record.dataset_snapshots = funding_dataset_snapshots(fixture_uri);
+        record.summary = "Funding carry backtest experiment fixture".to_string();
+        record
+    }
+
+    fn funding_replay_corpus(fixture_uri: &str) -> RuntimeReplayCorpusRecord {
+        RuntimeReplayCorpusRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            corpus_id: "replay_corpus_sol_perp_feature_cache".to_string(),
+            title: "funding carry replay".to_string(),
+            summary: "Mixed spot/perp replay corpus for funding carry tests.".to_string(),
+            replay_kind: protocol::RuntimeReplayCorpusKind::FeedGatewayV1,
+            created_at: "2026-03-10T14:00:00.000Z".to_string(),
+            updated_at: "2026-03-10T14:00:00.000Z".to_string(),
+            venue_keys: vec!["jupiter".to_string(), "drift".to_string()],
+            asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+            pair_symbols: vec!["SOL/USDC".to_string(), "SOL-PERP".to_string()],
+            chain_keys: vec!["solana-mainnet".to_string()],
+            dataset_snapshots: funding_dataset_snapshots(fixture_uri),
+            fixture_uri: Some(fixture_uri.to_string()),
+            content_digest: Some("sha256:funding-fixture".to_string()),
+            deterministic_seed: Some(200),
+            tags: vec!["test".to_string(), "perp".to_string()],
+            notes: None,
+        }
+    }
+
+    fn funding_feature_definitions(fixture_uri: &str) -> Vec<RuntimeFeatureDefinitionRecord> {
+        [
+            (
+                "feature_funding_rate_bps_v1",
+                "funding_rate_bps",
+                "Funding rate",
+                "Funding edge for Drift perps.",
+            ),
+            (
+                "feature_basis_bps_v1",
+                "basis_bps",
+                "Basis",
+                "Basis versus spot reference price.",
+            ),
+            (
+                "feature_open_interest_delta_bps_v1",
+                "open_interest_delta_bps",
+                "Open-interest delta",
+                "Open-interest crowding signal.",
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(feature_id, feature_key, title, summary)| RuntimeFeatureDefinitionRecord {
+                schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                feature_id: feature_id.to_string(),
+                feature_key: feature_key.to_string(),
+                version: "1.0.0".to_string(),
+                title: title.to_string(),
+                summary: summary.to_string(),
+                status: protocol::RuntimeFeatureCatalogStatus::Active,
+                market_type: protocol::RuntimeVenueMarketType::Perp,
+                venue_keys: vec!["drift".to_string()],
+                asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+                pair_symbols: vec!["SOL-PERP".to_string()],
+                input_requirements: vec![protocol::RuntimeFeatureInputRequirement {
+                    input_key: "mid_price_usd".to_string(),
+                    required: true,
+                    freshness_ms: Some(60_000),
+                    notes: None,
+                }],
+                derived_from_feature_keys: Vec::new(),
+                freshness_slo_ms: 60_000,
+                max_allowed_drift_bps: 100,
+                min_coverage_bps: 10_000,
+                provenance: protocol::RuntimeCatalogProvenance {
+                    generated_by: "tests".to_string(),
+                    generated_revision: Some("seed".to_string()),
+                    generated_at: "2026-03-10T14:00:00.000Z".to_string(),
+                    notes: None,
+                },
+                dataset_snapshots: funding_dataset_snapshots(fixture_uri),
+                created_at: "2026-03-10T14:00:00.000Z".to_string(),
+                updated_at: "2026-03-10T14:00:00.000Z".to_string(),
+                tags: vec!["test".to_string(), "perp".to_string()],
+                notes: None,
+            },
+        )
+        .collect()
+    }
+
+    fn funding_regime_tags(fixture_uri: &str) -> Vec<RuntimeRegimeTagRecord> {
+        [
+            (
+                "regime_liquidity_state_v1",
+                "liquidity_state",
+                protocol::RuntimeRegimeDimension::Liquidity,
+                "normal",
+                vec!["spread_bps".to_string()],
+            ),
+            (
+                "regime_volatility_band_v1",
+                "volatility_band",
+                protocol::RuntimeRegimeDimension::Volatility,
+                "medium",
+                vec!["realized_volatility_bps".to_string()],
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(regime_tag_id, regime_key, dimension, value, source_feature_keys)| {
+                RuntimeRegimeTagRecord {
+                    schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+                    regime_tag_id: regime_tag_id.to_string(),
+                    regime_key: regime_key.to_string(),
+                    version: "1.0.0".to_string(),
+                    title: regime_key.replace('_', " "),
+                    summary: "Funding carry test regime".to_string(),
+                    status: protocol::RuntimeFeatureCatalogStatus::Active,
+                    dimension,
+                    value: value.to_string(),
+                    market_type: protocol::RuntimeVenueMarketType::Perp,
+                    venue_keys: vec!["drift".to_string()],
+                    asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+                    pair_symbols: vec!["SOL-PERP".to_string()],
+                    source_feature_keys,
+                    freshness_slo_ms: 60_000,
+                    max_allowed_drift_bps: 100,
+                    min_confidence_bps: 8_000,
+                    provenance: protocol::RuntimeCatalogProvenance {
+                        generated_by: "tests".to_string(),
+                        generated_revision: Some("seed".to_string()),
+                        generated_at: "2026-03-10T14:00:00.000Z".to_string(),
+                        notes: None,
+                    },
+                    dataset_snapshots: funding_dataset_snapshots(fixture_uri),
+                    created_at: "2026-03-10T14:00:00.000Z".to_string(),
+                    updated_at: "2026-03-10T14:00:00.000Z".to_string(),
+                    tags: vec!["test".to_string(), "perp".to_string()],
+                    notes: None,
+                }
+            },
+        )
+        .collect()
     }
 
     fn feature_definitions() -> Vec<RuntimeFeatureDefinitionRecord> {
@@ -1479,6 +1829,138 @@ mod tests {
             tags: vec!["test".to_string()],
             notes: None,
         }
+    }
+
+    fn funding_cost_model(fixture_uri: &str) -> RuntimeExecutionCostModelRecord {
+        RuntimeExecutionCostModelRecord {
+            schema_version: RUNTIME_PROTOCOL_SCHEMA_VERSION.to_string(),
+            model_id: "cost_model_drift_sol_perp".to_string(),
+            venue_key: "drift".to_string(),
+            market_type: protocol::RuntimeVenueMarketType::Perp,
+            pair_symbol: "SOL-PERP".to_string(),
+            instrument_id: Some("SOL-PERP".to_string()),
+            asset_keys: vec!["SOL".to_string(), "USDC".to_string()],
+            mode_coverage: vec![protocol::RuntimeMode::Shadow, protocol::RuntimeMode::Paper],
+            status: protocol::RuntimeExecutionCostModelStatus::Active,
+            assumptions: protocol::RuntimeExecutionCostAssumptions {
+                fee_bps: 1,
+                slippage_bps: 1,
+                market_impact_bps: 1,
+                partial_fill_rate_bps: 0,
+                partial_fill_penalty_bps: 0,
+                financing_cost_bps_per_day: None,
+            },
+            latency_profile: protocol::RuntimeVenueLatencyProfile {
+                expected_quote_ms: 75,
+                expected_submit_ms: 150,
+                expected_settlement_ms: 750,
+            },
+            dataset_snapshots: funding_dataset_snapshots(fixture_uri),
+            calibration: protocol::RuntimeExecutionCostCalibration {
+                calibration_id: "calibration_drift_sol_perp".to_string(),
+                methodology: "seeded-regression".to_string(),
+                sample_start_at: "2026-03-01T00:00:00.000Z".to_string(),
+                sample_end_at: "2026-03-10T14:00:00.000Z".to_string(),
+                sample_count: 80,
+                confidence_bps: 8_500,
+                reference_notional_usd: "250.00".to_string(),
+                tags: vec!["test".to_string(), "perp".to_string()],
+                notes: None,
+            },
+            drift_guard: protocol::RuntimeExecutionCostDriftGuard {
+                max_cost_drift_bps: 25,
+                max_latency_drift_ms: 300,
+                max_reconciliation_drift_usd: "1.00".to_string(),
+            },
+            created_at: "2026-03-10T14:00:00.000Z".to_string(),
+            updated_at: "2026-03-10T14:00:00.000Z".to_string(),
+            tags: vec!["test".to_string(), "perp".to_string()],
+            notes: None,
+        }
+    }
+
+    #[test]
+    fn builds_observations_only_for_requested_market_from_mixed_replay() {
+        let fixture = funding_fixture();
+        let config = RuntimeBacktestConfig {
+            replay_corpus_id: "replay_corpus_sol_perp_feature_cache".to_string(),
+            venue_key: "drift".to_string(),
+            pair_symbol: "SOL-PERP".to_string(),
+            market_type: protocol::RuntimeVenueMarketType::Perp,
+            window_mode: RuntimeBacktestWindowMode::Rolling,
+            training_window_observations: 3,
+            testing_window_observations: 1,
+            step_observations: 1,
+            purge_observations: 0,
+            baseline_strategies: vec![RuntimeBacktestBaseline::FlatCash],
+        };
+
+        let observations = build_observations(&fixture, &config, &funding_regime_tags("/tmp/mock"))
+            .expect("observations");
+
+        assert_eq!(observations.len(), 5);
+        assert!(observations
+            .iter()
+            .all(|observation| observation.feature.symbol == "SOL-PERP"));
+        assert_eq!(
+            observations[2].feature.funding_rate_bps.as_deref(),
+            Some("12.0000")
+        );
+        assert_eq!(observations[2].feature.basis_bps.as_deref(), Some("5.0025"));
+        assert_eq!(
+            observations[2].feature.open_interest_delta_bps.as_deref(),
+            Some("20.0000")
+        );
+    }
+
+    #[test]
+    fn previews_completed_funding_carry_backtest_from_mixed_replay() {
+        let fixture_uri = write_fixture("funding-carry", &funding_fixture());
+        let request = BacktestRunRequest {
+            report_id: Some("backtest_perp_funding_carry".to_string()),
+            experiment: funding_experiment(&fixture_uri),
+            strategy_spec: funding_strategy_spec(),
+            cost_model: Some(funding_cost_model(&fixture_uri)),
+            feature_definitions: funding_feature_definitions(&fixture_uri),
+            regime_tags: funding_regime_tags(&fixture_uri),
+            replay_corpus: funding_replay_corpus(&fixture_uri),
+            config: RuntimeBacktestConfig {
+                replay_corpus_id: "replay_corpus_sol_perp_feature_cache".to_string(),
+                venue_key: "drift".to_string(),
+                pair_symbol: "SOL-PERP".to_string(),
+                market_type: protocol::RuntimeVenueMarketType::Perp,
+                window_mode: RuntimeBacktestWindowMode::Rolling,
+                training_window_observations: 3,
+                testing_window_observations: 1,
+                step_observations: 1,
+                purge_observations: 0,
+                baseline_strategies: vec![RuntimeBacktestBaseline::FlatCash],
+            },
+        };
+
+        let report = engine("funding-carry").preview(&request).expect("backtest");
+
+        assert_eq!(report.status, RuntimeBacktestStatus::Completed);
+        assert!(report.promotion_eligible);
+        assert_eq!(report.fold_reports.len(), 2);
+        assert_eq!(report.aggregate_metrics.observation_count, 2);
+        assert!(report.blocking_reasons.is_empty());
+        assert_eq!(report.strategy_key, "funding_carry");
+        assert_eq!(report.config.venue_key, "drift");
+        assert!(report.aggregate_metrics.trade_count >= 1);
+        assert!(
+            report
+                .aggregate_metrics
+                .net_return_bps
+                .parse::<f64>()
+                .expect("net return")
+                > 0.0
+        );
+        assert_eq!(report.aggregate_baseline_comparisons.len(), 1);
+        assert!(report
+            .aggregate_baseline_comparisons
+            .first()
+            .is_some_and(|comparison| comparison.excess_return_bps != "0.0000"));
     }
 
     #[test]

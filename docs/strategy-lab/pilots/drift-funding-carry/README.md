@@ -61,18 +61,24 @@ bun run strategy-lab:curate \
 - the candidate has a checked-in draft `StrategySpec`
 - the feature-catalog path no longer assumes every strategy deployment is spot
 - perp pair symbols like `SOL-PERP` can now resolve catalog asset matching
+- the feature cache emits `funding_rate_bps`, `basis_bps`, and
+  `open_interest_delta_bps` from a mixed spot plus perp replay
+- the backtesting engine can evaluate `funding_carry` on a mixed Drift plus
+  spot replay without polluting the observation stream with spot events
 
 ## What is still blocked before shadow or paper testing
 
-- the repo's feature cache does not emit `funding_rate_bps`, `basis_bps`, or
-  `open_interest_delta_bps`
-- the builtin strategy registry and backtest engine do not execute an actual
-  `funding_carry` strategy yet
-- there is no checked-in Drift perp replay corpus or cost model that matches the
-  funding-carry feature set
+- the runtime execution-plan contract is still swap-shaped, so a perp strategy
+  cannot yet progress through the same runtime execution path as spot
+- `execution-planner` still enforces spot-only venue capability checks for the
+  production runtime plan builder
+- `services/runtime-rs` paper execution is still spot-swap shaped, so there is
+  no honest repo-owned paper lifecycle for Drift perps yet
+- the replay fixture and cost model used here are synthetic test fixtures, not
+  a checked-in Drift research corpus with operator-reviewed assumptions
 
 ## Honest promotion verdict
 
 - Highest justified state after this slice: `draft`
+- Stronger than before: reproducible feature and backtest evidence now exists
 - Not justified yet: `shadow`, `paper`, or any money-state promotion
-

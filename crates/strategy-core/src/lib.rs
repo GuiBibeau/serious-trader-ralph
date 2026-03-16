@@ -21,6 +21,7 @@ pub enum StrategyKind {
     Breakout,
     MacroRotation,
     VolatilityTarget,
+    FundingCarry,
 }
 
 impl StrategyKind {
@@ -35,6 +36,7 @@ impl StrategyKind {
             Self::Breakout => "breakout",
             Self::MacroRotation => "macro_rotation",
             Self::VolatilityTarget => "volatility_target",
+            Self::FundingCarry => "funding_carry",
         }
     }
 
@@ -48,6 +50,7 @@ impl StrategyKind {
             Self::Breakout => "Breakout",
             Self::MacroRotation => "Macro rotation",
             Self::VolatilityTarget => "Volatility target",
+            Self::FundingCarry => "Funding carry",
         }
     }
 
@@ -77,6 +80,9 @@ impl StrategyKind {
             Self::VolatilityTarget => {
                 "Targets base exposure from realized volatility and rebalances toward that budget."
             }
+            Self::FundingCarry => {
+                "Harvests perp carry only when funding edge, basis alignment, and crowding filters agree."
+            }
         }
     }
 
@@ -86,7 +92,7 @@ impl StrategyKind {
                 RuntimeStrategyCategory::Allocation
             }
             Self::TrendFollowing | Self::MeanReversion => RuntimeStrategyCategory::Signal,
-            Self::Breakout | Self::MacroRotation | Self::VolatilityTarget => {
+            Self::Breakout | Self::MacroRotation | Self::VolatilityTarget | Self::FundingCarry => {
                 RuntimeStrategyCategory::Advanced
             }
         }
@@ -104,18 +110,31 @@ impl StrategyKind {
     }
 
     fn supported_modes(&self) -> Vec<RuntimeMode> {
-        vec![RuntimeMode::Shadow, RuntimeMode::Paper, RuntimeMode::Live]
+        match self {
+            Self::FundingCarry => vec![RuntimeMode::Shadow, RuntimeMode::Paper],
+            _ => vec![RuntimeMode::Shadow, RuntimeMode::Paper, RuntimeMode::Live],
+        }
     }
 
     fn supported_venues(&self) -> Vec<RuntimeStrategyVenueSupport> {
-        vec![RuntimeStrategyVenueSupport {
-            venue_key: "jupiter".to_string(),
-            onboarding_state: RuntimeOnboardingState::BroadLiveReady,
-            notes: Some(
-                "Current runtime execution and canary coverage is bounded to the Jupiter bridge."
-                    .to_string(),
-            ),
-        }]
+        match self {
+            Self::FundingCarry => vec![RuntimeStrategyVenueSupport {
+                venue_key: "drift".to_string(),
+                onboarding_state: RuntimeOnboardingState::Integrated,
+                notes: Some(
+                    "Bounded Drift perp support is available for research, replay, and paper-path development while live remains explicitly blocked."
+                        .to_string(),
+                ),
+            }],
+            _ => vec![RuntimeStrategyVenueSupport {
+                venue_key: "jupiter".to_string(),
+                onboarding_state: RuntimeOnboardingState::BroadLiveReady,
+                notes: Some(
+                    "Current runtime execution and canary coverage is bounded to the Jupiter bridge."
+                        .to_string(),
+                ),
+            }],
+        }
     }
 
     fn asset_constraints(&self) -> Vec<RuntimeStrategyAssetConstraint> {
@@ -166,6 +185,23 @@ impl StrategyKind {
                 20_000,
                 "Realized volatility drives the target base-exposure budget.",
             )],
+            Self::FundingCarry => vec![
+                feature_requirement(
+                    "funding_rate_bps",
+                    60_000,
+                    "Funding edge drives the carry direction and entry gating.",
+                ),
+                feature_requirement(
+                    "basis_bps",
+                    60_000,
+                    "Basis alignment confirms whether perp pricing agrees with the carry thesis.",
+                ),
+                feature_requirement(
+                    "open_interest_delta_bps",
+                    60_000,
+                    "Open-interest expansion gates crowded carry states.",
+                ),
+            ],
         }
     }
 
@@ -178,6 +214,9 @@ impl StrategyKind {
             Self::Breakout => vec!["long_trend".to_string(), "liquidity_state".to_string()],
             Self::MacroRotation => vec!["long_trend".to_string()],
             Self::VolatilityTarget => vec!["volatility_band".to_string()],
+            Self::FundingCarry => {
+                vec!["liquidity_state".to_string(), "volatility_band".to_string()]
+            }
         }
     }
 
@@ -231,6 +270,26 @@ impl StrategyKind {
                 Some("32"),
                 "Used to derive per-run TWAP slices from the deployment budget.",
             )),
+            Self::FundingCarry => {
+                parameters.push(bps_parameter(
+                    "signal.min_funding_edge_bps",
+                    "Min funding edge bps",
+                    true,
+                    Some("8"),
+                    Some("1"),
+                    Some("100"),
+                    "Minimum funding edge required before opening carry exposure.",
+                ));
+                parameters.push(bps_parameter(
+                    "signal.max_open_interest_delta_bps",
+                    "Max open-interest delta bps",
+                    true,
+                    Some("250"),
+                    Some("10"),
+                    Some("5000"),
+                    "Crowding ceiling above which carry entries are suppressed.",
+                ));
+            }
             _ => {}
         }
 
@@ -313,6 +372,7 @@ pub enum VenueKind {
     Jupiter,
     MagicBlock,
     Phoenix,
+    Drift,
 }
 
 impl VenueKind {
@@ -322,6 +382,7 @@ impl VenueKind {
             Self::Jupiter => "jupiter",
             Self::MagicBlock => "magicblock",
             Self::Phoenix => "phoenix",
+            Self::Drift => "drift",
         }
     }
 
@@ -330,6 +391,7 @@ impl VenueKind {
             Self::Jupiter => "Jupiter",
             Self::MagicBlock => "MagicBlock",
             Self::Phoenix => "Phoenix",
+            Self::Drift => "Drift",
         }
     }
 
@@ -342,16 +404,21 @@ impl VenueKind {
             ],
             Self::MagicBlock => vec!["magicblock_ephemeral_rollup".to_string()],
             Self::Phoenix => vec!["phoenix_orderbook".to_string()],
+            Self::Drift => vec!["drift".to_string(), "drift_swift".to_string()],
         }
     }
 
     fn market_types(&self) -> Vec<RuntimeVenueMarketType> {
-        vec![RuntimeVenueMarketType::Spot]
+        match self {
+            Self::Drift => vec![RuntimeVenueMarketType::Perp],
+            _ => vec![RuntimeVenueMarketType::Spot],
+        }
     }
 
     fn order_types(&self) -> Vec<RuntimeVenueOrderType> {
         match self {
             Self::Phoenix => vec![RuntimeVenueOrderType::Market, RuntimeVenueOrderType::Limit],
+            Self::Drift => vec![RuntimeVenueOrderType::Market, RuntimeVenueOrderType::Limit],
             Self::Jupiter | Self::MagicBlock => vec![RuntimeVenueOrderType::Market],
         }
     }
@@ -359,7 +426,9 @@ impl VenueKind {
     fn supported_modes(&self) -> Vec<RuntimeMode> {
         match self {
             Self::Jupiter => vec![RuntimeMode::Shadow, RuntimeMode::Paper, RuntimeMode::Live],
-            Self::MagicBlock | Self::Phoenix => vec![RuntimeMode::Shadow, RuntimeMode::Paper],
+            Self::MagicBlock | Self::Phoenix | Self::Drift => {
+                vec![RuntimeMode::Shadow, RuntimeMode::Paper]
+            }
         }
     }
 
@@ -368,6 +437,7 @@ impl VenueKind {
             Self::Jupiter => RuntimeOnboardingState::BroadLiveReady,
             Self::MagicBlock => RuntimeOnboardingState::PaperReady,
             Self::Phoenix => RuntimeOnboardingState::Candidate,
+            Self::Drift => RuntimeOnboardingState::Integrated,
         }
     }
 
@@ -376,12 +446,14 @@ impl VenueKind {
             Self::Jupiter => RuntimeVenueFeeModel::VenueQuoteInclusive,
             Self::MagicBlock => RuntimeVenueFeeModel::FixedBps,
             Self::Phoenix => RuntimeVenueFeeModel::MakerTakerBps,
+            Self::Drift => RuntimeVenueFeeModel::MakerTakerBps,
         }
     }
 
     fn settlement_behavior(&self) -> RuntimeVenueSettlementBehavior {
         match self {
             Self::Phoenix => RuntimeVenueSettlementBehavior::OrderbookAtomic,
+            Self::Drift => RuntimeVenueSettlementBehavior::OrderbookPartial,
             Self::Jupiter | Self::MagicBlock => RuntimeVenueSettlementBehavior::SwapAtomic,
         }
     }
@@ -396,6 +468,9 @@ impl VenueKind {
             }
             Self::Phoenix => {
                 "Stubbed non-current venue proving the runtime can add a new venue through the shared capability and adapter abstractions."
+            }
+            Self::Drift => {
+                "Bounded Drift perp venue for shadow and paper research flows while the execution-plan contract remains under expansion."
             }
         }
     }
@@ -424,17 +499,20 @@ impl VenueKind {
             latency_profile: RuntimeVenueLatencyProfile {
                 expected_quote_ms: match self {
                     Self::Phoenix => 150,
+                    Self::Drift => 200,
                     Self::MagicBlock => 200,
                     Self::Jupiter => 250,
                 },
                 expected_submit_ms: match self {
                     Self::Phoenix => 350,
+                    Self::Drift => 450,
                     Self::MagicBlock => 400,
                     Self::Jupiter => 750,
                 },
                 expected_settlement_ms: match self {
                     Self::MagicBlock => 3_000,
                     Self::Phoenix => 4_000,
+                    Self::Drift => 4_000,
                     Self::Jupiter => 5_000,
                 },
             },
@@ -446,7 +524,7 @@ impl VenueKind {
     }
 }
 
-pub const SUPPORTED_STRATEGIES: [StrategyKind; 8] = [
+pub const SUPPORTED_STRATEGIES: [StrategyKind; 9] = [
     StrategyKind::Dca,
     StrategyKind::ThresholdRebalance,
     StrategyKind::Twap,
@@ -455,12 +533,14 @@ pub const SUPPORTED_STRATEGIES: [StrategyKind; 8] = [
     StrategyKind::Breakout,
     StrategyKind::MacroRotation,
     StrategyKind::VolatilityTarget,
+    StrategyKind::FundingCarry,
 ];
 
-pub const SUPPORTED_VENUES: [VenueKind; 3] = [
+pub const SUPPORTED_VENUES: [VenueKind; 4] = [
     VenueKind::Jupiter,
     VenueKind::MagicBlock,
     VenueKind::Phoenix,
+    VenueKind::Drift,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -884,6 +964,7 @@ mod tests {
                 "breakout",
                 "macro_rotation",
                 "volatility_target",
+                "funding_carry",
             ],
         );
     }
@@ -892,13 +973,29 @@ mod tests {
     fn builds_builtin_catalog_with_strategy_specs() {
         let catalog = StrategyCatalog::builtin().expect("builtin catalog");
         let trend = catalog.get("trend_following").expect("trend spec");
+        let funding = catalog.get("funding_carry").expect("funding carry spec");
 
-        assert_eq!(catalog.keys().len(), 8);
+        assert_eq!(catalog.keys().len(), 9);
         assert_eq!(trend.category, RuntimeStrategyCategory::Signal);
         assert_eq!(trend.feature_requirements.len(), 1);
         assert_eq!(
             trend.promotion_policy.live_lane_allowlist,
             vec![RuntimeLane::Safe]
+        );
+        assert_eq!(funding.category, RuntimeStrategyCategory::Advanced);
+        assert_eq!(
+            funding.supported_modes,
+            vec![RuntimeMode::Shadow, RuntimeMode::Paper]
+        );
+        assert_eq!(funding.supported_venues.len(), 1);
+        assert_eq!(funding.supported_venues[0].venue_key, "drift");
+        assert_eq!(
+            funding
+                .feature_requirements
+                .iter()
+                .map(|requirement| requirement.feature_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["funding_rate_bps", "basis_bps", "open_interest_delta_bps"]
         );
     }
 

@@ -123,6 +123,7 @@ impl BuiltinStrategyPlugin {
                 StrategyKind::Breakout => breakout_trade_decision,
                 StrategyKind::MacroRotation => macro_rotation_trade_decision,
                 StrategyKind::VolatilityTarget => volatility_target_trade_decision,
+                StrategyKind::FundingCarry => funding_carry_trade_decision,
             },
         }
     }
@@ -635,6 +636,18 @@ fn volatility_target_trade_decision(
     )
 }
 
+fn funding_carry_trade_decision(
+    input: &ExecutionPlannerInput,
+) -> Result<StrategyTradeDecision, ExecutionPlannerError> {
+    Ok(funding_carry_decision(
+        funding_rate_bps(input)?,
+        basis_bps(input)?,
+        open_interest_delta_bps(input)?,
+        realized_volatility_bps(input)?,
+        desired_notional_cents(&input.deployment)?,
+    ))
+}
+
 fn short_signal(input: &ExecutionPlannerInput) -> Result<f64, ExecutionPlannerError> {
     input
         .feature_snapshot
@@ -662,6 +675,35 @@ fn realized_volatility_bps(
         .realized_volatility_bps
         .as_deref()
         .map(|value| parse_decimal("featureSnapshot.realizedVolatilityBps", value))
+        .transpose()
+}
+
+fn funding_rate_bps(input: &ExecutionPlannerInput) -> Result<Option<f64>, ExecutionPlannerError> {
+    input
+        .feature_snapshot
+        .funding_rate_bps
+        .as_deref()
+        .map(|value| parse_signed_decimal("featureSnapshot.fundingRateBps", value))
+        .transpose()
+}
+
+fn basis_bps(input: &ExecutionPlannerInput) -> Result<Option<f64>, ExecutionPlannerError> {
+    input
+        .feature_snapshot
+        .basis_bps
+        .as_deref()
+        .map(|value| parse_signed_decimal("featureSnapshot.basisBps", value))
+        .transpose()
+}
+
+fn open_interest_delta_bps(
+    input: &ExecutionPlannerInput,
+) -> Result<Option<f64>, ExecutionPlannerError> {
+    input
+        .feature_snapshot
+        .open_interest_delta_bps
+        .as_deref()
+        .map(|value| parse_signed_decimal("featureSnapshot.openInterestDeltaBps", value))
         .transpose()
 }
 
@@ -855,6 +897,46 @@ fn twap_decision(input: &ExecutionPlannerInput, notional_cents: i64) -> Strategy
             action: RuntimeExecutionAction::Buy,
             direction: SwapDirection::BuyBase,
             notional_cents: per_run_notional,
+        }
+    }
+}
+
+fn funding_carry_decision(
+    funding_rate_bps: Option<f64>,
+    basis_bps: Option<f64>,
+    open_interest_delta_bps: Option<f64>,
+    realized_volatility_bps: Option<f64>,
+    notional_cents: i64,
+) -> StrategyTradeDecision {
+    let Some(funding_rate_bps) = funding_rate_bps else {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    };
+    if funding_rate_bps.abs() < 8.0 {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    }
+    if open_interest_delta_bps.is_some_and(|value| value.abs() > 250.0) {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    }
+    if realized_volatility_bps.is_some_and(|value| value > VOLATILITY_TARGET_MEDIUM_THRESHOLD_BPS) {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    }
+    if basis_bps
+        .is_some_and(|value| value.abs() > 4.0 && value.signum() != funding_rate_bps.signum())
+    {
+        return noop_decision(RuntimeExecutionAction::Buy, SwapDirection::BuyBase);
+    }
+
+    if funding_rate_bps > 0.0 {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Sell,
+            direction: SwapDirection::SellBase,
+            notional_cents,
+        }
+    } else {
+        StrategyTradeDecision {
+            action: RuntimeExecutionAction::Buy,
+            direction: SwapDirection::BuyBase,
+            notional_cents,
         }
     }
 }
@@ -1382,6 +1464,10 @@ mod tests {
             short_return_bps: Some(short_return_bps.to_string()),
             long_return_bps: Some("20.0".to_string()),
             realized_volatility_bps: Some("18.0".to_string()),
+            funding_rate_bps: None,
+            basis_bps: None,
+            open_interest_usd: None,
+            open_interest_delta_bps: None,
             processed_slot: Some(123),
             slot_age_ms: Some(100),
             slot_gap: Some(0),
