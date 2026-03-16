@@ -109,7 +109,11 @@ type CanaryPairContext = {
   inputMint: string;
   outputMint: string;
   marketType: "spot" | "perp" | "prediction";
-  intentFamily: "spot_swap" | "perp_order" | "prediction_order";
+  intentFamily:
+    | "spot_swap"
+    | "perp_order"
+    | "prediction_order"
+    | "flash_atomic";
   instrumentId?: string;
   predictionOutcomeId?: string;
   predictionOutcomeSide?: "yes" | "no";
@@ -230,6 +234,7 @@ function readSmokeIntentFamily(
   if (raw === "prediction_order") return "prediction_order";
   if (raw === "conditional_spot_order") return "conditional_spot_order";
   if (raw === "clob_order") return "clob_order";
+  if (raw === "flash_atomic") return "flash_atomic";
   return "spot_swap";
 }
 
@@ -473,6 +478,9 @@ function allowsVenueTxSmokeLiveBypass(
   if (smokeIntentFamily === "prediction_order") {
     return venueKey === "dflow";
   }
+  if (smokeIntentFamily === "flash_atomic") {
+    return venueKey === "flash_liquidity";
+  }
   return false;
 }
 
@@ -658,6 +666,57 @@ function resolveCanaryPairContext(
       marketType: "perp",
       intentFamily: "perp_order",
       instrumentId,
+    };
+  }
+
+  if (smokeIntentFamily === "flash_atomic") {
+    if (!runtimeVenueSupportsIntentFamily(capability, smokeIntentFamily)) {
+      throw new Error(
+        `strategy-lab-readiness-canary-intent-family-unsupported:${venueKey}:${smokeIntentFamily}`,
+      );
+    }
+    const requestedAdapterKey = readOptionalString(request.adapterKey);
+    const adapterKey =
+      requestedAdapterKey ??
+      capability.adapterKeys.find((candidate) => {
+        const registration = resolveExecutionAdapterRegistration(candidate);
+        return (
+          registration !== null &&
+          registration.venueKey === venueKey &&
+          registration.supportedIntentFamilies.includes(smokeIntentFamily) &&
+          (registration.supportedModes.includes("live") || allowSmokeLiveBypass)
+        );
+      });
+    if (!adapterKey) {
+      throw new Error(
+        `strategy-lab-readiness-canary-adapter-unavailable:${venueKey}`,
+      );
+    }
+    if (requestedAdapterKey) {
+      const registration =
+        resolveExecutionAdapterRegistration(requestedAdapterKey);
+      if (
+        !registration ||
+        registration.venueKey !== venueKey ||
+        !registration.supportedIntentFamilies.includes(smokeIntentFamily) ||
+        (!registration.supportedModes.includes("live") && !allowSmokeLiveBypass)
+      ) {
+        throw new Error(
+          `strategy-lab-readiness-canary-adapter-unavailable:${venueKey}:${requestedAdapterKey}:${smokeIntentFamily}`,
+        );
+      }
+    }
+
+    return {
+      venueKey,
+      assetKey: request.assetKey ?? "USDC",
+      pairSymbol: request.pairSymbol ?? "USDC/USDC",
+      adapterKey,
+      inputMint: USDC_MINT,
+      outputMint: USDC_MINT,
+      marketType: "spot",
+      intentFamily: "flash_atomic",
+      instrumentId: request.pairSymbol ?? "USDC/USDC",
     };
   }
 
@@ -2279,6 +2338,117 @@ function buildStubCanaryMetadata(input: {
   };
 }
 
+function readFlashSmokeProvider(
+  request: RuntimeResearchReadinessCanaryRequest,
+): "marginfi" {
+  const metadata = isRecord(request.metadata) ? request.metadata : {};
+  const provider =
+    readOptionalString(metadata.provider) ??
+    readOptionalString(metadata.flashProvider) ??
+    "marginfi";
+  if (provider !== "marginfi") {
+    throw new Error(
+      `strategy-lab-readiness-canary-flash-provider-unsupported:${provider}`,
+    );
+  }
+  return "marginfi";
+}
+
+function readFlashSmokeSettlementMint(
+  request: RuntimeResearchReadinessCanaryRequest,
+): string {
+  const metadata = isRecord(request.metadata) ? request.metadata : {};
+  const settlementMint =
+    readOptionalString(metadata.settlementMint) ?? USDC_MINT;
+  if (settlementMint !== USDC_MINT) {
+    throw new Error(
+      `strategy-lab-readiness-canary-flash-settlement-mint-unsupported:${settlementMint}`,
+    );
+  }
+  return settlementMint;
+}
+
+function readFlashExecutionAccountState(result: ExecuteSwapResult): {
+  marginfiAccountAddress: string | null;
+  activeBalanceCount: number | null;
+  activeBankAddresses: string[];
+  activeBalances: Array<{
+    assetQuantityUi: string;
+    assetShares: string;
+    bankAddress: string;
+    liabilityQuantityUi: string;
+    liabilityShares: string;
+  }>;
+  setupSignature: string | null;
+  liveProvider: string | null;
+  liveBankAddress: string | null;
+  liveBankMint: string | null;
+} {
+  const snapshot = isRecord(result.executionMeta?.referencePrice?.snapshot)
+    ? result.executionMeta?.referencePrice?.snapshot
+    : null;
+  const lifecycleNotes = Array.isArray(result.executionMeta?.lifecycle?.notes)
+    ? result.executionMeta?.lifecycle?.notes
+        .map((entry) => readOptionalString(entry))
+        .filter((entry): entry is string => Boolean(entry))
+    : [];
+  const setupSignatureNote = lifecycleNotes.find((note) =>
+    note.startsWith("setup-signature:"),
+  );
+  const setupSignature =
+    setupSignatureNote && setupSignatureNote !== "setup-signature:none"
+      ? setupSignatureNote.slice("setup-signature:".length)
+      : null;
+  return {
+    marginfiAccountAddress:
+      readOptionalString(snapshot?.marginfiAccountAddress) ?? null,
+    activeBalanceCount:
+      typeof snapshot?.activeBalanceCount === "number" &&
+      Number.isInteger(snapshot.activeBalanceCount)
+        ? snapshot.activeBalanceCount
+        : null,
+    activeBankAddresses: readStringArray(snapshot?.activeBankAddresses),
+    activeBalances: Array.isArray(snapshot?.activeBalances)
+      ? snapshot.activeBalances.flatMap((entry) => {
+          if (!isRecord(entry)) {
+            return [];
+          }
+          return [
+            {
+              bankAddress: readOptionalString(entry.bankAddress) ?? "unknown",
+              assetShares: readOptionalString(entry.assetShares) ?? "unknown",
+              liabilityShares:
+                readOptionalString(entry.liabilityShares) ?? "unknown",
+              assetQuantityUi:
+                readOptionalString(entry.assetQuantityUi) ?? "unknown",
+              liabilityQuantityUi:
+                readOptionalString(entry.liabilityQuantityUi) ?? "unknown",
+            },
+          ];
+        })
+      : [],
+    setupSignature,
+    liveProvider: readOptionalString(snapshot?.liveProvider) ?? null,
+    liveBankAddress: readOptionalString(snapshot?.liveBankAddress) ?? null,
+    liveBankMint: readOptionalString(snapshot?.liveBankMint) ?? null,
+  };
+}
+
+function flashAccountHasResidualExposure(
+  executionState: ReturnType<typeof readFlashExecutionAccountState>,
+): boolean {
+  const isZeroQuantity = (value: string): boolean =>
+    /^(?:0|0\.0+)$/.test(value.trim());
+  if (executionState.activeBalances.length < 1) {
+    return false;
+  }
+  return executionState.activeBalances.some(
+    (balance) =>
+      !isZeroQuantity(balance.assetQuantityUi) ||
+      !isZeroQuantity(balance.liabilityQuantityUi),
+  );
+}
+
 function classifyExecutionFailure(
   status: string,
   error: unknown,
@@ -2888,6 +3058,223 @@ async function runDriftVenueSmoke(input: {
   });
 }
 
+async function runFlashLiquidityVenueSmoke(input: {
+  env: Env;
+  request: RuntimeResearchReadinessCanaryRequest;
+  context: CanaryPairContext;
+  config: StrategyLabReadinessCanaryConfig;
+  wallet: StrategyLabReadinessCanaryWallet;
+  runId: string;
+  targetNotionalUsd: string;
+  submissionPath: {
+    venueKey: string;
+    adapterKey: string;
+    lane: string;
+    adapter: string;
+  };
+  laneResolution: { lane: string };
+  rpc: SolanaRpc;
+  jupiter: JupiterClient;
+}): Promise<RuntimeResearchReadinessCanaryWorkflowResult> {
+  const flashProvider = readFlashSmokeProvider(input.request);
+  const settlementMint = readFlashSmokeSettlementMint(input.request);
+  const amountAtomic = parseUsdAtomic(input.targetNotionalUsd).toString();
+  const minimumSolReserve =
+    parseBigIntLike(input.config.minSolReserveLamports) ?? 0n;
+  const beforeSolLamports = await input.rpc.getBalanceLamports(
+    input.wallet.walletAddress,
+  );
+  if (beforeSolLamports < minimumSolReserve) {
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: "blocked",
+      runPatch: {
+        errorCode: "policy-denied",
+        errorMessage: "strategy-lab-readiness-canary-sol-reserve-too-low",
+        metadata: {
+          submissionPath: input.submissionPath,
+          smokeIntentFamily: "flash_atomic",
+          flashProvider,
+          walletSolLamports: beforeSolLamports.toString(),
+          minSolReserveLamports: input.config.minSolReserveLamports,
+        },
+      },
+    });
+  }
+
+  const beforeTokenAtomic = await input.rpc.getTokenBalanceAtomic(
+    input.wallet.walletAddress,
+    settlementMint,
+  );
+  const intent = {
+    family: "flash_atomic" as const,
+    wallet: input.wallet.walletAddress,
+    venueKey: "flash_liquidity" as const,
+    marketType: "spot" as const,
+    instrumentId: input.context.instrumentId ?? input.context.pairSymbol,
+    referenceId: `flash-smoke:${flashProvider}:${input.runId}`,
+    settlementMint,
+    borrowLegs: [
+      {
+        provider: flashProvider,
+        mint: settlementMint,
+        amountAtomic,
+      },
+    ],
+    params: {
+      orderType: "market",
+    },
+  };
+  const policy = normalizePolicy({
+    allowedMints: [settlementMint],
+    slippageBps: input.config.maxSlippageBps,
+    minSolReserveLamports: input.config.minSolReserveLamports,
+    simulateOnly: false,
+    dryRun: false,
+    commitment: "finalized",
+    maxTradeAmountAtomic: amountAtomic,
+  });
+
+  const result = await executeIntentViaRouter({
+    env: input.env,
+    venueKey: input.context.venueKey,
+    runtimeMode: "live",
+    experimentalLiveModeBypass: "venue_tx_smoke",
+    requireVenueRouting: true,
+    subjectControlBypassReason: "strategy_lab_readiness_canary",
+    execution: {
+      adapter: input.context.adapterKey,
+      params: {
+        lane: input.laneResolution.lane,
+        requireSimulation: true,
+      },
+    },
+    policy,
+    rpc: input.rpc,
+    jupiter: input.jupiter,
+    intent,
+    privyWalletId: input.wallet.walletId,
+    log(level, message, meta) {
+      console[level]("strategy_lab.readiness_canary", {
+        runId: input.runId,
+        message,
+        ...(meta ?? {}),
+      });
+    },
+  });
+  if (!executionSucceeded(result.status)) {
+    const failure = classifyExecutionFailure(result.status, result.err);
+    return await finalizeReadinessCanaryRun(input.env, {
+      runId: input.runId,
+      status: failure.status,
+      runPatch: {
+        errorCode: failure.errorCode,
+        errorMessage: failure.errorMessage,
+        metadata: {
+          submissionPath: {
+            ...input.submissionPath,
+            landingStatus: result.status,
+          },
+          smokeIntentFamily: "flash_atomic",
+          flashProvider,
+          executionMeta: asJsonObject(result.executionMeta),
+        },
+      },
+    });
+  }
+
+  const executionState = readFlashExecutionAccountState(result);
+  const transaction =
+    result.signature !== null
+      ? await input.rpc.getTransactionParsed(result.signature, {
+          commitment: "confirmed",
+        })
+      : null;
+  const feeLamports = readReconciliationFeeLamports(transaction);
+  const afterTokenAtomic = await input.rpc.getTokenBalanceAtomic(
+    input.wallet.walletAddress,
+    settlementMint,
+  );
+  const afterSolLamports = await input.rpc.getBalanceLamports(
+    input.wallet.walletAddress,
+  );
+  const tokenDeltaAtomic = afterTokenAtomic - beforeTokenAtomic;
+  const reconciliationPassed =
+    readTransactionError(transaction) === null &&
+    tokenDeltaAtomic === 0n &&
+    !flashAccountHasResidualExposure(executionState);
+
+  return await finalizeReadinessCanaryRun(input.env, {
+    runId: input.runId,
+    status: reconciliationPassed ? "success" : "failed",
+    runPatch: {
+      receiptId: `receipt_${input.runId.slice(-16)}`,
+      signature: result.signature ?? undefined,
+      ...(reconciliationPassed
+        ? {}
+        : {
+            errorCode: "strategy-lab-readiness-canary-reconciliation-failed",
+            errorMessage:
+              "strategy-lab-readiness-canary-flash-reconciliation-failed",
+          }),
+      reconciliation: {
+        status: reconciliationPassed ? "passed" : "failed",
+        actualOutputAtomic: absoluteAtomic(tokenDeltaAtomic) ?? "0",
+        minExpectedOutAtomic: "0",
+        notes: [
+          `status=${result.status}`,
+          `flashProvider=${flashProvider}`,
+          `activeBalanceCount=${executionState.activeBalanceCount ?? -1}`,
+          `activeBalances=${JSON.stringify(executionState.activeBalances)}`,
+          `netTokenDeltaAtomic=${tokenDeltaAtomic.toString()}`,
+        ],
+      },
+      evidenceRefs: [
+        {
+          kind: "live_canary",
+          ref: `signature:${result.signature ?? "missing"}`,
+        },
+        ...(executionState.setupSignature
+          ? [
+              {
+                kind: "live_canary" as const,
+                ref: `signature:${executionState.setupSignature}`,
+              },
+            ]
+          : []),
+      ],
+      metadata: {
+        submissionPath: {
+          ...input.submissionPath,
+          landingStatus: result.status,
+        },
+        smokeIntentFamily: "flash_atomic",
+        flashProvider,
+        referenceId: intent.referenceId,
+        marginfiAccountAddress: executionState.marginfiAccountAddress,
+        activeBalanceCount: executionState.activeBalanceCount,
+        activeBankAddresses: executionState.activeBankAddresses,
+        activeBalances: executionState.activeBalances,
+        setupSignature: executionState.setupSignature,
+        liveBankAddress: executionState.liveBankAddress,
+        liveBankMint: executionState.liveBankMint,
+        liveProvider: executionState.liveProvider,
+        executionMeta: asJsonObject(result.executionMeta),
+        feeLamports: feeLamports.toString(),
+        beforeBalances: {
+          tokenAtomic: beforeTokenAtomic.toString(),
+          solLamports: beforeSolLamports.toString(),
+        },
+        afterBalances: {
+          tokenAtomic: afterTokenAtomic.toString(),
+          solLamports: afterSolLamports.toString(),
+        },
+        netTokenDeltaAtomic: tokenDeltaAtomic.toString(),
+      },
+    },
+  });
+}
+
 async function runOpenBookVenueTxSmoke(input: {
   env: Env;
   request: RuntimeResearchReadinessCanaryRequest;
@@ -3469,6 +3856,39 @@ export async function runRuntimeResearchReadinessCanaryWorkflow(input: {
       jupiter,
       dflow,
     });
+  }
+  if (smokeIntentFamily === "flash_atomic") {
+    try {
+      return await runFlashLiquidityVenueSmoke({
+        env: input.env,
+        request: input.request,
+        context,
+        config,
+        wallet,
+        runId,
+        targetNotionalUsd,
+        submissionPath,
+        laneResolution: { lane: laneResolution.lane },
+        rpc,
+        jupiter,
+      });
+    } catch (error) {
+      return await finalizeReadinessCanaryRun(input.env, {
+        runId,
+        status: "failed",
+        runPatch: {
+          errorCode: normalizeExecutionErrorCode({
+            error,
+            fallback: "submission-failed",
+          }),
+          errorMessage: executionErrorMessage(error),
+          metadata: {
+            submissionPath,
+            smokeIntentFamily,
+          },
+        },
+      });
+    }
   }
   if (smokeIntentFamily === "clob_order") {
     try {

@@ -30,6 +30,19 @@ function buildIntent() {
   };
 }
 
+function buildLiveIntent() {
+  return {
+    ...buildIntent(),
+    borrowLegs: [
+      {
+        provider: "marginfi",
+        mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        amountAtomic: "1000000",
+      },
+    ],
+  };
+}
+
 describe("worker flash atomic execution adapter", () => {
   test("returns dry_run for bounded flash-atomic plans", async () => {
     const result = await executeFlashAtomicIntent({
@@ -97,5 +110,105 @@ describe("worker flash atomic execution adapter", () => {
         log: () => {},
       }),
     ).rejects.toThrow(/flash-liquidity-live-mode-not-supported/);
+  });
+
+  test("allows bounded live smoke through the readiness bypass", async () => {
+    let sendCount = 0;
+    const result = await executeFlashAtomicIntent(
+      {
+        env: {} as Env,
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        policy: normalizePolicy({}),
+        rpc: {
+          simulateTransactionBase64: async () => ({
+            err: null,
+            unitsConsumed: 321_000,
+          }),
+          sendTransactionBase64: async () =>
+            ++sendCount === 1 ? "sig-setup" : "sig-live",
+          confirmSignature: async () => ({
+            ok: true,
+            status: "confirmed",
+          }),
+        } as never,
+        jupiter: {} as never,
+        intent: buildLiveIntent(),
+        privyWalletId: "privy-wallet-1",
+        execution: {
+          params: {
+            lane: "safe",
+          },
+        },
+        log: () => {},
+      },
+      {
+        resolveFlashLiquidityLiveAccount: async () => ({
+          provider: "marginfi",
+          bankAddress: "bank-1",
+          bankMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          tokenSymbol: "USDC",
+          borrowAmountAtomic: "1000000",
+          borrowAmountUi: 1,
+          marginfiAccountAddress: "marginfi-account-1",
+          setup: {
+            unsignedTransactionBase64: "setup-base64",
+            lastValidBlockHeight: 100,
+          },
+        }),
+        buildFlashLiquidityLiveTransactionPlan: async () => ({
+          provider: "marginfi",
+          bankAddress: "bank-1",
+          bankMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          tokenSymbol: "USDC",
+          borrowAmountAtomic: "1000000",
+          borrowAmountUi: 1,
+          referenceId: "arb:sol-usdc-jupiter-raydium",
+          marginfiAccountAddress: "marginfi-account-1",
+          unsignedTransactionBase64: "flash-base64",
+          lastValidBlockHeight: 101,
+          addressLookupTableAddresses: ["lut-1"],
+        }),
+        readFlashLiquidityLiveAccountState: async () => ({
+          provider: "marginfi",
+          marginfiAccountAddress: "marginfi-account-1",
+          activeBalanceCount: 0,
+          activeBankAddresses: [],
+        }),
+        signTransactionWithPrivyById: async (_env, _walletId, unsignedTx) =>
+          `signed:${unsignedTx}`,
+        evaluateSafeLaneTransaction: () => ({
+          ok: true as const,
+          profile: "safe" as const,
+          limits: {
+            maxTxBytes: 1400,
+            maxInstructionCount: 24,
+            maxAccountKeyCount: 64,
+            maxComputeUnitLimit: 1_400_000,
+            maxEstimatedFeeLamports: 5_000_000,
+          },
+        }),
+      },
+    );
+
+    expect(result.status).toBe("confirmed");
+    expect(result.signature).toBe("sig-live");
+    expect(result.executionMeta?.route).toBe("flash_liquidity");
+    expect(result.executionMeta?.classification).toBe("confirmed");
+    expect(result.executionMeta?.lifecycle?.notes).toContain(
+      "setup-signature:sig-setup",
+    );
+    expect(result.executionMeta?.referencePrice?.snapshot).toMatchObject({
+      liveProvider: "marginfi",
+      marginfiAccountAddress: "marginfi-account-1",
+      activeBalanceCount: 0,
+    });
+    expect(result.executionMeta?.composedPlan).toMatchObject({
+      mode: "flash_atomic",
+      addressLookupTableCount: 1,
+      addressLookupTableAddresses: ["lut-1"],
+      simulationUnitsConsumed: 321_000,
+    });
   });
 });

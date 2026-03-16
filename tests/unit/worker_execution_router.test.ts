@@ -246,6 +246,46 @@ describe("worker execution router", () => {
     expect(result.executionMeta?.route).toBe("flash_liquidity");
   });
 
+  test("allows flash-liquidity live venue smoke only through the bounded readiness bypass", async () => {
+    const { env, sqlite } = await createLiveRouterEnv();
+    try {
+      const result = await executeIntentViaRouter({
+        env,
+        venueKey: "flash_liquidity",
+        runtimeMode: "live",
+        experimentalLiveModeBypass: "venue_tx_smoke",
+        requireVenueRouting: true,
+        subjectControlBypassReason: "strategy_lab_readiness_canary",
+        execution: { adapter: "flash_liquidity" },
+        policy: normalizePolicy({ dryRun: true }),
+        rpc: {} as never,
+        jupiter: {} as never,
+        intent: {
+          family: "flash_atomic",
+          wallet: "11111111111111111111111111111111",
+          venueKey: "flash_liquidity",
+          marketType: "spot",
+          instrumentId: "USDC/USDC",
+          referenceId: "flash-smoke",
+          settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          borrowLegs: [
+            {
+              provider: "marginfi",
+              mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              amountAtomic: "1000000",
+            },
+          ],
+        },
+        log: () => {},
+      });
+
+      expect(result.status).toBe("dry_run");
+      expect(result.executionMeta?.route).toBe("flash_liquidity");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("custom execution adapters can be registered for new intent families", async () => {
     registerExecutionAdapter(
       "phoenix_orderbook",

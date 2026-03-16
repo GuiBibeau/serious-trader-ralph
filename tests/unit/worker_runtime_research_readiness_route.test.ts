@@ -681,6 +681,55 @@ describe("worker runtime research readiness routes", () => {
     }
   });
 
+  test("runs a flash-liquidity venue tx smoke and records the flash intent", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const response = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/research/readiness/smoke",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              subjectKind: "venue",
+              subjectKey: "flash_liquidity",
+              requestedBy: "codex",
+              venueKey: "flash_liquidity",
+              assetKey: "USDC",
+              pairSymbol: "USDC/USDC",
+              smokeIntentFamily: "flash_atomic",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status: string;
+        markdown: string;
+        run: {
+          assetKey: string;
+          metadata?: Record<string, unknown>;
+          evidenceRefs: Array<{ kind: string }>;
+        };
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.status).toBe("success");
+      expect(payload.run.assetKey).toBe("USDC");
+      expect(payload.markdown).toContain("Smoke intent: flash_atomic");
+      expect(payload.run.metadata?.smokeIntentFamily).toBe("flash_atomic");
+      expect(payload.run.evidenceRefs[0]?.kind).toBe("live_canary");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("blocks conditional venue smoke on a live adapter that does not support trigger intents", async () => {
     const { env, sqlite } = createOpsEnv();
     try {

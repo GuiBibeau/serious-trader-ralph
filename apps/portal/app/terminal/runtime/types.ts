@@ -40,7 +40,8 @@ export type RuntimeOperatorVenueTxSmokeInput = {
     | "spot_swap"
     | "conditional_spot_order"
     | "clob_order"
-    | "prediction_order";
+    | "prediction_order"
+    | "flash_atomic";
   smokeOrderSide?: "buy" | "sell";
   tightenOnFailure?: boolean;
   failureControlMode?: "disable_live" | "engage_kill_switch";

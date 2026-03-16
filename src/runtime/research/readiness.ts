@@ -84,7 +84,8 @@ export type RuntimeResearchVenueTxSmokeIntentFamily =
   | "spot_swap"
   | "conditional_spot_order"
   | "clob_order"
-  | "prediction_order";
+  | "prediction_order"
+  | "flash_atomic";
 
 type ReadinessContext = {
   subjectKind: "venue" | "asset";
@@ -373,7 +374,8 @@ export function parseRuntimeResearchReadinessCanaryRequest(
     smokeIntentFamilyValue !== "spot_swap" &&
     smokeIntentFamilyValue !== "conditional_spot_order" &&
     smokeIntentFamilyValue !== "clob_order" &&
-    smokeIntentFamilyValue !== "prediction_order"
+    smokeIntentFamilyValue !== "prediction_order" &&
+    smokeIntentFamilyValue !== "flash_atomic"
   ) {
     throw new Error(
       "invalid-runtime-research-readiness-canary-smoke-intent-family",
@@ -407,7 +409,8 @@ export function parseRuntimeResearchReadinessCanaryRequest(
     smokeIntentFamilyValue === "spot_swap" ||
     smokeIntentFamilyValue === "conditional_spot_order" ||
     smokeIntentFamilyValue === "clob_order" ||
-    smokeIntentFamilyValue === "prediction_order"
+    smokeIntentFamilyValue === "prediction_order" ||
+    smokeIntentFamilyValue === "flash_atomic"
       ? smokeIntentFamilyValue
       : undefined;
   const smokeOrderSide =

@@ -280,6 +280,9 @@ function allowsVenueTxSmokeLiveBypass(input: {
   if (input.intentFamily === "prediction_order") {
     return input.venueKey === "dflow";
   }
+  if (input.intentFamily === "flash_atomic") {
+    return input.venueKey === "flash_liquidity";
+  }
   return input.intentFamily === "perp_order" && input.venueKey === "drift";
 }
 
