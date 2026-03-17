@@ -105,6 +105,267 @@
       },
       "additionalProperties": false
     },
+    "researchMatrix": {
+      "type": "object",
+      "properties": {
+        "selectionMetric": {
+          "type": "string",
+          "enum": ["net_return_bps", "excess_vs_flat_cash_bps"]
+        },
+        "backtestLegs": {
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "legId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "experimentId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "replayCorpusId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "venueKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pairSymbol": {
+                "type": "string",
+                "minLength": 1
+              },
+              "marketType": {
+                "type": "string",
+                "enum": ["spot", "perp", "options", "prediction"]
+              },
+              "windowMode": {
+                "type": "string",
+                "enum": ["rolling", "anchored"]
+              },
+              "trainingWindowObservations": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "testingWindowObservations": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "stepObservations": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "purgeObservations": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "baselineStrategies": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["flat_cash", "buy_and_hold"]
+                }
+              },
+              "notes": {
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "legId",
+              "experimentId",
+              "replayCorpusId",
+              "venueKey",
+              "pairSymbol",
+              "marketType"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "windows": {
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "windowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cohort": {
+                "type": "string",
+                "enum": ["selection", "holdout"]
+              },
+              "windowMode": {
+                "type": "string",
+                "enum": ["rolling", "anchored"]
+              },
+              "trainingWindowObservations": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "testingWindowObservations": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "stepObservations": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "purgeObservations": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "notes": {
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "windowId",
+              "label",
+              "cohort",
+              "windowMode",
+              "trainingWindowObservations",
+              "testingWindowObservations",
+              "stepObservations",
+              "purgeObservations"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "variants": {
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "variantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "parameterManifest": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "legOverrides": {
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "legId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "experimentId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "replayCorpusId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "venueKey": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "pairSymbol": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "marketType": {
+                      "type": "string",
+                      "enum": ["spot", "perp", "options", "prediction"]
+                    },
+                    "windowMode": {
+                      "type": "string",
+                      "enum": ["rolling", "anchored"]
+                    },
+                    "trainingWindowObservations": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "testingWindowObservations": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "stepObservations": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "purgeObservations": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "baselineStrategies": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": ["flat_cash", "buy_and_hold"]
+                      }
+                    }
+                  },
+                  "required": ["legId"],
+                  "additionalProperties": false
+                }
+              },
+              "notes": {
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": ["variantId", "label", "parameterManifest"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["backtestLegs", "windows", "variants"],
+      "additionalProperties": false
+    },
     "legs": {
       "minItems": 1,
       "maxItems": 16,

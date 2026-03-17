@@ -232,6 +232,7 @@ import {
   upsertRuntimeStrategyDeskScenarioWorkflow,
 } from "./runtime_strategy_desk";
 import { executeRuntimeStrategyDeskScenarioWorkflow } from "./runtime_strategy_desk_runner";
+import { executeRuntimeStrategyDeskStudyWorkflow } from "./runtime_strategy_desk_study";
 import { SolanaRpc } from "./solana_rpc";
 import type { Env, ExecutionConfig } from "./types";
 import type { UserRow } from "./users_db";
@@ -679,6 +680,56 @@ function parseRuntimeStrategyDeskExecuteRequest(payload: unknown): {
               : {}),
           },
         }
+      : {}),
+  };
+}
+
+function parseRuntimeStrategyDeskStudyRequest(payload: unknown): {
+  runKind: "replay" | "backtest";
+  requestedBy: string;
+  variantIds?: string[];
+  windowIds?: string[];
+  scenarioRunId?: string;
+  reportId?: string;
+  selectionMetric?: "net_return_bps" | "excess_vs_flat_cash_bps";
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("runtime-strategy-desk-study-invalid-body");
+  }
+  const record = payload as Record<string, unknown>;
+  const runKind =
+    record.runKind === "replay" || record.runKind === "backtest"
+      ? record.runKind
+      : null;
+  const requestedBy = String(record.requestedBy ?? "").trim();
+  const scenarioRunId = String(record.scenarioRunId ?? "").trim();
+  const reportId = String(record.reportId ?? "").trim();
+  const selectionMetric =
+    record.selectionMetric === "net_return_bps" ||
+    record.selectionMetric === "excess_vs_flat_cash_bps"
+      ? record.selectionMetric
+      : undefined;
+  const readStringArray = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const items = value
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean);
+    return items.length > 0 ? items : undefined;
+  };
+  if (!runKind || !requestedBy) {
+    throw new Error("runtime-strategy-desk-study-invalid-body");
+  }
+  return {
+    runKind,
+    requestedBy,
+    ...(scenarioRunId ? { scenarioRunId } : {}),
+    ...(reportId ? { reportId } : {}),
+    ...(selectionMetric ? { selectionMetric } : {}),
+    ...(readStringArray(record.variantIds)
+      ? { variantIds: readStringArray(record.variantIds) }
+      : {}),
+    ...(readStringArray(record.windowIds)
+      ? { windowIds: readStringArray(record.windowIds) }
       : {}),
   };
 }
@@ -3938,6 +3989,57 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-strategy-desk-scenario-execute-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      const strategyDeskStudyScenarioId =
+        request.method === "POST"
+          ? parseAdminEntityActionPath(
+              url.pathname,
+              "/api/admin/ops/runtime/strategy-desk/scenarios/",
+              "/study",
+            )
+          : null;
+      if (request.method === "POST" && strategyDeskStudyScenarioId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const parsed = parseRuntimeStrategyDeskStudyRequest(
+            await request.json(),
+          );
+          const result = await executeRuntimeStrategyDeskStudyWorkflow({
+            env,
+            scenarioId: strategyDeskStudyScenarioId,
+            ...parsed,
+          });
+          return withCors(
+            json({
+              ok: true,
+              scenario: result.scenario,
+              run: result.run,
+              report: result.report,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-scenario-study-failed",
               },
               { status: 400 },
             ),
