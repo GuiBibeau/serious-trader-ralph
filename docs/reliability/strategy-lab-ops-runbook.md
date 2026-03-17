@@ -5,6 +5,10 @@
 This runbook defines how operators should control candidate strategies, venues,
 and assets as they move from research to bounded real-money validation.
 
+For composite harness-native desk scenarios, use
+`docs/reliability/strategy-desk-ops-runbook.md` as the desk-specific extension
+to this runbook.
+
 ## Operating model
 
 - The Worker remains the public edge and the operator control surface.

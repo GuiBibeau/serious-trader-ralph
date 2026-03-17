@@ -1,0 +1,5 @@
+{
+  "action": "pause",
+  "actor": "operator_1",
+  "notes": "pause bounded execution during rollback drill"
+}
