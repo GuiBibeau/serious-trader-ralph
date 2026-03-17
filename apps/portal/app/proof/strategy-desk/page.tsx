@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import type {
+  RuntimeStrategyDeskExecutionRecipe,
+  RuntimeStrategyDeskPromotionHandoff,
+  RuntimeStrategyDeskPromotionHandoffEvent,
   RuntimeStrategyDeskScenarioManifest,
   RuntimeStrategyDeskScenarioReport,
   RuntimeStrategyDeskScenarioRun,
@@ -374,10 +377,118 @@ function paperReportFixture(): RuntimeStrategyDeskScenarioReport {
   };
 }
 
+function handoffFixture(
+  status: RuntimeStrategyDeskPromotionHandoff["status"] = "draft",
+): RuntimeStrategyDeskPromotionHandoff {
+  return {
+    schemaVersion: "v1",
+    handoffId: "desk_handoff_sol_composite_live_1",
+    scenarioId: "desk_sol_composite_1",
+    currentState: "operator_review",
+    targetMode: "limited_live",
+    status,
+    summary:
+      "Bound the spot leg to limited live while keeping the hedge and prediction overlay paper-bound.",
+    requestedBy: "operator_1",
+    createdAt: FIXTURE_TIME,
+    updatedAt: FIXTURE_TIME,
+    ...(status === "applied" ? { appliedAt: FIXTURE_TIME } : {}),
+    evidenceRefs: [
+      {
+        kind: "strategy_desk_report",
+        ref: "desk_report_sol_composite_paper_1",
+      },
+    ],
+    checks: [
+      {
+        checkId: "paper-report-pass",
+        status: "pass",
+        message: "Paper report is green and ready for operator review.",
+      },
+      {
+        checkId: "limited-live-human-approval",
+        status: "requires_human_approval",
+        message:
+          "Limited-live promotion remains human-gated even when the desk report is green.",
+      },
+    ],
+    approvals:
+      status === "approved" || status === "applied"
+        ? [
+            {
+              targetMode: "limited_live",
+              approvedBy: "operator_1",
+              approvedAt: FIXTURE_TIME,
+            },
+          ]
+        : [],
+    bindings: [
+      {
+        bindingId: "binding_leg_spot_alpha_runtime",
+        bindingKind: "runtime_deployment",
+        legIds: ["leg_spot_alpha"],
+        venueKey: "jupiter",
+        targetMode: "limited_live",
+        deploymentId: "dep_desk_sol_live",
+        lane: "safe",
+      },
+      {
+        bindingId: "binding_leg_perp_hedge_recipe",
+        bindingKind: "worker_execution_recipe",
+        legIds: ["leg_perp_hedge"],
+        venueKey: "drift",
+        instrumentId: "SOL-PERP",
+        targetMode: "paper",
+      },
+    ],
+    actions: [
+      {
+        actionId: "record-desk-state",
+        actionType: "record_state_transition",
+        summary: "Move the scenario into operator review before arming.",
+        required: true,
+      },
+    ],
+  };
+}
+
+function handoffEventFixture(
+  eventType: RuntimeStrategyDeskPromotionHandoffEvent["eventType"],
+  summary: string,
+): RuntimeStrategyDeskPromotionHandoffEvent {
+  return {
+    eventId: `desk_handoff_evt_${eventType}`,
+    handoffId: "desk_handoff_sol_composite_live_1",
+    eventType,
+    actor: "operator_1",
+    summary,
+    createdAt: FIXTURE_TIME,
+  };
+}
+
+function executionRecipeFixture(
+  status: RuntimeStrategyDeskExecutionRecipe["status"] = "paper",
+): RuntimeStrategyDeskExecutionRecipe {
+  return {
+    recipeId: "desk_recipe_perp_1",
+    scenarioId: "desk_sol_composite_1",
+    handoffId: "desk_handoff_sol_composite_live_1",
+    bindingId: "binding_leg_perp_hedge_recipe",
+    status,
+    venueKey: "drift",
+    instrumentId: "SOL-PERP",
+    targetMode: "paper",
+    legIds: ["leg_perp_hedge"],
+    createdAt: FIXTURE_TIME,
+    updatedAt: FIXTURE_TIME,
+  };
+}
+
 function buildPayload(): StrategyDeskApiPayload {
   const scenario = scenarioFixture();
   const runs = [paperRunFixture(), backtestRunFixture()];
   const reports = [paperReportFixture(), backtestReportFixture()];
+  const handoffs = [handoffFixture()];
   return {
     ok: true,
     snapshot: {
@@ -386,6 +497,10 @@ function buildPayload(): StrategyDeskApiPayload {
       selectedScenario: scenario,
       runs,
       reports,
+      handoffs,
+      latestHandoff: handoffs[0],
+      handoffEvents: [handoffEventFixture("prepared", "Prepared a bounded execution handoff.")],
+      executionRecipes: [],
       latestRun: runs[0],
       latestReport: reports[0],
     },
@@ -498,6 +613,133 @@ export default function StrategyDeskProofPage() {
     setActionPending(null);
   }
 
+  function applyPrepareHandoff() {
+    setActionPending("handoff:prepare");
+    setPayload((current) => ({
+      ok: true,
+      snapshot: {
+        ...current.snapshot,
+        selectedScenario: current.snapshot.selectedScenario
+          ? {
+              ...current.snapshot.selectedScenario,
+              state: "operator_review",
+              activeHandoffId: "desk_handoff_sol_composite_live_1",
+            }
+          : null,
+        scenarios: current.snapshot.scenarios.map((scenario) => ({
+          ...scenario,
+          state:
+            scenario.scenarioId === "desk_sol_composite_1"
+              ? "operator_review"
+              : scenario.state,
+          activeHandoffId:
+            scenario.scenarioId === "desk_sol_composite_1"
+              ? "desk_handoff_sol_composite_live_1"
+              : scenario.activeHandoffId,
+        })),
+        handoffs: [handoffFixture(), ...current.snapshot.handoffs.slice(1)],
+        latestHandoff: handoffFixture(),
+        handoffEvents: [
+          handoffEventFixture(
+            "prepared",
+            "Prepared a bounded execution handoff from paper evidence.",
+          ),
+        ],
+        executionRecipes: [],
+      },
+    }));
+    setActionPending(null);
+  }
+
+  function applyHandoffAction(
+    action:
+      | "submit"
+      | "approve"
+      | "apply"
+      | "pause"
+      | "kill"
+      | "demote",
+  ) {
+    setActionPending(`handoff:${action}`);
+    setPayload((current) => {
+      const nextScenario =
+        current.snapshot.selectedScenario &&
+        current.snapshot.selectedScenario.scenarioId === "desk_sol_composite_1"
+          ? {
+              ...current.snapshot.selectedScenario,
+              state:
+                action === "submit"
+                  ? "operator_review"
+                  : action === "approve"
+                    ? "execution_ready"
+                    : action === "apply"
+                      ? "execution_bound"
+                      : action === "demote"
+                        ? "paper_ready"
+                        : "paused",
+              activeHandoffId:
+                action === "demote"
+                  ? undefined
+                  : "desk_handoff_sol_composite_live_1",
+            }
+          : current.snapshot.selectedScenario;
+      const handoffStatus =
+        action === "submit"
+          ? "awaiting_review"
+          : action === "approve"
+            ? "approved"
+            : action === "apply"
+              ? "applied"
+              : action === "demote"
+                ? "archived"
+                : current.snapshot.latestHandoff?.status ?? "applied";
+      const nextHandoff = handoffFixture(
+        handoffStatus as RuntimeStrategyDeskPromotionHandoff["status"],
+      );
+      const eventSummary =
+        action === "submit"
+          ? "Submitted bounded execution handoff for review."
+          : action === "approve"
+            ? "Approved bounded execution handoff."
+            : action === "apply"
+              ? "Applied bounded execution handoff."
+              : action === "pause"
+                ? "Paused bounded execution."
+                : action === "kill"
+                  ? "Killed bounded execution."
+                  : "Demoted bounded execution back to paper.";
+      return {
+        ok: true,
+        snapshot: {
+          ...current.snapshot,
+          selectedScenario: nextScenario,
+          scenarios: current.snapshot.scenarios.map((scenario) =>
+            scenario.scenarioId === "desk_sol_composite_1" && nextScenario
+              ? nextScenario
+              : scenario,
+          ),
+          handoffs: [nextHandoff],
+          latestHandoff: nextHandoff,
+          handoffEvents: [
+            ...current.snapshot.handoffEvents,
+            handoffEventFixture(action, eventSummary),
+          ],
+          executionRecipes:
+            action === "apply"
+              ? [executionRecipeFixture("paper")]
+              : action === "pause"
+                ? [executionRecipeFixture("paused")]
+                : action === "kill"
+                  ? [executionRecipeFixture("killed")]
+                  : action === "demote"
+                    ? [executionRecipeFixture("archived")]
+                    : current.snapshot.executionRecipes,
+        },
+      };
+    });
+    setActionPending(null);
+  }
+
   return (
     <div data-testid="strategy-desk-proof-page">
       <StrategyDeskView
@@ -551,6 +793,19 @@ export default function StrategyDeskProofPage() {
         }}
         onRunStudy={(runKind) => applyStudy(runKind)}
         onRunExecute={(runKind) => applyExecution(runKind)}
+        onPrepareHandoff={() => applyPrepareHandoff()}
+        onTransitionHandoff={(action) => {
+          if (
+            action === "submit" ||
+            action === "approve" ||
+            action === "apply" ||
+            action === "pause" ||
+            action === "kill" ||
+            action === "demote"
+          ) {
+            applyHandoffAction(action);
+          }
+        }}
       />
     </div>
   );

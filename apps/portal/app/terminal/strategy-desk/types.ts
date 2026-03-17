@@ -1,4 +1,7 @@
 import type {
+  RuntimeStrategyDeskExecutionRecipe,
+  RuntimeStrategyDeskPromotionHandoff,
+  RuntimeStrategyDeskPromotionHandoffEvent,
   RuntimeStrategyDeskScenarioManifest,
   RuntimeStrategyDeskScenarioReport,
   RuntimeStrategyDeskScenarioRun,
@@ -18,6 +21,10 @@ export type StrategyDeskApiPayload = {
     selectedScenario: RuntimeStrategyDeskScenarioManifest | null;
     runs: RuntimeStrategyDeskScenarioRun[];
     reports: RuntimeStrategyDeskScenarioReport[];
+    handoffs: RuntimeStrategyDeskPromotionHandoff[];
+    latestHandoff: RuntimeStrategyDeskPromotionHandoff | null;
+    handoffEvents: RuntimeStrategyDeskPromotionHandoffEvent[];
+    executionRecipes: RuntimeStrategyDeskExecutionRecipe[];
     latestRun: RuntimeStrategyDeskScenarioRun | null;
     latestReport: RuntimeStrategyDeskScenarioReport | null;
   };
@@ -28,5 +35,8 @@ export type StrategyDeskMutationResult = {
   scenario?: RuntimeStrategyDeskScenarioManifest;
   run?: RuntimeStrategyDeskScenarioRun;
   report?: RuntimeStrategyDeskScenarioReport;
+  handoff?: RuntimeStrategyDeskPromotionHandoff;
+  events?: RuntimeStrategyDeskPromotionHandoffEvent[];
+  executionRecipes?: RuntimeStrategyDeskExecutionRecipe[];
   error?: string;
 };

@@ -18,6 +18,7 @@ function withExecutionSchema(run: (db: Database) => void): void {
       "0032_strategy_desk_leg_intent.sql",
       "0033_strategy_desk_scorecards.sql",
       "0034_strategy_desk_research_matrix.sql",
+      "0035_strategy_desk_promotion_handoffs.sql",
     ]) {
       const migrationPath = resolve(
         import.meta.dir,
@@ -119,7 +120,10 @@ describe("worker execution schema migration", () => {
               'strategy_desk_scenarios',
               'strategy_desk_scenario_legs',
               'strategy_desk_runs',
-              'strategy_desk_reports'
+              'strategy_desk_reports',
+              'strategy_desk_promotion_handoffs',
+              'strategy_desk_promotion_handoff_events',
+              'strategy_desk_execution_recipes'
             )
           ORDER BY name
           `,
@@ -135,6 +139,9 @@ describe("worker execution schema migration", () => {
         "execution_status_events",
         "runtime_canary_runs",
         "runtime_canary_state",
+        "strategy_desk_execution_recipes",
+        "strategy_desk_promotion_handoff_events",
+        "strategy_desk_promotion_handoffs",
         "strategy_desk_reports",
         "strategy_desk_runs",
         "strategy_desk_scenario_legs",

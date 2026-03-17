@@ -79,6 +79,59 @@ export type RuntimeStrategyDeskScenarioReport = {
   metadata?: Record<string, unknown>;
 };
 
+export type RuntimeStrategyDeskPromotionHandoff = {
+  schemaVersion?: string;
+  handoffId: string;
+  scenarioId: string;
+  currentState: string;
+  targetMode: string;
+  status: string;
+  summary: string;
+  requestedBy: string;
+  createdAt: string;
+  updatedAt: string;
+  appliedAt?: string;
+  implementationReference?: Record<string, unknown>;
+  evidenceRefs: readonly Record<string, unknown>[];
+  checks: readonly Record<string, unknown>[];
+  approvals: readonly Record<string, unknown>[];
+  bindings: readonly Record<string, unknown>[];
+  actions: readonly Record<string, unknown>[];
+  metadata?: Record<string, unknown>;
+};
+
+export type RuntimeStrategyDeskPromotionHandoffEvent = {
+  eventId: string;
+  handoffId: string;
+  eventType: string;
+  actor: string;
+  fromStatus?: string;
+  toStatus?: string;
+  summary: string;
+  details?: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type RuntimeStrategyDeskExecutionRecipe = {
+  recipeId: string;
+  scenarioId: string;
+  handoffId: string;
+  bindingId: string;
+  schemaVersion?: string;
+  status: string;
+  venueKey: string;
+  instrumentId?: string;
+  pair?: Record<string, unknown>;
+  targetMode: string;
+  lane?: string;
+  legIds: readonly string[];
+  budget?: Record<string, unknown>;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type ParseSuccess<T> = {
   success: true;
   data: T;
@@ -269,6 +322,138 @@ export function safeParseRuntimeStrategyDeskScenarioRun(
       failureCode: readOptionalString(value.failureCode),
       failureMessage: readOptionalString(value.failureMessage),
       metadata: isRecord(value.metadata) ? value.metadata : undefined,
+    },
+  };
+}
+
+export function safeParseRuntimeStrategyDeskPromotionHandoff(
+  value: unknown,
+): ParseResult<RuntimeStrategyDeskPromotionHandoff> {
+  if (!isRecord(value)) return fail("strategy-desk-handoff-not-object");
+  const handoffId = readString(value.handoffId);
+  const scenarioId = readString(value.scenarioId);
+  const currentState = readString(value.currentState);
+  const targetMode = readString(value.targetMode);
+  const status = readString(value.status);
+  const summary = readString(value.summary);
+  const requestedBy = readString(value.requestedBy);
+  const createdAt = readString(value.createdAt);
+  const updatedAt = readString(value.updatedAt);
+  if (
+    !handoffId ||
+    !scenarioId ||
+    !currentState ||
+    !targetMode ||
+    !status ||
+    !summary ||
+    !requestedBy ||
+    !createdAt ||
+    !updatedAt
+  ) {
+    return fail("strategy-desk-handoff-invalid");
+  }
+  return {
+    success: true,
+    data: {
+      handoffId,
+      schemaVersion: readOptionalString(value.schemaVersion),
+      scenarioId,
+      currentState,
+      targetMode,
+      status,
+      summary,
+      requestedBy,
+      createdAt,
+      updatedAt,
+      appliedAt: readOptionalString(value.appliedAt),
+      implementationReference: isRecord(value.implementationReference)
+        ? value.implementationReference
+        : undefined,
+      evidenceRefs: readRecordArray(value.evidenceRefs),
+      checks: readRecordArray(value.checks),
+      approvals: readRecordArray(value.approvals),
+      bindings: readRecordArray(value.bindings),
+      actions: readRecordArray(value.actions),
+      metadata: isRecord(value.metadata) ? value.metadata : undefined,
+    },
+  };
+}
+
+export function safeParseRuntimeStrategyDeskPromotionHandoffEvent(
+  value: unknown,
+): ParseResult<RuntimeStrategyDeskPromotionHandoffEvent> {
+  if (!isRecord(value)) return fail("strategy-desk-handoff-event-not-object");
+  const eventId = readString(value.eventId);
+  const handoffId = readString(value.handoffId);
+  const eventType = readString(value.eventType);
+  const actor = readString(value.actor);
+  const summary = readString(value.summary);
+  const createdAt = readString(value.createdAt);
+  if (!eventId || !handoffId || !eventType || !actor || !summary || !createdAt) {
+    return fail("strategy-desk-handoff-event-invalid");
+  }
+  return {
+    success: true,
+    data: {
+      eventId,
+      handoffId,
+      eventType,
+      actor,
+      fromStatus: readOptionalString(value.fromStatus),
+      toStatus: readOptionalString(value.toStatus),
+      summary,
+      details: isRecord(value.details) ? value.details : undefined,
+      createdAt,
+    },
+  };
+}
+
+export function safeParseRuntimeStrategyDeskExecutionRecipe(
+  value: unknown,
+): ParseResult<RuntimeStrategyDeskExecutionRecipe> {
+  if (!isRecord(value)) return fail("strategy-desk-execution-recipe-not-object");
+  const recipeId = readString(value.recipeId);
+  const scenarioId = readString(value.scenarioId);
+  const handoffId = readString(value.handoffId);
+  const bindingId = readString(value.bindingId);
+  const status = readString(value.status);
+  const venueKey = readString(value.venueKey);
+  const targetMode = readString(value.targetMode);
+  const createdAt = readString(value.createdAt);
+  const updatedAt = readString(value.updatedAt);
+  if (
+    !recipeId ||
+    !scenarioId ||
+    !handoffId ||
+    !bindingId ||
+    !status ||
+    !venueKey ||
+    !targetMode ||
+    !createdAt ||
+    !updatedAt
+  ) {
+    return fail("strategy-desk-execution-recipe-invalid");
+  }
+  return {
+    success: true,
+    data: {
+      recipeId,
+      scenarioId,
+      handoffId,
+      bindingId,
+      schemaVersion: readOptionalString(value.schemaVersion),
+      status,
+      venueKey,
+      instrumentId: readOptionalString(value.instrumentId),
+      pair: isRecord(value.pair) ? value.pair : undefined,
+      targetMode,
+      lane: readOptionalString(value.lane),
+      legIds: readStringArray(value.legIds),
+      budget: isRecord(value.budget) ? value.budget : undefined,
+      notes: readOptionalString(value.notes),
+      metadata: isRecord(value.metadata) ? value.metadata : undefined,
+      createdAt,
+      updatedAt,
     },
   };
 }

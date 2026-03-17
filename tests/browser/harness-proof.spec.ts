@@ -421,4 +421,25 @@ test("strategy desk proof covers author, run, inspect, and compare flows", async
     "leg_spot_alpha",
   );
   await captureCheckpoint(page, "strategy-desk-paper.png");
+
+  await page.getByTestId("strategy-desk-prepare-handoff").click();
+  await expect(
+    page.getByTestId("strategy-desk-page"),
+  ).toContainText("operator review");
+
+  await page.getByTestId("strategy-desk-submit-handoff").click();
+  await page.getByTestId("strategy-desk-approve-handoff").click();
+  await page.getByTestId("strategy-desk-apply-handoff").click();
+  await expect(
+    page.getByTestId("strategy-desk-page"),
+  ).toContainText("execution bound");
+  await expect(
+    page.getByTestId("strategy-desk-handoff-bindings"),
+  ).toContainText("binding_leg_spot_alpha_runtime");
+  await captureCheckpoint(page, "strategy-desk-bounded-execution.png");
+
+  await page.getByTestId("strategy-desk-demote-handoff").click();
+  await expect(
+    page.getByTestId("strategy-desk-page"),
+  ).toContainText("paper ready");
 });

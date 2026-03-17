@@ -101,6 +101,87 @@ function reportFixture() {
   };
 }
 
+function handoffFixture() {
+  return {
+    schemaVersion: "v1",
+    handoffId: "desk_handoff_sol_composite_live_1",
+    scenarioId: "desk_sol_composite_1",
+    currentState: "operator_review",
+    targetMode: "limited_live",
+    status: "approved",
+    summary: "Bound the spot leg to limited live while keeping overlays paper-bound.",
+    requestedBy: "operator_1",
+    createdAt: FIXTURE_TIME,
+    updatedAt: FIXTURE_TIME,
+    evidenceRefs: [
+      {
+        kind: "strategy_desk_report",
+        ref: "desk_report_sol_composite_paper_1",
+      },
+    ],
+    checks: [
+      {
+        checkId: "limited-live-human-approval",
+        status: "requires_human_approval",
+        message: "Human approval remains required.",
+      },
+    ],
+    approvals: [
+      {
+        targetMode: "limited_live",
+        approvedBy: "operator_1",
+        approvedAt: FIXTURE_TIME,
+      },
+    ],
+    bindings: [
+      {
+        bindingId: "binding_leg_spot_alpha_runtime",
+        bindingKind: "runtime_deployment",
+        legIds: ["leg_spot_alpha"],
+        venueKey: "jupiter",
+        targetMode: "limited_live",
+        deploymentId: "dep_desk_sol_live",
+        lane: "safe",
+      },
+    ],
+    actions: [
+      {
+        actionId: "record-desk-state",
+        actionType: "record_state_transition",
+        summary: "Move into operator review.",
+        required: true,
+      },
+    ],
+  };
+}
+
+function handoffEventFixture() {
+  return {
+    eventId: "desk_handoff_evt_1",
+    handoffId: "desk_handoff_sol_composite_live_1",
+    eventType: "approved",
+    actor: "operator_1",
+    summary: "Approved bounded execution handoff.",
+    createdAt: FIXTURE_TIME,
+  };
+}
+
+function executionRecipeFixture() {
+  return {
+    recipeId: "desk_recipe_perp_1",
+    scenarioId: "desk_sol_composite_1",
+    handoffId: "desk_handoff_sol_composite_live_1",
+    bindingId: "binding_leg_perp_hedge_recipe",
+    status: "paper",
+    venueKey: "drift",
+    instrumentId: "SOL-PERP",
+    targetMode: "paper",
+    legIds: ["leg_perp_hedge"],
+    createdAt: FIXTURE_TIME,
+    updatedAt: FIXTURE_TIME,
+  };
+}
+
 afterEach(() => {
   process.env.NEXT_PUBLIC_EDGE_API_BASE =
     ORIGINAL_ENV.NEXT_PUBLIC_EDGE_API_BASE;
@@ -249,6 +330,36 @@ describe("portal runtime strategy desk route", () => {
           },
         );
       }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/handoffs?")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            handoffs: [handoffFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.endsWith(
+          "/api/admin/ops/runtime/strategy-desk/handoffs/desk_handoff_sol_composite_live_1",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            handoff: handoffFixture(),
+            events: [handoffEventFixture()],
+            executionRecipes: [executionRecipeFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
       throw new Error(`unexpected fetch ${url}`);
     }) as typeof fetch;
 
@@ -280,6 +391,24 @@ describe("portal runtime strategy desk route", () => {
         reports: [
           {
             reportId: "desk_report_sol_composite_paper_1",
+          },
+        ],
+        handoffs: [
+          {
+            handoffId: "desk_handoff_sol_composite_live_1",
+          },
+        ],
+        latestHandoff: {
+          handoffId: "desk_handoff_sol_composite_live_1",
+        },
+        handoffEvents: [
+          {
+            eventId: "desk_handoff_evt_1",
+          },
+        ],
+        executionRecipes: [
+          {
+            recipeId: "desk_recipe_perp_1",
           },
         ],
       },
@@ -655,6 +784,176 @@ describe("portal runtime strategy desk route", () => {
       requestedBy: "operator_1",
       selectionMetric: "excess_vs_flat_cash_bps",
       variantIds: ["fast"],
+    });
+  });
+
+  test("forwards handoff preparation through the worker admin surface", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    let receivedPath = "";
+    let receivedBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(JSON.stringify({ ok: true, user: { id: "u_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (
+        url.endsWith(
+          "/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare",
+        )
+      ) {
+        receivedPath = new URL(url).pathname;
+        receivedBody = JSON.parse(String(init?.body ?? "{}")) as Record<
+          string,
+          unknown
+        >;
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            scenario: scenarioFixture(),
+            handoff: handoffFixture(),
+            events: [handoffEventFixture()],
+            executionRecipes: [executionRecipeFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await POST(
+      new Request("https://www.trader-ralph.com/api/runtime/strategy-desk", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer user-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "prepare_handoff",
+          scenarioId: "desk_sol_composite_1",
+          requestedBy: "operator_1",
+          targetMode: "limited_live",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      handoff: {
+        handoffId: "desk_handoff_sol_composite_live_1",
+      },
+      executionRecipes: [
+        {
+          recipeId: "desk_recipe_perp_1",
+        },
+      ],
+    });
+    expect(receivedPath).toBe(
+      "/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare",
+    );
+    expect(receivedBody).toEqual({
+      requestedBy: "operator_1",
+      targetMode: "limited_live",
+    });
+  });
+
+  test("forwards handoff transitions through the worker admin surface", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    let receivedPath = "";
+    let receivedBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(JSON.stringify({ ok: true, user: { id: "u_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (
+        url.endsWith(
+          "/api/admin/ops/runtime/strategy-desk/handoffs/desk_handoff_sol_composite_live_1/transition",
+        )
+      ) {
+        receivedPath = new URL(url).pathname;
+        receivedBody = JSON.parse(String(init?.body ?? "{}")) as Record<
+          string,
+          unknown
+        >;
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            scenario: {
+              ...scenarioFixture(),
+              state: "execution_bound",
+            },
+            handoff: {
+              ...handoffFixture(),
+              status: "applied",
+            },
+            events: [handoffEventFixture()],
+            executionRecipes: [executionRecipeFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await POST(
+      new Request("https://www.trader-ralph.com/api/runtime/strategy-desk", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer user-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "transition_handoff",
+          handoffId: "desk_handoff_sol_composite_live_1",
+          handoffAction: "apply",
+          actor: "operator_1",
+          notes: "arm bounded execution",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      scenario: {
+        state: "execution_bound",
+      },
+      handoff: {
+        status: "applied",
+      },
+    });
+    expect(receivedPath).toBe(
+      "/api/admin/ops/runtime/strategy-desk/handoffs/desk_handoff_sol_composite_live_1/transition",
+    );
+    expect(receivedBody).toEqual({
+      action: "apply",
+      actor: "operator_1",
+      notes: "arm bounded execution",
     });
   });
 });

@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import {
+  type RuntimeStrategyDeskExecutionRecipe,
+  type RuntimeStrategyDeskPromotionHandoff,
+  type RuntimeStrategyDeskPromotionHandoffEvent,
   type RuntimeStrategyDeskScenarioManifest,
   type RuntimeStrategyDeskScenarioReport,
   type RuntimeStrategyDeskScenarioRun,
+  safeParseRuntimeStrategyDeskExecutionRecipe,
+  safeParseRuntimeStrategyDeskPromotionHandoff,
+  safeParseRuntimeStrategyDeskPromotionHandoffEvent,
   safeParseRuntimeStrategyDeskScenarioManifest,
   safeParseRuntimeStrategyDeskScenarioReport,
   safeParseRuntimeStrategyDeskScenarioRun,
@@ -166,6 +172,40 @@ function parseReports(value: unknown): RuntimeStrategyDeskScenarioReport[] {
   return reports;
 }
 
+function parseHandoffs(value: unknown): RuntimeStrategyDeskPromotionHandoff[] {
+  if (!Array.isArray(value)) return [];
+  const handoffs: RuntimeStrategyDeskPromotionHandoff[] = [];
+  for (const entry of value) {
+    const parsed = safeParseRuntimeStrategyDeskPromotionHandoff(entry);
+    if (parsed.success) handoffs.push(parsed.data);
+  }
+  return handoffs;
+}
+
+function parseHandoffEvents(
+  value: unknown,
+): RuntimeStrategyDeskPromotionHandoffEvent[] {
+  if (!Array.isArray(value)) return [];
+  const events: RuntimeStrategyDeskPromotionHandoffEvent[] = [];
+  for (const entry of value) {
+    const parsed = safeParseRuntimeStrategyDeskPromotionHandoffEvent(entry);
+    if (parsed.success) events.push(parsed.data);
+  }
+  return events;
+}
+
+function parseExecutionRecipes(
+  value: unknown,
+): RuntimeStrategyDeskExecutionRecipe[] {
+  if (!Array.isArray(value)) return [];
+  const recipes: RuntimeStrategyDeskExecutionRecipe[] = [];
+  for (const entry of value) {
+    const parsed = safeParseRuntimeStrategyDeskExecutionRecipe(entry);
+    if (parsed.success) recipes.push(parsed.data);
+  }
+  return recipes;
+}
+
 function latestByTimestamp<
   T extends { generatedAt?: string; updatedAt?: string },
 >(items: T[], timestampKey: "generatedAt" | "updatedAt"): T | null {
@@ -320,6 +360,61 @@ function parseStudyPayload(value: unknown): {
   };
 }
 
+function parsePrepareHandoffPayload(value: unknown): {
+  scenarioId: string;
+  requestedBy: string;
+  targetMode?: "limited_live";
+} | null {
+  if (!isRecord(value)) return null;
+  const scenarioId = readString(value.scenarioId);
+  const requestedBy = readString(value.requestedBy);
+  const targetMode = value.targetMode === "limited_live" ? "limited_live" : undefined;
+  if (!scenarioId || !requestedBy) return null;
+  return {
+    scenarioId,
+    requestedBy,
+    ...(targetMode ? { targetMode } : {}),
+  };
+}
+
+function parseTransitionHandoffPayload(value: unknown): {
+  handoffId: string;
+  actor: string;
+  handoffAction:
+    | "submit"
+    | "approve"
+    | "reject"
+    | "apply"
+    | "pause"
+    | "kill"
+    | "demote"
+    | "archive";
+  notes?: string;
+} | null {
+  if (!isRecord(value)) return null;
+  const handoffId = readString(value.handoffId);
+  const actor = readString(value.actor);
+  const handoffAction =
+    value.handoffAction === "submit" ||
+    value.handoffAction === "approve" ||
+    value.handoffAction === "reject" ||
+    value.handoffAction === "apply" ||
+    value.handoffAction === "pause" ||
+    value.handoffAction === "kill" ||
+    value.handoffAction === "demote" ||
+    value.handoffAction === "archive"
+      ? value.handoffAction
+      : null;
+  const notes = readString(value.notes);
+  if (!handoffId || !actor || !handoffAction) return null;
+  return {
+    handoffId,
+    actor,
+    handoffAction,
+    ...(notes ? { notes } : {}),
+  };
+}
+
 export async function GET(request: Request) {
   const auth = await ensureAuthorizedOperator(request);
   if (!auth.ok) return auth.response;
@@ -399,9 +494,13 @@ export async function GET(request: Request) {
 
   let runs: RuntimeStrategyDeskScenarioRun[] = [];
   let reports: RuntimeStrategyDeskScenarioReport[] = [];
+  let handoffs: RuntimeStrategyDeskPromotionHandoff[] = [];
+  let latestHandoff: RuntimeStrategyDeskPromotionHandoff | null = null;
+  let handoffEvents: RuntimeStrategyDeskPromotionHandoffEvent[] = [];
+  let executionRecipes: RuntimeStrategyDeskExecutionRecipe[] = [];
 
   if (selectedScenarioId) {
-    const [runsResult, reportsResult] = await Promise.all([
+    const [runsResult, reportsResult, handoffsResult] = await Promise.all([
       requestWorkerJson({
         path: `/api/admin/ops/runtime/strategy-desk/runs?scenarioId=${encodeURIComponent(
           selectedScenarioId,
@@ -410,6 +509,12 @@ export async function GET(request: Request) {
       }),
       requestWorkerJson({
         path: `/api/admin/ops/runtime/strategy-desk/reports?scenarioId=${encodeURIComponent(
+          selectedScenarioId,
+        )}&limit=20`,
+        authHeader: auth.adminAuthHeader,
+      }),
+      requestWorkerJson({
+        path: `/api/admin/ops/runtime/strategy-desk/handoffs?scenarioId=${encodeURIComponent(
           selectedScenarioId,
         )}&limit=20`,
         authHeader: auth.adminAuthHeader,
@@ -440,6 +545,29 @@ export async function GET(request: Request) {
     }
     runs = parseRuns(runsResult.payload.runs);
     reports = parseReports(reportsResult.payload.reports);
+    if (handoffsResult.status === 200 && handoffsResult.payload.ok === true) {
+      handoffs = parseHandoffs(handoffsResult.payload.handoffs);
+    }
+    latestHandoff = latestByTimestamp(handoffs, "updatedAt");
+
+    if (latestHandoff) {
+      const detailResult = await requestWorkerJson({
+        path: `/api/admin/ops/runtime/strategy-desk/handoffs/${encodeURIComponent(
+          latestHandoff.handoffId,
+        )}`,
+        authHeader: auth.adminAuthHeader,
+      });
+      if (detailResult.status === 200 && detailResult.payload.ok === true) {
+        const parsed = safeParseRuntimeStrategyDeskPromotionHandoff(
+          detailResult.payload.handoff,
+        );
+        if (parsed.success) latestHandoff = parsed.data;
+        handoffEvents = parseHandoffEvents(detailResult.payload.events);
+        executionRecipes = parseExecutionRecipes(
+          detailResult.payload.executionRecipes,
+        );
+      }
+    }
   }
 
   return NextResponse.json({
@@ -450,6 +578,10 @@ export async function GET(request: Request) {
       selectedScenario,
       runs,
       reports,
+      handoffs,
+      latestHandoff,
+      handoffEvents,
+      executionRecipes,
       latestRun: latestByTimestamp(runs, "updatedAt"),
       latestReport: latestByTimestamp(reports, "generatedAt"),
     },
@@ -618,6 +750,152 @@ export async function POST(request: Request) {
       scenario: scenario.data,
       run: run.data,
       report: report.data,
+    });
+  }
+
+  if (action === "prepare_handoff") {
+    const parsed = parsePrepareHandoffPayload(body);
+    if (!parsed) {
+      return NextResponse.json(
+        { ok: false, error: "strategy-desk-handoff-prepare-invalid" },
+        { status: 400 },
+      );
+    }
+    const result = await requestWorkerJson({
+      path: `/api/admin/ops/runtime/strategy-desk/scenarios/${encodeURIComponent(
+        parsed.scenarioId,
+      )}/handoffs/prepare`,
+      method: "POST",
+      authHeader: auth.adminAuthHeader,
+      body: {
+        requestedBy: parsed.requestedBy,
+        ...(parsed.targetMode ? { targetMode: parsed.targetMode } : {}),
+      },
+    });
+    if (result.status !== 200 || result.payload.ok !== true) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            readString(result.payload.error) ??
+            "strategy-desk-handoff-prepare-failed",
+        },
+        { status: result.status || 502 },
+      );
+    }
+    const scenario = safeParseRuntimeStrategyDeskScenarioManifest(
+      result.payload.scenario,
+    );
+    const handoff = safeParseRuntimeStrategyDeskPromotionHandoff(
+      result.payload.handoff,
+    );
+    if (!scenario.success || !handoff.success) {
+      return NextResponse.json(
+        { ok: false, error: "strategy-desk-handoff-prepare-response-invalid" },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json({
+      ok: true,
+      scenario: scenario.data,
+      handoff: handoff.data,
+      events: parseHandoffEvents(result.payload.events),
+      executionRecipes: parseExecutionRecipes(result.payload.executionRecipes),
+    });
+  }
+
+  if (action === "transition_handoff") {
+    const parsed = parseTransitionHandoffPayload(body);
+    if (!parsed) {
+      return NextResponse.json(
+        { ok: false, error: "strategy-desk-handoff-transition-invalid" },
+        { status: 400 },
+      );
+    }
+    const result = await requestWorkerJson({
+      path: `/api/admin/ops/runtime/strategy-desk/handoffs/${encodeURIComponent(
+        parsed.handoffId,
+      )}/transition`,
+      method: "POST",
+      authHeader: auth.adminAuthHeader,
+      body: {
+        action: parsed.handoffAction,
+        actor: parsed.actor,
+        ...(parsed.notes ? { notes: parsed.notes } : {}),
+      },
+    });
+    if (result.status !== 200 || result.payload.ok !== true) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            readString(result.payload.error) ??
+            "strategy-desk-handoff-transition-failed",
+        },
+        { status: result.status || 502 },
+      );
+    }
+    const scenario = safeParseRuntimeStrategyDeskScenarioManifest(
+      result.payload.scenario,
+    );
+    const handoff = safeParseRuntimeStrategyDeskPromotionHandoff(
+      result.payload.handoff,
+    );
+    if (!scenario.success || !handoff.success) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "strategy-desk-handoff-transition-response-invalid",
+        },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json({
+      ok: true,
+      scenario: scenario.data,
+      handoff: handoff.data,
+      events: parseHandoffEvents(result.payload.events),
+      executionRecipes: parseExecutionRecipes(result.payload.executionRecipes),
+    });
+  }
+
+  if (action === "upsert_handoff") {
+    const parsed = safeParseRuntimeStrategyDeskPromotionHandoff(body.handoff);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { ok: false, error: parsed.error },
+        { status: 400 },
+      );
+    }
+    const result = await requestWorkerJson({
+      path: "/api/admin/ops/runtime/strategy-desk/handoffs",
+      method: "POST",
+      authHeader: auth.adminAuthHeader,
+      body: parsed.data,
+    });
+    if (result.status !== 200 || result.payload.ok !== true) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            readString(result.payload.error) ??
+            "strategy-desk-handoff-upsert-failed",
+        },
+        { status: result.status || 502 },
+      );
+    }
+    const handoff = safeParseRuntimeStrategyDeskPromotionHandoff(
+      result.payload.handoff,
+    );
+    if (!handoff.success) {
+      return NextResponse.json(
+        { ok: false, error: handoff.error },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json({
+      ok: true,
+      handoff: handoff.data,
     });
   }
 

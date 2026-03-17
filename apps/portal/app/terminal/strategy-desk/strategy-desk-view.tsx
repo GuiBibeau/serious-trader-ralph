@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type {
+  RuntimeStrategyDeskPromotionHandoff,
   RuntimeStrategyDeskScenarioReport,
   RuntimeStrategyDeskScenarioRun,
 } from "../../../lib/runtime-strategy-desk";
@@ -34,6 +35,18 @@ type StrategyDeskViewProps = {
     selectionMetric?: StrategyDeskStudySelectionMetric,
   ) => void;
   onRunExecute?: (runKind: StrategyDeskExecuteRunKind) => void;
+  onPrepareHandoff?: () => void;
+  onTransitionHandoff?: (
+    action:
+      | "submit"
+      | "approve"
+      | "reject"
+      | "apply"
+      | "pause"
+      | "kill"
+      | "demote"
+      | "archive",
+  ) => void;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -179,6 +192,19 @@ function reportForDisplay(
   return latestReport ?? reports[0] ?? null;
 }
 
+function readCheckStatusCounts(handoff: RuntimeStrategyDeskPromotionHandoff | null) {
+  let pass = 0;
+  let blocked = 0;
+  let human = 0;
+  for (const check of readRecordArray(handoff?.checks)) {
+    const status = readString(check.status);
+    if (status === "pass") pass += 1;
+    if (status === "blocked") blocked += 1;
+    if (status === "requires_human_approval") human += 1;
+  }
+  return { pass, blocked, human };
+}
+
 export function StrategyDeskView({
   authenticated,
   loading,
@@ -197,6 +223,8 @@ export function StrategyDeskView({
   onSaveScenario,
   onRunStudy,
   onRunExecute,
+  onPrepareHandoff,
+  onTransitionHandoff,
 }: StrategyDeskViewProps) {
   const snapshot = payload?.snapshot ?? null;
   const selectedScenario = snapshot?.selectedScenario ?? null;
@@ -205,11 +233,13 @@ export function StrategyDeskView({
     snapshot?.latestReport ?? null,
     snapshot?.reports ?? [],
   );
+  const latestHandoff = snapshot?.latestHandoff ?? null;
   const comparison = buildRunComparison(
     snapshot?.runs ?? [],
     snapshot?.reports ?? [],
   );
   const reproducibilityRefs = collectReproducibilityRefs(latestReport);
+  const handoffCheckCounts = readCheckStatusCounts(latestHandoff);
 
   let draftScenario: Record<string, unknown> | null = null;
   try {
@@ -551,6 +581,252 @@ export function StrategyDeskView({
                     ? "Running paper..."
                     : "Run paper"}
                 </button>
+              </div>
+            </div>
+          </article>
+
+          <article
+            className="rounded border border-border bg-surface/80 p-5"
+            data-testid="strategy-desk-bounded-execution"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted">
+                  Bounded execution
+                </p>
+                <h2 className="mt-2 text-lg font-medium text-ink">
+                  Review, arm, and roll back from the desk
+                </h2>
+                <p className="mt-2 text-sm text-muted">
+                  Prepare a bounded handoff from the current paper evidence, then
+                  move it through explicit operator review before applying or
+                  rolling it back.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className={BTN_SECONDARY}
+                  data-testid="strategy-desk-prepare-handoff"
+                  disabled={
+                    actionPending === "handoff:prepare" || !selectedScenario
+                  }
+                  onClick={onPrepareHandoff}
+                  type="button"
+                >
+                  {actionPending === "handoff:prepare"
+                    ? "Preparing..."
+                    : "Prepare handoff"}
+                </button>
+                <button
+                  className={BTN_SECONDARY}
+                  data-testid="strategy-desk-submit-handoff"
+                  disabled={
+                    actionPending === "handoff:submit" || !latestHandoff
+                  }
+                  onClick={() => onTransitionHandoff?.("submit")}
+                  type="button"
+                >
+                  {actionPending === "handoff:submit"
+                    ? "Submitting..."
+                    : "Submit review"}
+                </button>
+                <button
+                  className={BTN_SECONDARY}
+                  data-testid="strategy-desk-approve-handoff"
+                  disabled={
+                    actionPending === "handoff:approve" || !latestHandoff
+                  }
+                  onClick={() => onTransitionHandoff?.("approve")}
+                  type="button"
+                >
+                  {actionPending === "handoff:approve"
+                    ? "Approving..."
+                    : "Approve"}
+                </button>
+                <button
+                  className={BTN_PRIMARY}
+                  data-testid="strategy-desk-apply-handoff"
+                  disabled={
+                    actionPending === "handoff:apply" || !latestHandoff
+                  }
+                  onClick={() => onTransitionHandoff?.("apply")}
+                  type="button"
+                >
+                  {actionPending === "handoff:apply"
+                    ? "Arming..."
+                    : "Arm bounded execution"}
+                </button>
+                <button
+                  className={BTN_SECONDARY}
+                  data-testid="strategy-desk-pause-handoff"
+                  disabled={
+                    actionPending === "handoff:pause" || !latestHandoff
+                  }
+                  onClick={() => onTransitionHandoff?.("pause")}
+                  type="button"
+                >
+                  {actionPending === "handoff:pause" ? "Pausing..." : "Pause"}
+                </button>
+                <button
+                  className={BTN_SECONDARY}
+                  data-testid="strategy-desk-kill-handoff"
+                  disabled={
+                    actionPending === "handoff:kill" || !latestHandoff
+                  }
+                  onClick={() => onTransitionHandoff?.("kill")}
+                  type="button"
+                >
+                  {actionPending === "handoff:kill" ? "Killing..." : "Kill"}
+                </button>
+                <button
+                  className={BTN_SECONDARY}
+                  data-testid="strategy-desk-demote-handoff"
+                  disabled={
+                    actionPending === "handoff:demote" || !latestHandoff
+                  }
+                  onClick={() => onTransitionHandoff?.("demote")}
+                  type="button"
+                >
+                  {actionPending === "handoff:demote"
+                    ? "Demoting..."
+                    : "Demote to paper"}
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {summaryItem(
+                "Latest handoff",
+                latestHandoff?.handoffId ?? "none",
+              )}
+              {summaryItem("Status", latestHandoff?.status ?? "--")}
+              {summaryItem(
+                "Approvals",
+                String(readRecordArray(latestHandoff?.approvals).length),
+              )}
+              {summaryItem(
+                "Materialized recipes",
+                String(snapshot?.executionRecipes.length ?? 0),
+              )}
+            </div>
+
+            <div className="mt-5 grid gap-4 xl:grid-cols-2">
+              <div className="rounded border border-border bg-paper/70 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-muted">
+                      Handoff summary
+                    </p>
+                    <h3 className="mt-2 text-sm font-medium text-ink">
+                      {latestHandoff?.summary ?? "No bounded execution handoff prepared yet."}
+                    </h3>
+                  </div>
+                  <div className="flex gap-2">
+                    {renderBadge(latestHandoff?.status ?? null)}
+                    {renderBadge(latestHandoff?.targetMode ?? null)}
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  {summaryItem("Passed checks", String(handoffCheckCounts.pass))}
+                  {summaryItem("Blocked checks", String(handoffCheckCounts.blocked))}
+                  {summaryItem(
+                    "Human gates",
+                    String(handoffCheckCounts.human),
+                  )}
+                </div>
+                <div className="mt-4 space-y-3">
+                  {readRecordArray(latestHandoff?.checks).length === 0 ? (
+                    <p className="text-sm text-muted">
+                      Prepare a bounded handoff to surface checks and actions.
+                    </p>
+                  ) : (
+                    readRecordArray(latestHandoff?.checks).map((check) => (
+                      <div
+                        key={`${readString(check.checkId) ?? "check"}-${readString(check.status) ?? "status"}`}
+                        className="rounded border border-border bg-surface/80 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-medium text-ink">
+                            {readString(check.checkId) ?? "check"}
+                          </p>
+                          {renderBadge(readString(check.status))}
+                        </div>
+                        <p className="mt-2 text-xs text-muted">
+                          {readString(check.message) ?? "No message"}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded border border-border bg-paper/70 p-4">
+                <p className="text-[10px] uppercase tracking-[0.24em] text-muted">
+                  Bindings and control timeline
+                </p>
+                <div
+                  className="mt-3 space-y-3"
+                  data-testid="strategy-desk-handoff-bindings"
+                >
+                  {readRecordArray(latestHandoff?.bindings).length === 0 ? (
+                    <p className="text-sm text-muted">
+                      No bindings materialized yet.
+                    </p>
+                  ) : (
+                    readRecordArray(latestHandoff?.bindings).map((binding) => (
+                      <div
+                        key={
+                          readString(binding.bindingId) ??
+                          `${readString(binding.venueKey) ?? "binding"}-${readString(binding.instrumentId) ?? readString(isRecord(binding.pair) ? binding.pair.symbol : null) ?? "target"}`
+                        }
+                        className="rounded border border-border bg-surface/80 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-medium text-ink">
+                            {readString(binding.bindingId) ?? "binding"}
+                          </p>
+                          <div className="flex gap-2">
+                            {renderBadge(readString(binding.bindingKind))}
+                            {renderBadge(readString(binding.targetMode))}
+                          </div>
+                        </div>
+                        <p className="mt-2 text-xs text-muted">
+                          {readString(binding.venueKey) ?? "venue"} ·{" "}
+                          {readString(binding.instrumentId) ??
+                            readString(isRecord(binding.pair) ? binding.pair.symbol : null) ??
+                            "pair"}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                  {snapshot?.handoffEvents.length ? (
+                    <div className="rounded border border-border bg-surface/80 p-3">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-muted">
+                        Timeline
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {snapshot.handoffEvents.map((event) => (
+                          <div
+                            className="rounded border border-border/60 bg-paper/60 p-2"
+                            key={event.eventId}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-xs font-medium text-ink">
+                                {event.eventType}
+                              </p>
+                              <p className="text-[11px] text-muted">
+                                {formatTick(event.createdAt)}
+                              </p>
+                            </div>
+                            <p className="mt-1 text-xs text-muted">
+                              {event.summary}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           </article>

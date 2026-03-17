@@ -1,4 +1,5 @@
 import {
+  parseRuntimeStrategyDeskPromotionHandoff,
   parseRuntimeStrategyDeskScenarioManifest,
   parseRuntimeStrategyDeskScenarioReport,
   parseRuntimeStrategyDeskScenarioRun,
@@ -231,6 +232,13 @@ import {
   upsertRuntimeStrategyDeskScenarioRunWorkflow,
   upsertRuntimeStrategyDeskScenarioWorkflow,
 } from "./runtime_strategy_desk";
+import {
+  getRuntimeStrategyDeskPromotionHandoffWorkflow,
+  listRuntimeStrategyDeskPromotionHandoffsWorkflow,
+  prepareRuntimeStrategyDeskPromotionHandoffWorkflow,
+  transitionRuntimeStrategyDeskPromotionHandoffWorkflow,
+  upsertRuntimeStrategyDeskPromotionHandoffWorkflow,
+} from "./runtime_strategy_desk_promotion";
 import { executeRuntimeStrategyDeskScenarioWorkflow } from "./runtime_strategy_desk_runner";
 import { executeRuntimeStrategyDeskStudyWorkflow } from "./runtime_strategy_desk_study";
 import { SolanaRpc } from "./solana_rpc";
@@ -731,6 +739,65 @@ function parseRuntimeStrategyDeskStudyRequest(payload: unknown): {
     ...(readStringArray(record.windowIds)
       ? { windowIds: readStringArray(record.windowIds) }
       : {}),
+  };
+}
+
+function parseRuntimeStrategyDeskPrepareHandoffRequest(payload: unknown): {
+  requestedBy: string;
+  targetMode?: "limited_live";
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("runtime-strategy-desk-handoff-prepare-invalid-body");
+  }
+  const record = payload as Record<string, unknown>;
+  const requestedBy = String(record.requestedBy ?? "").trim();
+  const targetMode = record.targetMode === "limited_live" ? "limited_live" : undefined;
+  if (!requestedBy) {
+    throw new Error("runtime-strategy-desk-handoff-prepare-invalid-body");
+  }
+  return {
+    requestedBy,
+    ...(targetMode ? { targetMode } : {}),
+  };
+}
+
+function parseRuntimeStrategyDeskTransitionHandoffRequest(payload: unknown): {
+  action:
+    | "submit"
+    | "approve"
+    | "reject"
+    | "apply"
+    | "pause"
+    | "kill"
+    | "demote"
+    | "archive";
+  actor: string;
+  notes?: string;
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("runtime-strategy-desk-handoff-transition-invalid-body");
+  }
+  const record = payload as Record<string, unknown>;
+  const action =
+    record.action === "submit" ||
+    record.action === "approve" ||
+    record.action === "reject" ||
+    record.action === "apply" ||
+    record.action === "pause" ||
+    record.action === "kill" ||
+    record.action === "demote" ||
+    record.action === "archive"
+      ? record.action
+      : null;
+  const actor = String(record.actor ?? "").trim();
+  const notes = String(record.notes ?? "").trim();
+  if (!action || !actor) {
+    throw new Error("runtime-strategy-desk-handoff-transition-invalid-body");
+  }
+  return {
+    action,
+    actor,
+    ...(notes ? { notes } : {}),
   };
 }
 
@@ -4048,6 +4115,59 @@ const worker = {
         }
       }
 
+      const strategyDeskPrepareHandoffScenarioId =
+        request.method === "POST"
+          ? parseAdminEntityActionPath(
+              url.pathname,
+              "/api/admin/ops/runtime/strategy-desk/scenarios/",
+              "/handoffs/prepare",
+            )
+          : null;
+      if (request.method === "POST" && strategyDeskPrepareHandoffScenarioId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const parsed = parseRuntimeStrategyDeskPrepareHandoffRequest(
+            await request.json(),
+          );
+          const result =
+            await prepareRuntimeStrategyDeskPromotionHandoffWorkflow({
+              env,
+              scenarioId: strategyDeskPrepareHandoffScenarioId,
+              ...parsed,
+            });
+          return withCors(
+            json({
+              ok: true,
+              scenario: result.scenario,
+              handoff: result.handoff,
+              events: result.events,
+              executionRecipes: result.executionRecipes,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-handoff-prepare-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
       if (
         request.method === "POST" &&
         url.pathname === "/api/admin/ops/runtime/strategy-desk/scenarios"
@@ -4142,6 +4262,196 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-strategy-desk-scenario-list-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      const strategyDeskHandoffId =
+        request.method === "GET"
+          ? parseAdminEntityDetailPath(
+              url.pathname,
+              "/api/admin/ops/runtime/strategy-desk/handoffs/",
+            )
+          : null;
+      if (request.method === "GET" && strategyDeskHandoffId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const result = await getRuntimeStrategyDeskPromotionHandoffWorkflow({
+            env,
+            handoffId: strategyDeskHandoffId,
+          });
+          return withCors(
+            json({
+              ok: true,
+              handoff: result.handoff,
+              events: result.events,
+              executionRecipes: result.executionRecipes,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-handoff-read-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      const strategyDeskTransitionHandoffId =
+        request.method === "POST"
+          ? parseAdminEntityActionPath(
+              url.pathname,
+              "/api/admin/ops/runtime/strategy-desk/handoffs/",
+              "/transition",
+            )
+          : null;
+      if (request.method === "POST" && strategyDeskTransitionHandoffId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const parsed = parseRuntimeStrategyDeskTransitionHandoffRequest(
+            await request.json(),
+          );
+          const result =
+            await transitionRuntimeStrategyDeskPromotionHandoffWorkflow({
+              env,
+              handoffId: strategyDeskTransitionHandoffId,
+              ...parsed,
+            });
+          return withCors(
+            json({
+              ok: true,
+              scenario: result.scenario,
+              handoff: result.handoff,
+              events: result.events,
+              executionRecipes: result.executionRecipes,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-handoff-transition-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/handoffs"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const handoff = parseRuntimeStrategyDeskPromotionHandoff(
+            await request.json(),
+          );
+          const result = await upsertRuntimeStrategyDeskPromotionHandoffWorkflow(
+            {
+              env,
+              handoff,
+            },
+          );
+          return withCors(
+            json({
+              ok: true,
+              handoff: result.handoff,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-handoff-upsert-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/handoffs"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeStrategyDeskPromotionHandoffsWorkflow({
+            env,
+            handoffId: url.searchParams.get("handoffId") ?? undefined,
+            scenarioId: url.searchParams.get("scenarioId") ?? undefined,
+            status: url.searchParams.get("status") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              handoffs: result.handoffs,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-handoff-list-failed",
               },
               { status: 400 },
             ),

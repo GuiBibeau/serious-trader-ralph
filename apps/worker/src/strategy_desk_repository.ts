@@ -409,6 +409,37 @@ export async function updateStrategyDeskScenarioLatestReport(
     .run();
 }
 
+export async function updateStrategyDeskScenarioReviewState(
+  db: D1Database,
+  input: {
+    scenarioId: string;
+    state: RuntimeStrategyDeskScenarioManifest["state"];
+    updatedAt: string;
+    activeHandoffId?: string | null;
+    reviewedAt?: string | null;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      `
+      UPDATE strategy_desk_scenarios
+      SET state = ?2,
+          active_handoff_id = ?3,
+          reviewed_at = ?4,
+          updated_at = ?5
+      WHERE scenario_id = ?1
+      `,
+    )
+    .bind(
+      input.scenarioId,
+      input.state,
+      input.activeHandoffId ?? null,
+      input.reviewedAt ?? null,
+      input.updatedAt,
+    )
+    .run();
+}
+
 export async function getStrategyDeskScenarioManifest(
   db: D1Database,
   scenarioId: string,

@@ -68,6 +68,7 @@ function createOpsEnv(overrides?: Partial<Env>) {
     "0032_strategy_desk_leg_intent.sql",
     "0033_strategy_desk_scorecards.sql",
     "0034_strategy_desk_research_matrix.sql",
+    "0035_strategy_desk_promotion_handoffs.sql",
   ]) {
     const migrationPath = resolve(
       import.meta.dir,
@@ -528,6 +529,189 @@ describe("worker runtime strategy desk routes", () => {
       expect(scenarioCount.count).toBe(1);
       expect(runCount.count).toBe(1);
       expect(reportCount.count).toBe(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("prepares, applies, and rolls back bounded execution handoffs", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const scenario = readFixture(
+        "runtime.strategy_desk_scenario.valid.v1.json",
+      );
+      const run = readFixture("runtime.strategy_desk_run.valid.v1.json");
+      const report = readFixture("runtime.strategy_desk_report.valid.v1.json");
+
+      for (const [path, payload] of [
+        [
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios",
+          scenario,
+        ],
+        ["http://localhost/api/admin/ops/runtime/strategy-desk/runs", run],
+        [
+          "http://localhost/api/admin/ops/runtime/strategy-desk/reports",
+          report,
+        ],
+      ] as const) {
+        const response = await worker.fetch(
+          new Request(path, {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          }),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(response.status).toBe(200);
+      }
+
+      const prepareResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              requestedBy: "operator_1",
+              targetMode: "limited_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(prepareResponse.status).toBe(200);
+      const preparePayload = (await prepareResponse.json()) as {
+        ok: boolean;
+        handoff: { handoffId: string; status: string; bindings: unknown[] };
+        events: Array<{ eventType: string }>;
+      };
+      expect(preparePayload.ok).toBe(true);
+      expect(preparePayload.handoff.status).toBe("draft");
+      expect(preparePayload.handoff.bindings.length).toBeGreaterThan(0);
+      expect(preparePayload.events.map((event) => event.eventType)).toEqual([
+        "prepared",
+      ]);
+
+      const handoffId = preparePayload.handoff.handoffId;
+
+      for (const action of ["submit", "approve", "apply"] as const) {
+        const response = await worker.fetch(
+          new Request(
+            `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}/transition`,
+            {
+              method: "POST",
+              headers: {
+                authorization: "Bearer admin-secret",
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                action,
+                actor: "operator_1",
+              }),
+            },
+          ),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(response.status).toBe(200);
+      }
+
+      const appliedDetailResponse = await worker.fetch(
+        new Request(
+          `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}`,
+          {
+            headers: {
+              authorization: "Bearer admin-secret",
+            },
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(appliedDetailResponse.status).toBe(200);
+      const appliedDetailPayload = (await appliedDetailResponse.json()) as {
+        ok: boolean;
+        handoff: { status: string };
+        events: Array<{ eventType: string }>;
+        executionRecipes: Array<{ recipeId: string }>;
+      };
+      expect(appliedDetailPayload.ok).toBe(true);
+      expect(appliedDetailPayload.handoff.status).toBe("applied");
+      expect(
+        appliedDetailPayload.events.map((event) => event.eventType),
+      ).toEqual(["prepared", "submitted", "approved", "applied"]);
+      expect(appliedDetailPayload.executionRecipes.length).toBeGreaterThan(0);
+
+      const promotionCount = sqlite
+        .query("SELECT COUNT(*) AS count FROM strategy_lab_promotions")
+        .get() as { count: number };
+      const recipeCount = sqlite
+        .query("SELECT COUNT(*) AS count FROM strategy_desk_execution_recipes")
+        .get() as { count: number };
+      expect(promotionCount.count).toBe(1);
+      expect(recipeCount.count).toBeGreaterThan(0);
+
+      const pauseResponse = await worker.fetch(
+        new Request(
+          `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}/transition`,
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              action: "pause",
+              actor: "operator_1",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(pauseResponse.status).toBe(200);
+      const pausePayload = (await pauseResponse.json()) as {
+        ok: boolean;
+        scenario: { state: string };
+      };
+      expect(pausePayload.ok).toBe(true);
+      expect(pausePayload.scenario.state).toBe("paused");
+
+      const demoteResponse = await worker.fetch(
+        new Request(
+          `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}/transition`,
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              action: "demote",
+              actor: "operator_1",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(demoteResponse.status).toBe(200);
+      const demotePayload = (await demoteResponse.json()) as {
+        ok: boolean;
+        scenario: { state: string };
+        handoff: { status: string };
+      };
+      expect(demotePayload.ok).toBe(true);
+      expect(demotePayload.scenario.state).toBe("paper_ready");
+      expect(demotePayload.handoff.status).toBe("archived");
     } finally {
       sqlite.close();
     }
