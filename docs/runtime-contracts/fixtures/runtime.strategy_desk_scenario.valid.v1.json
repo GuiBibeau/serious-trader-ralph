@@ -12,6 +12,14 @@
   "updatedAt": "2026-03-17T03:05:00Z",
   "reviewedAt": "2026-03-17T03:06:00Z",
   "latestReportId": "desk_report_sol_composite_paper_1",
+  "riskLimits": {
+    "maxReservedCapitalUsd": "1600",
+    "maxGrossExposureUsd": "3500",
+    "maxNetExposureUsd": "1500",
+    "maxLegConcentrationBps": 7000,
+    "maxVenueFamilyConcentrationBps": 9000,
+    "maxDrawdownBps": 750
+  },
   "legs": [
     {
       "legId": "leg_spot_alpha",

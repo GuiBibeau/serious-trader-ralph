@@ -72,6 +72,39 @@
       "type": "string",
       "minLength": 1
     },
+    "riskLimits": {
+      "type": "object",
+      "properties": {
+        "maxReservedCapitalUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "maxGrossExposureUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "maxNetExposureUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "maxLegConcentrationBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "maxVenueFamilyConcentrationBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "maxDrawdownBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      },
+      "additionalProperties": false
+    },
     "legs": {
       "minItems": 1,
       "maxItems": 16,

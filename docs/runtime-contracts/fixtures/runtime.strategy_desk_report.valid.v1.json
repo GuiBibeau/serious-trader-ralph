@@ -46,12 +46,117 @@
     }
   ],
   "portfolioSummary": {
+    "capitalAllocatedUsd": "1375.00",
+    "grossExposureBudgetUsd": "4000.00",
+    "equityUsd": "1424.30",
+    "availableUsd": "774.30",
+    "reservedUsd": "650.00",
+    "realizedPnlUsd": "9.10",
+    "unrealizedPnlUsd": "40.20",
     "grossPnlUsd": "61.50",
     "netPnlUsd": "49.30",
+    "grossExposureUsd": "1650.00",
+    "netExposureUsd": "684.75",
     "maxDrawdownBps": 180,
     "tradeCount": 11,
+    "activeLegCount": 2,
+    "venueExposureUsd": {
+      "jupiter": "1000.00",
+      "drift": "500.00",
+      "dflow": "150.00"
+    },
+    "venueFamilyExposureUsd": {
+      "spot_swap": "1000.00",
+      "perp_order": "500.00",
+      "prediction_order": "150.00"
+    },
+    "marketTypeExposureUsd": {
+      "spot": "1000.00",
+      "perp": "500.00",
+      "prediction": "150.00"
+    },
     "notes": ["Composite report aggregates harness-side leg evidence."]
   },
+  "scorecard": {
+    "aggregate": {
+      "passedLegCount": 2,
+      "blockedLegCount": 0,
+      "skippedLegCount": 0,
+      "activeLegCount": 2,
+      "tradeCount": 11,
+      "reservedCapitalUsd": "650.00",
+      "grossExposureUsd": "1650.00",
+      "netExposureUsd": "684.75",
+      "grossPnlUsd": "61.50",
+      "netPnlUsd": "49.30",
+      "totalCostUsd": "11.15",
+      "maxDrawdownBps": 180
+    },
+    "legMetrics": [
+      {
+        "legId": "leg_spot_alpha",
+        "venueKey": "jupiter",
+        "intentFamily": "spot_swap",
+        "marketType": "spot",
+        "status": "pass",
+        "targetNotionalUsd": "1000.00",
+        "reservedCapitalUsd": "400.00",
+        "grossExposureUsd": "1000.00",
+        "netExposureUsd": "1000.00",
+        "netPnlUsd": "42.15",
+        "costUsd": "6.80"
+      },
+      {
+        "legId": "leg_perp_hedge",
+        "venueKey": "drift",
+        "intentFamily": "perp_order",
+        "marketType": "perp",
+        "status": "pass",
+        "targetNotionalUsd": "500.00",
+        "reservedCapitalUsd": "250.00",
+        "grossExposureUsd": "500.00",
+        "netExposureUsd": "-500.00",
+        "netPnlUsd": "8.25",
+        "costUsd": "3.10"
+      },
+      {
+        "legId": "leg_prediction_overlay",
+        "venueKey": "dflow",
+        "intentFamily": "prediction_order",
+        "marketType": "prediction",
+        "status": "requires_human_approval",
+        "targetNotionalUsd": "150.00",
+        "costUsd": "1.25",
+        "notes": ["Prediction leg remains paper-only until readiness improves."]
+      }
+    ]
+  },
+  "riskOverlays": [
+    {
+      "overlayId": "reserved-capital",
+      "category": "capital",
+      "status": "pass",
+      "observedValue": "650.00",
+      "thresholdValue": "1600.00",
+      "message": "Reserved capital remains within the configured desk budget."
+    },
+    {
+      "overlayId": "gross-exposure",
+      "category": "exposure",
+      "status": "pass",
+      "observedValue": "1650.00",
+      "thresholdValue": "3500.00",
+      "message": "Gross exposure remains within the configured composite budget."
+    },
+    {
+      "overlayId": "failure-state-demotion",
+      "category": "failure_state",
+      "status": "pass",
+      "observedValue": "completed",
+      "thresholdValue": "completed",
+      "message": "Composite execution completed without fail-closed demotion."
+    }
+  ],
   "evidence": [
     {
       "stage": "backtest",

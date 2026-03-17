@@ -103,11 +103,47 @@
     "portfolioSummary": {
       "type": "object",
       "properties": {
+        "capitalAllocatedUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "grossExposureBudgetUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "equityUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "availableUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "reservedUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "realizedPnlUsd": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
+        "unrealizedPnlUsd": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
         "grossPnlUsd": {
           "type": "string",
           "pattern": "^-?\\d+(?:\\.\\d+)?$"
         },
         "netPnlUsd": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
+        "grossExposureUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "netExposureUsd": {
           "type": "string",
           "pattern": "^-?\\d+(?:\\.\\d+)?$"
         },
@@ -121,6 +157,41 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
+        "activeLegCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "venueExposureUsd": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          }
+        },
+        "venueFamilyExposureUsd": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          }
+        },
+        "marketTypeExposureUsd": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          }
+        },
         "notes": {
           "maxItems": 16,
           "type": "array",
@@ -131,6 +202,211 @@
         }
       },
       "additionalProperties": false
+    },
+    "scorecard": {
+      "type": "object",
+      "properties": {
+        "aggregate": {
+          "type": "object",
+          "properties": {
+            "passedLegCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "blockedLegCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "skippedLegCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "activeLegCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tradeCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "reservedCapitalUsd": {
+              "type": "string",
+              "pattern": "^\\d+(?:\\.\\d+)?$"
+            },
+            "grossExposureUsd": {
+              "type": "string",
+              "pattern": "^\\d+(?:\\.\\d+)?$"
+            },
+            "netExposureUsd": {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?$"
+            },
+            "grossPnlUsd": {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?$"
+            },
+            "netPnlUsd": {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?$"
+            },
+            "totalCostUsd": {
+              "type": "string",
+              "pattern": "^\\d+(?:\\.\\d+)?$"
+            },
+            "maxDrawdownBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          },
+          "required": ["passedLegCount", "blockedLegCount", "skippedLegCount"],
+          "additionalProperties": false
+        },
+        "legMetrics": {
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "legId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "venueKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "intentFamily": {
+                "type": "string",
+                "enum": [
+                  "spot_swap",
+                  "conditional_spot_order",
+                  "clob_order",
+                  "perp_order",
+                  "prediction_order",
+                  "flash_atomic"
+                ]
+              },
+              "marketType": {
+                "type": "string",
+                "enum": ["spot", "perp", "options", "prediction"]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "blocked",
+                  "requires_human_approval",
+                  "not_applicable"
+                ]
+              },
+              "targetNotionalUsd": {
+                "type": "string",
+                "pattern": "^\\d+(?:\\.\\d+)?$"
+              },
+              "reservedCapitalUsd": {
+                "type": "string",
+                "pattern": "^\\d+(?:\\.\\d+)?$"
+              },
+              "grossExposureUsd": {
+                "type": "string",
+                "pattern": "^\\d+(?:\\.\\d+)?$"
+              },
+              "netExposureUsd": {
+                "type": "string",
+                "pattern": "^-?\\d+(?:\\.\\d+)?$"
+              },
+              "netPnlUsd": {
+                "type": "string",
+                "pattern": "^-?\\d+(?:\\.\\d+)?$"
+              },
+              "costUsd": {
+                "type": "string",
+                "pattern": "^\\d+(?:\\.\\d+)?$"
+              },
+              "notes": {
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "legId",
+              "venueKey",
+              "intentFamily",
+              "marketType",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["aggregate", "legMetrics"],
+      "additionalProperties": false
+    },
+    "riskOverlays": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "overlayId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "capital",
+              "concentration",
+              "exposure",
+              "margin",
+              "venue_family",
+              "failure_state"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "blocked",
+              "requires_human_approval",
+              "not_applicable"
+            ]
+          },
+          "observedValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "thresholdValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "legIds": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["overlayId", "category", "status", "message"],
+        "additionalProperties": false
+      }
     },
     "evidence": {
       "maxItems": 8,

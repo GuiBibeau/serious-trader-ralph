@@ -91,6 +91,7 @@ function mapScenarioRow(
   const reviewedAt = stringOrNull(row.reviewedAt);
   const activeHandoffId = stringOrNull(row.activeHandoffId);
   const latestReportId = stringOrNull(row.latestReportId);
+  const riskLimits = parseJsonValue(row.riskLimits);
   const evidence = parseJsonValue(row.evidence);
   const implementationReferences = parseJsonValue(row.implementationReferences);
   const tags = parseJsonValue(row.tags);
@@ -113,6 +114,7 @@ function mapScenarioRow(
     ...(reviewedAt ? { reviewedAt } : {}),
     ...(activeHandoffId ? { activeHandoffId } : {}),
     ...(latestReportId ? { latestReportId } : {}),
+    ...(isRecord(riskLimits) ? { riskLimits } : {}),
     legs,
     evidence: Array.isArray(evidence) ? evidence : [],
     implementationReferences: Array.isArray(implementationReferences)
@@ -163,6 +165,8 @@ function mapScenarioReportRow(
 ): RuntimeStrategyDeskScenarioReport {
   const legOutcomes = parseJsonValue(row.legOutcomes);
   const portfolioSummary = parseJsonValue(row.portfolioSummary);
+  const scorecard = parseJsonValue(row.scorecard);
+  const riskOverlays = parseJsonValue(row.riskOverlays);
   const evidence = parseJsonValue(row.evidence);
   const checks = parseJsonValue(row.checks);
   const approvals = parseJsonValue(row.approvals);
@@ -181,6 +185,8 @@ function mapScenarioReportRow(
     generatedAt: stringValue(row.generatedAt),
     legOutcomes: Array.isArray(legOutcomes) ? legOutcomes : [],
     ...(isRecord(portfolioSummary) ? { portfolioSummary } : {}),
+    ...(isRecord(scorecard) ? { scorecard } : {}),
+    ...(Array.isArray(riskOverlays) ? { riskOverlays } : {}),
     evidence: Array.isArray(evidence) ? evidence : [],
     checks: Array.isArray(checks) ? checks : [],
     approvals: Array.isArray(approvals) ? approvals : [],
@@ -256,6 +262,7 @@ export async function writeStrategyDeskScenarioManifest(
         reviewed_at,
         active_handoff_id,
         latest_report_id,
+        risk_limits_json,
         evidence_json,
         implementation_references_json,
         tags_json,
@@ -263,7 +270,7 @@ export async function writeStrategyDeskScenarioManifest(
         created_at,
         updated_at
       ) VALUES (
-        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
       )
       ON CONFLICT(scenario_id) DO UPDATE SET
         schema_version = excluded.schema_version,
@@ -277,6 +284,7 @@ export async function writeStrategyDeskScenarioManifest(
         reviewed_at = excluded.reviewed_at,
         active_handoff_id = excluded.active_handoff_id,
         latest_report_id = excluded.latest_report_id,
+        risk_limits_json = excluded.risk_limits_json,
         evidence_json = excluded.evidence_json,
         implementation_references_json = excluded.implementation_references_json,
         tags_json = excluded.tags_json,
@@ -298,6 +306,7 @@ export async function writeStrategyDeskScenarioManifest(
       scenario.reviewedAt ?? null,
       scenario.activeHandoffId ?? null,
       scenario.latestReportId ?? null,
+      stringifyJson(scenario.riskLimits),
       stringifyJson(scenario.evidence) ?? "[]",
       stringifyJson(scenario.implementationReferences) ?? "[]",
       stringifyJson(scenario.tags) ?? "[]",
@@ -410,6 +419,7 @@ export async function getStrategyDeskScenarioManifest(
         reviewed_at AS reviewedAt,
         active_handoff_id AS activeHandoffId,
         latest_report_id AS latestReportId,
+        risk_limits_json AS riskLimits,
         evidence_json AS evidence,
         implementation_references_json AS implementationReferences,
         tags_json AS tags,
@@ -459,6 +469,7 @@ export async function listStrategyDeskScenarioManifests(
         reviewed_at AS reviewedAt,
         active_handoff_id AS activeHandoffId,
         latest_report_id AS latestReportId,
+        risk_limits_json AS riskLimits,
         evidence_json AS evidence,
         implementation_references_json AS implementationReferences,
         tags_json AS tags,
@@ -673,13 +684,15 @@ export async function writeStrategyDeskScenarioReport(
         summary,
         leg_outcomes_json,
         portfolio_summary_json,
+        scorecard_json,
+        risk_overlays_json,
         evidence_json,
         checks_json,
         approvals_json,
         metadata_json,
         generated_at
       ) VALUES (
-        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
       )
       ON CONFLICT(report_id) DO UPDATE SET
         scenario_id = excluded.scenario_id,
@@ -690,6 +703,8 @@ export async function writeStrategyDeskScenarioReport(
         summary = excluded.summary,
         leg_outcomes_json = excluded.leg_outcomes_json,
         portfolio_summary_json = excluded.portfolio_summary_json,
+        scorecard_json = excluded.scorecard_json,
+        risk_overlays_json = excluded.risk_overlays_json,
         evidence_json = excluded.evidence_json,
         checks_json = excluded.checks_json,
         approvals_json = excluded.approvals_json,
@@ -707,6 +722,8 @@ export async function writeStrategyDeskScenarioReport(
       report.summary,
       stringifyJson(report.legOutcomes) ?? "[]",
       stringifyJson(report.portfolioSummary),
+      stringifyJson(report.scorecard),
+      stringifyJson(report.riskOverlays) ?? "[]",
       stringifyJson(report.evidence) ?? "[]",
       stringifyJson(report.checks) ?? "[]",
       stringifyJson(report.approvals) ?? "[]",
@@ -734,6 +751,8 @@ export async function getStrategyDeskScenarioReport(
         summary,
         leg_outcomes_json AS legOutcomes,
         portfolio_summary_json AS portfolioSummary,
+        scorecard_json AS scorecard,
+        risk_overlays_json AS riskOverlays,
         evidence_json AS evidence,
         checks_json AS checks,
         approvals_json AS approvals,
@@ -774,6 +793,8 @@ export async function listStrategyDeskScenarioReports(
         summary,
         leg_outcomes_json AS legOutcomes,
         portfolio_summary_json AS portfolioSummary,
+        scorecard_json AS scorecard,
+        risk_overlays_json AS riskOverlays,
         evidence_json AS evidence,
         checks_json AS checks,
         approvals_json AS approvals,

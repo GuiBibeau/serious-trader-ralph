@@ -807,140 +807,622 @@ function replaceLegRun(
   };
 }
 
+type StrategyDeskScorecard = NonNullable<
+  RuntimeStrategyDeskScenarioReport["scorecard"]
+>;
+
+type StrategyDeskRiskOverlay = NonNullable<
+  RuntimeStrategyDeskScenarioReport["riskOverlays"]
+>[number];
+
+type StrategyDeskPortfolioSummary = NonNullable<
+  RuntimeStrategyDeskScenarioReport["portfolioSummary"]
+>;
+
+type StrategyDeskReportBuildResult = {
+  report: RuntimeStrategyDeskScenarioReport;
+  terminalState: RuntimeStrategyDeskScenarioRun["state"];
+  blockingOverlay: StrategyDeskRiskOverlay | null;
+};
+
+function readUsd(value: string | null | undefined): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatUsd(value: number): string {
+  return value.toFixed(2);
+}
+
+function readLegTargetNotionalUsd(leg: RuntimeStrategyDeskScenarioLeg): number {
+  return readUsd(leg.sizing.targetNotionalUsd);
+}
+
+function readLegReserveUsd(leg: RuntimeStrategyDeskScenarioLeg): number {
+  return readUsd(leg.sizing.reserveUsd ?? leg.sizing.targetNotionalUsd);
+}
+
+function readLegGrossExposureUsd(leg: RuntimeStrategyDeskScenarioLeg): number {
+  return readLegTargetNotionalUsd(leg);
+}
+
+function readLegNetExposureUsd(leg: RuntimeStrategyDeskScenarioLeg): number {
+  const notional = readLegTargetNotionalUsd(leg);
+  const side = String(leg.intent?.side ?? "")
+    .trim()
+    .toLowerCase();
+
+  switch (leg.intentFamily) {
+    case "spot_swap":
+    case "clob_order":
+      return side === "sell" ? -notional : notional;
+    case "perp_order":
+      if (side === "short" || side === "close_long") {
+        return -notional;
+      }
+      return notional;
+    case "prediction_order":
+      if (side === "buy_no" || side === "sell_yes") {
+        return -notional;
+      }
+      if (side === "sell_no") {
+        return notional;
+      }
+      return notional;
+    case "flash_atomic":
+      return 0;
+    default:
+      return 0;
+  }
+}
+
+function readMaxNotionalUsd(leg: RuntimeStrategyDeskScenarioLeg): number {
+  return readUsd(leg.sizing.maxNotionalUsd ?? leg.sizing.targetNotionalUsd);
+}
+
+function sumScenarioCapitalAllocatedUsd(
+  scenario: RuntimeStrategyDeskScenarioManifest,
+): number {
+  return scenario.legs.reduce(
+    (total, leg) => total + readLegReserveUsd(leg),
+    0,
+  );
+}
+
+function sumScenarioGrossExposureBudgetUsd(
+  scenario: RuntimeStrategyDeskScenarioManifest,
+): number {
+  return scenario.legs.reduce(
+    (total, leg) => total + readMaxNotionalUsd(leg),
+    0,
+  );
+}
+
+function buildLegOutcome(input: {
+  scenarioRunId: string;
+  leg: RuntimeStrategyDeskScenarioLeg;
+  artifact?: StrategyDeskRunArtifact;
+}): RuntimeStrategyDeskScenarioReport["legOutcomes"][number] {
+  const { artifact, leg, scenarioRunId } = input;
+  if (!artifact || artifact.status === "skipped") {
+    return {
+      legId: leg.legId,
+      status: "not_applicable",
+      evidenceRefs: [
+        {
+          kind: "strategy_desk_leg_receipt",
+          ref: `${scenarioRunId}:${leg.legId}`,
+          notes: "leg-skipped",
+        },
+      ],
+      notes: ["leg skipped after upstream failure"],
+    };
+  }
+
+  const passed =
+    artifact.status !== "blocked" &&
+    artifact.status !== "skipped" &&
+    artifact.status !== "simulate_error" &&
+    artifact.status !== "error";
+
+  return {
+    legId: leg.legId,
+    status: passed ? "pass" : "blocked",
+    evidenceRefs: [
+      {
+        kind: "strategy_desk_leg_receipt",
+        ref: artifact.requestRef,
+        notes: `${artifact.venueKey}:${artifact.status}`,
+      },
+    ],
+    notes: [
+      `adapter:${artifact.adapterKey}`,
+      `status:${artifact.status}`,
+      ...(artifact.error ? [artifact.error] : []),
+    ],
+  };
+}
+
+function buildScorecardLegMetric(input: {
+  leg: RuntimeStrategyDeskScenarioLeg;
+  outcome: RuntimeStrategyDeskScenarioReport["legOutcomes"][number];
+}): StrategyDeskScorecard["legMetrics"][number] {
+  const executed = input.outcome.status === "pass";
+  const targetNotionalUsd = readLegTargetNotionalUsd(input.leg);
+  const reservedCapitalUsd = executed ? readLegReserveUsd(input.leg) : 0;
+  const grossExposureUsd = executed ? readLegGrossExposureUsd(input.leg) : 0;
+  const netExposureUsd = executed ? readLegNetExposureUsd(input.leg) : 0;
+
+  return {
+    legId: input.leg.legId,
+    venueKey: input.leg.venueKey,
+    intentFamily: input.leg.intentFamily,
+    marketType: input.leg.marketType,
+    status: input.outcome.status,
+    ...(targetNotionalUsd > 0
+      ? { targetNotionalUsd: formatUsd(targetNotionalUsd) }
+      : {}),
+    ...(reservedCapitalUsd > 0
+      ? { reservedCapitalUsd: formatUsd(reservedCapitalUsd) }
+      : {}),
+    ...(grossExposureUsd > 0
+      ? { grossExposureUsd: formatUsd(grossExposureUsd) }
+      : {}),
+    ...(netExposureUsd !== 0
+      ? { netExposureUsd: formatUsd(netExposureUsd) }
+      : {}),
+    ...(input.outcome.netPnlUsd ? { netPnlUsd: input.outcome.netPnlUsd } : {}),
+    ...(input.outcome.costUsd ? { costUsd: input.outcome.costUsd } : {}),
+    ...(input.outcome.notes ? { notes: input.outcome.notes } : {}),
+  };
+}
+
+function sumMetricUsd(
+  metrics: StrategyDeskScorecard["legMetrics"],
+  key:
+    | "reservedCapitalUsd"
+    | "grossExposureUsd"
+    | "costUsd"
+    | "targetNotionalUsd",
+): number {
+  return metrics.reduce((total, metric) => total + readUsd(metric[key]), 0);
+}
+
+function sumMetricNumericUsd(
+  metrics: StrategyDeskScorecard["legMetrics"],
+  key: "netExposureUsd" | "netPnlUsd",
+): number {
+  return metrics.reduce((total, metric) => total + readUsd(metric[key]), 0);
+}
+
+function addExposure(
+  record: Record<string, string>,
+  key: string,
+  amountUsd: number,
+): void {
+  if (!key || amountUsd <= 0) return;
+  record[key] = formatUsd(readUsd(record[key]) + amountUsd);
+}
+
+function buildPortfolioSummary(input: {
+  scenario: RuntimeStrategyDeskScenarioManifest;
+  legMetrics: StrategyDeskScorecard["legMetrics"];
+  legOutcomes: RuntimeStrategyDeskScenarioReport["legOutcomes"];
+}): StrategyDeskPortfolioSummary {
+  const capitalAllocatedUsd = sumScenarioCapitalAllocatedUsd(input.scenario);
+  const grossExposureBudgetUsd = sumScenarioGrossExposureBudgetUsd(
+    input.scenario,
+  );
+  const reservedUsd = sumMetricUsd(input.legMetrics, "reservedCapitalUsd");
+  const grossExposureUsd = sumMetricUsd(input.legMetrics, "grossExposureUsd");
+  const netExposureUsd = sumMetricNumericUsd(
+    input.legMetrics,
+    "netExposureUsd",
+  );
+  const realizedPnlUsd = 0;
+  const unrealizedPnlUsd = 0;
+  const grossPnlUsd = input.legOutcomes.reduce(
+    (total, outcome) =>
+      total + readUsd(outcome.netPnlUsd) + readUsd(outcome.costUsd),
+    0,
+  );
+  const netPnlUsd = input.legOutcomes.reduce(
+    (total, outcome) => total + readUsd(outcome.netPnlUsd),
+    0,
+  );
+  const equityUsd = capitalAllocatedUsd + realizedPnlUsd + unrealizedPnlUsd;
+  const availableUsd = equityUsd - reservedUsd;
+
+  const venueExposureUsd: Record<string, string> = {};
+  const venueFamilyExposureUsd: Record<string, string> = {};
+  const marketTypeExposureUsd: Record<string, string> = {};
+  for (const metric of input.legMetrics) {
+    const exposureUsd = readUsd(metric.grossExposureUsd);
+    addExposure(venueExposureUsd, metric.venueKey, exposureUsd);
+    addExposure(venueFamilyExposureUsd, metric.intentFamily, exposureUsd);
+    addExposure(marketTypeExposureUsd, metric.marketType, exposureUsd);
+  }
+
+  const activeLegCount = input.legMetrics.filter(
+    (metric) => metric.status === "pass",
+  ).length;
+  const blockedLegCount = input.legMetrics.filter(
+    (metric) => metric.status === "blocked",
+  ).length;
+  const skippedLegCount = input.legMetrics.filter(
+    (metric) => metric.status === "not_applicable",
+  ).length;
+
+  return {
+    capitalAllocatedUsd: formatUsd(capitalAllocatedUsd),
+    grossExposureBudgetUsd: formatUsd(grossExposureBudgetUsd),
+    equityUsd: formatUsd(equityUsd),
+    availableUsd: formatUsd(availableUsd),
+    reservedUsd: formatUsd(reservedUsd),
+    realizedPnlUsd: formatUsd(realizedPnlUsd),
+    unrealizedPnlUsd: formatUsd(unrealizedPnlUsd),
+    grossPnlUsd: formatUsd(grossPnlUsd),
+    netPnlUsd: formatUsd(netPnlUsd),
+    grossExposureUsd: formatUsd(grossExposureUsd),
+    netExposureUsd: formatUsd(netExposureUsd),
+    maxDrawdownBps: 0,
+    tradeCount: activeLegCount,
+    activeLegCount,
+    venueExposureUsd,
+    venueFamilyExposureUsd,
+    marketTypeExposureUsd,
+    notes: [
+      `passed_legs:${activeLegCount}`,
+      `blocked_legs:${blockedLegCount}`,
+      `skipped_legs:${skippedLegCount}`,
+    ],
+  };
+}
+
+function buildScorecard(input: {
+  legMetrics: StrategyDeskScorecard["legMetrics"];
+  portfolioSummary: StrategyDeskPortfolioSummary;
+}): StrategyDeskScorecard {
+  const passedLegCount = input.legMetrics.filter(
+    (metric) => metric.status === "pass",
+  ).length;
+  const blockedLegCount = input.legMetrics.filter(
+    (metric) => metric.status === "blocked",
+  ).length;
+  const skippedLegCount = input.legMetrics.filter(
+    (metric) => metric.status === "not_applicable",
+  ).length;
+
+  return {
+    aggregate: {
+      passedLegCount,
+      blockedLegCount,
+      skippedLegCount,
+      activeLegCount: input.portfolioSummary.activeLegCount,
+      tradeCount: input.portfolioSummary.tradeCount,
+      reservedCapitalUsd: input.portfolioSummary.reservedUsd,
+      grossExposureUsd: input.portfolioSummary.grossExposureUsd,
+      netExposureUsd: input.portfolioSummary.netExposureUsd,
+      grossPnlUsd: input.portfolioSummary.grossPnlUsd,
+      netPnlUsd: input.portfolioSummary.netPnlUsd,
+      totalCostUsd: formatUsd(sumMetricUsd(input.legMetrics, "costUsd")),
+      maxDrawdownBps: input.portfolioSummary.maxDrawdownBps,
+    },
+    legMetrics: input.legMetrics,
+  };
+}
+
+function evaluateOverlay(input: {
+  overlayId: string;
+  category: StrategyDeskRiskOverlay["category"];
+  observedValue: number;
+  thresholdValue?: number;
+  message: string;
+  format?: "usd" | "bps";
+  legIds?: string[];
+}): StrategyDeskRiskOverlay {
+  const blocked =
+    input.thresholdValue !== undefined &&
+    input.observedValue > input.thresholdValue + Number.EPSILON;
+  const formatValue = (value: number): string =>
+    input.format === "bps" ? String(Math.round(value)) : formatUsd(value);
+  return {
+    overlayId: input.overlayId,
+    category: input.category,
+    status: blocked ? "blocked" : "pass",
+    observedValue: formatValue(input.observedValue),
+    ...(input.thresholdValue !== undefined
+      ? { thresholdValue: formatValue(input.thresholdValue) }
+      : {}),
+    ...(input.legIds && input.legIds.length > 0
+      ? { legIds: input.legIds }
+      : {}),
+    message: input.message,
+  };
+}
+
+function buildRiskOverlays(input: {
+  scenario: RuntimeStrategyDeskScenarioManifest;
+  legMetrics: StrategyDeskScorecard["legMetrics"];
+  portfolioSummary: StrategyDeskPortfolioSummary;
+  terminalState: RuntimeStrategyDeskScenarioRun["state"];
+  failureMessage?: string;
+}): StrategyDeskRiskOverlay[] {
+  const grossExposureBudgetUsd = readUsd(
+    input.portfolioSummary.grossExposureBudgetUsd,
+  );
+  const grossExposureUsd = readUsd(input.portfolioSummary.grossExposureUsd);
+  const netExposureUsd = Math.abs(
+    readUsd(input.portfolioSummary.netExposureUsd),
+  );
+  const reservedUsd = readUsd(input.portfolioSummary.reservedUsd);
+  const riskLimits = input.scenario.riskLimits ?? {};
+  const maxLegMetric = input.legMetrics.reduce(
+    (current, metric) => {
+      const grossExposure = readUsd(metric.grossExposureUsd);
+      if (grossExposure <= current.grossExposureUsd) return current;
+      return { legId: metric.legId, grossExposureUsd: grossExposure };
+    },
+    { legId: "", grossExposureUsd: 0 },
+  );
+  const venueFamilyEntries = Object.entries(
+    input.portfolioSummary.venueFamilyExposureUsd ?? {},
+  );
+  const maxVenueFamilyEntry = venueFamilyEntries.reduce(
+    (current, entry) => {
+      const exposure = readUsd(entry[1]);
+      if (exposure <= current.exposureUsd) return current;
+      return {
+        family: entry[0],
+        exposureUsd: exposure,
+      };
+    },
+    { family: "", exposureUsd: 0 },
+  );
+  const maxLegConcentrationBps =
+    grossExposureBudgetUsd > 0
+      ? (maxLegMetric.grossExposureUsd / grossExposureBudgetUsd) * 10_000
+      : 0;
+  const maxVenueFamilyConcentrationBps =
+    grossExposureBudgetUsd > 0
+      ? (maxVenueFamilyEntry.exposureUsd / grossExposureBudgetUsd) * 10_000
+      : 0;
+
+  const overlays: StrategyDeskRiskOverlay[] = [
+    evaluateOverlay({
+      overlayId: "reserved-capital",
+      category: "capital",
+      observedValue: reservedUsd,
+      thresholdValue: riskLimits.maxReservedCapitalUsd
+        ? readUsd(riskLimits.maxReservedCapitalUsd)
+        : readUsd(input.portfolioSummary.capitalAllocatedUsd),
+      message: "Reserved capital remains within the configured desk budget.",
+    }),
+    evaluateOverlay({
+      overlayId: "gross-exposure",
+      category: "exposure",
+      observedValue: grossExposureUsd,
+      thresholdValue: riskLimits.maxGrossExposureUsd
+        ? readUsd(riskLimits.maxGrossExposureUsd)
+        : grossExposureBudgetUsd,
+      message: "Gross exposure remains within the configured composite budget.",
+    }),
+    evaluateOverlay({
+      overlayId: "net-exposure",
+      category: "exposure",
+      observedValue: netExposureUsd,
+      thresholdValue: riskLimits.maxNetExposureUsd
+        ? readUsd(riskLimits.maxNetExposureUsd)
+        : grossExposureBudgetUsd,
+      message:
+        "Net directional exposure remains within the configured desk budget.",
+    }),
+    evaluateOverlay({
+      overlayId: "leg-concentration",
+      category: "concentration",
+      observedValue: maxLegConcentrationBps,
+      thresholdValue: riskLimits.maxLegConcentrationBps ?? 10_000,
+      format: "bps",
+      ...(maxLegMetric.legId ? { legIds: [maxLegMetric.legId] } : {}),
+      message: "No single leg breaches the configured concentration bound.",
+    }),
+    evaluateOverlay({
+      overlayId: "venue-family-concentration",
+      category: "venue_family",
+      observedValue: maxVenueFamilyConcentrationBps,
+      thresholdValue: riskLimits.maxVenueFamilyConcentrationBps ?? 10_000,
+      format: "bps",
+      message: "Venue-family concentration remains within configured bounds.",
+    }),
+    evaluateOverlay({
+      overlayId: "drawdown",
+      category: "margin",
+      observedValue: input.portfolioSummary.maxDrawdownBps ?? 0,
+      thresholdValue: riskLimits.maxDrawdownBps ?? 10_000,
+      format: "bps",
+      message: "Observed drawdown remains within the configured desk limit.",
+    }),
+    {
+      overlayId: "failure-state-demotion",
+      category: "failure_state",
+      status:
+        input.terminalState === "failed" || input.terminalState === "rejected"
+          ? "blocked"
+          : "pass",
+      observedValue: input.terminalState,
+      thresholdValue: "completed",
+      message:
+        input.terminalState === "failed" || input.terminalState === "rejected"
+          ? (input.failureMessage ??
+            "A leg or overlay failed, so the composite desk result was demoted.")
+          : "Composite execution completed without fail-closed demotion.",
+    },
+  ];
+
+  return overlays;
+}
+
 function buildReport(input: {
   scenario: RuntimeStrategyDeskScenarioManifest;
   run: RuntimeStrategyDeskScenarioRun;
   runKind: StrategyDeskExecuteRunKind;
+  terminalState: RuntimeStrategyDeskScenarioRun["state"];
+  failureMessage?: string;
   generatedAt: string;
   reportId: string;
   artifacts: Record<string, StrategyDeskRunArtifact>;
-}): RuntimeStrategyDeskScenarioReport {
-  const legOutcomes = input.scenario.legs.map((leg) => {
-    const artifact = input.artifacts[leg.legId];
-    if (!artifact || artifact.status === "skipped") {
-      return {
-        legId: leg.legId,
-        status: "not_applicable" as const,
-        evidenceRefs: [
-          {
-            kind: "strategy_desk_leg_receipt",
-            ref: `${input.run.scenarioRunId}:${leg.legId}`,
-            notes: "leg-skipped",
-          },
-        ],
-        notes: ["leg skipped after upstream failure"],
-      };
+}): StrategyDeskReportBuildResult {
+  const legOutcomes = input.scenario.legs.map((leg) =>
+    buildLegOutcome({
+      scenarioRunId: input.run.scenarioRunId,
+      leg,
+      artifact: input.artifacts[leg.legId],
+    }),
+  );
+  const legMetrics = legOutcomes.map((outcome, index) => {
+    const leg = input.scenario.legs[index];
+    if (!leg) {
+      throw new Error(
+        `runtime-strategy-desk-leg-outcome-mismatch:${input.scenario.scenarioId}:${index}`,
+      );
     }
-
-    const passed =
-      artifact.status !== "blocked" &&
-      artifact.status !== "skipped" &&
-      artifact.status !== "simulate_error" &&
-      artifact.status !== "error";
-
-    return {
-      legId: leg.legId,
-      status: passed ? ("pass" as const) : ("blocked" as const),
-      evidenceRefs: [
-        {
-          kind: "strategy_desk_leg_receipt",
-          ref: artifact.requestRef,
-          notes: `${artifact.venueKey}:${artifact.status}`,
-        },
-      ],
-      notes: [
-        `adapter:${artifact.adapterKey}`,
-        `status:${artifact.status}`,
-        ...(artifact.error ? [artifact.error] : []),
-      ],
-    };
+    return buildScorecardLegMetric({
+      leg,
+      outcome,
+    });
   });
-
+  const portfolioSummary = buildPortfolioSummary({
+    scenario: input.scenario,
+    legMetrics,
+    legOutcomes,
+  });
+  const scorecard = buildScorecard({
+    legMetrics,
+    portfolioSummary,
+  });
   const passedCount = legOutcomes.filter(
     (outcome) => outcome.status === "pass",
   ).length;
   const blockedCount = legOutcomes.filter(
     (outcome) => outcome.status === "blocked",
   ).length;
-  const skippedCount = legOutcomes.filter(
-    (outcome) => outcome.status === "not_applicable",
-  ).length;
+  let reportTerminalState = input.terminalState;
+  let riskOverlays = buildRiskOverlays({
+    scenario: input.scenario,
+    legMetrics,
+    portfolioSummary,
+    terminalState: reportTerminalState,
+    failureMessage: input.failureMessage,
+  });
+  const blockingOverlay =
+    reportTerminalState === "completed"
+      ? (riskOverlays.find((overlay) => overlay.status === "blocked") ?? null)
+      : null;
+  if (blockingOverlay) {
+    reportTerminalState = "rejected";
+    riskOverlays = buildRiskOverlays({
+      scenario: input.scenario,
+      legMetrics,
+      portfolioSummary,
+      terminalState: reportTerminalState,
+      failureMessage: blockingOverlay.message,
+    });
+  }
   const overallStatus =
     blockedCount > 0 ||
-    input.run.state === "failed" ||
-    input.run.state === "rejected"
+    riskOverlays.some((overlay) => overlay.status === "blocked") ||
+    reportTerminalState === "failed" ||
+    reportTerminalState === "rejected"
       ? ("blocked" as const)
       : ("pass" as const);
   const stage = stageForRunKind(input.runKind);
   return {
-    schemaVersion: "v1",
-    reportId: input.reportId,
-    scenarioId: input.scenario.scenarioId,
-    scenarioRunId: input.run.scenarioRunId,
-    stage,
-    status: overallStatus,
-    summary:
-      overallStatus === "pass"
-        ? `Composite ${input.runKind} scenario completed with ${passedCount}/${input.scenario.legs.length} successful legs.`
-        : `Composite ${input.runKind} scenario failed closed after ${blockedCount} blocked leg(s).`,
-    generatedAt: input.generatedAt,
-    legOutcomes,
-    portfolioSummary: {
-      tradeCount: passedCount,
-      notes: [
-        `passed_legs:${passedCount}`,
-        `blocked_legs:${blockedCount}`,
-        `skipped_legs:${skippedCount}`,
+    terminalState: reportTerminalState,
+    blockingOverlay,
+    report: {
+      schemaVersion: "v1",
+      reportId: input.reportId,
+      scenarioId: input.scenario.scenarioId,
+      scenarioRunId: input.run.scenarioRunId,
+      stage,
+      status: overallStatus,
+      summary:
+        overallStatus === "pass"
+          ? `Composite ${input.runKind} scenario completed with ${passedCount}/${input.scenario.legs.length} successful legs.`
+          : `Composite ${input.runKind} scenario failed closed after ${blockedCount + riskOverlays.filter((overlay) => overlay.status === "blocked").length} blocked condition(s).`,
+      generatedAt: input.generatedAt,
+      legOutcomes,
+      portfolioSummary,
+      scorecard,
+      riskOverlays,
+      evidence: [
+        {
+          stage,
+          summary: `Composite ${input.runKind} run evidence for ${input.scenario.title}.`,
+          evidenceRefs: [
+            {
+              kind: "strategy_desk_run",
+              ref: input.run.scenarioRunId,
+            },
+            ...Object.values(input.artifacts).map((artifact) => ({
+              kind: "strategy_desk_leg_receipt",
+              ref: artifact.requestRef,
+              notes: `${artifact.venueKey}:${artifact.status}`,
+            })),
+          ],
+          latestReportId: input.reportId,
+        },
       ],
-    },
-    evidence: [
-      {
-        stage,
-        summary: `Composite ${input.runKind} run evidence for ${input.scenario.title}.`,
-        evidenceRefs: [
-          {
-            kind: "strategy_desk_run",
-            ref: input.run.scenarioRunId,
-          },
-          ...Object.values(input.artifacts).map((artifact) => ({
-            kind: "strategy_desk_leg_receipt",
-            ref: artifact.requestRef,
-            notes: `${artifact.venueKey}:${artifact.status}`,
-          })),
-        ],
-        latestReportId: input.reportId,
+      checks: [
+        {
+          checkId: "scenario-ready-state",
+          status: "pass",
+          observedValue: input.scenario.state,
+          thresholdValue:
+            input.runKind === "shadow" ? "shadow_ready+" : "paper_ready+",
+          message: "Scenario state allowed composite execution.",
+        },
+        {
+          checkId: "legs-completed",
+          status: blockedCount > 0 ? "blocked" : "pass",
+          observedValue: `${passedCount}/${input.scenario.legs.length}`,
+          thresholdValue: `${input.scenario.legs.length}/${input.scenario.legs.length}`,
+          message:
+            blockedCount === 0
+              ? "The composite run captured per-leg execution receipts for every leg."
+              : "At least one leg failed or was unsupported, so the scenario failed closed.",
+        },
+        {
+          checkId: "portfolio-scorecard",
+          status: "pass",
+          observedValue: `active=${scorecard.aggregate.activeLegCount ?? 0}, gross=${scorecard.aggregate.grossExposureUsd ?? "0.00"}, net=${scorecard.aggregate.netExposureUsd ?? "0.00"}`,
+          thresholdValue: "aggregate + per-leg scorecard present",
+          message:
+            "Scenario report includes unified desk ledger totals and per-leg metrics.",
+        },
+        {
+          checkId: "risk-overlays",
+          status: riskOverlays.some((overlay) => overlay.status === "blocked")
+            ? "blocked"
+            : "pass",
+          observedValue: `${riskOverlays.filter((overlay) => overlay.status === "blocked").length}/${riskOverlays.length}`,
+          thresholdValue: "0 blocked overlays",
+          message: riskOverlays.some((overlay) => overlay.status === "blocked")
+            ? "At least one cross-leg risk overlay blocked the scenario."
+            : "Cross-leg risk overlays remained within configured bounds.",
+        },
+        {
+          checkId: "router-gates-enforced",
+          status: "pass",
+          message:
+            "Each leg ran through the existing Worker router with venue capability checks enabled.",
+        },
+      ],
+      approvals: [],
+      metadata: {
+        runKind: input.runKind,
+        artifacts: input.artifacts,
       },
-    ],
-    checks: [
-      {
-        checkId: "scenario-ready-state",
-        status: "pass",
-        observedValue: input.scenario.state,
-        thresholdValue:
-          input.runKind === "shadow" ? "shadow_ready+" : "paper_ready+",
-        message: "Scenario state allowed composite execution.",
-      },
-      {
-        checkId: "legs-completed",
-        status: overallStatus,
-        observedValue: `${passedCount}/${input.scenario.legs.length}`,
-        thresholdValue: `${input.scenario.legs.length}/${input.scenario.legs.length}`,
-        message:
-          overallStatus === "pass"
-            ? "All legs completed through the Worker router."
-            : "At least one leg failed or was unsupported, so the scenario failed closed.",
-      },
-      {
-        checkId: "router-gates-enforced",
-        status: "pass",
-        message:
-          "Each leg ran through the existing Worker router with venue capability checks enabled.",
-      },
-    ],
-    approvals: [],
-    metadata: {
-      runKind: input.runKind,
-      artifacts: input.artifacts,
     },
   };
 }
@@ -1209,22 +1691,31 @@ export async function executeRuntimeStrategyDeskScenarioWorkflow(
   ).run;
 
   const completedAt = nowIso(deps);
+  const reportBuild = buildReport({
+    scenario,
+    run,
+    runKind: input.runKind,
+    terminalState,
+    failureMessage,
+    generatedAt: completedAt,
+    reportId:
+      input.reportId ??
+      createDeskId(`desk_report_${scenario.scenarioId}_${input.runKind}`, deps),
+    artifacts,
+  });
+  terminalState = reportBuild.terminalState;
+  if (terminalState === "rejected" && !failureCode) {
+    failureCode = "strategy-desk-risk-overlay-blocked";
+  }
+  if (terminalState === "rejected" && !failureMessage) {
+    failureMessage =
+      reportBuild.blockingOverlay?.message ??
+      "Scenario exceeded a configured cross-leg risk overlay.";
+  }
   const report = (
     await upsertRuntimeStrategyDeskScenarioReportWorkflow({
       env: input.env,
-      report: buildReport({
-        scenario,
-        run,
-        runKind: input.runKind,
-        generatedAt: completedAt,
-        reportId:
-          input.reportId ??
-          createDeskId(
-            `desk_report_${scenario.scenarioId}_${input.runKind}`,
-            deps,
-          ),
-        artifacts,
-      }),
+      report: reportBuild.report,
     })
   ).report;
 

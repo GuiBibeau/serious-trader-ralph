@@ -1558,6 +1558,17 @@ const RuntimeStrategyDeskEvidenceBucketSchema = z
   })
   .strict();
 
+const RuntimeStrategyDeskRiskLimitsSchema = z
+  .object({
+    maxReservedCapitalUsd: DECIMAL_STRING_SCHEMA.optional(),
+    maxGrossExposureUsd: DECIMAL_STRING_SCHEMA.optional(),
+    maxNetExposureUsd: DECIMAL_STRING_SCHEMA.optional(),
+    maxLegConcentrationBps: BPS_SCHEMA.optional(),
+    maxVenueFamilyConcentrationBps: BPS_SCHEMA.optional(),
+    maxDrawdownBps: BPS_SCHEMA.optional(),
+  })
+  .strict();
+
 export const RuntimeStrategyDeskScenarioLegSchema = z
   .object({
     legId: NON_EMPTY_STRING_SCHEMA,
@@ -1593,6 +1604,7 @@ export const RuntimeStrategyDeskScenarioManifestSchema = VersionedSchema.extend(
     reviewedAt: ISO_DATETIME_SCHEMA.optional(),
     activeHandoffId: NON_EMPTY_STRING_SCHEMA.optional(),
     latestReportId: NON_EMPTY_STRING_SCHEMA.optional(),
+    riskLimits: RuntimeStrategyDeskRiskLimitsSchema.optional(),
     legs: z.array(RuntimeStrategyDeskScenarioLegSchema).min(1).max(16),
     evidence: z.array(RuntimeStrategyDeskEvidenceBucketSchema).max(8),
     implementationReferences: z
@@ -1646,11 +1658,91 @@ const RuntimeStrategyDeskLegOutcomeSchema = z
 
 const RuntimeStrategyDeskPortfolioSummarySchema = z
   .object({
+    capitalAllocatedUsd: DECIMAL_STRING_SCHEMA.optional(),
+    grossExposureBudgetUsd: DECIMAL_STRING_SCHEMA.optional(),
+    equityUsd: DECIMAL_STRING_SCHEMA.optional(),
+    availableUsd: DECIMAL_STRING_SCHEMA.optional(),
+    reservedUsd: DECIMAL_STRING_SCHEMA.optional(),
+    realizedPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
+    unrealizedPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
     grossPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
     netPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
+    grossExposureUsd: DECIMAL_STRING_SCHEMA.optional(),
+    netExposureUsd: NUMERIC_STRING_SCHEMA.optional(),
     maxDrawdownBps: BPS_SCHEMA.optional(),
     tradeCount: z.number().int().nonnegative().optional(),
+    activeLegCount: z.number().int().nonnegative().optional(),
+    venueExposureUsd: z.record(z.string(), DECIMAL_STRING_SCHEMA).optional(),
+    venueFamilyExposureUsd: z
+      .record(z.string(), DECIMAL_STRING_SCHEMA)
+      .optional(),
+    marketTypeExposureUsd: z
+      .record(z.string(), DECIMAL_STRING_SCHEMA)
+      .optional(),
     notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskRiskOverlayCategorySchema = z.enum([
+  "capital",
+  "concentration",
+  "exposure",
+  "margin",
+  "venue_family",
+  "failure_state",
+]);
+
+const RuntimeStrategyDeskRiskOverlaySchema = z
+  .object({
+    overlayId: NON_EMPTY_STRING_SCHEMA,
+    category: RuntimeStrategyDeskRiskOverlayCategorySchema,
+    status: RuntimeResearchPolicyGateStatusSchema,
+    observedValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    thresholdValue: NON_EMPTY_STRING_SCHEMA.optional(),
+    legIds: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+    message: NON_EMPTY_STRING_SCHEMA,
+  })
+  .strict();
+
+const RuntimeStrategyDeskScorecardLegMetricSchema = z
+  .object({
+    legId: NON_EMPTY_STRING_SCHEMA,
+    venueKey: NON_EMPTY_STRING_SCHEMA,
+    intentFamily: RuntimeExecutionIntentFamilySchema,
+    marketType: RuntimeVenueMarketTypeSchema,
+    status: RuntimeResearchPolicyGateStatusSchema,
+    targetNotionalUsd: DECIMAL_STRING_SCHEMA.optional(),
+    reservedCapitalUsd: DECIMAL_STRING_SCHEMA.optional(),
+    grossExposureUsd: DECIMAL_STRING_SCHEMA.optional(),
+    netExposureUsd: NUMERIC_STRING_SCHEMA.optional(),
+    netPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
+    costUsd: DECIMAL_STRING_SCHEMA.optional(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskScenarioScorecardSchema = z
+  .object({
+    aggregate: z
+      .object({
+        passedLegCount: z.number().int().nonnegative(),
+        blockedLegCount: z.number().int().nonnegative(),
+        skippedLegCount: z.number().int().nonnegative(),
+        activeLegCount: z.number().int().nonnegative().optional(),
+        tradeCount: z.number().int().nonnegative().optional(),
+        reservedCapitalUsd: DECIMAL_STRING_SCHEMA.optional(),
+        grossExposureUsd: DECIMAL_STRING_SCHEMA.optional(),
+        netExposureUsd: NUMERIC_STRING_SCHEMA.optional(),
+        grossPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
+        netPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
+        totalCostUsd: DECIMAL_STRING_SCHEMA.optional(),
+        maxDrawdownBps: BPS_SCHEMA.optional(),
+      })
+      .strict(),
+    legMetrics: z
+      .array(RuntimeStrategyDeskScorecardLegMetricSchema)
+      .min(1)
+      .max(16),
   })
   .strict();
 
@@ -1664,6 +1756,11 @@ export const RuntimeStrategyDeskScenarioReportSchema = VersionedSchema.extend({
   generatedAt: ISO_DATETIME_SCHEMA,
   legOutcomes: z.array(RuntimeStrategyDeskLegOutcomeSchema).min(1).max(16),
   portfolioSummary: RuntimeStrategyDeskPortfolioSummarySchema.optional(),
+  scorecard: RuntimeStrategyDeskScenarioScorecardSchema.optional(),
+  riskOverlays: z
+    .array(RuntimeStrategyDeskRiskOverlaySchema)
+    .max(16)
+    .optional(),
   evidence: z.array(RuntimeStrategyDeskEvidenceBucketSchema).max(8),
   checks: z.array(RuntimeStrategyLabCheckSchema).min(1),
   approvals: z.array(RuntimeResearchHumanApprovalRecordSchema).max(16),

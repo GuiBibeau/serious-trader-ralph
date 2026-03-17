@@ -144,6 +144,7 @@ function createOpsEnv(overrides?: Partial<Env>) {
     "0030_strategy_lab_post_live.sql",
     "0031_strategy_desk_registry.sql",
     "0032_strategy_desk_leg_intent.sql",
+    "0033_strategy_desk_scorecards.sql",
   ]) {
     const migrationPath = resolve(
       import.meta.dir,
