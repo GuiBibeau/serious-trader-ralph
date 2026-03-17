@@ -3,6 +3,9 @@ import { z } from "zod";
 import {
   canTransitionRuntimeDeploymentState,
   canTransitionRuntimeRunState,
+  canTransitionRuntimeStrategyDeskPromotionHandoffState,
+  canTransitionRuntimeStrategyDeskRunState,
+  canTransitionRuntimeStrategyDeskScenarioState,
   parseRuntimeAssetRecord,
   parseRuntimeBacktestReport,
   parseRuntimeDeploymentRecord,
@@ -23,11 +26,18 @@ import {
   parseRuntimeResearchSourceRecord,
   parseRuntimeRiskVerdict,
   parseRuntimeRunRecord,
+  parseRuntimeStrategyDeskPromotionHandoff,
+  parseRuntimeStrategyDeskScenarioManifest,
+  parseRuntimeStrategyDeskScenarioReport,
+  parseRuntimeStrategyDeskScenarioRun,
   parseRuntimeStrategySpec,
   parseRuntimeVenueCapability,
   RUNTIME_DEPLOYMENT_STATE_TRANSITIONS,
   RUNTIME_PROTOCOL_SCHEMA_REGISTRY,
   RUNTIME_RUN_STATE_TRANSITIONS,
+  RUNTIME_STRATEGY_DESK_PROMOTION_HANDOFF_STATE_TRANSITIONS,
+  RUNTIME_STRATEGY_DESK_RUN_STATE_TRANSITIONS,
+  RUNTIME_STRATEGY_DESK_SCENARIO_STATE_TRANSITIONS,
   safeParseRuntimeDeploymentRecord,
   safeParseRuntimeExecutionPlan,
 } from "../../src/runtime/contracts/index.js";
@@ -960,6 +970,347 @@ describe("runtime protocol contracts", () => {
       promotedAt: "2026-03-10T14:00:00Z",
       tags: ["core"],
     });
+    const strategyDeskScenario = parseRuntimeStrategyDeskScenarioManifest({
+      schemaVersion: "v1",
+      scenarioId: "desk_sol_composite_1",
+      title: "SOL composite desk scenario",
+      summary:
+        "Composite spot, perp, prediction, and flash scenario staged through the harness.",
+      ownerUserId: "user_1",
+      strategyKey: "strategy_desk::sol_composite",
+      thesis:
+        "Pair trend spot exposure with bounded perp hedge, event overlay, and flash rebalancing.",
+      sleeveId: "sleeve_1",
+      state: "paper_ready",
+      createdAt: "2026-03-17T03:00:00Z",
+      updatedAt: "2026-03-17T03:05:00Z",
+      reviewedAt: "2026-03-17T03:06:00Z",
+      latestReportId: "desk_report_sol_composite_paper_1",
+      legs: [
+        {
+          legId: "leg_spot_alpha",
+          label: "Spot alpha",
+          role: "primary_alpha",
+          venueKey: "jupiter",
+          intentFamily: "spot_swap",
+          marketType: "spot",
+          pair: {
+            symbol: "SOL/USDC",
+            baseMint: SOL_MINT,
+            quoteMint: USDC_MINT,
+          },
+          assetKeys: ["SOL", "USDC"],
+          enabledModes: ["shadow", "paper", "live"],
+          sizing: {
+            targetNotionalUsd: "1000",
+            maxNotionalUsd: "2500",
+            reserveUsd: "1000",
+            maxSlippageBps: 50,
+          },
+          thesis: "Primary directional spot leg.",
+          tags: ["alpha", "spot"],
+        },
+        {
+          legId: "leg_perp_hedge",
+          label: "Perp hedge",
+          role: "hedge",
+          venueKey: "drift",
+          intentFamily: "perp_order",
+          marketType: "perp",
+          pair: {
+            symbol: "SOL-PERP",
+            baseMint: SOL_MINT,
+            quoteMint: USDC_MINT,
+            marketType: "perp",
+          },
+          instrumentId: "SOL-PERP",
+          assetKeys: ["SOL", "USDC"],
+          enabledModes: ["shadow", "paper"],
+          sizing: {
+            targetNotionalUsd: "500",
+            maxNotionalUsd: "750",
+            reserveUsd: "250",
+            maxSlippageBps: 30,
+          },
+          thesis: "Hedge spot beta when momentum weakens.",
+          dependencies: ["leg_spot_alpha"],
+          tags: ["hedge", "perp"],
+        },
+        {
+          legId: "leg_prediction_overlay",
+          label: "Prediction overlay",
+          role: "prediction",
+          venueKey: "dflow",
+          intentFamily: "prediction_order",
+          marketType: "spot",
+          instrumentId: "macro-fed-cut-jun-2026",
+          assetKeys: ["SOL", "USDC"],
+          enabledModes: ["shadow", "paper"],
+          sizing: {
+            targetNotionalUsd: "150",
+            maxNotionalUsd: "250",
+            reserveUsd: "100",
+            maxSlippageBps: 100,
+          },
+          thesis: "Event hedge for macro-sensitive weeks.",
+          tags: ["overlay", "prediction"],
+        },
+        {
+          legId: "leg_flash_rebalance",
+          label: "Flash rebalance",
+          role: "flash_rebalance",
+          venueKey: "flash_liquidity",
+          intentFamily: "flash_atomic",
+          marketType: "spot",
+          pair: {
+            symbol: "SOL/USDC",
+            baseMint: SOL_MINT,
+            quoteMint: USDC_MINT,
+          },
+          assetKeys: ["SOL", "USDC"],
+          enabledModes: ["shadow", "paper"],
+          sizing: {
+            targetNotionalUsd: "250",
+            maxNotionalUsd: "500",
+            reserveUsd: "125",
+            maxSlippageBps: 35,
+          },
+          thesis: "Atomic rebalance path for bounded inventory clean-up.",
+          dependencies: ["leg_spot_alpha", "leg_perp_hedge"],
+          tags: ["flash", "rebalance"],
+        },
+      ],
+      evidence: [
+        {
+          stage: "backtest",
+          summary: "Walk-forward backtest bundle for the composite thesis.",
+          evidenceRefs: [
+            {
+              kind: "backtest_report",
+              ref: "backtest_alloc_dca_report",
+            },
+          ],
+        },
+        {
+          stage: "paper",
+          summary: "Composite paper report and leg receipts.",
+          evidenceRefs: [
+            {
+              kind: "strategy_desk_report",
+              ref: "desk_report_sol_composite_paper_1",
+            },
+          ],
+          latestReportId: "desk_report_sol_composite_paper_1",
+        },
+      ],
+      implementationReferences: [
+        {
+          kind: "issue",
+          ref: "#436",
+          notes: "Contract-first strategy desk rollout.",
+        },
+      ],
+      tags: ["strategy-desk", "composite"],
+    });
+    const strategyDeskRun = parseRuntimeStrategyDeskScenarioRun({
+      schemaVersion: "v1",
+      scenarioRunId: "desk_run_sol_composite_paper_1",
+      scenarioId: strategyDeskScenario.scenarioId,
+      scenarioState: "paper_ready",
+      runKind: "paper",
+      state: "completed",
+      requestedBy: "user_1",
+      trigger: {
+        kind: "operator",
+        source: "portal.strategy-desk",
+        observedAt: "2026-03-17T03:07:00Z",
+        reason: "paper validation before operator review",
+      },
+      createdAt: "2026-03-17T03:07:00Z",
+      updatedAt: "2026-03-17T03:08:00Z",
+      startedAt: "2026-03-17T03:07:05Z",
+      completedAt: "2026-03-17T03:08:00Z",
+      legRuns: [
+        {
+          legId: "leg_spot_alpha",
+          stage: "paper",
+          state: "completed",
+          runtimeDeploymentId: "dep_sol_spot_paper",
+          runtimeRunId: "run_sol_spot_paper_1",
+        },
+        {
+          legId: "leg_perp_hedge",
+          stage: "paper",
+          state: "completed",
+          runtimeDeploymentId: "dep_sol_perp_paper",
+          runtimeRunId: "run_sol_perp_paper_1",
+        },
+        {
+          legId: "leg_prediction_overlay",
+          stage: "paper",
+          state: "completed",
+          requestRef: "submit_prediction_overlay_1",
+        },
+        {
+          legId: "leg_flash_rebalance",
+          stage: "paper",
+          state: "skipped",
+          notes: "No rebalance required in this paper window.",
+        },
+      ],
+    });
+    const strategyDeskReport = parseRuntimeStrategyDeskScenarioReport({
+      schemaVersion: "v1",
+      reportId: "desk_report_sol_composite_paper_1",
+      scenarioId: strategyDeskScenario.scenarioId,
+      scenarioRunId: strategyDeskRun.scenarioRunId,
+      stage: "paper",
+      status: "requires_human_approval",
+      summary:
+        "Composite paper evidence is sufficient for operator review, but not for self-arming.",
+      generatedAt: "2026-03-17T03:08:10Z",
+      legOutcomes: [
+        {
+          legId: "leg_spot_alpha",
+          status: "pass",
+          netPnlUsd: "42.15",
+          costUsd: "6.80",
+          evidenceRefs: [
+            {
+              kind: "runtime_run",
+              ref: "run_sol_spot_paper_1",
+            },
+          ],
+        },
+        {
+          legId: "leg_perp_hedge",
+          status: "pass",
+          netPnlUsd: "8.25",
+          costUsd: "3.10",
+          evidenceRefs: [
+            {
+              kind: "runtime_run",
+              ref: "run_sol_perp_paper_1",
+            },
+          ],
+        },
+        {
+          legId: "leg_prediction_overlay",
+          status: "requires_human_approval",
+          costUsd: "1.25",
+          evidenceRefs: [
+            {
+              kind: "worker_receipt",
+              ref: "submit_prediction_overlay_1",
+            },
+          ],
+          notes: [
+            "Prediction leg remains paper-only until readiness improves.",
+          ],
+        },
+      ],
+      portfolioSummary: {
+        grossPnlUsd: "61.50",
+        netPnlUsd: "49.30",
+        maxDrawdownBps: 180,
+        tradeCount: 11,
+        notes: ["Composite report aggregates harness-side leg evidence."],
+      },
+      evidence: strategyDeskScenario.evidence,
+      checks: [
+        {
+          checkId: "paper-scorecards",
+          status: "pass",
+          observedValue: "3/4 legs cleared paper gates",
+          thresholdValue: "all live-eligible legs must pass",
+          message: "Paper evidence is sufficient for operator review.",
+        },
+      ],
+      approvals: [],
+    });
+    const strategyDeskHandoff = parseRuntimeStrategyDeskPromotionHandoff({
+      schemaVersion: "v1",
+      handoffId: "desk_handoff_sol_composite_live_1",
+      scenarioId: strategyDeskScenario.scenarioId,
+      currentState: "operator_review",
+      targetMode: "limited_live",
+      status: "awaiting_review",
+      summary:
+        "Bound the spot alpha leg to limited live while keeping the hedge and prediction overlay off the live allowlist.",
+      requestedBy: "user_1",
+      createdAt: "2026-03-17T03:09:00Z",
+      updatedAt: "2026-03-17T03:09:00Z",
+      implementationReference: {
+        kind: "issue",
+        ref: "#436",
+      },
+      evidenceRefs: [
+        {
+          kind: "strategy_desk_report",
+          ref: strategyDeskReport.reportId,
+        },
+      ],
+      checks: [
+        {
+          checkId: "limited-live-human-approval",
+          status: "requires_human_approval",
+          message:
+            "Limited-live promotion remains human-gated even when the desk report is green.",
+        },
+      ],
+      approvals: [],
+      bindings: [
+        {
+          bindingId: "binding_spot_alpha_live",
+          bindingKind: "runtime_deployment",
+          legIds: ["leg_spot_alpha"],
+          venueKey: "jupiter",
+          pair: {
+            symbol: "SOL/USDC",
+            baseMint: SOL_MINT,
+            quoteMint: USDC_MINT,
+          },
+          targetMode: "limited_live",
+          deploymentId: "dep_sol_spot_limited_live",
+          lane: "safe",
+        },
+        {
+          bindingId: "binding_perp_hedge_recipe",
+          bindingKind: "worker_execution_recipe",
+          legIds: ["leg_perp_hedge"],
+          venueKey: "drift",
+          instrumentId: "SOL-PERP",
+          targetMode: "paper",
+          notes:
+            "Perp hedge remains bounded to paper during the first live canary.",
+        },
+        {
+          bindingId: "binding_prediction_control",
+          bindingKind: "subject_control",
+          legIds: ["leg_prediction_overlay"],
+          venueKey: "dflow",
+          instrumentId: "macro-fed-cut-jun-2026",
+          targetMode: "paper",
+          notes:
+            "Prediction overlay is intentionally excluded from live arming.",
+        },
+      ],
+      actions: [
+        {
+          actionId: "record-desk-state",
+          actionType: "record_state_transition",
+          summary: "Move scenario into operator review before arming.",
+          required: true,
+        },
+        {
+          actionId: "upsert-limited-live-deployment",
+          actionType: "upsert_runtime_deployment",
+          summary:
+            "Create or update the bounded Jupiter deployment for the spot leg.",
+          required: true,
+        },
+      ],
+    });
 
     expect(run.state).toBe("planned");
     expect(ledger.totals.availableUsd).toBe("95");
@@ -990,6 +1341,14 @@ describe("runtime protocol contracts", () => {
     expect(venueCapability.adapterKeys).toContain("jupiter");
     expect(assetRecord.venueMappings[0]?.venueKey).toBe("jupiter");
     expect(strategySpec.pluginKey).toBe("builtin::trend_following");
+    expect(strategyDeskScenario.legs).toHaveLength(4);
+    expect(strategyDeskScenario.state).toBe("paper_ready");
+    expect(strategyDeskRun.runKind).toBe("paper");
+    expect(strategyDeskReport.status).toBe("requires_human_approval");
+    expect(strategyDeskHandoff.bindings[0]?.bindingKind).toBe(
+      "runtime_deployment",
+    );
+    expect(strategyDeskHandoff.targetMode).toBe("limited_live");
   });
 
   test("rejects an execution plan without slices", () => {
@@ -1016,8 +1375,48 @@ describe("runtime protocol contracts", () => {
     expect(canTransitionRuntimeDeploymentState("live", "draft")).toBe(false);
     expect(canTransitionRuntimeRunState("pending", "risk_checked")).toBe(true);
     expect(canTransitionRuntimeRunState("completed", "planned")).toBe(false);
+    expect(
+      canTransitionRuntimeStrategyDeskScenarioState(
+        "paper_ready",
+        "operator_review",
+      ),
+    ).toBe(true);
+    expect(
+      canTransitionRuntimeStrategyDeskScenarioState(
+        "execution_bound",
+        "paper_ready",
+      ),
+    ).toBe(false);
+    expect(
+      canTransitionRuntimeStrategyDeskRunState(
+        "legs_running",
+        "collecting_evidence",
+      ),
+    ).toBe(true);
+    expect(
+      canTransitionRuntimeStrategyDeskRunState("completed", "legs_requested"),
+    ).toBe(false);
+    expect(
+      canTransitionRuntimeStrategyDeskPromotionHandoffState(
+        "awaiting_review",
+        "approved",
+      ),
+    ).toBe(true);
+    expect(
+      canTransitionRuntimeStrategyDeskPromotionHandoffState(
+        "applied",
+        "approved",
+      ),
+    ).toBe(false);
     expect(RUNTIME_DEPLOYMENT_STATE_TRANSITIONS.archived).toEqual([]);
     expect(RUNTIME_RUN_STATE_TRANSITIONS.failed).toEqual([]);
+    expect(RUNTIME_STRATEGY_DESK_SCENARIO_STATE_TRANSITIONS.archived).toEqual(
+      [],
+    );
+    expect(RUNTIME_STRATEGY_DESK_RUN_STATE_TRANSITIONS.completed).toEqual([]);
+    expect(
+      RUNTIME_STRATEGY_DESK_PROMOTION_HANDOFF_STATE_TRANSITIONS.archived,
+    ).toEqual([]);
   });
 
   test("generates deterministic JSON schema documents", () => {

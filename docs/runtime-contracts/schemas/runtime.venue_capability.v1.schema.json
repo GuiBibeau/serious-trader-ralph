@@ -28,7 +28,7 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["spot", "perp", "options"]
+        "enum": ["spot", "perp", "options", "prediction"]
       }
     },
     "orderTypes": {
@@ -36,7 +36,22 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["market", "limit", "auction", "twap"]
+        "enum": ["market", "limit", "trigger", "auction", "twap"]
+      }
+    },
+    "intentFamilies": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "spot_swap",
+          "conditional_spot_order",
+          "clob_order",
+          "perp_order",
+          "prediction_order",
+          "flash_atomic"
+        ]
       }
     },
     "authModel": {
@@ -116,6 +131,45 @@
     "settlementBehavior": {
       "type": "string",
       "enum": ["swap_atomic", "orderbook_atomic", "orderbook_partial"]
+    },
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "supportsOrderLifecycle": {
+          "type": "boolean"
+        },
+        "supportsPositionLifecycle": {
+          "type": "boolean"
+        },
+        "requiresExternalOracle": {
+          "type": "boolean"
+        },
+        "settlementModel": {
+          "type": "string",
+          "enum": [
+            "atomic_swap",
+            "resting_order",
+            "position_account",
+            "tokenized_outcome",
+            "flash_loan_atomic"
+          ]
+        }
+      },
+      "required": [
+        "supportsOrderLifecycle",
+        "supportsPositionLifecycle",
+        "requiresExternalOracle",
+        "settlementModel"
+      ],
+      "additionalProperties": false
+    },
+    "oracleRequirements": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["pyth", "switchboard", "venue_reference", "none"]
+      }
     },
     "supportedModes": {
       "minItems": 1,

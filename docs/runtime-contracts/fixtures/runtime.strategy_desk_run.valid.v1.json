@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "v1",
+  "scenarioRunId": "desk_run_sol_composite_paper_1",
+  "scenarioId": "desk_sol_composite_1",
+  "scenarioState": "paper_ready",
+  "runKind": "paper",
+  "state": "completed",
+  "requestedBy": "user_1",
+  "trigger": {
+    "kind": "operator",
+    "source": "portal.strategy-desk",
+    "observedAt": "2026-03-17T03:07:00Z",
+    "reason": "paper validation before operator review"
+  },
+  "createdAt": "2026-03-17T03:07:00Z",
+  "updatedAt": "2026-03-17T03:08:00Z",
+  "startedAt": "2026-03-17T03:07:05Z",
+  "completedAt": "2026-03-17T03:08:00Z",
+  "legRuns": [
+    {
+      "legId": "leg_spot_alpha",
+      "stage": "paper",
+      "state": "completed",
+      "runtimeRunId": "run_sol_spot_paper_1",
+      "runtimeDeploymentId": "dep_sol_spot_paper"
+    },
+    {
+      "legId": "leg_perp_hedge",
+      "stage": "paper",
+      "state": "completed",
+      "runtimeRunId": "run_sol_perp_paper_1",
+      "runtimeDeploymentId": "dep_sol_perp_paper"
+    },
+    {
+      "legId": "leg_prediction_overlay",
+      "stage": "paper",
+      "state": "completed",
+      "requestRef": "submit_prediction_overlay_1"
+    },
+    {
+      "legId": "leg_flash_rebalance",
+      "stage": "paper",
+      "state": "skipped",
+      "notes": "No rebalance required in this paper window."
+    }
+  ]
+}

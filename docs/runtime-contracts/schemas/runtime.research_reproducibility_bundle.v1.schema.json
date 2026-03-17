@@ -213,7 +213,7 @@
         },
         "marketType": {
           "type": "string",
-          "enum": ["spot", "perp", "options"]
+          "enum": ["spot", "perp", "options", "prediction"]
         },
         "strategySpecDigest": {
           "type": "string",
@@ -310,7 +310,7 @@
             },
             "marketType": {
               "type": "string",
-              "enum": ["spot", "perp", "options"]
+              "enum": ["spot", "perp", "options", "prediction"]
             },
             "windowMode": {
               "type": "string",

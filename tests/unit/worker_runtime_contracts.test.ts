@@ -12,6 +12,10 @@ import {
   parseRuntimeRegimeTagRecord,
   parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchReproducibilityBundleRecord,
+  parseRuntimeStrategyDeskPromotionHandoff,
+  parseRuntimeStrategyDeskScenarioManifest,
+  parseRuntimeStrategyDeskScenarioReport,
+  parseRuntimeStrategyDeskScenarioRun,
   parseRuntimeStrategyLabPostLiveArtifact,
   parseRuntimeStrategyLabPromotionEvent,
   parseRuntimeStrategyLabPromotionRecord,
@@ -59,6 +63,10 @@ describe("worker runtime contract bridge", () => {
       "strategyLabReadinessArtifact",
       "strategyLabReadinessCanaryRun",
       "strategyLabPostLiveArtifact",
+      "strategyDeskScenario",
+      "strategyDeskRun",
+      "strategyDeskReport",
+      "strategyDeskPromotionHandoff",
     ]);
   });
 
@@ -174,6 +182,35 @@ describe("worker runtime contract bridge", () => {
 
     expect(artifact.recommendedAction).toBe("demote");
     expect(artifact.appliedTargetState).toBe("paper");
+  });
+
+  test("worker can parse the canonical strategy-desk fixtures", () => {
+    const scenario = parseRuntimeStrategyDeskScenarioManifest(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_desk_scenario.valid.v1.json",
+      ),
+    );
+    const run = parseRuntimeStrategyDeskScenarioRun(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_desk_run.valid.v1.json",
+      ),
+    );
+    const report = parseRuntimeStrategyDeskScenarioReport(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_desk_report.valid.v1.json",
+      ),
+    );
+    const handoff = parseRuntimeStrategyDeskPromotionHandoff(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_desk_promotion_handoff.valid.v1.json",
+      ),
+    );
+
+    expect(scenario.state).toBe("paper_ready");
+    expect(scenario.legs).toHaveLength(4);
+    expect(run.runKind).toBe("paper");
+    expect(report.status).toBe("requires_human_approval");
+    expect(handoff.targetMode).toBe("limited_live");
   });
 
   test("worker can parse the canonical venue capability fixture", () => {
