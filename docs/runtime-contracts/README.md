@@ -23,8 +23,19 @@ The runtime contract set now also includes:
 - the versioned `RuntimeStrategySpec` artifact used to describe strategy
   parameters, feature requirements, venue support, asset constraints, and
   promotion policy,
+- strategy-desk scenario manifests, scenario runs, scenario reports, and
+  promotion handoffs for harness-native composite testing,
 - backward-compatible fixtures proving the Worker and Rust runtime can parse
   the same strategy ABI.
+
+Strategy-desk objects are intentionally distinct from runtime deployments:
+
+- a strategy-desk scenario can describe multiple legs across spot, perps,
+  prediction, and flash paths,
+- a runtime deployment remains a bounded single-venue, single-pair execution
+  object,
+- promotion handoffs map desk scenarios into one or more runtime deployments or
+  Worker-side execution recipes without widening public API posture.
 
 Generate or refresh the schemas with:
 

@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "v1",
+  "reportId": "desk_report_sol_composite_paper_1",
+  "scenarioId": "desk_sol_composite_1",
+  "scenarioRunId": "desk_run_sol_composite_paper_1",
+  "stage": "paper",
+  "status": "requires_human_approval",
+  "summary": "Composite paper evidence is sufficient for operator review, but not for self-arming.",
+  "generatedAt": "2026-03-17T03:08:10Z",
+  "legOutcomes": [
+    {
+      "legId": "leg_spot_alpha",
+      "status": "pass",
+      "netPnlUsd": "42.15",
+      "costUsd": "6.80",
+      "evidenceRefs": [
+        {
+          "kind": "runtime_run",
+          "ref": "run_sol_spot_paper_1"
+        }
+      ]
+    },
+    {
+      "legId": "leg_perp_hedge",
+      "status": "pass",
+      "netPnlUsd": "8.25",
+      "costUsd": "3.10",
+      "evidenceRefs": [
+        {
+          "kind": "runtime_run",
+          "ref": "run_sol_perp_paper_1"
+        }
+      ]
+    },
+    {
+      "legId": "leg_prediction_overlay",
+      "status": "requires_human_approval",
+      "costUsd": "1.25",
+      "evidenceRefs": [
+        {
+          "kind": "worker_receipt",
+          "ref": "submit_prediction_overlay_1"
+        }
+      ],
+      "notes": ["Prediction leg remains paper-only until readiness improves."]
+    }
+  ],
+  "portfolioSummary": {
+    "grossPnlUsd": "61.50",
+    "netPnlUsd": "49.30",
+    "maxDrawdownBps": 180,
+    "tradeCount": 11,
+    "notes": ["Composite report aggregates harness-side leg evidence."]
+  },
+  "evidence": [
+    {
+      "stage": "backtest",
+      "summary": "Walk-forward backtest bundle for the composite thesis.",
+      "evidenceRefs": [
+        {
+          "kind": "backtest_report",
+          "ref": "backtest_alloc_dca_report"
+        }
+      ]
+    },
+    {
+      "stage": "paper",
+      "summary": "Composite paper report and leg receipts.",
+      "evidenceRefs": [
+        {
+          "kind": "strategy_desk_report",
+          "ref": "desk_report_sol_composite_paper_1"
+        }
+      ],
+      "latestReportId": "desk_report_sol_composite_paper_1"
+    }
+  ],
+  "checks": [
+    {
+      "checkId": "paper-scorecards",
+      "status": "pass",
+      "observedValue": "3/4 legs cleared paper gates",
+      "thresholdValue": "all live-eligible legs must pass",
+      "message": "Paper evidence is sufficient for operator review."
+    }
+  ],
+  "approvals": []
+}

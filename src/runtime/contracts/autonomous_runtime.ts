@@ -1439,6 +1439,244 @@ export const RuntimeStrategyLabPostLiveArtifactSchema = VersionedSchema.extend({
   metadata: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
+export const RuntimeStrategyDeskScenarioStateSchema = z.enum([
+  "draft",
+  "replay_ready",
+  "shadow_ready",
+  "paper_ready",
+  "operator_review",
+  "execution_ready",
+  "execution_bound",
+  "paused",
+  "archived",
+]);
+
+export const RuntimeStrategyDeskRunKindSchema = z.enum([
+  "replay",
+  "backtest",
+  "shadow",
+  "paper",
+  "promotion_review",
+]);
+
+export const RuntimeStrategyDeskRunStateSchema = z.enum([
+  "pending",
+  "legs_requested",
+  "legs_running",
+  "collecting_evidence",
+  "needs_review",
+  "completed",
+  "rejected",
+  "failed",
+  "cancelled",
+]);
+
+export const RuntimeStrategyDeskLegRoleSchema = z.enum([
+  "primary_alpha",
+  "hedge",
+  "inventory",
+  "carry",
+  "prediction",
+  "liquidity",
+  "flash_rebalance",
+]);
+
+export const RuntimeStrategyDeskEvidenceStageSchema = z.enum([
+  "replay",
+  "backtest",
+  "shadow",
+  "paper",
+  "bounded_execution",
+]);
+
+export const RuntimeStrategyDeskPromotionHandoffStateSchema = z.enum([
+  "draft",
+  "awaiting_review",
+  "approved",
+  "applied",
+  "rejected",
+  "archived",
+]);
+
+export const RuntimeStrategyDeskBindingKindSchema = z.enum([
+  "runtime_deployment",
+  "worker_execution_recipe",
+  "subject_control",
+]);
+
+export const RuntimeStrategyDeskTargetModeSchema = z.enum([
+  "shadow",
+  "paper",
+  "limited_live",
+]);
+
+const RuntimeStrategyDeskScenarioLegSizingSchema = z
+  .object({
+    targetNotionalUsd: DECIMAL_STRING_SCHEMA,
+    maxNotionalUsd: DECIMAL_STRING_SCHEMA.optional(),
+    reserveUsd: DECIMAL_STRING_SCHEMA.optional(),
+    maxSlippageBps: BPS_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskEvidenceBucketSchema = z
+  .object({
+    stage: RuntimeStrategyDeskEvidenceStageSchema,
+    summary: NON_EMPTY_STRING_SCHEMA,
+    evidenceRefs: z.array(RuntimeStrategyLabEvidenceRefSchema).min(1).max(32),
+    latestReportId: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskScenarioLegSchema = z
+  .object({
+    legId: NON_EMPTY_STRING_SCHEMA,
+    label: NON_EMPTY_STRING_SCHEMA,
+    role: RuntimeStrategyDeskLegRoleSchema,
+    venueKey: NON_EMPTY_STRING_SCHEMA,
+    intentFamily: RuntimeExecutionIntentFamilySchema,
+    marketType: RuntimeVenueMarketTypeSchema,
+    pair: PairSchema.optional(),
+    instrumentId: NON_EMPTY_STRING_SCHEMA.optional(),
+    assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1).max(8),
+    enabledModes: z.array(RuntimeModeSchema).min(1).max(3),
+    sizing: RuntimeStrategyDeskScenarioLegSizingSchema,
+    thesis: NON_EMPTY_STRING_SCHEMA.optional(),
+    dependencies: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+    tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+export const RuntimeStrategyDeskScenarioManifestSchema = VersionedSchema.extend(
+  {
+    scenarioId: NON_EMPTY_STRING_SCHEMA,
+    title: NON_EMPTY_STRING_SCHEMA,
+    summary: NON_EMPTY_STRING_SCHEMA,
+    ownerUserId: NON_EMPTY_STRING_SCHEMA,
+    strategyKey: NON_EMPTY_STRING_SCHEMA,
+    thesis: NON_EMPTY_STRING_SCHEMA,
+    sleeveId: NON_EMPTY_STRING_SCHEMA.optional(),
+    state: RuntimeStrategyDeskScenarioStateSchema,
+    createdAt: ISO_DATETIME_SCHEMA,
+    updatedAt: ISO_DATETIME_SCHEMA,
+    reviewedAt: ISO_DATETIME_SCHEMA.optional(),
+    activeHandoffId: NON_EMPTY_STRING_SCHEMA.optional(),
+    latestReportId: NON_EMPTY_STRING_SCHEMA.optional(),
+    legs: z.array(RuntimeStrategyDeskScenarioLegSchema).min(1).max(16),
+    evidence: z.array(RuntimeStrategyDeskEvidenceBucketSchema).max(8),
+    implementationReferences: z
+      .array(RuntimeStrategyLabImplementationReferenceSchema)
+      .max(16),
+    tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  },
+).strict();
+
+const RuntimeStrategyDeskLegRunRefSchema = z
+  .object({
+    legId: NON_EMPTY_STRING_SCHEMA,
+    stage: RuntimeStrategyDeskEvidenceStageSchema,
+    state: z.enum(["pending", "submitted", "completed", "failed", "skipped"]),
+    requestRef: NON_EMPTY_STRING_SCHEMA.optional(),
+    runtimeRunId: NON_EMPTY_STRING_SCHEMA.optional(),
+    runtimeDeploymentId: NON_EMPTY_STRING_SCHEMA.optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+export const RuntimeStrategyDeskScenarioRunSchema = VersionedSchema.extend({
+  scenarioRunId: NON_EMPTY_STRING_SCHEMA,
+  scenarioId: NON_EMPTY_STRING_SCHEMA,
+  scenarioState: RuntimeStrategyDeskScenarioStateSchema,
+  runKind: RuntimeStrategyDeskRunKindSchema,
+  state: RuntimeStrategyDeskRunStateSchema,
+  requestedBy: NON_EMPTY_STRING_SCHEMA,
+  trigger: RuntimeTriggerSchema,
+  createdAt: ISO_DATETIME_SCHEMA,
+  updatedAt: ISO_DATETIME_SCHEMA,
+  startedAt: ISO_DATETIME_SCHEMA.optional(),
+  completedAt: ISO_DATETIME_SCHEMA.optional(),
+  legRuns: z.array(RuntimeStrategyDeskLegRunRefSchema).min(1).max(16),
+  failureCode: NON_EMPTY_STRING_SCHEMA.optional(),
+  failureMessage: NON_EMPTY_STRING_SCHEMA.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
+const RuntimeStrategyDeskLegOutcomeSchema = z
+  .object({
+    legId: NON_EMPTY_STRING_SCHEMA,
+    status: RuntimeResearchPolicyGateStatusSchema,
+    netPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
+    costUsd: DECIMAL_STRING_SCHEMA.optional(),
+    evidenceRefs: z.array(RuntimeStrategyLabEvidenceRefSchema).max(16),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskPortfolioSummarySchema = z
+  .object({
+    grossPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
+    netPnlUsd: NUMERIC_STRING_SCHEMA.optional(),
+    maxDrawdownBps: BPS_SCHEMA.optional(),
+    tradeCount: z.number().int().nonnegative().optional(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+export const RuntimeStrategyDeskScenarioReportSchema = VersionedSchema.extend({
+  reportId: NON_EMPTY_STRING_SCHEMA,
+  scenarioId: NON_EMPTY_STRING_SCHEMA,
+  scenarioRunId: NON_EMPTY_STRING_SCHEMA,
+  stage: RuntimeStrategyDeskEvidenceStageSchema,
+  status: RuntimeResearchPolicyGateStatusSchema,
+  summary: NON_EMPTY_STRING_SCHEMA,
+  generatedAt: ISO_DATETIME_SCHEMA,
+  legOutcomes: z.array(RuntimeStrategyDeskLegOutcomeSchema).min(1).max(16),
+  portfolioSummary: RuntimeStrategyDeskPortfolioSummarySchema.optional(),
+  evidence: z.array(RuntimeStrategyDeskEvidenceBucketSchema).max(8),
+  checks: z.array(RuntimeStrategyLabCheckSchema).min(1),
+  approvals: z.array(RuntimeResearchHumanApprovalRecordSchema).max(16),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
+const RuntimeStrategyDeskRuntimeBindingSchema = z
+  .object({
+    bindingId: NON_EMPTY_STRING_SCHEMA,
+    bindingKind: RuntimeStrategyDeskBindingKindSchema,
+    legIds: z.array(NON_EMPTY_STRING_SCHEMA).min(1).max(16),
+    venueKey: NON_EMPTY_STRING_SCHEMA,
+    pair: PairSchema.optional(),
+    instrumentId: NON_EMPTY_STRING_SCHEMA.optional(),
+    targetMode: RuntimeStrategyDeskTargetModeSchema,
+    deploymentId: NON_EMPTY_STRING_SCHEMA.optional(),
+    lane: RuntimeLaneSchema.optional(),
+    notes: NON_EMPTY_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+export const RuntimeStrategyDeskPromotionHandoffSchema = VersionedSchema.extend(
+  {
+    handoffId: NON_EMPTY_STRING_SCHEMA,
+    scenarioId: NON_EMPTY_STRING_SCHEMA,
+    currentState: RuntimeStrategyDeskScenarioStateSchema,
+    targetMode: RuntimeStrategyDeskTargetModeSchema,
+    status: RuntimeStrategyDeskPromotionHandoffStateSchema,
+    summary: NON_EMPTY_STRING_SCHEMA,
+    requestedBy: NON_EMPTY_STRING_SCHEMA,
+    createdAt: ISO_DATETIME_SCHEMA,
+    updatedAt: ISO_DATETIME_SCHEMA,
+    appliedAt: ISO_DATETIME_SCHEMA.optional(),
+    implementationReference:
+      RuntimeStrategyLabImplementationReferenceSchema.optional(),
+    evidenceRefs: z.array(RuntimeStrategyLabEvidenceRefSchema).min(1).max(64),
+    checks: z.array(RuntimeStrategyLabCheckSchema).min(1),
+    approvals: z.array(RuntimeResearchHumanApprovalRecordSchema).max(16),
+    bindings: z.array(RuntimeStrategyDeskRuntimeBindingSchema).min(1).max(16),
+    actions: z.array(RuntimeStrategyLabActionSchema).min(1),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  },
+).strict();
+
 export const RuntimeExecutionCostModelStatusSchema = z.enum([
   "draft",
   "active",
@@ -1730,6 +1968,42 @@ export type RuntimeStrategyLabPostLiveAction = z.infer<
 export type RuntimeStrategyLabPostLiveArtifact = z.infer<
   typeof RuntimeStrategyLabPostLiveArtifactSchema
 >;
+export type RuntimeStrategyDeskScenarioState = z.infer<
+  typeof RuntimeStrategyDeskScenarioStateSchema
+>;
+export type RuntimeStrategyDeskRunKind = z.infer<
+  typeof RuntimeStrategyDeskRunKindSchema
+>;
+export type RuntimeStrategyDeskRunState = z.infer<
+  typeof RuntimeStrategyDeskRunStateSchema
+>;
+export type RuntimeStrategyDeskLegRole = z.infer<
+  typeof RuntimeStrategyDeskLegRoleSchema
+>;
+export type RuntimeStrategyDeskEvidenceStage = z.infer<
+  typeof RuntimeStrategyDeskEvidenceStageSchema
+>;
+export type RuntimeStrategyDeskPromotionHandoffState = z.infer<
+  typeof RuntimeStrategyDeskPromotionHandoffStateSchema
+>;
+export type RuntimeStrategyDeskBindingKind = z.infer<
+  typeof RuntimeStrategyDeskBindingKindSchema
+>;
+export type RuntimeStrategyDeskTargetMode = z.infer<
+  typeof RuntimeStrategyDeskTargetModeSchema
+>;
+export type RuntimeStrategyDeskScenarioManifest = z.infer<
+  typeof RuntimeStrategyDeskScenarioManifestSchema
+>;
+export type RuntimeStrategyDeskScenarioRun = z.infer<
+  typeof RuntimeStrategyDeskScenarioRunSchema
+>;
+export type RuntimeStrategyDeskScenarioReport = z.infer<
+  typeof RuntimeStrategyDeskScenarioReportSchema
+>;
+export type RuntimeStrategyDeskPromotionHandoff = z.infer<
+  typeof RuntimeStrategyDeskPromotionHandoffSchema
+>;
 
 export const RUNTIME_DEPLOYMENT_STATE_TRANSITIONS = {
   draft: ["shadow", "paper", "live", "archived"],
@@ -1798,6 +2072,56 @@ export const RUNTIME_STRATEGY_LAB_READINESS_STATE_TRANSITIONS = {
     "draft" | "shadow" | "paper" | "limited_live" | "broad_live"
   >,
   readonly RuntimeStrategyLabPromotionState[]
+>;
+
+export const RUNTIME_STRATEGY_DESK_SCENARIO_STATE_TRANSITIONS = {
+  draft: ["replay_ready", "archived"],
+  replay_ready: ["shadow_ready", "paused", "archived"],
+  shadow_ready: ["paper_ready", "paused", "archived"],
+  paper_ready: ["operator_review", "paused", "archived"],
+  operator_review: ["paper_ready", "execution_ready", "paused", "archived"],
+  execution_ready: ["execution_bound", "paused", "archived"],
+  execution_bound: ["operator_review", "paused", "archived"],
+  paused: [
+    "replay_ready",
+    "shadow_ready",
+    "paper_ready",
+    "operator_review",
+    "execution_ready",
+    "execution_bound",
+    "archived",
+  ],
+  archived: [],
+} as const satisfies Record<
+  RuntimeStrategyDeskScenarioState,
+  readonly RuntimeStrategyDeskScenarioState[]
+>;
+
+export const RUNTIME_STRATEGY_DESK_RUN_STATE_TRANSITIONS = {
+  pending: ["legs_requested", "rejected", "cancelled"],
+  legs_requested: ["legs_running", "failed", "cancelled"],
+  legs_running: ["collecting_evidence", "failed", "cancelled"],
+  collecting_evidence: ["completed", "needs_review", "failed"],
+  needs_review: ["completed", "failed", "cancelled"],
+  completed: [],
+  rejected: [],
+  failed: [],
+  cancelled: [],
+} as const satisfies Record<
+  RuntimeStrategyDeskRunState,
+  readonly RuntimeStrategyDeskRunState[]
+>;
+
+export const RUNTIME_STRATEGY_DESK_PROMOTION_HANDOFF_STATE_TRANSITIONS = {
+  draft: ["awaiting_review", "archived"],
+  awaiting_review: ["approved", "rejected", "archived"],
+  approved: ["applied", "archived"],
+  applied: ["archived"],
+  rejected: ["draft", "archived"],
+  archived: [],
+} as const satisfies Record<
+  RuntimeStrategyDeskPromotionHandoffState,
+  readonly RuntimeStrategyDeskPromotionHandoffState[]
 >;
 
 export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
@@ -1954,6 +2278,29 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
       "https://trader-ralph.com/schemas/runtime/v1/strategy_lab_post_live_artifact",
     outputFile: "runtime.strategy_lab_post_live_artifact.v1.schema.json",
   },
+  strategyDeskScenario: {
+    schema: RuntimeStrategyDeskScenarioManifestSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_scenario",
+    outputFile: "runtime.strategy_desk_scenario.v1.schema.json",
+  },
+  strategyDeskRun: {
+    schema: RuntimeStrategyDeskScenarioRunSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_run",
+    outputFile: "runtime.strategy_desk_run.v1.schema.json",
+  },
+  strategyDeskReport: {
+    schema: RuntimeStrategyDeskScenarioReportSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_report",
+    outputFile: "runtime.strategy_desk_report.v1.schema.json",
+  },
+  strategyDeskPromotionHandoff: {
+    schema: RuntimeStrategyDeskPromotionHandoffSchema,
+    schemaId:
+      "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_promotion_handoff",
+    outputFile: "runtime.strategy_desk_promotion_handoff.v1.schema.json",
+  },
 } as const;
 
 export function canTransitionRuntimeDeploymentState(
@@ -1996,6 +2343,36 @@ export function canTransitionRuntimeStrategyLabReadinessState(
   const allowed = RUNTIME_STRATEGY_LAB_READINESS_STATE_TRANSITIONS[
     from
   ] as readonly RuntimeStrategyLabPromotionState[];
+  return allowed.includes(to);
+}
+
+export function canTransitionRuntimeStrategyDeskScenarioState(
+  from: RuntimeStrategyDeskScenarioState,
+  to: RuntimeStrategyDeskScenarioState,
+): boolean {
+  const allowed = RUNTIME_STRATEGY_DESK_SCENARIO_STATE_TRANSITIONS[
+    from
+  ] as readonly RuntimeStrategyDeskScenarioState[];
+  return allowed.includes(to);
+}
+
+export function canTransitionRuntimeStrategyDeskRunState(
+  from: RuntimeStrategyDeskRunState,
+  to: RuntimeStrategyDeskRunState,
+): boolean {
+  const allowed = RUNTIME_STRATEGY_DESK_RUN_STATE_TRANSITIONS[
+    from
+  ] as readonly RuntimeStrategyDeskRunState[];
+  return allowed.includes(to);
+}
+
+export function canTransitionRuntimeStrategyDeskPromotionHandoffState(
+  from: RuntimeStrategyDeskPromotionHandoffState,
+  to: RuntimeStrategyDeskPromotionHandoffState,
+): boolean {
+  const allowed = RUNTIME_STRATEGY_DESK_PROMOTION_HANDOFF_STATE_TRANSITIONS[
+    from
+  ] as readonly RuntimeStrategyDeskPromotionHandoffState[];
   return allowed.includes(to);
 }
 
@@ -2165,6 +2542,30 @@ export function parseRuntimeStrategyLabPostLiveArtifact(
   return RuntimeStrategyLabPostLiveArtifactSchema.parse(input);
 }
 
+export function parseRuntimeStrategyDeskScenarioManifest(
+  input: unknown,
+): RuntimeStrategyDeskScenarioManifest {
+  return RuntimeStrategyDeskScenarioManifestSchema.parse(input);
+}
+
+export function parseRuntimeStrategyDeskScenarioRun(
+  input: unknown,
+): RuntimeStrategyDeskScenarioRun {
+  return RuntimeStrategyDeskScenarioRunSchema.parse(input);
+}
+
+export function parseRuntimeStrategyDeskScenarioReport(
+  input: unknown,
+): RuntimeStrategyDeskScenarioReport {
+  return RuntimeStrategyDeskScenarioReportSchema.parse(input);
+}
+
+export function parseRuntimeStrategyDeskPromotionHandoff(
+  input: unknown,
+): RuntimeStrategyDeskPromotionHandoff {
+  return RuntimeStrategyDeskPromotionHandoffSchema.parse(input);
+}
+
 export function safeParseRuntimeDeploymentRecord(input: unknown) {
   return RuntimeDeploymentRecordSchema.safeParse(input);
 }
@@ -2279,4 +2680,20 @@ export function safeParseRuntimeStrategyLabReadinessCanaryRun(input: unknown) {
 
 export function safeParseRuntimeStrategyLabPostLiveArtifact(input: unknown) {
   return RuntimeStrategyLabPostLiveArtifactSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategyDeskScenarioManifest(input: unknown) {
+  return RuntimeStrategyDeskScenarioManifestSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategyDeskScenarioRun(input: unknown) {
+  return RuntimeStrategyDeskScenarioRunSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategyDeskScenarioReport(input: unknown) {
+  return RuntimeStrategyDeskScenarioReportSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategyDeskPromotionHandoff(input: unknown) {
+  return RuntimeStrategyDeskPromotionHandoffSchema.safeParse(input);
 }

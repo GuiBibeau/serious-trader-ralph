@@ -41,7 +41,7 @@
     },
     "marketType": {
       "type": "string",
-      "enum": ["spot", "perp", "options"]
+      "enum": ["spot", "perp", "options", "prediction"]
     },
     "venueKeys": {
       "type": "array",

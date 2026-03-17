@@ -33,7 +33,7 @@
     },
     "marketType": {
       "type": "string",
-      "enum": ["spot", "perp", "options"]
+      "enum": ["spot", "perp", "options", "prediction"]
     },
     "pairSymbol": {
       "type": "string",

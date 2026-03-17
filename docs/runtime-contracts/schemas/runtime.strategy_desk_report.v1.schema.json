@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_report",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "reportId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scenarioId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scenarioRunId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stage": {
+      "type": "string",
+      "enum": ["replay", "backtest", "shadow", "paper", "bounded_execution"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "blocked", "requires_human_approval", "not_applicable"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "legOutcomes": {
+      "minItems": 1,
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "legId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "blocked",
+              "requires_human_approval",
+              "not_applicable"
+            ]
+          },
+          "netPnlUsd": {
+            "type": "string",
+            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+          },
+          "costUsd": {
+            "type": "string",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "evidenceRefs": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "notes": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["kind", "ref"],
+              "additionalProperties": false
+            }
+          },
+          "notes": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": ["legId", "status", "evidenceRefs"],
+        "additionalProperties": false
+      }
+    },
+    "portfolioSummary": {
+      "type": "object",
+      "properties": {
+        "grossPnlUsd": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
+        "netPnlUsd": {
+          "type": "string",
+          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+        },
+        "maxDrawdownBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "tradeCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "notes": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "replay",
+              "backtest",
+              "shadow",
+              "paper",
+              "bounded_execution"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidenceRefs": {
+            "minItems": 1,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "notes": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["kind", "ref"],
+              "additionalProperties": false
+            }
+          },
+          "latestReportId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["stage", "summary", "evidenceRefs"],
+        "additionalProperties": false
+      }
+    },
+    "checks": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "checkId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "blocked",
+              "requires_human_approval",
+              "not_applicable"
+            ]
+          },
+          "observedValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "thresholdValue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["checkId", "status", "message"],
+        "additionalProperties": false
+      }
+    },
+    "approvals": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "targetMode": {
+            "type": "string",
+            "enum": ["shadow", "paper", "limited_live", "broad_live"]
+          },
+          "approvedBy": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["targetMode", "approvedBy", "approvedAt"],
+        "additionalProperties": false
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "reportId",
+    "scenarioId",
+    "scenarioRunId",
+    "stage",
+    "status",
+    "summary",
+    "generatedAt",
+    "legOutcomes",
+    "evidence",
+    "checks",
+    "approvals"
+  ],
+  "additionalProperties": false
+}
