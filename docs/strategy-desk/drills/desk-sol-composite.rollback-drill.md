@@ -36,7 +36,8 @@ curl -fsS \
 Expected:
 
 - scenario state is `paused`
-- handoff status moves to `rejected` or equivalent paused state trail
+- handoff status remains `applied` until an explicit demotion archives it
+- the event trail records a `paused` transition
 
 ### 2. Optional venue-disable style kill
 
@@ -79,7 +80,7 @@ Expected:
 
 - scenario state is `paper_ready`
 - handoff status is `archived`
-- event list includes `pause` or `kill`, then `demote` or `archive`
+- event list includes `paused` or `killed`, then `demoted`
 - no leg remains silently armed after demotion
 
 ## Pass criteria
