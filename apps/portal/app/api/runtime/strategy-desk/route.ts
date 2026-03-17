@@ -497,6 +497,7 @@ export async function GET(request: Request) {
   let reports: RuntimeStrategyDeskScenarioReport[] = [];
   let handoffs: RuntimeStrategyDeskPromotionHandoff[] = [];
   let latestHandoff: RuntimeStrategyDeskPromotionHandoff | null = null;
+  let activeHandoff: RuntimeStrategyDeskPromotionHandoff | null = null;
   let handoffEvents: RuntimeStrategyDeskPromotionHandoffEvent[] = [];
   let executionRecipes: RuntimeStrategyDeskExecutionRecipe[] = [];
 
@@ -549,12 +550,20 @@ export async function GET(request: Request) {
     if (handoffsResult.status === 200 && handoffsResult.payload.ok === true) {
       handoffs = parseHandoffs(handoffsResult.payload.handoffs);
     }
-    latestHandoff = latestByTimestamp(handoffs, "updatedAt");
+    const latestHandoffSummary = latestByTimestamp(handoffs, "updatedAt");
+    const activeHandoffSummary = selectedScenario?.activeHandoffId
+      ? (handoffs.find(
+          (handoff) => handoff.handoffId === selectedScenario.activeHandoffId,
+        ) ?? null)
+      : null;
+    latestHandoff = latestHandoffSummary;
+    activeHandoff = activeHandoffSummary;
 
-    if (latestHandoff) {
+    const detailHandoff = activeHandoffSummary ?? latestHandoffSummary;
+    if (detailHandoff) {
       const detailResult = await requestWorkerJson({
         path: `/api/admin/ops/runtime/strategy-desk/handoffs/${encodeURIComponent(
-          latestHandoff.handoffId,
+          detailHandoff.handoffId,
         )}`,
         authHeader: auth.adminAuthHeader,
       });
@@ -562,7 +571,14 @@ export async function GET(request: Request) {
         const parsed = safeParseRuntimeStrategyDeskPromotionHandoff(
           detailResult.payload.handoff,
         );
-        if (parsed.success) latestHandoff = parsed.data;
+        if (parsed.success) {
+          if (activeHandoffSummary?.handoffId === parsed.data.handoffId) {
+            activeHandoff = parsed.data;
+          }
+          if (latestHandoffSummary?.handoffId === parsed.data.handoffId) {
+            latestHandoff = parsed.data;
+          }
+        }
         handoffEvents = parseHandoffEvents(detailResult.payload.events);
         executionRecipes = parseExecutionRecipes(
           detailResult.payload.executionRecipes,
@@ -580,6 +596,7 @@ export async function GET(request: Request) {
       runs,
       reports,
       handoffs,
+      activeHandoff,
       latestHandoff,
       handoffEvents,
       executionRecipes,

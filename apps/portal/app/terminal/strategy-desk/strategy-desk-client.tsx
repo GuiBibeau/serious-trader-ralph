@@ -3,12 +3,13 @@
 import { usePrivy } from "@privy-io/react-auth";
 import { useEffect, useState, useTransition } from "react";
 import { StrategyDeskView } from "./strategy-desk-view";
-import type {
-  StrategyDeskApiPayload,
-  StrategyDeskExecuteRunKind,
-  StrategyDeskMutationResult,
-  StrategyDeskStudyRunKind,
-  StrategyDeskStudySelectionMetric,
+import {
+  type StrategyDeskApiPayload,
+  type StrategyDeskExecuteRunKind,
+  type StrategyDeskMutationResult,
+  type StrategyDeskStudyRunKind,
+  type StrategyDeskStudySelectionMetric,
+  selectStrategyDeskHandoffForAction,
 } from "./types";
 
 async function readJson<T>(response: Response): Promise<T | null> {
@@ -252,7 +253,10 @@ export function StrategyDeskClient() {
       | "archive",
   ) {
     const scenarioId = payload?.snapshot.selectedScenarioId;
-    const handoffId = payload?.snapshot.latestHandoff?.handoffId;
+    const handoffId = selectStrategyDeskHandoffForAction(
+      payload?.snapshot,
+      action,
+    )?.handoffId;
     if (!scenarioId || !handoffId) {
       setError("strategy-desk-handoff-required");
       return;

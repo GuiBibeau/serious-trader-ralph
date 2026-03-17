@@ -532,6 +532,19 @@ function assertHandoffStateTransition(
   }
 }
 
+function assertScenarioActiveHandoff(
+  scenario: RuntimeStrategyDeskScenarioManifest,
+  handoff: RuntimeStrategyDeskPromotionHandoff,
+  action: "apply" | "pause" | "kill" | "demote",
+): void {
+  if (scenario.activeHandoffId === handoff.handoffId) {
+    return;
+  }
+  throw new Error(
+    `runtime-strategy-desk-handoff-not-active:${action}:${scenario.activeHandoffId ?? "none"}`,
+  );
+}
+
 function subjectControlKeyForBinding(
   scenario: RuntimeStrategyDeskScenarioManifest,
   binding: StrategyDeskPromotionBinding,
@@ -1074,6 +1087,7 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
           `runtime-strategy-desk-handoff-already-applied:${handoff.handoffId}`,
         );
       }
+      assertScenarioActiveHandoff(scenario, handoff, "apply");
       assertNoBlockedChecks(handoff);
       if (handoff.approvals.length === 0 && nextApprovals.length === 0) {
         throw new Error(
@@ -1128,6 +1142,7 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
           `runtime-strategy-desk-handoff-control-not-applied:${handoff.status}`,
         );
       }
+      assertScenarioActiveHandoff(scenario, handoff, "pause");
       assertScenarioStateTransition(scenario, "paused");
       await applyControlToMaterializedObjects({
         env: input.env,
@@ -1150,6 +1165,7 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
           `runtime-strategy-desk-handoff-control-not-applied:${handoff.status}`,
         );
       }
+      assertScenarioActiveHandoff(scenario, handoff, "kill");
       assertScenarioStateTransition(scenario, "paused");
       await applyControlToMaterializedObjects({
         env: input.env,
@@ -1172,6 +1188,7 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
           `runtime-strategy-desk-handoff-demote-not-ready:${handoff.status}`,
         );
       }
+      assertScenarioActiveHandoff(scenario, handoff, "demote");
       assertScenarioStateTransition(scenario, "paper_ready");
       if (handoff.status === "applied") {
         await applyControlToMaterializedObjects({

@@ -7,11 +7,13 @@ import type {
   RuntimeStrategyDeskScenarioRun,
 } from "../../../lib/runtime-strategy-desk";
 import { BTN_PRIMARY, BTN_SECONDARY, formatTick } from "../../lib";
-import type {
-  StrategyDeskApiPayload,
-  StrategyDeskExecuteRunKind,
-  StrategyDeskStudyRunKind,
-  StrategyDeskStudySelectionMetric,
+import {
+  type StrategyDeskApiPayload,
+  type StrategyDeskExecuteRunKind,
+  type StrategyDeskStudyRunKind,
+  type StrategyDeskStudySelectionMetric,
+  selectStrategyDeskFocusHandoff,
+  selectStrategyDeskHandoffForAction,
 } from "./types";
 
 type StrategyDeskViewProps = {
@@ -235,7 +237,16 @@ export function StrategyDeskView({
     snapshot?.latestReport ?? null,
     snapshot?.reports ?? [],
   );
-  const latestHandoff = snapshot?.latestHandoff ?? null;
+  const latestHandoff = selectStrategyDeskFocusHandoff(snapshot);
+  const submitHandoff = selectStrategyDeskHandoffForAction(snapshot, "submit");
+  const approveHandoff = selectStrategyDeskHandoffForAction(
+    snapshot,
+    "approve",
+  );
+  const applyHandoff = selectStrategyDeskHandoffForAction(snapshot, "apply");
+  const pauseHandoff = selectStrategyDeskHandoffForAction(snapshot, "pause");
+  const killHandoff = selectStrategyDeskHandoffForAction(snapshot, "kill");
+  const demoteHandoff = selectStrategyDeskHandoffForAction(snapshot, "demote");
   const comparison = buildRunComparison(
     snapshot?.runs ?? [],
     snapshot?.reports ?? [],
@@ -623,7 +634,7 @@ export function StrategyDeskView({
                   className={BTN_SECONDARY}
                   data-testid="strategy-desk-submit-handoff"
                   disabled={
-                    actionPending === "handoff:submit" || !latestHandoff
+                    actionPending === "handoff:submit" || !submitHandoff
                   }
                   onClick={() => onTransitionHandoff?.("submit")}
                   type="button"
@@ -636,7 +647,7 @@ export function StrategyDeskView({
                   className={BTN_SECONDARY}
                   data-testid="strategy-desk-approve-handoff"
                   disabled={
-                    actionPending === "handoff:approve" || !latestHandoff
+                    actionPending === "handoff:approve" || !approveHandoff
                   }
                   onClick={() => onTransitionHandoff?.("approve")}
                   type="button"
@@ -648,7 +659,7 @@ export function StrategyDeskView({
                 <button
                   className={BTN_PRIMARY}
                   data-testid="strategy-desk-apply-handoff"
-                  disabled={actionPending === "handoff:apply" || !latestHandoff}
+                  disabled={actionPending === "handoff:apply" || !applyHandoff}
                   onClick={() => onTransitionHandoff?.("apply")}
                   type="button"
                 >
@@ -659,7 +670,7 @@ export function StrategyDeskView({
                 <button
                   className={BTN_SECONDARY}
                   data-testid="strategy-desk-pause-handoff"
-                  disabled={actionPending === "handoff:pause" || !latestHandoff}
+                  disabled={actionPending === "handoff:pause" || !pauseHandoff}
                   onClick={() => onTransitionHandoff?.("pause")}
                   type="button"
                 >
@@ -668,7 +679,7 @@ export function StrategyDeskView({
                 <button
                   className={BTN_SECONDARY}
                   data-testid="strategy-desk-kill-handoff"
-                  disabled={actionPending === "handoff:kill" || !latestHandoff}
+                  disabled={actionPending === "handoff:kill" || !killHandoff}
                   onClick={() => onTransitionHandoff?.("kill")}
                   type="button"
                 >
@@ -678,7 +689,7 @@ export function StrategyDeskView({
                   className={BTN_SECONDARY}
                   data-testid="strategy-desk-demote-handoff"
                   disabled={
-                    actionPending === "handoff:demote" || !latestHandoff
+                    actionPending === "handoff:demote" || !demoteHandoff
                   }
                   onClick={() => onTransitionHandoff?.("demote")}
                   type="button"

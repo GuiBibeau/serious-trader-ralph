@@ -498,6 +498,7 @@ function buildPayload(): StrategyDeskApiPayload {
       runs,
       reports,
       handoffs,
+      activeHandoff: handoffs[0],
       latestHandoff: handoffs[0],
       handoffEvents: [
         handoffEventFixture(
@@ -643,6 +644,7 @@ export default function StrategyDeskProofPage() {
               : scenario.activeHandoffId,
         })),
         handoffs: [handoffFixture(), ...current.snapshot.handoffs.slice(1)],
+        activeHandoff: handoffFixture(),
         latestHandoff: handoffFixture(),
         handoffEvents: [
           handoffEventFixture(
@@ -718,6 +720,7 @@ export default function StrategyDeskProofPage() {
               : scenario,
           ),
           handoffs: [nextHandoff],
+          activeHandoff: action === "demote" ? null : nextHandoff,
           latestHandoff: nextHandoff,
           handoffEvents: [
             ...current.snapshot.handoffEvents,

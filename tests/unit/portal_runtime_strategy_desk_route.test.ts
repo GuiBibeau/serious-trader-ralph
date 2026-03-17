@@ -29,6 +29,7 @@ function scenarioFixture() {
     state: "paper_ready",
     createdAt: FIXTURE_TIME,
     updatedAt: FIXTURE_TIME,
+    activeHandoffId: "desk_handoff_sol_composite_live_1",
     legs: [
       {
         legId: "leg_spot_alpha",
@@ -399,6 +400,9 @@ describe("portal runtime strategy desk route", () => {
             handoffId: "desk_handoff_sol_composite_live_1",
           },
         ],
+        activeHandoff: {
+          handoffId: "desk_handoff_sol_composite_live_1",
+        },
         latestHandoff: {
           handoffId: "desk_handoff_sol_composite_live_1",
         },
@@ -416,6 +420,148 @@ describe("portal runtime strategy desk route", () => {
     });
     expect(seenAuthHeaders).toContain("Bearer user-token");
     expect(seenAuthHeaders).toContain("Bearer operator-admin");
+  });
+
+  test("loads detail from the active handoff even when a newer draft exists", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    const latestDraft = {
+      ...handoffFixture(),
+      handoffId: "desk_handoff_sol_composite_draft_2",
+      status: "draft",
+      updatedAt: "2026-03-17T03:09:10Z",
+    };
+    let detailPath = "";
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(JSON.stringify({ ok: true, user: { id: "u_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/scenarios?")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            scenarios: [scenarioFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.endsWith(
+          "/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            scenario: scenarioFixture(),
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/runs?")) {
+        return new Response(
+          JSON.stringify({ ok: true, runs: [runFixture()] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/reports?")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            reports: [reportFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/handoffs?")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            handoffs: [handoffFixture(), latestDraft],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.endsWith(
+          "/api/admin/ops/runtime/strategy-desk/handoffs/desk_handoff_sol_composite_live_1",
+        )
+      ) {
+        detailPath = new URL(url).pathname;
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            handoff: handoffFixture(),
+            events: [handoffEventFixture()],
+            executionRecipes: [executionRecipeFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await GET(
+      new Request(
+        "https://www.trader-ralph.com/api/runtime/strategy-desk?scenarioId=desk_sol_composite_1",
+        {
+          headers: {
+            authorization: "Bearer user-token",
+          },
+        },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      snapshot: {
+        activeHandoff: {
+          handoffId: "desk_handoff_sol_composite_live_1",
+        },
+        latestHandoff: {
+          handoffId: "desk_handoff_sol_composite_draft_2",
+        },
+        handoffEvents: [
+          {
+            handoffId: "desk_handoff_sol_composite_live_1",
+          },
+        ],
+        executionRecipes: [
+          {
+            handoffId: "desk_handoff_sol_composite_live_1",
+          },
+        ],
+      },
+    });
+    expect(detailPath).toBe(
+      "/api/admin/ops/runtime/strategy-desk/handoffs/desk_handoff_sol_composite_live_1",
+    );
   });
 
   test("fails closed when the requested scenario cannot be loaded", async () => {

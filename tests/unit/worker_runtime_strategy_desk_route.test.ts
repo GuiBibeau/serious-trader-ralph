@@ -982,6 +982,159 @@ describe("worker runtime strategy desk routes", () => {
     }
   });
 
+  test("blocks apply when a newer active handoff supersedes an older approved handoff", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const scenario = readFixture(
+        "runtime.strategy_desk_scenario.valid.v1.json",
+      );
+      const run = readFixture("runtime.strategy_desk_run.valid.v1.json");
+      const report = {
+        ...readFixture("runtime.strategy_desk_report.valid.v1.json"),
+        status: "pass",
+      };
+
+      for (const [path, payload] of [
+        [
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios",
+          scenario,
+        ],
+        ["http://localhost/api/admin/ops/runtime/strategy-desk/runs", run],
+        [
+          "http://localhost/api/admin/ops/runtime/strategy-desk/reports",
+          report,
+        ],
+      ] as const) {
+        const response = await worker.fetch(
+          new Request(path, {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          }),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(response.status).toBe(200);
+      }
+
+      async function prepareApproveHandoff(requestedBy: string) {
+        const prepareResponse = await worker.fetch(
+          new Request(
+            "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare",
+            {
+              method: "POST",
+              headers: {
+                authorization: "Bearer admin-secret",
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                requestedBy,
+                targetMode: "limited_live",
+              }),
+            },
+          ),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(prepareResponse.status).toBe(200);
+        const preparePayload = (await prepareResponse.json()) as {
+          handoff: { handoffId: string };
+        };
+        const handoffId = preparePayload.handoff.handoffId;
+
+        for (const action of ["submit", "approve"] as const) {
+          const response = await worker.fetch(
+            new Request(
+              `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}/transition`,
+              {
+                method: "POST",
+                headers: {
+                  authorization: "Bearer admin-secret",
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify({
+                  action,
+                  actor: requestedBy,
+                }),
+              },
+            ),
+            env,
+            createExecutionContextStub(),
+          );
+          expect(response.status).toBe(200);
+        }
+
+        return handoffId;
+      }
+
+      const staleApprovedHandoffId = await prepareApproveHandoff("operator_1");
+      const prepareNewerDraftResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              requestedBy: "operator_2",
+              targetMode: "limited_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(prepareNewerDraftResponse.status).toBe(200);
+      const prepareNewerDraftPayload =
+        (await prepareNewerDraftResponse.json()) as {
+          handoff: { handoffId: string };
+        };
+      const activeApprovedHandoffId =
+        prepareNewerDraftPayload.handoff.handoffId;
+
+      sqlite
+        .query(
+          "UPDATE strategy_desk_scenarios SET active_handoff_id = ?1, updated_at = ?2 WHERE scenario_id = ?3",
+        )
+        .run(
+          activeApprovedHandoffId,
+          "2026-03-17T03:10:00Z",
+          "desk_sol_composite_1",
+        );
+
+      const applyResponse = await worker.fetch(
+        new Request(
+          `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${staleApprovedHandoffId}/transition`,
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              action: "apply",
+              actor: "operator_1",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(applyResponse.status).toBe(400);
+      await expect(applyResponse.json()).resolves.toMatchObject({
+        ok: false,
+        error: `runtime-strategy-desk-handoff-not-active:apply:${activeApprovedHandoffId}`,
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("demotes approved handoffs without requiring materialized deployment controls", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
