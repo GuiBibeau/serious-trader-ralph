@@ -260,6 +260,144 @@ describe("portal runtime strategy desk route", () => {
     expect(seenAuthHeaders).toContain("Bearer operator-admin");
   });
 
+  test("fails closed when the requested scenario cannot be loaded", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(JSON.stringify({ ok: true, user: { id: "u_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/scenarios?")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            scenarios: [
+              {
+                ...scenarioFixture(),
+                scenarioId: "desk_other",
+                title: "Other scenario",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (
+        url.endsWith(
+          "/api/admin/ops/runtime/strategy-desk/scenarios/desk_missing",
+        )
+      ) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "strategy-desk-scenario-not-found",
+          }),
+          {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await GET(
+      new Request(
+        "https://www.trader-ralph.com/api/runtime/strategy-desk?scenarioId=desk_missing",
+        {
+          headers: {
+            authorization: "Bearer user-token",
+          },
+        },
+      ),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: "strategy-desk-scenario-not-found",
+    });
+  });
+
+  test("fails closed when reports cannot be loaded for the selected scenario", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        return new Response(JSON.stringify({ ok: true, user: { id: "u_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/scenarios?")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            scenarios: [scenarioFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/runs?")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            runs: [runFixture()],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.includes("/api/admin/ops/runtime/strategy-desk/reports?")) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "strategy-desk-reports-load-failed",
+          }),
+          {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await GET(
+      new Request(
+        "https://www.trader-ralph.com/api/runtime/strategy-desk?scenarioId=desk_sol_composite_1",
+        {
+          headers: {
+            authorization: "Bearer user-token",
+          },
+        },
+      ),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: "strategy-desk-reports-load-failed",
+    });
+  });
+
   test("forwards scenario upserts through the worker admin surface", async () => {
     process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
     process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";

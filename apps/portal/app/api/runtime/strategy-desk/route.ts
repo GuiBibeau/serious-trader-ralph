@@ -349,12 +349,27 @@ export async function GET(request: Request) {
       )}`,
       authHeader: auth.adminAuthHeader,
     });
-    if (detailResult.status === 200 && detailResult.payload.ok === true) {
-      const parsed = safeParseRuntimeStrategyDeskScenarioManifest(
-        detailResult.payload.scenario,
+    if (detailResult.status !== 200 || detailResult.payload.ok !== true) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            readString(detailResult.payload.error) ??
+            "strategy-desk-scenario-load-failed",
+        },
+        { status: detailResult.status || 502 },
       );
-      if (parsed.success) selectedScenario = parsed.data;
     }
+    const parsed = safeParseRuntimeStrategyDeskScenarioManifest(
+      detailResult.payload.scenario,
+    );
+    if (!parsed.success) {
+      return NextResponse.json(
+        { ok: false, error: "strategy-desk-scenario-parse-failed" },
+        { status: 502 },
+      );
+    }
+    selectedScenario = parsed.data;
   }
 
   selectedScenario ??= scenarios[0] ?? null;
@@ -379,12 +394,30 @@ export async function GET(request: Request) {
       }),
     ]);
 
-    if (runsResult.status === 200 && runsResult.payload.ok === true) {
-      runs = parseRuns(runsResult.payload.runs);
+    if (runsResult.status !== 200 || runsResult.payload.ok !== true) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            readString(runsResult.payload.error) ??
+            "strategy-desk-runs-load-failed",
+        },
+        { status: runsResult.status || 502 },
+      );
     }
-    if (reportsResult.status === 200 && reportsResult.payload.ok === true) {
-      reports = parseReports(reportsResult.payload.reports);
+    if (reportsResult.status !== 200 || reportsResult.payload.ok !== true) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            readString(reportsResult.payload.error) ??
+            "strategy-desk-reports-load-failed",
+        },
+        { status: reportsResult.status || 502 },
+      );
     }
+    runs = parseRuns(runsResult.payload.runs);
+    reports = parseReports(reportsResult.payload.reports);
   }
 
   return NextResponse.json({
