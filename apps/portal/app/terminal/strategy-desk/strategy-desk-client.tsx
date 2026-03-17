@@ -121,11 +121,7 @@ function detectWalletAddressFromDraft(draft: string): string {
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? parsed.metadata
         : null;
-    if (
-      metadata &&
-      typeof metadata === "object" &&
-      !Array.isArray(metadata)
-    ) {
+    if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
       const metadataRecord = metadata as Record<string, unknown>;
       if (typeof metadataRecord.operatorWalletAddress === "string") {
         return metadataRecord.operatorWalletAddress.trim();
