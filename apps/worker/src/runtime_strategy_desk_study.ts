@@ -75,6 +75,7 @@ export type RuntimeStrategyDeskStudyWorkflowResult = {
 
 const DEFAULT_SELECTION_METRIC: StrategyDeskStudySelectionMetric =
   "excess_vs_flat_cash_bps";
+const MAX_STRATEGY_DESK_EVIDENCE_BUCKETS = 8;
 
 function nowIso(deps?: StrategyDeskStudyDeps): string {
   return deps?.now?.() ?? new Date().toISOString();
@@ -98,6 +99,30 @@ function formatUsd(value: number): string {
 
 function formatBps(value: number): string {
   return value.toFixed(4);
+}
+
+function scenarioStateAllowsStudy(
+  scenario: RuntimeStrategyDeskScenarioManifest,
+  runKind: StrategyDeskStudyRunKind,
+): boolean {
+  if (runKind === "replay") {
+    return (
+      scenario.state === "replay_ready" ||
+      scenario.state === "shadow_ready" ||
+      scenario.state === "paper_ready" ||
+      scenario.state === "operator_review" ||
+      scenario.state === "execution_ready" ||
+      scenario.state === "execution_bound"
+    );
+  }
+  return (
+    scenario.state === "replay_ready" ||
+    scenario.state === "shadow_ready" ||
+    scenario.state === "paper_ready" ||
+    scenario.state === "operator_review" ||
+    scenario.state === "execution_ready" ||
+    scenario.state === "execution_bound"
+  );
 }
 
 function zeroMetrics(): StrategyDeskBacktestMetrics {
@@ -362,7 +387,7 @@ function upsertStageEvidenceBucket(input: {
     ].slice(0, 32),
     latestReportId: input.reportId,
   });
-  return next;
+  return next.slice(-MAX_STRATEGY_DESK_EVIDENCE_BUCKETS);
 }
 
 function scenarioLegById(
@@ -774,6 +799,11 @@ export async function executeRuntimeStrategyDeskStudyWorkflow(
     env: input.env,
     scenarioId: input.scenarioId,
   });
+  if (!scenarioStateAllowsStudy(scenario, input.runKind)) {
+    throw new Error(
+      `runtime-strategy-desk-scenario-state-not-ready:${scenario.scenarioId}:${scenario.state}:${input.runKind}`,
+    );
+  }
   const researchMatrix = scenario.researchMatrix;
   if (!researchMatrix) {
     throw new Error(

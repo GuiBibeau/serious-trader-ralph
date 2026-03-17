@@ -149,6 +149,59 @@ function buildBacktestReport(input: {
   };
 }
 
+function buildStudyScenario(
+  overrides?: Record<string, unknown>,
+): Record<string, unknown> {
+  const scenario = readFixture(
+    "runtime.strategy_desk_scenario.valid.v1.json",
+  ) as Record<string, unknown>;
+  return {
+    ...scenario,
+    state: "replay_ready",
+    researchMatrix: {
+      selectionMetric: "excess_vs_flat_cash_bps",
+      backtestLegs: [
+        {
+          legId: "leg_spot_alpha",
+          experimentId: "exp_spot_base",
+          replayCorpusId: "replay_sol_usdc",
+          venueKey: "jupiter",
+          pairSymbol: "SOL/USDC",
+          marketType: "spot",
+          windowMode: "rolling",
+          trainingWindowObservations: 8,
+          testingWindowObservations: 4,
+          stepObservations: 4,
+          purgeObservations: 1,
+          baselineStrategies: ["flat_cash", "buy_and_hold"],
+        },
+      ],
+      windows: [
+        {
+          windowId: "selection_week_1",
+          label: "Selection week 1",
+          cohort: "selection",
+          windowMode: "rolling",
+          trainingWindowObservations: 8,
+          testingWindowObservations: 4,
+          stepObservations: 4,
+          purgeObservations: 1,
+        },
+      ],
+      variants: [
+        {
+          variantId: "fast",
+          label: "Fast",
+          parameterManifest: {
+            threshold: "fast",
+          },
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
+
 describe("runtime strategy desk study workflow", () => {
   test("builds a multi-window study matrix and preserves holdout summaries", async () => {
     const { env, sqlite } = createOpsEnv();
@@ -421,6 +474,116 @@ describe("runtime strategy desk study workflow", () => {
       expect(persisted.scenario.latestReportId).toBe(
         "desk_report_desk_sol_composite_1_backtest",
       );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("blocks study runs when the scenario is paused", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      await upsertRuntimeStrategyDeskScenarioWorkflow({
+        env,
+        scenario: buildStudyScenario({
+          state: "paused",
+        }) as never,
+      });
+
+      await expect(
+        executeRuntimeStrategyDeskStudyWorkflow(
+          {
+            env,
+            scenarioId: "desk_sol_composite_1",
+            runKind: "backtest",
+            requestedBy: "operator_1",
+          },
+          {
+            async runRuntimeBacktest() {
+              throw new Error("should-not-run-backtest");
+            },
+          },
+        ),
+      ).rejects.toThrow(
+        "runtime-strategy-desk-scenario-state-not-ready:desk_sol_composite_1:paused:backtest",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("caps propagated evidence buckets to the report schema limit", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      await upsertRuntimeStrategyDeskScenarioWorkflow({
+        env,
+        scenario: buildStudyScenario({
+          evidence: Array.from({ length: 8 }, (_, index) => ({
+            stage:
+              index % 4 === 0
+                ? "shadow"
+                : index % 4 === 1
+                  ? "paper"
+                  : index % 4 === 2
+                    ? "replay"
+                    : "bounded_execution",
+            summary: `existing-${index}`,
+            evidenceRefs: [
+              {
+                kind: "strategy_desk_report",
+                ref: `existing_report_${index}`,
+              },
+            ],
+          })),
+        }) as never,
+      });
+
+      const result = await executeRuntimeStrategyDeskStudyWorkflow(
+        {
+          env,
+          scenarioId: "desk_sol_composite_1",
+          runKind: "backtest",
+          requestedBy: "operator_1",
+        },
+        {
+          createId(prefix) {
+            return prefix;
+          },
+          now() {
+            return "2026-03-17T05:00:00Z";
+          },
+          async runRuntimeBacktest({ payload }) {
+            const request = payload as {
+              reportId: string;
+              experimentId: string;
+            };
+            return {
+              status: 201,
+              ok: true,
+              payload: {
+                ok: true,
+                source: "stub",
+                created: true,
+                report: buildBacktestReport({
+                  reportId: request.reportId,
+                  experimentId: request.experimentId,
+                  venueKey: "jupiter",
+                  netReturnBps: "12.0000",
+                  grossReturnBps: "18.0000",
+                  totalCostBps: "6.0000",
+                  tradeCount: 2,
+                  maxDrawdownBps: "5.0000",
+                  excessVsFlatCashBps: "12.0000",
+                }),
+              },
+            };
+          },
+        },
+      );
+
+      expect(result.report.evidence).toHaveLength(8);
+      expect(
+        result.report.evidence.filter((bucket) => bucket.stage === "backtest"),
+      ).toHaveLength(1);
     } finally {
       sqlite.close();
     }
