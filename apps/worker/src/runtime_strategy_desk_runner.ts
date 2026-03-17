@@ -375,10 +375,11 @@ function buildRunnerContext(
 
 function defaultAdapterKey(leg: RuntimeStrategyDeskScenarioLeg): string {
   if (leg.intentFamily === "spot_swap") {
+    const capability = requireRuntimeVenueCapability(leg.venueKey);
     return resolveSpotVenueExecutionAdapter({
       venueKey: leg.venueKey,
       runtimeMode: "paper",
-      defaultAdapter: "jupiter",
+      defaultAdapter: capability.adapterKeys[0] ?? leg.venueKey,
     });
   }
   if (leg.intentFamily === "perp_order" && leg.venueKey === "drift") {
@@ -960,6 +961,7 @@ export async function executeRuntimeStrategyDeskScenarioWorkflow(
 
   const stage = stageForRunKind(input.runKind);
   const createdAt = nowIso(deps);
+  const orderedLegs = topologicalScenarioLegs(scenario);
   let run: RuntimeStrategyDeskScenarioRun = {
     schemaVersion: "v1",
     scenarioRunId:
@@ -987,7 +989,6 @@ export async function executeRuntimeStrategyDeskScenarioWorkflow(
   ).run;
 
   const context = buildRunnerContext(input.env, deps);
-  const orderedLegs = topologicalScenarioLegs(scenario);
   const artifacts: Record<string, StrategyDeskRunArtifact> = {};
   const maxRetriesPerLeg = readPositiveInt(input.maxRetriesPerLeg, 0);
 

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   getRuntimeStrategyDeskScenarioWorkflow,
+  listRuntimeStrategyDeskScenarioRunsWorkflow,
   upsertRuntimeStrategyDeskScenarioWorkflow,
 } from "../../apps/worker/src/runtime_strategy_desk";
 import { executeRuntimeStrategyDeskScenarioWorkflow } from "../../apps/worker/src/runtime_strategy_desk_runner";
@@ -450,6 +451,126 @@ describe("runtime strategy desk runner", () => {
           (legRun) => legRun.legId === "leg_prediction_overlay",
         )?.state,
       ).toBe("skipped");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("uses the venue default adapter for paper spot legs when the manifest omits one", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const scenario = readFixture(
+        "runtime.strategy_desk_scenario.valid.v1.json",
+      );
+      const mutatedScenario = {
+        ...scenario,
+        legs: (scenario.legs as Array<Record<string, unknown>>).map((leg) =>
+          leg.legId === "leg_spot_alpha"
+            ? {
+                ...leg,
+                venueKey: "magicblock",
+                enabledModes: ["shadow", "paper"],
+              }
+            : leg,
+        ),
+      };
+      await upsertRuntimeStrategyDeskScenarioWorkflow({
+        env,
+        scenario: mutatedScenario as never,
+      });
+
+      await executeRuntimeStrategyDeskScenarioWorkflow(
+        {
+          env,
+          scenarioId: "desk_sol_composite_1",
+          runKind: "paper",
+          requestedBy: "operator_1",
+          walletAddress: "11111111111111111111111111111111",
+        },
+        {
+          createId(prefix) {
+            return `${prefix}_magicblock`;
+          },
+          createRpc: () => ({}) as never,
+          createJupiterClient: () => ({}) as never,
+          createDFlowClient: () => ({}) as never,
+          createDriftClient: () => ({}) as never,
+          createRaydiumClient: () => ({}) as never,
+          createOrcaClient: () => ({}) as never,
+          createMangoClient: () => ({}) as never,
+          createOpenBookClient: () => ({}) as never,
+          quoteSpotSwap: quoteSpotSwapMock as never,
+          executeIntentViaRouter: executeIntentViaRouterMock as never,
+        },
+      );
+
+      const spotCall = executeIntentViaRouterMock.mock.calls.find(
+        ([input]) => input.intent.family === "spot_swap",
+      );
+      expect(spotCall?.[0].execution?.adapter).toBe(
+        "magicblock_ephemeral_rollup",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("validates the dependency graph before persisting a pending run", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const scenario = readFixture(
+        "runtime.strategy_desk_scenario.valid.v1.json",
+      );
+      const mutatedScenario = {
+        ...scenario,
+        legs: (scenario.legs as Array<Record<string, unknown>>).map((leg) =>
+          leg.legId === "leg_perp_hedge"
+            ? {
+                ...leg,
+                dependencies: ["missing_leg"],
+              }
+            : leg,
+        ),
+      };
+      await upsertRuntimeStrategyDeskScenarioWorkflow({
+        env,
+        scenario: mutatedScenario as never,
+      });
+
+      await expect(
+        executeRuntimeStrategyDeskScenarioWorkflow(
+          {
+            env,
+            scenarioId: "desk_sol_composite_1",
+            runKind: "paper",
+            requestedBy: "operator_1",
+            walletAddress: "11111111111111111111111111111111",
+          },
+          {
+            createId(prefix) {
+              return `${prefix}_invalid_graph`;
+            },
+            createRpc: () => ({}) as never,
+            createJupiterClient: () => ({}) as never,
+            createDFlowClient: () => ({}) as never,
+            createDriftClient: () => ({}) as never,
+            createRaydiumClient: () => ({}) as never,
+            createOrcaClient: () => ({}) as never,
+            createMangoClient: () => ({}) as never,
+            createOpenBookClient: () => ({}) as never,
+            quoteSpotSwap: quoteSpotSwapMock as never,
+            executeIntentViaRouter: executeIntentViaRouterMock as never,
+          },
+        ),
+      ).rejects.toThrow(
+        "runtime-strategy-desk-leg-dependency-unknown:desk_sol_composite_1:leg_perp_hedge:missing_leg",
+      );
+
+      const storedRuns = await listRuntimeStrategyDeskScenarioRunsWorkflow({
+        env,
+        scenarioId: "desk_sol_composite_1",
+      });
+      expect(storedRuns.runs).toHaveLength(0);
     } finally {
       sqlite.close();
     }
