@@ -13,6 +13,7 @@ import {
   parseRuntimeReplayCorpusRecord,
   parseRuntimeResearchReproducibilityBundleRecord,
   parseRuntimeStrategyDeskPromotionHandoff,
+  parseRuntimeStrategyDeskScenarioLeg,
   parseRuntimeStrategyDeskScenarioManifest,
   parseRuntimeStrategyDeskScenarioReport,
   parseRuntimeStrategyDeskScenarioRun,
@@ -64,6 +65,7 @@ describe("worker runtime contract bridge", () => {
       "strategyLabReadinessCanaryRun",
       "strategyLabPostLiveArtifact",
       "strategyDeskScenario",
+      "strategyDeskLeg",
       "strategyDeskRun",
       "strategyDeskReport",
       "strategyDeskPromotionHandoff",
@@ -185,6 +187,11 @@ describe("worker runtime contract bridge", () => {
   });
 
   test("worker can parse the canonical strategy-desk fixtures", () => {
+    const leg = parseRuntimeStrategyDeskScenarioLeg(
+      readJson(
+        "docs/runtime-contracts/fixtures/runtime.strategy_desk_leg.valid.v1.json",
+      ),
+    );
     const scenario = parseRuntimeStrategyDeskScenarioManifest(
       readJson(
         "docs/runtime-contracts/fixtures/runtime.strategy_desk_scenario.valid.v1.json",
@@ -206,6 +213,7 @@ describe("worker runtime contract bridge", () => {
       ),
     );
 
+    expect(leg.legId).toBe("leg_spot_alpha");
     expect(scenario.state).toBe("paper_ready");
     expect(scenario.legs).toHaveLength(4);
     expect(run.runKind).toBe("paper");

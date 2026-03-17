@@ -27,6 +27,7 @@ import {
   parseRuntimeRiskVerdict,
   parseRuntimeRunRecord,
   parseRuntimeStrategyDeskPromotionHandoff,
+  parseRuntimeStrategyDeskScenarioLeg,
   parseRuntimeStrategyDeskScenarioManifest,
   parseRuntimeStrategyDeskScenarioReport,
   parseRuntimeStrategyDeskScenarioRun,
@@ -970,6 +971,29 @@ describe("runtime protocol contracts", () => {
       promotedAt: "2026-03-10T14:00:00Z",
       tags: ["core"],
     });
+    const strategyDeskLeg = parseRuntimeStrategyDeskScenarioLeg({
+      legId: "leg_spot_alpha",
+      label: "Spot alpha",
+      role: "primary_alpha",
+      venueKey: "jupiter",
+      intentFamily: "spot_swap",
+      marketType: "spot",
+      pair: {
+        symbol: "SOL/USDC",
+        baseMint: SOL_MINT,
+        quoteMint: USDC_MINT,
+      },
+      assetKeys: ["SOL", "USDC"],
+      enabledModes: ["shadow", "paper", "live"],
+      sizing: {
+        targetNotionalUsd: "1000",
+        maxNotionalUsd: "2500",
+        reserveUsd: "1000",
+        maxSlippageBps: 50,
+      },
+      thesis: "Primary directional spot leg.",
+      tags: ["alpha", "spot"],
+    });
     const strategyDeskScenario = parseRuntimeStrategyDeskScenarioManifest({
       schemaVersion: "v1",
       scenarioId: "desk_sol_composite_1",
@@ -987,29 +1011,7 @@ describe("runtime protocol contracts", () => {
       reviewedAt: "2026-03-17T03:06:00Z",
       latestReportId: "desk_report_sol_composite_paper_1",
       legs: [
-        {
-          legId: "leg_spot_alpha",
-          label: "Spot alpha",
-          role: "primary_alpha",
-          venueKey: "jupiter",
-          intentFamily: "spot_swap",
-          marketType: "spot",
-          pair: {
-            symbol: "SOL/USDC",
-            baseMint: SOL_MINT,
-            quoteMint: USDC_MINT,
-          },
-          assetKeys: ["SOL", "USDC"],
-          enabledModes: ["shadow", "paper", "live"],
-          sizing: {
-            targetNotionalUsd: "1000",
-            maxNotionalUsd: "2500",
-            reserveUsd: "1000",
-            maxSlippageBps: 50,
-          },
-          thesis: "Primary directional spot leg.",
-          tags: ["alpha", "spot"],
-        },
+        strategyDeskLeg,
         {
           legId: "leg_perp_hedge",
           label: "Perp hedge",
@@ -1341,6 +1343,7 @@ describe("runtime protocol contracts", () => {
     expect(venueCapability.adapterKeys).toContain("jupiter");
     expect(assetRecord.venueMappings[0]?.venueKey).toBe("jupiter");
     expect(strategySpec.pluginKey).toBe("builtin::trend_following");
+    expect(strategyDeskLeg.legId).toBe("leg_spot_alpha");
     expect(strategyDeskScenario.legs).toHaveLength(4);
     expect(strategyDeskScenario.state).toBe("paper_ready");
     expect(strategyDeskRun.runKind).toBe("paper");

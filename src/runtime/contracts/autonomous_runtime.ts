@@ -1533,7 +1533,7 @@ const RuntimeStrategyDeskEvidenceBucketSchema = z
   })
   .strict();
 
-const RuntimeStrategyDeskScenarioLegSchema = z
+export const RuntimeStrategyDeskScenarioLegSchema = z
   .object({
     legId: NON_EMPTY_STRING_SCHEMA,
     label: NON_EMPTY_STRING_SCHEMA,
@@ -1997,6 +1997,9 @@ export type RuntimeStrategyDeskBindingKind = z.infer<
 export type RuntimeStrategyDeskTargetMode = z.infer<
   typeof RuntimeStrategyDeskTargetModeSchema
 >;
+export type RuntimeStrategyDeskScenarioLeg = z.infer<
+  typeof RuntimeStrategyDeskScenarioLegSchema
+>;
 export type RuntimeStrategyDeskScenarioManifest = z.infer<
   typeof RuntimeStrategyDeskScenarioManifestSchema
 >;
@@ -2289,6 +2292,11 @@ export const RUNTIME_PROTOCOL_SCHEMA_REGISTRY = {
       "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_scenario",
     outputFile: "runtime.strategy_desk_scenario.v1.schema.json",
   },
+  strategyDeskLeg: {
+    schema: RuntimeStrategyDeskScenarioLegSchema,
+    schemaId: "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_leg",
+    outputFile: "runtime.strategy_desk_leg.v1.schema.json",
+  },
   strategyDeskRun: {
     schema: RuntimeStrategyDeskScenarioRunSchema,
     schemaId: "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_run",
@@ -2553,6 +2561,12 @@ export function parseRuntimeStrategyDeskScenarioManifest(
   return RuntimeStrategyDeskScenarioManifestSchema.parse(input);
 }
 
+export function parseRuntimeStrategyDeskScenarioLeg(
+  input: unknown,
+): RuntimeStrategyDeskScenarioLeg {
+  return RuntimeStrategyDeskScenarioLegSchema.parse(input);
+}
+
 export function parseRuntimeStrategyDeskScenarioRun(
   input: unknown,
 ): RuntimeStrategyDeskScenarioRun {
@@ -2689,6 +2703,10 @@ export function safeParseRuntimeStrategyLabPostLiveArtifact(input: unknown) {
 
 export function safeParseRuntimeStrategyDeskScenarioManifest(input: unknown) {
   return RuntimeStrategyDeskScenarioManifestSchema.safeParse(input);
+}
+
+export function safeParseRuntimeStrategyDeskScenarioLeg(input: unknown) {
+  return RuntimeStrategyDeskScenarioLegSchema.safeParse(input);
 }
 
 export function safeParseRuntimeStrategyDeskScenarioRun(input: unknown) {

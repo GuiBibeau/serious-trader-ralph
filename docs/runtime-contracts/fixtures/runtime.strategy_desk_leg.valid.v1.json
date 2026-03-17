@@ -1,0 +1,24 @@
+{
+  "legId": "leg_spot_alpha",
+  "label": "Spot alpha",
+  "role": "primary_alpha",
+  "venueKey": "jupiter",
+  "intentFamily": "spot_swap",
+  "marketType": "spot",
+  "pair": {
+    "symbol": "SOL/USDC",
+    "baseMint": "So11111111111111111111111111111111111111112",
+    "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "marketType": "spot"
+  },
+  "assetKeys": ["SOL", "USDC"],
+  "enabledModes": ["shadow", "paper", "live"],
+  "sizing": {
+    "targetNotionalUsd": "1000",
+    "maxNotionalUsd": "2500",
+    "reserveUsd": "1000",
+    "maxSlippageBps": 50
+  },
+  "thesis": "Primary directional spot leg.",
+  "tags": ["alpha", "spot"]
+}
