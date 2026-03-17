@@ -8,73 +8,167 @@ import {
   createWorkerLiveEnv,
 } from "../integration/_worker_live_test_utils";
 
-const executeRuntimeStrategyDeskScenarioWorkflowMock = mock(
+const executeRuntimeStrategyDeskStudyWorkflowMock = mock(
   async (input: {
     scenarioId: string;
-    runKind: "shadow" | "paper";
+    runKind: "replay" | "backtest";
     requestedBy: string;
-    walletAddress: string;
+    variantIds?: string[];
+    windowIds?: string[];
   }) => ({
     scenario: {
       schemaVersion: "v1",
       scenarioId: input.scenarioId,
-      title: "Mock desk scenario",
-      summary: "Mock scenario summary",
+      title: "Mock study scenario",
+      summary: "Mock study summary",
       ownerUserId: "user_1",
       strategyKey: "strategy_desk::mock",
       thesis: "Mock thesis",
-      state: "paper_ready",
+      state: "replay_ready",
       createdAt: "2026-03-17T03:00:00Z",
       updatedAt: "2026-03-17T03:05:00Z",
       legs: [],
       evidence: [],
       implementationReferences: [],
       tags: [],
+      researchMatrix: {
+        selectionMetric: "excess_vs_flat_cash_bps",
+        backtestLegs: [],
+        windows: [],
+        variants: [],
+      },
     },
     run: {
       schemaVersion: "v1",
-      scenarioRunId: "desk_run_mock_1",
+      scenarioRunId: "desk_run_study_mock_1",
       scenarioId: input.scenarioId,
-      scenarioState: "paper_ready",
+      scenarioState: "replay_ready",
       runKind: input.runKind,
       state: "completed",
       requestedBy: input.requestedBy,
       trigger: {
         kind: "operator",
-        source: "strategy_desk_runner",
+        source: "strategy_desk_study",
         observedAt: "2026-03-17T03:06:00Z",
       },
       createdAt: "2026-03-17T03:06:00Z",
       updatedAt: "2026-03-17T03:06:01Z",
+      completedAt: "2026-03-17T03:06:30Z",
       legRuns: [],
     },
     report: {
       schemaVersion: "v1",
-      reportId: "desk_report_mock_1",
+      reportId: "desk_report_study_mock_1",
       scenarioId: input.scenarioId,
-      scenarioRunId: "desk_run_mock_1",
+      scenarioRunId: "desk_run_study_mock_1",
       stage: input.runKind,
       status: "pass",
-      summary: "Mock report",
-      generatedAt: "2026-03-17T03:06:02Z",
+      summary: "Mock study report",
+      generatedAt: "2026-03-17T03:06:30Z",
       legOutcomes: [
         {
           legId: "leg_1",
           status: "pass",
-          evidenceRefs: [
-            {
-              kind: "strategy_desk_leg_receipt",
-              ref: "desk_run_mock_1:leg_1",
-            },
-          ],
+          evidenceRefs: [],
         },
       ],
+      studyMatrix: {
+        matrixId: "matrix_1",
+        runKind: input.runKind,
+        selectionMetric: "excess_vs_flat_cash_bps",
+        generatedAt: "2026-03-17T03:06:30Z",
+        selectedVariantId: "fast",
+        windows: [
+          {
+            windowId: "selection_1",
+            label: "Selection 1",
+            cohort: "selection",
+          },
+        ],
+        variantSummaries: [
+          {
+            variantId: "fast",
+            label: "Fast",
+            parameterManifest: { threshold: "fast" },
+            selectionWindowCount: 1,
+            holdoutWindowCount: 0,
+            selectionMetrics: {
+              observationCount: 2,
+              tradeCount: 1,
+              grossReturnBps: "10.0000",
+              netReturnBps: "8.0000",
+              totalCostBps: "2.0000",
+              winRateBps: 5000,
+              maxDrawdownBps: "5.0000",
+            },
+            selectionBaselineComparisons: [
+              {
+                baseline: "flat_cash",
+                baselineReturnBps: "0.0000",
+                excessReturnBps: "8.0000",
+              },
+            ],
+          },
+        ],
+        cells: [
+          {
+            cellId: "fast:selection_1",
+            variantId: "fast",
+            variantLabel: "Fast",
+            windowId: "selection_1",
+            windowLabel: "Selection 1",
+            cohort: "selection",
+            status: "completed",
+            legResults: [
+              {
+                legId: "leg_1",
+                reportId: "backtest_fast_selection_1_leg_1",
+                reproducibilityBundleId:
+                  "repro_backtest_fast_selection_1_leg_1",
+                status: "completed",
+                metrics: {
+                  observationCount: 2,
+                  tradeCount: 1,
+                  grossReturnBps: "10.0000",
+                  netReturnBps: "8.0000",
+                  totalCostBps: "2.0000",
+                  winRateBps: 5000,
+                  maxDrawdownBps: "5.0000",
+                },
+                baselineComparisons: [
+                  {
+                    baseline: "flat_cash",
+                    baselineReturnBps: "0.0000",
+                    excessReturnBps: "8.0000",
+                  },
+                ],
+              },
+            ],
+            aggregateMetrics: {
+              observationCount: 2,
+              tradeCount: 1,
+              grossReturnBps: "10.0000",
+              netReturnBps: "8.0000",
+              totalCostBps: "2.0000",
+              winRateBps: 5000,
+              maxDrawdownBps: "5.0000",
+            },
+            aggregateBaselineComparisons: [
+              {
+                baseline: "flat_cash",
+                baselineReturnBps: "0.0000",
+                excessReturnBps: "8.0000",
+              },
+            ],
+          },
+        ],
+      },
       evidence: [],
       checks: [
         {
-          checkId: "mock",
+          checkId: "matrix-generated",
           status: "pass",
-          message: "mock",
+          message: "matrix ok",
         },
       ],
       approvals: [],
@@ -82,9 +176,9 @@ const executeRuntimeStrategyDeskScenarioWorkflowMock = mock(
   }),
 );
 
-mock.module("../../apps/worker/src/runtime_strategy_desk_runner", () => ({
-  executeRuntimeStrategyDeskScenarioWorkflow:
-    executeRuntimeStrategyDeskScenarioWorkflowMock,
+mock.module("../../apps/worker/src/runtime_strategy_desk_study", () => ({
+  executeRuntimeStrategyDeskStudyWorkflow:
+    executeRuntimeStrategyDeskStudyWorkflowMock,
 }));
 mock.module("../../apps/worker/src/auth", () => ({
   requireUser: mock(async () => ({
@@ -168,22 +262,21 @@ function createOpsEnv(overrides?: Partial<Env>) {
   return { env, sqlite };
 }
 
-describe("worker runtime strategy desk execute route", () => {
+describe("worker runtime strategy desk study route", () => {
   test("requires admin auth", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
       const response = await worker.fetch(
         new Request(
-          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/execute",
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/study",
           {
             method: "POST",
             headers: {
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              runKind: "paper",
+              runKind: "backtest",
               requestedBy: "operator_1",
-              walletAddress: "11111111111111111111111111111111",
             }),
           },
         ),
@@ -197,12 +290,12 @@ describe("worker runtime strategy desk execute route", () => {
     }
   });
 
-  test("dispatches scenario execution through the runner workflow", async () => {
+  test("dispatches scenario study through the study workflow", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
       const response = await worker.fetch(
         new Request(
-          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/execute",
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/study",
           {
             method: "POST",
             headers: {
@@ -210,13 +303,11 @@ describe("worker runtime strategy desk execute route", () => {
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              runKind: "paper",
+              runKind: "backtest",
               requestedBy: "operator_1",
-              walletAddress: "11111111111111111111111111111111",
-              maxRetriesPerLeg: 1,
-              trigger: {
-                reason: "manual-eval",
-              },
+              variantIds: ["fast"],
+              windowIds: ["selection_1"],
+              selectionMetric: "excess_vs_flat_cash_bps",
             }),
           },
         ),
@@ -228,23 +319,23 @@ describe("worker runtime strategy desk execute route", () => {
       const payload = (await response.json()) as {
         ok: boolean;
         run: { scenarioRunId: string };
-        report: { reportId: string };
+        report: {
+          reportId: string;
+          studyMatrix?: { selectedVariantId?: string };
+        };
       };
       expect(payload.ok).toBe(true);
-      expect(payload.run.scenarioRunId).toBe("desk_run_mock_1");
-      expect(payload.report.reportId).toBe("desk_report_mock_1");
-      expect(
-        executeRuntimeStrategyDeskScenarioWorkflowMock,
-      ).toHaveBeenCalledWith(
+      expect(payload.run.scenarioRunId).toBe("desk_run_study_mock_1");
+      expect(payload.report.reportId).toBe("desk_report_study_mock_1");
+      expect(payload.report.studyMatrix?.selectedVariantId).toBe("fast");
+      expect(executeRuntimeStrategyDeskStudyWorkflowMock).toHaveBeenCalledWith(
         expect.objectContaining({
           scenarioId: "desk_sol_composite_1",
-          runKind: "paper",
+          runKind: "backtest",
           requestedBy: "operator_1",
-          walletAddress: "11111111111111111111111111111111",
-          maxRetriesPerLeg: 1,
-          trigger: {
-            reason: "manual-eval",
-          },
+          variantIds: ["fast"],
+          windowIds: ["selection_1"],
+          selectionMetric: "excess_vs_flat_cash_bps",
         }),
       );
     } finally {

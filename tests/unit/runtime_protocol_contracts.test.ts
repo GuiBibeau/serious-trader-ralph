@@ -1018,6 +1018,77 @@ describe("runtime protocol contracts", () => {
         maxVenueFamilyConcentrationBps: 9000,
         maxDrawdownBps: 750,
       },
+      researchMatrix: {
+        selectionMetric: "excess_vs_flat_cash_bps",
+        backtestLegs: [
+          {
+            legId: "leg_spot_alpha",
+            experimentId: "exp_sol_spot",
+            replayCorpusId: "replay_sol_usdc",
+            venueKey: "jupiter",
+            pairSymbol: "SOL/USDC",
+            marketType: "spot",
+            windowMode: "rolling",
+            trainingWindowObservations: 8,
+            testingWindowObservations: 4,
+            stepObservations: 4,
+            purgeObservations: 1,
+            baselineStrategies: ["flat_cash", "buy_and_hold"],
+          },
+          {
+            legId: "leg_perp_hedge",
+            experimentId: "exp_sol_perp",
+            replayCorpusId: "replay_sol_perp",
+            venueKey: "drift",
+            pairSymbol: "SOL-PERP",
+            marketType: "perp",
+            windowMode: "rolling",
+            trainingWindowObservations: 8,
+            testingWindowObservations: 4,
+            stepObservations: 4,
+            purgeObservations: 1,
+            baselineStrategies: ["flat_cash", "buy_and_hold"],
+          },
+        ],
+        windows: [
+          {
+            windowId: "selection_week_1",
+            label: "Selection week 1",
+            cohort: "selection",
+            windowMode: "rolling",
+            trainingWindowObservations: 8,
+            testingWindowObservations: 4,
+            stepObservations: 4,
+            purgeObservations: 1,
+          },
+          {
+            windowId: "holdout_week_1",
+            label: "Holdout week 1",
+            cohort: "holdout",
+            windowMode: "rolling",
+            trainingWindowObservations: 8,
+            testingWindowObservations: 4,
+            stepObservations: 4,
+            purgeObservations: 1,
+          },
+        ],
+        variants: [
+          {
+            variantId: "fast",
+            label: "Fast",
+            parameterManifest: {
+              threshold: "fast",
+            },
+          },
+          {
+            variantId: "slow",
+            label: "Slow",
+            parameterManifest: {
+              threshold: "slow",
+            },
+          },
+        ],
+      },
       legs: [
         strategyDeskLeg,
         {
@@ -1336,6 +1407,119 @@ describe("runtime protocol contracts", () => {
             "Composite execution completed without fail-closed demotion.",
         },
       ],
+      studyMatrix: {
+        matrixId: "desk_matrix_sol_composite_backtest_1",
+        runKind: "backtest",
+        selectionMetric: "excess_vs_flat_cash_bps",
+        generatedAt: "2026-03-17T03:08:15Z",
+        selectedVariantId: "fast",
+        windows: [
+          {
+            windowId: "selection_week_1",
+            label: "Selection week 1",
+            cohort: "selection",
+          },
+          {
+            windowId: "holdout_week_1",
+            label: "Holdout week 1",
+            cohort: "holdout",
+          },
+        ],
+        variantSummaries: [
+          {
+            variantId: "fast",
+            label: "Fast",
+            parameterManifest: {
+              threshold: "fast",
+            },
+            selectionWindowCount: 1,
+            holdoutWindowCount: 1,
+            selectionMetrics: {
+              observationCount: 8,
+              tradeCount: 5,
+              grossReturnBps: "75.0000",
+              netReturnBps: "60.0000",
+              totalCostBps: "15.0000",
+              winRateBps: 5000,
+              maxDrawdownBps: "45.0000",
+            },
+            selectionBaselineComparisons: [
+              {
+                baseline: "flat_cash",
+                baselineReturnBps: "0.0000",
+                excessReturnBps: "60.0000",
+              },
+            ],
+            holdoutMetrics: {
+              observationCount: 8,
+              tradeCount: 4,
+              grossReturnBps: "18.0000",
+              netReturnBps: "10.0000",
+              totalCostBps: "8.0000",
+              winRateBps: 5000,
+              maxDrawdownBps: "32.0000",
+            },
+            holdoutBaselineComparisons: [
+              {
+                baseline: "flat_cash",
+                baselineReturnBps: "0.0000",
+                excessReturnBps: "10.0000",
+              },
+            ],
+          },
+        ],
+        cells: [
+          {
+            cellId: "fast:selection_week_1",
+            variantId: "fast",
+            variantLabel: "Fast",
+            windowId: "selection_week_1",
+            windowLabel: "Selection week 1",
+            cohort: "selection",
+            status: "completed",
+            legResults: [
+              {
+                legId: "leg_spot_alpha",
+                reportId: "backtest_fast_selection_spot",
+                reproducibilityBundleId: "repro_backtest_fast_selection_spot",
+                status: "completed",
+                metrics: {
+                  observationCount: 4,
+                  tradeCount: 3,
+                  grossReturnBps: "90.0000",
+                  netReturnBps: "70.0000",
+                  totalCostBps: "20.0000",
+                  winRateBps: 5000,
+                  maxDrawdownBps: "45.0000",
+                },
+                baselineComparisons: [
+                  {
+                    baseline: "flat_cash",
+                    baselineReturnBps: "0.0000",
+                    excessReturnBps: "70.0000",
+                  },
+                ],
+              },
+            ],
+            aggregateMetrics: {
+              observationCount: 4,
+              tradeCount: 3,
+              grossReturnBps: "90.0000",
+              netReturnBps: "70.0000",
+              totalCostBps: "20.0000",
+              winRateBps: 5000,
+              maxDrawdownBps: "45.0000",
+            },
+            aggregateBaselineComparisons: [
+              {
+                baseline: "flat_cash",
+                baselineReturnBps: "0.0000",
+                excessReturnBps: "70.0000",
+              },
+            ],
+          },
+        ],
+      },
       evidence: strategyDeskScenario.evidence,
       checks: [
         {
@@ -1538,6 +1722,202 @@ describe("runtime protocol contracts", () => {
     expect(
       RUNTIME_STRATEGY_DESK_PROMOTION_HANDOFF_STATE_TRANSITIONS.archived,
     ).toEqual([]);
+  });
+
+  test("accepts anchored runtime backtest reports", () => {
+    const report = parseRuntimeBacktestReport({
+      schemaVersion: "v1",
+      reportId: "backtest_anchored_report",
+      experimentId: "experiment_anchored",
+      strategyKey: "strategy_desk::sol_composite",
+      status: "completed",
+      generatedAt: "2026-03-17T05:00:00.000Z",
+      venueKeys: ["jupiter"],
+      assetKeys: ["SOL", "USDC"],
+      codeRevision: {
+        vcs: "git",
+        repository: "github.com/GuiBibeau/serious-trader-ralph",
+        revision: "356b539e3ec730663c4025b8f00cd6b47b823d1a",
+        treeDirty: false,
+      },
+      datasetSnapshots: [
+        {
+          datasetId: "dataset_feature_cache_sol_usdc_market_events",
+          snapshotId: "snapshot_2026_03_17_backtest",
+          capturedAt: "2026-03-17T05:00:00.000Z",
+        },
+      ],
+      strategySpecDigest: "sha256:anchored-report",
+      config: {
+        replayCorpusId: "replay_corpus_sol_usdc_feature_cache",
+        venueKey: "jupiter",
+        pairSymbol: "SOL/USDC",
+        marketType: "spot",
+        windowMode: "anchored",
+        trainingWindowObservations: 8,
+        testingWindowObservations: 4,
+        stepObservations: 4,
+        purgeObservations: 1,
+        baselineStrategies: ["flat_cash", "buy_and_hold"],
+      },
+      foldReports: [
+        {
+          foldId: "fold_0",
+          foldIndex: 0,
+          trainingStartAt: "2026-03-10T00:00:00Z",
+          trainingEndAt: "2026-03-16T23:55:00Z",
+          testStartAt: "2026-03-16T23:55:00Z",
+          testEndAt: "2026-03-17T05:00:00Z",
+          trainObservationCount: 8,
+          purgedObservationCount: 1,
+          testObservationCount: 4,
+          metrics: {
+            observationCount: 4,
+            tradeCount: 2,
+            grossReturnBps: "18.0000",
+            netReturnBps: "12.0000",
+            totalCostBps: "6.0000",
+            winRateBps: 5000,
+            maxDrawdownBps: "5.0000",
+          },
+          baselineComparisons: [
+            {
+              baseline: "flat_cash",
+              baselineReturnBps: "0.0000",
+              excessReturnBps: "12.0000",
+            },
+          ],
+          regimeMetrics: [],
+        },
+      ],
+      aggregateMetrics: {
+        observationCount: 4,
+        tradeCount: 2,
+        grossReturnBps: "18.0000",
+        netReturnBps: "12.0000",
+        totalCostBps: "6.0000",
+        winRateBps: 5000,
+        maxDrawdownBps: "5.0000",
+      },
+      aggregateBaselineComparisons: [
+        {
+          baseline: "flat_cash",
+          baselineReturnBps: "0.0000",
+          excessReturnBps: "12.0000",
+        },
+      ],
+      aggregateRegimeMetrics: [],
+      promotionEligible: true,
+      blockingReasons: [],
+      summary: "Anchored study report.",
+      tags: ["anchored"],
+    });
+
+    expect(report.config.windowMode).toBe("anchored");
+  });
+
+  test("rejects duplicate strategy desk research matrix ids", () => {
+    expect(() =>
+      parseRuntimeStrategyDeskScenarioManifest({
+        schemaVersion: "v1",
+        scenarioId: "desk_sol_composite_duplicates",
+        title: "Duplicate matrix ids",
+        summary: "Ensure malformed study matrices fail closed.",
+        ownerUserId: "user_1",
+        strategyKey: "strategy_desk::sol_composite",
+        thesis: "Duplicate ids should never be accepted.",
+        state: "replay_ready",
+        createdAt: "2026-03-17T03:00:00Z",
+        updatedAt: "2026-03-17T03:05:00Z",
+        researchMatrix: {
+          selectionMetric: "excess_vs_flat_cash_bps",
+          backtestLegs: [
+            {
+              legId: "leg_spot_alpha",
+              experimentId: "exp_sol_spot",
+              replayCorpusId: "replay_sol_usdc",
+              venueKey: "jupiter",
+              pairSymbol: "SOL/USDC",
+              marketType: "spot",
+              windowMode: "rolling",
+              trainingWindowObservations: 8,
+              testingWindowObservations: 4,
+              stepObservations: 4,
+              purgeObservations: 1,
+              baselineStrategies: ["flat_cash", "buy_and_hold"],
+            },
+            {
+              legId: "leg_spot_alpha",
+              experimentId: "exp_sol_spot_alt",
+              replayCorpusId: "replay_sol_usdc",
+              venueKey: "jupiter",
+              pairSymbol: "SOL/USDC",
+              marketType: "spot",
+              windowMode: "rolling",
+              trainingWindowObservations: 8,
+              testingWindowObservations: 4,
+              stepObservations: 4,
+              purgeObservations: 1,
+              baselineStrategies: ["flat_cash", "buy_and_hold"],
+            },
+          ],
+          windows: [
+            {
+              windowId: "selection_week_1",
+              label: "Selection week 1",
+              cohort: "selection",
+              windowMode: "rolling",
+              trainingWindowObservations: 8,
+              testingWindowObservations: 4,
+              stepObservations: 4,
+              purgeObservations: 1,
+            },
+          ],
+          variants: [
+            {
+              variantId: "fast",
+              label: "Fast",
+              parameterManifest: {
+                threshold: "fast",
+              },
+            },
+            {
+              variantId: "fast",
+              label: "Fast duplicate",
+              parameterManifest: {
+                threshold: "slow",
+              },
+            },
+          ],
+        },
+        legs: [
+          {
+            legId: "leg_spot_alpha",
+            label: "Spot alpha",
+            role: "primary_alpha",
+            venueKey: "jupiter",
+            intentFamily: "spot_swap",
+            marketType: "spot",
+            pair: {
+              symbol: "SOL/USDC",
+              baseMint: SOL_MINT,
+              quoteMint: USDC_MINT,
+            },
+            assetKeys: ["SOL", "USDC"],
+            enabledModes: ["shadow", "paper"],
+            sizing: {
+              targetNotionalUsd: "1000",
+              maxNotionalUsd: "2500",
+              reserveUsd: "1000",
+              maxSlippageBps: 50,
+            },
+          },
+        ],
+        evidence: [],
+        implementationReferences: [],
+        tags: ["strategy-desk"],
+      }),
+    ).toThrow("duplicate-backtestLegs-legId:leg_spot_alpha");
   });
 
   test("generates deterministic JSON schema documents", () => {

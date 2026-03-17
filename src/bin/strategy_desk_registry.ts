@@ -7,7 +7,7 @@ import {
 } from "../runtime/contracts/autonomous_runtime.js";
 
 type Resource = "scenario" | "run" | "report";
-type Action = "upsert" | "list" | "execute";
+type Action = "upsert" | "list" | "execute" | "study";
 
 function readArg(flag: string): string | null {
   const index = process.argv.indexOf(flag);
@@ -29,7 +29,12 @@ function resolveResource(): Resource {
 
 function resolveAction(): Action {
   const raw = readArg("--action") ?? "upsert";
-  if (raw === "upsert" || raw === "list" || raw === "execute") {
+  if (
+    raw === "upsert" ||
+    raw === "list" ||
+    raw === "execute" ||
+    raw === "study"
+  ) {
     return raw;
   }
   throw new Error("invalid-arg:--action");
@@ -59,6 +64,25 @@ function endpointFor(input: {
       scenarioId,
     )}/execute`;
   }
+  if (input.action === "study") {
+    if (input.resource !== "scenario") {
+      throw new Error("strategy-desk-study-scenario-resource-required");
+    }
+    const scenarioId =
+      typeof input.requestPayload === "object" &&
+      input.requestPayload &&
+      !Array.isArray(input.requestPayload)
+        ? String(
+            (input.requestPayload as Record<string, unknown>).scenarioId ?? "",
+          ).trim()
+        : "";
+    if (!scenarioId) {
+      throw new Error("strategy-desk-study-scenario-id-required");
+    }
+    return `/api/admin/ops/runtime/strategy-desk/scenarios/${encodeURIComponent(
+      scenarioId,
+    )}/study`;
+  }
   const resource = input.resource;
   switch (resource) {
     case "scenario":
@@ -84,6 +108,17 @@ function buildUpsertBody(resource: Resource, payload: unknown): unknown {
 function buildExecuteBody(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("strategy-desk-execute-invalid-body");
+  }
+  const { scenarioId: _scenarioId, ...rest } = payload as Record<
+    string,
+    unknown
+  >;
+  return rest;
+}
+
+function buildStudyBody(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("strategy-desk-study-invalid-body");
   }
   const { scenarioId: _scenarioId, ...rest } = payload as Record<
     string,
@@ -127,7 +162,10 @@ async function main(): Promise<void> {
   const requestPayload = requestFile
     ? readJsonFile(resolve(requestFile))
     : null;
-  if ((action === "upsert" || action === "execute") && !requestPayload) {
+  if (
+    (action === "upsert" || action === "execute" || action === "study") &&
+    !requestPayload
+  ) {
     throw new Error("missing-arg:--request-file");
   }
 
@@ -156,7 +194,11 @@ async function main(): Promise<void> {
           ? {
               body: JSON.stringify(buildExecuteBody(requestPayload as unknown)),
             }
-          : {}),
+          : action === "study"
+            ? {
+                body: JSON.stringify(buildStudyBody(requestPayload as unknown)),
+              }
+            : {}),
     },
   );
 

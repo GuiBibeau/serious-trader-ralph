@@ -20,6 +20,77 @@
     "maxVenueFamilyConcentrationBps": 9000,
     "maxDrawdownBps": 750
   },
+  "researchMatrix": {
+    "selectionMetric": "excess_vs_flat_cash_bps",
+    "backtestLegs": [
+      {
+        "legId": "leg_spot_alpha",
+        "experimentId": "exp_sol_spot",
+        "replayCorpusId": "replay_sol_usdc",
+        "venueKey": "jupiter",
+        "pairSymbol": "SOL/USDC",
+        "marketType": "spot",
+        "windowMode": "rolling",
+        "trainingWindowObservations": 8,
+        "testingWindowObservations": 4,
+        "stepObservations": 4,
+        "purgeObservations": 1,
+        "baselineStrategies": ["flat_cash", "buy_and_hold"]
+      },
+      {
+        "legId": "leg_perp_hedge",
+        "experimentId": "exp_sol_perp",
+        "replayCorpusId": "replay_sol_perp",
+        "venueKey": "drift",
+        "pairSymbol": "SOL-PERP",
+        "marketType": "perp",
+        "windowMode": "rolling",
+        "trainingWindowObservations": 8,
+        "testingWindowObservations": 4,
+        "stepObservations": 4,
+        "purgeObservations": 1,
+        "baselineStrategies": ["flat_cash", "buy_and_hold"]
+      }
+    ],
+    "windows": [
+      {
+        "windowId": "selection_week_1",
+        "label": "Selection week 1",
+        "cohort": "selection",
+        "windowMode": "rolling",
+        "trainingWindowObservations": 8,
+        "testingWindowObservations": 4,
+        "stepObservations": 4,
+        "purgeObservations": 1
+      },
+      {
+        "windowId": "holdout_week_1",
+        "label": "Holdout week 1",
+        "cohort": "holdout",
+        "windowMode": "rolling",
+        "trainingWindowObservations": 8,
+        "testingWindowObservations": 4,
+        "stepObservations": 4,
+        "purgeObservations": 1
+      }
+    ],
+    "variants": [
+      {
+        "variantId": "fast",
+        "label": "Fast",
+        "parameterManifest": {
+          "threshold": "fast"
+        }
+      },
+      {
+        "variantId": "slow",
+        "label": "Slow",
+        "parameterManifest": {
+          "threshold": "slow"
+        }
+      }
+    ]
+  },
   "legs": [
     {
       "legId": "leg_spot_alpha",

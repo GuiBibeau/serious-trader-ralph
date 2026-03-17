@@ -19,6 +19,27 @@ const NUMERIC_STRING_SCHEMA = z
   .regex(/^-?\d+(?:\.\d+)?$/, "invalid-numeric-string");
 const BPS_SCHEMA = z.number().int().min(0).max(10_000);
 
+function addDuplicateIdIssues<
+  TEntry extends Record<string, unknown>,
+  TKey extends keyof TEntry & string,
+>(ctx: z.RefinementCtx, entries: TEntry[], collectionKey: string, idKey: TKey) {
+  const seen = new Map<string, number>();
+  for (const [index, entry] of entries.entries()) {
+    const value = entry[idKey];
+    if (typeof value !== "string" || value.length === 0) continue;
+    const firstIndex = seen.get(value);
+    if (typeof firstIndex === "number") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `duplicate-${collectionKey}-${idKey}:${value}`,
+        path: [collectionKey, index, idKey],
+      });
+      continue;
+    }
+    seen.set(value, index);
+  }
+}
+
 const VersionedSchema = z
   .object({
     schemaVersion: z.literal(RUNTIME_PROTOCOL_SCHEMA_VERSION),
@@ -298,7 +319,11 @@ export const RuntimeBacktestStatusSchema = z.enum([
   "failed",
 ]);
 
-export const RuntimeBacktestWindowModeSchema = z.enum(["rolling", "expanding"]);
+export const RuntimeBacktestWindowModeSchema = z.enum([
+  "rolling",
+  "expanding",
+  "anchored",
+]);
 
 export const RuntimeBacktestBaselineSchema = z.enum([
   "flat_cash",
@@ -1569,6 +1594,98 @@ const RuntimeStrategyDeskRiskLimitsSchema = z
   })
   .strict();
 
+const RuntimeStrategyDeskStudySelectionMetricSchema = z.enum([
+  "net_return_bps",
+  "excess_vs_flat_cash_bps",
+]);
+
+const RuntimeStrategyDeskStudyCohortSchema = z.enum(["selection", "holdout"]);
+
+const RuntimeStrategyDeskBacktestLegConfigSchema = z
+  .object({
+    legId: NON_EMPTY_STRING_SCHEMA,
+    experimentId: NON_EMPTY_STRING_SCHEMA,
+    replayCorpusId: NON_EMPTY_STRING_SCHEMA,
+    venueKey: NON_EMPTY_STRING_SCHEMA,
+    pairSymbol: NON_EMPTY_STRING_SCHEMA,
+    marketType: RuntimeVenueMarketTypeSchema,
+    windowMode: z.enum(["rolling", "anchored"]).optional(),
+    trainingWindowObservations: z.number().int().positive().optional(),
+    testingWindowObservations: z.number().int().positive().optional(),
+    stepObservations: z.number().int().positive().optional(),
+    purgeObservations: z.number().int().nonnegative().optional(),
+    baselineStrategies: z
+      .array(RuntimeBacktestBaselineSchema)
+      .min(1)
+      .optional(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskStudyWindowSchema = z
+  .object({
+    windowId: NON_EMPTY_STRING_SCHEMA,
+    label: NON_EMPTY_STRING_SCHEMA,
+    cohort: RuntimeStrategyDeskStudyCohortSchema,
+    windowMode: z.enum(["rolling", "anchored"]),
+    trainingWindowObservations: z.number().int().positive(),
+    testingWindowObservations: z.number().int().positive(),
+    stepObservations: z.number().int().positive(),
+    purgeObservations: z.number().int().nonnegative(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskStudyVariantLegOverrideSchema = z
+  .object({
+    legId: NON_EMPTY_STRING_SCHEMA,
+    experimentId: NON_EMPTY_STRING_SCHEMA.optional(),
+    replayCorpusId: NON_EMPTY_STRING_SCHEMA.optional(),
+    venueKey: NON_EMPTY_STRING_SCHEMA.optional(),
+    pairSymbol: NON_EMPTY_STRING_SCHEMA.optional(),
+    marketType: RuntimeVenueMarketTypeSchema.optional(),
+    windowMode: z.enum(["rolling", "anchored"]).optional(),
+    trainingWindowObservations: z.number().int().positive().optional(),
+    testingWindowObservations: z.number().int().positive().optional(),
+    stepObservations: z.number().int().positive().optional(),
+    purgeObservations: z.number().int().nonnegative().optional(),
+    baselineStrategies: z
+      .array(RuntimeBacktestBaselineSchema)
+      .min(1)
+      .optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskStudyVariantSchema = z
+  .object({
+    variantId: NON_EMPTY_STRING_SCHEMA,
+    label: NON_EMPTY_STRING_SCHEMA,
+    parameterManifest: z.record(z.string(), z.unknown()),
+    legOverrides: z
+      .array(RuntimeStrategyDeskStudyVariantLegOverrideSchema)
+      .max(16)
+      .optional(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskResearchMatrixSchema = z
+  .object({
+    selectionMetric: RuntimeStrategyDeskStudySelectionMetricSchema.optional(),
+    backtestLegs: z
+      .array(RuntimeStrategyDeskBacktestLegConfigSchema)
+      .min(1)
+      .max(16),
+    windows: z.array(RuntimeStrategyDeskStudyWindowSchema).min(1).max(16),
+    variants: z.array(RuntimeStrategyDeskStudyVariantSchema).min(1).max(16),
+  })
+  .superRefine((value, ctx) => {
+    addDuplicateIdIssues(ctx, value.backtestLegs, "backtestLegs", "legId");
+    addDuplicateIdIssues(ctx, value.windows, "windows", "windowId");
+    addDuplicateIdIssues(ctx, value.variants, "variants", "variantId");
+  })
+  .strict();
+
 export const RuntimeStrategyDeskScenarioLegSchema = z
   .object({
     legId: NON_EMPTY_STRING_SCHEMA,
@@ -1605,6 +1722,7 @@ export const RuntimeStrategyDeskScenarioManifestSchema = VersionedSchema.extend(
     activeHandoffId: NON_EMPTY_STRING_SCHEMA.optional(),
     latestReportId: NON_EMPTY_STRING_SCHEMA.optional(),
     riskLimits: RuntimeStrategyDeskRiskLimitsSchema.optional(),
+    researchMatrix: RuntimeStrategyDeskResearchMatrixSchema.optional(),
     legs: z.array(RuntimeStrategyDeskScenarioLegSchema).min(1).max(16),
     evidence: z.array(RuntimeStrategyDeskEvidenceBucketSchema).max(8),
     implementationReferences: z
@@ -1746,6 +1864,81 @@ const RuntimeStrategyDeskScenarioScorecardSchema = z
   })
   .strict();
 
+const RuntimeStrategyDeskStudyLegResultSchema = z
+  .object({
+    legId: NON_EMPTY_STRING_SCHEMA,
+    reportId: NON_EMPTY_STRING_SCHEMA,
+    reproducibilityBundleId: NON_EMPTY_STRING_SCHEMA,
+    status: RuntimeBacktestStatusSchema,
+    metrics: RuntimeBacktestMetricsSchema,
+    baselineComparisons: z
+      .array(RuntimeBacktestBaselineComparisonSchema)
+      .optional(),
+    blockingReasons: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskStudyMatrixWindowSchema = z
+  .object({
+    windowId: NON_EMPTY_STRING_SCHEMA,
+    label: NON_EMPTY_STRING_SCHEMA,
+    cohort: RuntimeStrategyDeskStudyCohortSchema,
+  })
+  .strict();
+
+const RuntimeStrategyDeskStudyMatrixCellSchema = z
+  .object({
+    cellId: NON_EMPTY_STRING_SCHEMA,
+    variantId: NON_EMPTY_STRING_SCHEMA,
+    variantLabel: NON_EMPTY_STRING_SCHEMA,
+    windowId: NON_EMPTY_STRING_SCHEMA,
+    windowLabel: NON_EMPTY_STRING_SCHEMA,
+    cohort: RuntimeStrategyDeskStudyCohortSchema,
+    status: RuntimeBacktestStatusSchema,
+    legResults: z.array(RuntimeStrategyDeskStudyLegResultSchema).min(1).max(16),
+    aggregateMetrics: RuntimeBacktestMetricsSchema,
+    aggregateBaselineComparisons: z
+      .array(RuntimeBacktestBaselineComparisonSchema)
+      .optional(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskStudyVariantSummarySchema = z
+  .object({
+    variantId: NON_EMPTY_STRING_SCHEMA,
+    label: NON_EMPTY_STRING_SCHEMA,
+    parameterManifest: z.record(z.string(), z.unknown()),
+    selectionWindowCount: z.number().int().nonnegative(),
+    holdoutWindowCount: z.number().int().nonnegative(),
+    selectionMetrics: RuntimeBacktestMetricsSchema.optional(),
+    selectionBaselineComparisons: z
+      .array(RuntimeBacktestBaselineComparisonSchema)
+      .optional(),
+    holdoutMetrics: RuntimeBacktestMetricsSchema.optional(),
+    holdoutBaselineComparisons: z
+      .array(RuntimeBacktestBaselineComparisonSchema)
+      .optional(),
+    notes: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskStudyMatrixSchema = z
+  .object({
+    matrixId: NON_EMPTY_STRING_SCHEMA,
+    runKind: z.enum(["replay", "backtest"]),
+    selectionMetric: RuntimeStrategyDeskStudySelectionMetricSchema,
+    generatedAt: ISO_DATETIME_SCHEMA,
+    selectedVariantId: NON_EMPTY_STRING_SCHEMA.optional(),
+    windows: z.array(RuntimeStrategyDeskStudyMatrixWindowSchema).min(1).max(16),
+    variantSummaries: z
+      .array(RuntimeStrategyDeskStudyVariantSummarySchema)
+      .min(1)
+      .max(16),
+    cells: z.array(RuntimeStrategyDeskStudyMatrixCellSchema).min(1).max(256),
+  })
+  .strict();
+
 export const RuntimeStrategyDeskScenarioReportSchema = VersionedSchema.extend({
   reportId: NON_EMPTY_STRING_SCHEMA,
   scenarioId: NON_EMPTY_STRING_SCHEMA,
@@ -1761,6 +1954,7 @@ export const RuntimeStrategyDeskScenarioReportSchema = VersionedSchema.extend({
     .array(RuntimeStrategyDeskRiskOverlaySchema)
     .max(16)
     .optional(),
+  studyMatrix: RuntimeStrategyDeskStudyMatrixSchema.optional(),
   evidence: z.array(RuntimeStrategyDeskEvidenceBucketSchema).max(8),
   checks: z.array(RuntimeStrategyLabCheckSchema).min(1),
   approvals: z.array(RuntimeResearchHumanApprovalRecordSchema).max(16),

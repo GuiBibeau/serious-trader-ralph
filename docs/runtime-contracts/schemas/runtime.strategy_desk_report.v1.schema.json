@@ -408,6 +408,505 @@
         "additionalProperties": false
       }
     },
+    "studyMatrix": {
+      "type": "object",
+      "properties": {
+        "matrixId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runKind": {
+          "type": "string",
+          "enum": ["replay", "backtest"]
+        },
+        "selectionMetric": {
+          "type": "string",
+          "enum": ["net_return_bps", "excess_vs_flat_cash_bps"]
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "selectedVariantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "windows": {
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "windowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cohort": {
+                "type": "string",
+                "enum": ["selection", "holdout"]
+              }
+            },
+            "required": ["windowId", "label", "cohort"],
+            "additionalProperties": false
+          }
+        },
+        "variantSummaries": {
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "variantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "parameterManifest": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "selectionWindowCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "holdoutWindowCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "selectionMetrics": {
+                "type": "object",
+                "properties": {
+                  "observationCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "tradeCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "grossReturnBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "netReturnBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "totalCostBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "winRateBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "maxDrawdownBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  }
+                },
+                "required": [
+                  "observationCount",
+                  "tradeCount",
+                  "grossReturnBps",
+                  "netReturnBps",
+                  "totalCostBps",
+                  "winRateBps",
+                  "maxDrawdownBps"
+                ],
+                "additionalProperties": false
+              },
+              "selectionBaselineComparisons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "baseline": {
+                      "type": "string",
+                      "enum": ["flat_cash", "buy_and_hold"]
+                    },
+                    "baselineReturnBps": {
+                      "type": "string",
+                      "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                    },
+                    "excessReturnBps": {
+                      "type": "string",
+                      "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                    }
+                  },
+                  "required": [
+                    "baseline",
+                    "baselineReturnBps",
+                    "excessReturnBps"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "holdoutMetrics": {
+                "type": "object",
+                "properties": {
+                  "observationCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "tradeCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "grossReturnBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "netReturnBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "totalCostBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "winRateBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "maxDrawdownBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  }
+                },
+                "required": [
+                  "observationCount",
+                  "tradeCount",
+                  "grossReturnBps",
+                  "netReturnBps",
+                  "totalCostBps",
+                  "winRateBps",
+                  "maxDrawdownBps"
+                ],
+                "additionalProperties": false
+              },
+              "holdoutBaselineComparisons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "baseline": {
+                      "type": "string",
+                      "enum": ["flat_cash", "buy_and_hold"]
+                    },
+                    "baselineReturnBps": {
+                      "type": "string",
+                      "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                    },
+                    "excessReturnBps": {
+                      "type": "string",
+                      "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                    }
+                  },
+                  "required": [
+                    "baseline",
+                    "baselineReturnBps",
+                    "excessReturnBps"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "notes": {
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "variantId",
+              "label",
+              "parameterManifest",
+              "selectionWindowCount",
+              "holdoutWindowCount"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "cells": {
+          "minItems": 1,
+          "maxItems": 256,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "cellId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "variantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "variantLabel": {
+                "type": "string",
+                "minLength": 1
+              },
+              "windowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "windowLabel": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cohort": {
+                "type": "string",
+                "enum": ["selection", "holdout"]
+              },
+              "status": {
+                "type": "string",
+                "enum": ["completed", "blocked", "failed"]
+              },
+              "legResults": {
+                "minItems": 1,
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "legId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reportId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reproducibilityBundleId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["completed", "blocked", "failed"]
+                    },
+                    "metrics": {
+                      "type": "object",
+                      "properties": {
+                        "observationCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "tradeCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "grossReturnBps": {
+                          "type": "string",
+                          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                        },
+                        "netReturnBps": {
+                          "type": "string",
+                          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                        },
+                        "totalCostBps": {
+                          "type": "string",
+                          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                        },
+                        "winRateBps": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 10000
+                        },
+                        "maxDrawdownBps": {
+                          "type": "string",
+                          "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                        }
+                      },
+                      "required": [
+                        "observationCount",
+                        "tradeCount",
+                        "grossReturnBps",
+                        "netReturnBps",
+                        "totalCostBps",
+                        "winRateBps",
+                        "maxDrawdownBps"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "baselineComparisons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "baseline": {
+                            "type": "string",
+                            "enum": ["flat_cash", "buy_and_hold"]
+                          },
+                          "baselineReturnBps": {
+                            "type": "string",
+                            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                          },
+                          "excessReturnBps": {
+                            "type": "string",
+                            "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                          }
+                        },
+                        "required": [
+                          "baseline",
+                          "baselineReturnBps",
+                          "excessReturnBps"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "blockingReasons": {
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "required": [
+                    "legId",
+                    "reportId",
+                    "reproducibilityBundleId",
+                    "status",
+                    "metrics"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "aggregateMetrics": {
+                "type": "object",
+                "properties": {
+                  "observationCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "tradeCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "grossReturnBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "netReturnBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "totalCostBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  },
+                  "winRateBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "maxDrawdownBps": {
+                    "type": "string",
+                    "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                  }
+                },
+                "required": [
+                  "observationCount",
+                  "tradeCount",
+                  "grossReturnBps",
+                  "netReturnBps",
+                  "totalCostBps",
+                  "winRateBps",
+                  "maxDrawdownBps"
+                ],
+                "additionalProperties": false
+              },
+              "aggregateBaselineComparisons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "baseline": {
+                      "type": "string",
+                      "enum": ["flat_cash", "buy_and_hold"]
+                    },
+                    "baselineReturnBps": {
+                      "type": "string",
+                      "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                    },
+                    "excessReturnBps": {
+                      "type": "string",
+                      "pattern": "^-?\\d+(?:\\.\\d+)?$"
+                    }
+                  },
+                  "required": [
+                    "baseline",
+                    "baselineReturnBps",
+                    "excessReturnBps"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "notes": {
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "cellId",
+              "variantId",
+              "variantLabel",
+              "windowId",
+              "windowLabel",
+              "cohort",
+              "status",
+              "legResults",
+              "aggregateMetrics"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "matrixId",
+        "runKind",
+        "selectionMetric",
+        "generatedAt",
+        "windows",
+        "variantSummaries",
+        "cells"
+      ],
+      "additionalProperties": false
+    },
     "evidence": {
       "maxItems": 8,
       "type": "array",

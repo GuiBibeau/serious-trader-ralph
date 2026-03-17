@@ -157,6 +157,119 @@
       "message": "Composite execution completed without fail-closed demotion."
     }
   ],
+  "studyMatrix": {
+    "matrixId": "desk_matrix_sol_composite_backtest_1",
+    "runKind": "backtest",
+    "selectionMetric": "excess_vs_flat_cash_bps",
+    "generatedAt": "2026-03-17T03:08:15Z",
+    "selectedVariantId": "fast",
+    "windows": [
+      {
+        "windowId": "selection_week_1",
+        "label": "Selection week 1",
+        "cohort": "selection"
+      },
+      {
+        "windowId": "holdout_week_1",
+        "label": "Holdout week 1",
+        "cohort": "holdout"
+      }
+    ],
+    "variantSummaries": [
+      {
+        "variantId": "fast",
+        "label": "Fast",
+        "parameterManifest": {
+          "threshold": "fast"
+        },
+        "selectionWindowCount": 1,
+        "holdoutWindowCount": 1,
+        "selectionMetrics": {
+          "observationCount": 8,
+          "tradeCount": 5,
+          "grossReturnBps": "75.0000",
+          "netReturnBps": "60.0000",
+          "totalCostBps": "15.0000",
+          "winRateBps": 5000,
+          "maxDrawdownBps": "45.0000"
+        },
+        "selectionBaselineComparisons": [
+          {
+            "baseline": "flat_cash",
+            "baselineReturnBps": "0.0000",
+            "excessReturnBps": "60.0000"
+          }
+        ],
+        "holdoutMetrics": {
+          "observationCount": 8,
+          "tradeCount": 4,
+          "grossReturnBps": "18.0000",
+          "netReturnBps": "10.0000",
+          "totalCostBps": "8.0000",
+          "winRateBps": 5000,
+          "maxDrawdownBps": "32.0000"
+        },
+        "holdoutBaselineComparisons": [
+          {
+            "baseline": "flat_cash",
+            "baselineReturnBps": "0.0000",
+            "excessReturnBps": "10.0000"
+          }
+        ]
+      }
+    ],
+    "cells": [
+      {
+        "cellId": "fast:selection_week_1",
+        "variantId": "fast",
+        "variantLabel": "Fast",
+        "windowId": "selection_week_1",
+        "windowLabel": "Selection week 1",
+        "cohort": "selection",
+        "status": "completed",
+        "legResults": [
+          {
+            "legId": "leg_spot_alpha",
+            "reportId": "backtest_fast_selection_spot",
+            "reproducibilityBundleId": "repro_backtest_fast_selection_spot",
+            "status": "completed",
+            "metrics": {
+              "observationCount": 4,
+              "tradeCount": 3,
+              "grossReturnBps": "90.0000",
+              "netReturnBps": "70.0000",
+              "totalCostBps": "20.0000",
+              "winRateBps": 5000,
+              "maxDrawdownBps": "45.0000"
+            },
+            "baselineComparisons": [
+              {
+                "baseline": "flat_cash",
+                "baselineReturnBps": "0.0000",
+                "excessReturnBps": "70.0000"
+              }
+            ]
+          }
+        ],
+        "aggregateMetrics": {
+          "observationCount": 4,
+          "tradeCount": 3,
+          "grossReturnBps": "90.0000",
+          "netReturnBps": "70.0000",
+          "totalCostBps": "20.0000",
+          "winRateBps": 5000,
+          "maxDrawdownBps": "45.0000"
+        },
+        "aggregateBaselineComparisons": [
+          {
+            "baseline": "flat_cash",
+            "baselineReturnBps": "0.0000",
+            "excessReturnBps": "70.0000"
+          }
+        ]
+      }
+    ]
+  },
   "evidence": [
     {
       "stage": "backtest",
