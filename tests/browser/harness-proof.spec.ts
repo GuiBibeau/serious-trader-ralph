@@ -382,3 +382,43 @@ test("runtime operator proof shows deployment detail and control affordances", a
   ).toBeVisible();
   await captureCheckpoint(page, "runtime-operator-paused.png");
 });
+
+test("strategy desk proof covers author, run, inspect, and compare flows", async ({
+  page,
+}) => {
+  await page.goto("/proof/strategy-desk");
+
+  await expect(page.getByTestId("strategy-desk-proof-page")).toBeVisible();
+  await expect(page.getByTestId("strategy-desk-page")).toBeVisible();
+  await expect(page.getByTestId("strategy-desk-scenario-list")).toContainText(
+    "SOL composite desk scenario",
+  );
+  await captureCheckpoint(page, "strategy-desk-home.png");
+
+  await page
+    .getByTestId("strategy-desk-title-input")
+    .fill("SOL composite desk scenario proof");
+  await page.getByTestId("strategy-desk-save-scenario").click();
+  await expect(page.getByTestId("strategy-desk-scenario-list")).toContainText(
+    "SOL composite desk scenario proof",
+  );
+  await captureCheckpoint(page, "strategy-desk-author.png");
+
+  await page.getByTestId("strategy-desk-run-backtest").click();
+  await expect(page.getByTestId("strategy-desk-variant-table")).toContainText(
+    "Fast",
+  );
+  await expect(page.getByTestId("strategy-desk-run-history")).toContainText(
+    "backtest",
+  );
+  await captureCheckpoint(page, "strategy-desk-backtest.png");
+
+  await page.getByTestId("strategy-desk-run-paper").click();
+  await expect(page.getByTestId("strategy-desk-report-summary")).toContainText(
+    "requires human approval",
+  );
+  await expect(page.getByTestId("strategy-desk-leg-outcomes")).toContainText(
+    "leg_spot_alpha",
+  );
+  await captureCheckpoint(page, "strategy-desk-paper.png");
+});
