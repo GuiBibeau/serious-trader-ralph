@@ -6,6 +6,32 @@ import {
   parseRuntimeStrategyLabPromotionEvent,
   parseRuntimeStrategyLabPromotionRecord,
 } from "../../../src/runtime/contracts/autonomous_runtime.js";
+import type {
+  RuntimeStrategyDeskPromotionHandoff,
+  RuntimeStrategyDeskScenarioLeg,
+  RuntimeStrategyDeskScenarioManifest,
+} from "./runtime_contracts";
+import {
+  applyRuntimeDeploymentControl,
+  upsertRuntimeDeployment,
+} from "./runtime_internal";
+import {
+  getRuntimeStrategyDeskScenarioReportWorkflow,
+  getRuntimeStrategyDeskScenarioWorkflow,
+} from "./runtime_strategy_desk";
+import {
+  appendStrategyDeskPromotionHandoffEvent,
+  getStrategyDeskExecutionRecipeForBinding,
+  getStrategyDeskPromotionHandoff,
+  listStrategyDeskExecutionRecipes,
+  listStrategyDeskPromotionHandoffEvents,
+  listStrategyDeskPromotionHandoffs,
+  type StrategyDeskExecutionRecipeRecord,
+  type StrategyDeskPromotionHandoffEvent,
+  writeStrategyDeskExecutionRecipe,
+  writeStrategyDeskPromotionHandoff,
+} from "./strategy_desk_handoff_repository";
+import { updateStrategyDeskScenarioReviewState } from "./strategy_desk_repository";
 import {
   appendStrategyLabPromotionEvent,
   writeStrategyLabPromotion,
@@ -14,34 +40,6 @@ import {
   getStrategyLabSubjectControl,
   writeStrategyLabSubjectControl,
 } from "./strategy_lab_readiness_repository";
-import {
-  applyRuntimeDeploymentControl,
-  upsertRuntimeDeployment,
-} from "./runtime_internal";
-import type {
-  RuntimeStrategyDeskPromotionHandoff,
-  RuntimeStrategyDeskScenarioLeg,
-  RuntimeStrategyDeskScenarioManifest,
-} from "./runtime_contracts";
-import {
-  getRuntimeStrategyDeskScenarioReportWorkflow,
-  getRuntimeStrategyDeskScenarioWorkflow,
-} from "./runtime_strategy_desk";
-import {
-  StrategyDeskExecutionRecipeRecord,
-  StrategyDeskPromotionHandoffEvent,
-  appendStrategyDeskPromotionHandoffEvent,
-  getStrategyDeskExecutionRecipeForBinding,
-  getStrategyDeskPromotionHandoff,
-  listStrategyDeskExecutionRecipes,
-  listStrategyDeskPromotionHandoffEvents,
-  listStrategyDeskPromotionHandoffs,
-  writeStrategyDeskExecutionRecipe,
-  writeStrategyDeskPromotionHandoff,
-} from "./strategy_desk_handoff_repository";
-import {
-  updateStrategyDeskScenarioReviewState,
-} from "./strategy_desk_repository";
 import type { Env } from "./types";
 
 type StrategyDeskPrepareTargetMode = "limited_live";
@@ -123,7 +121,10 @@ function summarizeLabels(labels: string[]): string {
 }
 
 function legAllowsLimitedLive(leg: RuntimeStrategyDeskScenarioLeg): boolean {
-  return leg.enabledModes.includes("live") || leg.enabledModes.includes("limited_live");
+  return (
+    leg.enabledModes.includes("live") ||
+    leg.enabledModes.includes("limited_live")
+  );
 }
 
 function buildBindingForLeg(
@@ -131,7 +132,11 @@ function buildBindingForLeg(
   leg: RuntimeStrategyDeskScenarioLeg,
   targetMode: StrategyDeskPrepareTargetMode,
 ): StrategyDeskPromotionBinding {
-  if (legAllowsLimitedLive(leg) && leg.intentFamily === "spot_swap" && leg.pair) {
+  if (
+    legAllowsLimitedLive(leg) &&
+    leg.intentFamily === "spot_swap" &&
+    leg.pair
+  ) {
     return {
       bindingId: `binding_${leg.legId}_runtime`,
       bindingKind: "runtime_deployment",
@@ -145,7 +150,10 @@ function buildBindingForLeg(
     };
   }
 
-  if (leg.intentFamily === "prediction_order" || leg.marketType === "prediction") {
+  if (
+    leg.intentFamily === "prediction_order" ||
+    leg.marketType === "prediction"
+  ) {
     return {
       bindingId: `binding_${leg.legId}_control`,
       bindingKind: "subject_control",
@@ -165,7 +173,8 @@ function buildBindingForLeg(
     ...(leg.pair ? { pair: leg.pair } : {}),
     ...(leg.instrumentId ? { instrumentId: leg.instrumentId } : {}),
     targetMode: "paper",
-    notes: "Non-spot execution remains desk-managed and paper-bound for the first live arming pass.",
+    notes:
+      "Non-spot execution remains desk-managed and paper-bound for the first live arming pass.",
   };
 }
 
@@ -188,7 +197,9 @@ function buildBudgetForBinding(
   scenario: RuntimeStrategyDeskScenarioManifest,
   binding: StrategyDeskPromotionBinding,
 ): Record<string, unknown> {
-  const legs = scenario.legs.filter((leg) => binding.legIds.includes(leg.legId));
+  const legs = scenario.legs.filter((leg) =>
+    binding.legIds.includes(leg.legId),
+  );
   return {
     targetNotionalUsd: addDecimalStrings(
       legs.map((leg) => stringOrNull(leg.sizing.targetNotionalUsd)),
@@ -226,8 +237,7 @@ function buildRuntimeDeploymentPayload(input: {
     deploymentId: input.binding.deploymentId,
     strategyKey: input.scenario.strategyKey,
     sleeveId:
-      input.scenario.sleeveId ??
-      `desk_sleeve_${input.scenario.scenarioId}`,
+      input.scenario.sleeveId ?? `desk_sleeve_${input.scenario.scenarioId}`,
     ownerUserId: input.scenario.ownerUserId,
     venueKey: input.binding.venueKey,
     pair: input.binding.pair,
@@ -243,7 +253,9 @@ function buildRuntimeDeploymentPayload(input: {
         input.scenario.riskLimits?.maxDrawdownBps
           ? Math.max(
               1,
-              Math.round(Number(input.scenario.riskLimits.maxDrawdownBps) / 100),
+              Math.round(
+                Number(input.scenario.riskLimits.maxDrawdownBps) / 100,
+              ),
             )
           : 10,
       ),
@@ -266,7 +278,9 @@ function buildRuntimeDeploymentPayload(input: {
 }
 
 function flattenEvidenceRefs(
-  report: Awaited<ReturnType<typeof getRuntimeStrategyDeskScenarioReportWorkflow>>["report"],
+  report: Awaited<
+    ReturnType<typeof getRuntimeStrategyDeskScenarioReportWorkflow>
+  >["report"],
 ): RuntimeStrategyDeskPromotionHandoff["evidenceRefs"] {
   const refs: RuntimeStrategyDeskPromotionHandoff["evidenceRefs"] = [
     {
@@ -323,7 +337,9 @@ function readImplementationReference(
 
 function buildChecks(input: {
   scenario: RuntimeStrategyDeskScenarioManifest;
-  report: Awaited<ReturnType<typeof getRuntimeStrategyDeskScenarioReportWorkflow>>["report"];
+  report: Awaited<
+    ReturnType<typeof getRuntimeStrategyDeskScenarioReportWorkflow>
+  >["report"];
   bindings: StrategyDeskPromotionBinding[];
 }): RuntimeStrategyDeskPromotionHandoff["checks"] {
   const liveBindings = input.bindings.filter(
@@ -425,9 +441,23 @@ function buildHandoffSummary(bindings: StrategyDeskPromotionBinding[]): string {
   return `Bound ${summarizeLabels(liveLabels)} to limited live while keeping ${summarizeLabels(paperLabels)} under paper-bound desk controls.`;
 }
 
+function assertNoBlockedChecks(
+  handoff: RuntimeStrategyDeskPromotionHandoff,
+): void {
+  const blockedCheckIds = handoff.checks
+    .filter((check) => check.status === "blocked")
+    .map((check) => check.checkId);
+  if (blockedCheckIds.length === 0) return;
+  throw new Error(
+    `runtime-strategy-desk-handoff-checks-blocked:${handoff.handoffId}:${blockedCheckIds.join(",")}`,
+  );
+}
+
 function buildDefaultHandoff(input: {
   scenario: RuntimeStrategyDeskScenarioManifest;
-  report: Awaited<ReturnType<typeof getRuntimeStrategyDeskScenarioReportWorkflow>>["report"];
+  report: Awaited<
+    ReturnType<typeof getRuntimeStrategyDeskScenarioReportWorkflow>
+  >["report"];
   requestedBy: string;
   targetMode: StrategyDeskPrepareTargetMode;
   now: string;
@@ -476,7 +506,9 @@ function assertScenarioStateTransition(
   nextState: RuntimeStrategyDeskScenarioManifest["state"],
 ): void {
   if (scenario.state === nextState) return;
-  if (!canTransitionRuntimeStrategyDeskScenarioState(scenario.state, nextState)) {
+  if (
+    !canTransitionRuntimeStrategyDeskScenarioState(scenario.state, nextState)
+  ) {
     throw new Error(
       `runtime-strategy-desk-scenario-transition-invalid:${scenario.state}:${nextState}`,
     );
@@ -544,8 +576,7 @@ async function upsertPaperBoundBindingObjects(input: {
       input.binding.bindingId,
     );
     await writeStrategyDeskExecutionRecipe(input.env.WAITLIST_DB, {
-      recipeId:
-        existing?.recipeId ?? createDeskId("desk_recipe", undefined),
+      recipeId: existing?.recipeId ?? createDeskId("desk_recipe", undefined),
       scenarioId: input.scenario.scenarioId,
       handoffId: input.handoff.handoffId,
       bindingId: input.binding.bindingId,
@@ -716,8 +747,9 @@ function buildStrategyLabPromotionArtifacts(input: {
   now: string;
 }) {
   const deploymentId =
-    input.handoff.bindings.find((binding) => binding.bindingKind === "runtime_deployment")
-      ?.deploymentId ?? undefined;
+    input.handoff.bindings.find(
+      (binding) => binding.bindingKind === "runtime_deployment",
+    )?.deploymentId ?? undefined;
   const promotionId = createDeskId("promotion");
   const promotion = parseRuntimeStrategyLabPromotionRecord({
     schemaVersion: "v1",
@@ -860,7 +892,8 @@ export async function prepareRuntimeStrategyDeskPromotionHandoffWorkflow(
     handoffId: handoff.handoffId,
     eventType: "prepared",
     actor: input.requestedBy,
-    summary: "Prepared a bounded execution handoff draft from the current paper evidence.",
+    summary:
+      "Prepared a bounded execution handoff draft from the current paper evidence.",
     details: {
       targetMode,
       sourceReportId: report.reportId,
@@ -892,7 +925,10 @@ export async function upsertRuntimeStrategyDeskPromotionHandoffWorkflow(input: {
   if (existing) {
     assertHandoffStateTransition(existing, input.handoff.status);
   }
-  if (scenario.activeHandoffId && scenario.activeHandoffId !== input.handoff.handoffId) {
+  if (
+    scenario.activeHandoffId &&
+    scenario.activeHandoffId !== input.handoff.handoffId
+  ) {
     throw new Error(
       `runtime-strategy-desk-handoff-active-mismatch:${scenario.activeHandoffId}`,
     );
@@ -1028,7 +1064,8 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
       nextScenarioState = "paper_ready";
       nextActiveHandoffId = null;
       eventType = "rejected";
-      summary = "Rejected bounded execution handoff and returned scenario to paper readiness.";
+      summary =
+        "Rejected bounded execution handoff and returned scenario to paper readiness.";
       break;
     }
     case "apply": {
@@ -1037,6 +1074,7 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
           `runtime-strategy-desk-handoff-already-applied:${handoff.handoffId}`,
         );
       }
+      assertNoBlockedChecks(handoff);
       if (handoff.approvals.length === 0 && nextApprovals.length === 0) {
         throw new Error(
           "runtime-strategy-desk-handoff-human-approval-required",
@@ -1080,7 +1118,8 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
       await writeStrategyLabPromotion(input.env.WAITLIST_DB, promotion);
       await appendStrategyLabPromotionEvent(input.env.WAITLIST_DB, event);
       eventType = "applied";
-      summary = "Applied bounded execution handoff and materialized execution objects.";
+      summary =
+        "Applied bounded execution handoff and materialized execution objects.";
       break;
     }
     case "pause": {
@@ -1101,7 +1140,8 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
       nextScenarioState = "paused";
       nextActiveHandoffId = handoff.handoffId;
       eventType = "paused";
-      summary = "Paused bounded execution from the strategy desk operator boundary.";
+      summary =
+        "Paused bounded execution from the strategy desk operator boundary.";
       break;
     }
     case "kill": {
@@ -1122,7 +1162,8 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
       nextScenarioState = "paused";
       nextActiveHandoffId = handoff.handoffId;
       eventType = "killed";
-      summary = "Killed bounded execution from the strategy desk operator boundary.";
+      summary =
+        "Killed bounded execution from the strategy desk operator boundary.";
       break;
     }
     case "demote": {
@@ -1132,14 +1173,16 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
         );
       }
       assertScenarioStateTransition(scenario, "paper_ready");
-      await applyControlToMaterializedObjects({
-        env: input.env,
-        scenario,
-        handoff,
-        actor: input.actor,
-        now,
-        control: "demote",
-      });
+      if (handoff.status === "applied") {
+        await applyControlToMaterializedObjects({
+          env: input.env,
+          scenario,
+          handoff,
+          actor: input.actor,
+          now,
+          control: "demote",
+        });
+      }
       nextScenarioState = "paper_ready";
       nextActiveHandoffId = null;
       if (handoff.status === "approved" || handoff.status === "applied") {
@@ -1147,21 +1190,26 @@ export async function transitionRuntimeStrategyDeskPromotionHandoffWorkflow(
         nextStatus = "archived";
       }
       eventType = "demoted";
-      summary = "Demoted the scenario back to paper readiness and archived bounded execution bindings.";
+      summary =
+        "Demoted the scenario back to paper readiness and archived bounded execution bindings.";
       break;
     }
     case "archive": {
       assertHandoffStateTransition(handoff, "archived");
       nextStatus = "archived";
       nextActiveHandoffId =
-        scenario.activeHandoffId === handoff.handoffId ? null : scenario.activeHandoffId;
+        scenario.activeHandoffId === handoff.handoffId
+          ? null
+          : scenario.activeHandoffId;
       eventType = "archived";
       summary = "Archived the bounded execution handoff.";
       break;
     }
     default: {
       const exhaustiveCheck: never = input.action;
-      throw new Error(`runtime-strategy-desk-handoff-action-unknown:${exhaustiveCheck}`);
+      throw new Error(
+        `runtime-strategy-desk-handoff-action-unknown:${exhaustiveCheck}`,
+      );
     }
   }
 

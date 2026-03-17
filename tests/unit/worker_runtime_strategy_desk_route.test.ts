@@ -305,7 +305,10 @@ describe("worker runtime strategy desk routes", () => {
         "runtime.strategy_desk_scenario.valid.v1.json",
       );
       const run = readFixture("runtime.strategy_desk_run.valid.v1.json");
-      const report = readFixture("runtime.strategy_desk_report.valid.v1.json");
+      const report = {
+        ...readFixture("runtime.strategy_desk_report.valid.v1.json"),
+        status: "pass",
+      };
 
       for (const payload of [scenario]) {
         const response = await worker.fetch(
@@ -541,7 +544,10 @@ describe("worker runtime strategy desk routes", () => {
         "runtime.strategy_desk_scenario.valid.v1.json",
       );
       const run = readFixture("runtime.strategy_desk_run.valid.v1.json");
-      const report = readFixture("runtime.strategy_desk_report.valid.v1.json");
+      const report = {
+        ...readFixture("runtime.strategy_desk_report.valid.v1.json"),
+        status: "pass",
+      };
 
       for (const [path, payload] of [
         [
@@ -724,7 +730,10 @@ describe("worker runtime strategy desk routes", () => {
         "runtime.strategy_desk_scenario.valid.v1.json",
       );
       const run = readFixture("runtime.strategy_desk_run.valid.v1.json");
-      const report = readFixture("runtime.strategy_desk_report.valid.v1.json");
+      const report = {
+        ...readFixture("runtime.strategy_desk_report.valid.v1.json"),
+        status: "pass",
+      };
 
       for (const [path, payload] of [
         [
@@ -847,6 +856,248 @@ describe("worker runtime strategy desk routes", () => {
         .query("SELECT COUNT(*) AS count FROM strategy_lab_promotions")
         .get() as { count: number };
       expect(promotionCount.count).toBe(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("blocks apply when the prepared handoff still has blocked checks", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const scenario = readFixture(
+        "runtime.strategy_desk_scenario.valid.v1.json",
+      );
+      const run = readFixture("runtime.strategy_desk_run.valid.v1.json");
+      const report = {
+        ...readFixture("runtime.strategy_desk_report.valid.v1.json"),
+        status: "blocked",
+      };
+
+      for (const [path, payload] of [
+        [
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios",
+          scenario,
+        ],
+        ["http://localhost/api/admin/ops/runtime/strategy-desk/runs", run],
+        [
+          "http://localhost/api/admin/ops/runtime/strategy-desk/reports",
+          report,
+        ],
+      ] as const) {
+        const response = await worker.fetch(
+          new Request(path, {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          }),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(response.status).toBe(200);
+      }
+
+      const prepareResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              requestedBy: "operator_1",
+              targetMode: "limited_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(prepareResponse.status).toBe(200);
+      const preparePayload = (await prepareResponse.json()) as {
+        handoff: { handoffId: string; checks: Array<{ status: string }> };
+      };
+      const handoffId = preparePayload.handoff.handoffId;
+      expect(
+        preparePayload.handoff.checks.some(
+          (check) => check.status === "blocked",
+        ),
+      ).toBe(true);
+
+      for (const action of ["submit", "approve"] as const) {
+        const response = await worker.fetch(
+          new Request(
+            `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}/transition`,
+            {
+              method: "POST",
+              headers: {
+                authorization: "Bearer admin-secret",
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                action,
+                actor: "operator_1",
+              }),
+            },
+          ),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(response.status).toBe(200);
+      }
+
+      const applyResponse = await worker.fetch(
+        new Request(
+          `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}/transition`,
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              action: "apply",
+              actor: "operator_1",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(applyResponse.status).toBe(400);
+      const applyPayload = (await applyResponse.json()) as {
+        ok: boolean;
+        error: string;
+      };
+      expect(applyPayload.ok).toBe(false);
+      expect(applyPayload.error).toContain(
+        `runtime-strategy-desk-handoff-checks-blocked:${handoffId}:paper-report-pass`,
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test("demotes approved handoffs without requiring materialized deployment controls", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const scenario = readFixture(
+        "runtime.strategy_desk_scenario.valid.v1.json",
+      );
+      const run = readFixture("runtime.strategy_desk_run.valid.v1.json");
+      const report = {
+        ...readFixture("runtime.strategy_desk_report.valid.v1.json"),
+        status: "pass",
+      };
+
+      for (const [path, payload] of [
+        [
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios",
+          scenario,
+        ],
+        ["http://localhost/api/admin/ops/runtime/strategy-desk/runs", run],
+        [
+          "http://localhost/api/admin/ops/runtime/strategy-desk/reports",
+          report,
+        ],
+      ] as const) {
+        const response = await worker.fetch(
+          new Request(path, {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          }),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(response.status).toBe(200);
+      }
+
+      const prepareResponse = await worker.fetch(
+        new Request(
+          "http://localhost/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              requestedBy: "operator_1",
+              targetMode: "limited_live",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(prepareResponse.status).toBe(200);
+      const preparePayload = (await prepareResponse.json()) as {
+        handoff: { handoffId: string };
+      };
+      const handoffId = preparePayload.handoff.handoffId;
+
+      for (const action of ["submit", "approve"] as const) {
+        const response = await worker.fetch(
+          new Request(
+            `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}/transition`,
+            {
+              method: "POST",
+              headers: {
+                authorization: "Bearer admin-secret",
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                action,
+                actor: "operator_1",
+              }),
+            },
+          ),
+          env,
+          createExecutionContextStub(),
+        );
+        expect(response.status).toBe(200);
+      }
+
+      const demoteResponse = await worker.fetch(
+        new Request(
+          `http://localhost/api/admin/ops/runtime/strategy-desk/handoffs/${handoffId}/transition`,
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer admin-secret",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              action: "demote",
+              actor: "operator_1",
+            }),
+          },
+        ),
+        env,
+        createExecutionContextStub(),
+      );
+      expect(demoteResponse.status).toBe(200);
+      const demotePayload = (await demoteResponse.json()) as {
+        ok: boolean;
+        scenario: { state: string };
+        handoff: { status: string };
+      };
+      expect(demotePayload.ok).toBe(true);
+      expect(demotePayload.scenario.state).toBe("paper_ready");
+      expect(demotePayload.handoff.status).toBe("archived");
+
+      const promotionCount = sqlite
+        .query("SELECT COUNT(*) AS count FROM strategy_lab_promotions")
+        .get() as { count: number };
+      expect(promotionCount.count).toBe(0);
     } finally {
       sqlite.close();
     }

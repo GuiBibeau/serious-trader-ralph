@@ -1688,6 +1688,12 @@ describe("runtime protocol contracts", () => {
     ).toBe(true);
     expect(
       canTransitionRuntimeStrategyDeskScenarioState(
+        "execution_ready",
+        "paper_ready",
+      ),
+    ).toBe(true);
+    expect(
+      canTransitionRuntimeStrategyDeskScenarioState(
         "execution_bound",
         "paper_ready",
       ),

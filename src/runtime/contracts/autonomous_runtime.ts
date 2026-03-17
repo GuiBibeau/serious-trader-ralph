@@ -2405,7 +2405,7 @@ export const RUNTIME_STRATEGY_DESK_SCENARIO_STATE_TRANSITIONS = {
   shadow_ready: ["paper_ready", "paused", "archived"],
   paper_ready: ["operator_review", "paused", "archived"],
   operator_review: ["paper_ready", "execution_ready", "paused", "archived"],
-  execution_ready: ["execution_bound", "paused", "archived"],
+  execution_ready: ["paper_ready", "execution_bound", "paused", "archived"],
   execution_bound: ["operator_review", "paused", "archived"],
   paused: [
     "replay_ready",
