@@ -1,12 +1,11 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   getRuntimeStrategyDeskScenarioWorkflow,
   upsertRuntimeStrategyDeskScenarioWorkflow,
 } from "../../apps/worker/src/runtime_strategy_desk";
-import { executeRuntimeStrategyDeskStudyWorkflow } from "../../apps/worker/src/runtime_strategy_desk_study";
 import type { Env } from "../../apps/worker/src/types";
 import { createWorkerLiveEnv } from "../integration/_worker_live_test_utils";
 
@@ -202,10 +201,25 @@ function buildStudyScenario(
   };
 }
 
+let studyWorkflowImport:
+  | Promise<
+      typeof import("../../apps/worker/src/runtime_strategy_desk_study.ts")
+    >
+  | undefined;
+
+async function getStudyWorkflow() {
+  mock.restore();
+  studyWorkflowImport ??= import(
+    "../../apps/worker/src/runtime_strategy_desk_study.ts?runtime-study-real"
+  );
+  return (await studyWorkflowImport).executeRuntimeStrategyDeskStudyWorkflow;
+}
+
 describe("runtime strategy desk study workflow", () => {
   test("builds a multi-window study matrix and preserves holdout summaries", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
+      const executeRuntimeStrategyDeskStudyWorkflow = await getStudyWorkflow();
       const scenario = readFixture(
         "runtime.strategy_desk_scenario.valid.v1.json",
       ) as Record<string, unknown>;
@@ -482,6 +496,7 @@ describe("runtime strategy desk study workflow", () => {
   test("blocks study runs when the scenario is paused", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
+      const executeRuntimeStrategyDeskStudyWorkflow = await getStudyWorkflow();
       await upsertRuntimeStrategyDeskScenarioWorkflow({
         env,
         scenario: buildStudyScenario({
@@ -514,6 +529,7 @@ describe("runtime strategy desk study workflow", () => {
   test("caps propagated evidence buckets to the report schema limit", async () => {
     const { env, sqlite } = createOpsEnv();
     try {
+      const executeRuntimeStrategyDeskStudyWorkflow = await getStudyWorkflow();
       await upsertRuntimeStrategyDeskScenarioWorkflow({
         env,
         scenario: buildStudyScenario({
