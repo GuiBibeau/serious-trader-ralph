@@ -7,7 +7,7 @@ import {
 } from "../runtime/contracts/autonomous_runtime.js";
 
 type Resource = "scenario" | "run" | "report";
-type Action = "upsert" | "list";
+type Action = "upsert" | "list" | "execute";
 
 function readArg(flag: string): string | null {
   const index = process.argv.indexOf(flag);
@@ -29,13 +29,37 @@ function resolveResource(): Resource {
 
 function resolveAction(): Action {
   const raw = readArg("--action") ?? "upsert";
-  if (raw === "upsert" || raw === "list") {
+  if (raw === "upsert" || raw === "list" || raw === "execute") {
     return raw;
   }
   throw new Error("invalid-arg:--action");
 }
 
-function endpointFor(resource: Resource): string {
+function endpointFor(input: {
+  resource: Resource;
+  action: Action;
+  requestPayload: unknown;
+}): string {
+  if (input.action === "execute") {
+    if (input.resource !== "scenario") {
+      throw new Error("strategy-desk-execute-scenario-resource-required");
+    }
+    const scenarioId =
+      typeof input.requestPayload === "object" &&
+      input.requestPayload &&
+      !Array.isArray(input.requestPayload)
+        ? String(
+            (input.requestPayload as Record<string, unknown>).scenarioId ?? "",
+          ).trim()
+        : "";
+    if (!scenarioId) {
+      throw new Error("strategy-desk-execute-scenario-id-required");
+    }
+    return `/api/admin/ops/runtime/strategy-desk/scenarios/${encodeURIComponent(
+      scenarioId,
+    )}/execute`;
+  }
+  const resource = input.resource;
   switch (resource) {
     case "scenario":
       return "/api/admin/ops/runtime/strategy-desk/scenarios";
@@ -55,6 +79,17 @@ function buildUpsertBody(resource: Resource, payload: unknown): unknown {
     case "report":
       return parseRuntimeStrategyDeskScenarioReport(payload);
   }
+}
+
+function buildExecuteBody(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("strategy-desk-execute-invalid-body");
+  }
+  const { scenarioId: _scenarioId, ...rest } = payload as Record<
+    string,
+    unknown
+  >;
+  return rest;
 }
 
 function buildQueryString(payload: unknown): string {
@@ -92,20 +127,24 @@ async function main(): Promise<void> {
   const requestPayload = requestFile
     ? readJsonFile(resolve(requestFile))
     : null;
-  if (action === "upsert" && !requestPayload) {
+  if ((action === "upsert" || action === "execute") && !requestPayload) {
     throw new Error("missing-arg:--request-file");
   }
 
-  const endpoint = endpointFor(resource);
+  const endpoint = endpointFor({
+    resource,
+    action,
+    requestPayload,
+  });
   const queryString =
     action === "list" ? buildQueryString(requestPayload ?? undefined) : "";
   const response = await fetch(
     `${baseUrl.replace(/\/$/, "")}${endpoint}${queryString ? `?${queryString}` : ""}`,
     {
-      method: action === "upsert" ? "POST" : "GET",
+      method: action === "list" ? "GET" : "POST",
       headers: {
         authorization: `Bearer ${adminToken}`,
-        ...(action === "upsert" ? { "content-type": "application/json" } : {}),
+        ...(action !== "list" ? { "content-type": "application/json" } : {}),
       },
       ...(action === "upsert"
         ? {
@@ -113,7 +152,11 @@ async function main(): Promise<void> {
               buildUpsertBody(resource, requestPayload as unknown),
             ),
           }
-        : {}),
+        : action === "execute"
+          ? {
+              body: JSON.stringify(buildExecuteBody(requestPayload as unknown)),
+            }
+          : {}),
     },
   );
 

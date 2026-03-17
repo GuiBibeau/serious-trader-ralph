@@ -469,6 +469,8 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
     process.env.RUNTIME_INTERNAL_SERVICE_NAME ??
     DEFAULT_RUNTIME_INTERNAL_SERVICE_NAME;
   const runtimeInternalStubMode = process.env.RUNTIME_INTERNAL_STUB_MODE ?? "1";
+  const adminToken = String(process.env.ADMIN_TOKEN ?? "").trim();
+  const rpcEndpoint = String(process.env.RPC_ENDPOINT ?? "").trim();
 
   ensureWorkspaceDependencies(root);
   runWorkerMigration(workerDir, paths.workerStateDir);
@@ -497,6 +499,8 @@ export async function startHarness(root = resolveRepoRoot()): Promise<void> {
         `RUNTIME_INTERNAL_SERVICE_NAME:${runtimeInternalServiceName}`,
         "--var",
         `RUNTIME_INTERNAL_STUB_MODE:${runtimeInternalStubMode}`,
+        ...(adminToken ? ["--var", `ADMIN_TOKEN:${adminToken}`] : []),
+        ...(rpcEndpoint ? ["--var", `RPC_ENDPOINT:${rpcEndpoint}`] : []),
       ],
       logFile: paths.workerLog,
     });

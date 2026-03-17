@@ -50,6 +50,7 @@ function mapScenarioLegRow(
   const assetKeys = parseJsonValue(row.assetKeys);
   const enabledModes = parseJsonValue(row.enabledModes);
   const sizing = parseJsonValue(row.sizing);
+  const intent = parseJsonValue(row.intent);
   const dependencies = parseJsonValue(row.dependencies);
   const tags = parseJsonValue(row.tags);
 
@@ -73,6 +74,7 @@ function mapScenarioLegRow(
     assetKeys: Array.isArray(assetKeys) ? assetKeys : [],
     enabledModes: Array.isArray(enabledModes) ? enabledModes : [],
     sizing: isRecord(sizing) ? sizing : {},
+    ...(isRecord(intent) ? { intent } : {}),
     ...(stringOrNull(row.thesis) ? { thesis: stringValue(row.thesis) } : {}),
     ...(Array.isArray(dependencies) && dependencies.length > 0
       ? { dependencies }
@@ -213,6 +215,7 @@ async function listScenarioLegsForIds(
         asset_keys_json AS assetKeys,
         enabled_modes_json AS enabledModes,
         sizing_json AS sizing,
+        intent_json AS intent,
         thesis,
         dependencies_json AS dependencies,
         tags_json AS tags
@@ -332,11 +335,12 @@ export async function writeStrategyDeskScenarioManifest(
           asset_keys_json,
           enabled_modes_json,
           sizing_json,
+          intent_json,
           thesis,
           dependencies_json,
           tags_json
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
         )
         `,
       )
@@ -354,6 +358,7 @@ export async function writeStrategyDeskScenarioManifest(
         stringifyJson(leg.assetKeys) ?? "[]",
         stringifyJson(leg.enabledModes) ?? "[]",
         stringifyJson(leg.sizing) ?? "{}",
+        stringifyJson(leg.intent),
         leg.thesis ?? null,
         stringifyJson(leg.dependencies),
         stringifyJson(leg.tags),

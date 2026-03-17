@@ -518,7 +518,7 @@ export class DFlowClient {
   private readonly apiKey: string | null;
 
   constructor(input: Env | DFlowClientConfig, deps?: DFlowClientDeps) {
-    this.fetchImpl = deps?.fetch ?? fetch;
+    this.fetchImpl = deps?.fetch ?? ((resource, init) => fetch(resource, init));
     const config: DFlowClientConfig =
       "metadataApiBase" in input
         ? input

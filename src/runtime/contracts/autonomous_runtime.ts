@@ -1524,6 +1524,31 @@ const RuntimeStrategyDeskScenarioLegSizingSchema = z
   })
   .strict();
 
+const RuntimeStrategyDeskScenarioBorrowLegSchema = z
+  .object({
+    provider: NON_EMPTY_STRING_SCHEMA,
+    mint: PUBKEY_SCHEMA,
+    amountAtomic: DECIMAL_STRING_SCHEMA.optional(),
+  })
+  .strict();
+
+const RuntimeStrategyDeskScenarioLegIntentSchema = z
+  .object({
+    adapterKey: NON_EMPTY_STRING_SCHEMA.optional(),
+    side: NON_EMPTY_STRING_SCHEMA.optional(),
+    quantityAtomic: DECIMAL_STRING_SCHEMA.optional(),
+    collateralAtomic: DECIMAL_STRING_SCHEMA.optional(),
+    outcomeId: NON_EMPTY_STRING_SCHEMA.optional(),
+    settlementMint: PUBKEY_SCHEMA.optional(),
+    referenceId: NON_EMPTY_STRING_SCHEMA.optional(),
+    borrowLegs: z
+      .array(RuntimeStrategyDeskScenarioBorrowLegSchema)
+      .max(8)
+      .optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
 const RuntimeStrategyDeskEvidenceBucketSchema = z
   .object({
     stage: RuntimeStrategyDeskEvidenceStageSchema,
@@ -1546,6 +1571,7 @@ export const RuntimeStrategyDeskScenarioLegSchema = z
     assetKeys: z.array(NON_EMPTY_STRING_SCHEMA).min(1).max(8),
     enabledModes: z.array(RuntimeModeSchema).min(1).max(3),
     sizing: RuntimeStrategyDeskScenarioLegSizingSchema,
+    intent: RuntimeStrategyDeskScenarioLegIntentSchema.optional(),
     thesis: NON_EMPTY_STRING_SCHEMA.optional(),
     dependencies: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
     tags: z.array(NON_EMPTY_STRING_SCHEMA).max(16).optional(),
@@ -2109,7 +2135,7 @@ export const RUNTIME_STRATEGY_DESK_RUN_STATE_TRANSITIONS = {
   pending: ["legs_requested", "rejected", "cancelled"],
   legs_requested: ["legs_running", "failed", "cancelled"],
   legs_running: ["collecting_evidence", "failed", "cancelled"],
-  collecting_evidence: ["completed", "needs_review", "failed"],
+  collecting_evidence: ["completed", "needs_review", "failed", "rejected"],
   needs_review: ["completed", "failed", "cancelled"],
   completed: [],
   rejected: [],

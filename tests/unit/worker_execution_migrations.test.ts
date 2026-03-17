@@ -15,6 +15,7 @@ function withExecutionSchema(run: (db: Database) => void): void {
       "0029_strategy_lab_readiness.sql",
       "0030_strategy_lab_post_live.sql",
       "0031_strategy_desk_registry.sql",
+      "0032_strategy_desk_leg_intent.sql",
     ]) {
       const migrationPath = resolve(
         import.meta.dir,

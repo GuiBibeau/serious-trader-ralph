@@ -34,6 +34,9 @@
         "reserveUsd": "1000",
         "maxSlippageBps": 50
       },
+      "intent": {
+        "side": "buy"
+      },
       "thesis": "Primary directional spot leg.",
       "tags": ["alpha", "spot"]
     },
@@ -59,6 +62,10 @@
         "reserveUsd": "250",
         "maxSlippageBps": 30
       },
+      "intent": {
+        "side": "short",
+        "quantityAtomic": "3521126760"
+      },
       "thesis": "Hedge spot beta when momentum weakens.",
       "dependencies": ["leg_spot_alpha"],
       "tags": ["hedge", "perp"]
@@ -69,7 +76,7 @@
       "role": "prediction",
       "venueKey": "dflow",
       "intentFamily": "prediction_order",
-      "marketType": "spot",
+      "marketType": "prediction",
       "instrumentId": "macro-fed-cut-jun-2026",
       "assetKeys": ["SOL", "USDC"],
       "enabledModes": ["shadow", "paper"],
@@ -78,6 +85,10 @@
         "maxNotionalUsd": "250",
         "reserveUsd": "100",
         "maxSlippageBps": 100
+      },
+      "intent": {
+        "side": "buy_yes",
+        "outcomeId": "yes"
       },
       "thesis": "Event hedge for macro-sensitive weeks.",
       "tags": ["overlay", "prediction"]
@@ -102,6 +113,17 @@
         "maxNotionalUsd": "500",
         "reserveUsd": "125",
         "maxSlippageBps": 35
+      },
+      "intent": {
+        "referenceId": "flash_rebalance_sol_usdc",
+        "settlementMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "borrowLegs": [
+          {
+            "provider": "marginfi",
+            "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "amountAtomic": "250000000"
+          }
+        ]
       },
       "thesis": "Atomic rebalance path for bounded inventory clean-up.",
       "dependencies": ["leg_spot_alpha", "leg_perp_hedge"],

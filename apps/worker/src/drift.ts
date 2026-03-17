@@ -260,7 +260,7 @@ export class DriftClient {
         },
     deps?: DriftClientDeps,
   ) {
-    this.fetchImpl = deps?.fetch ?? fetch;
+    this.fetchImpl = deps?.fetch ?? ((resource, init) => fetch(resource, init));
     this.dataApiBase =
       readTrimmedString(
         "DRIFT_DATA_API_BASE" in input

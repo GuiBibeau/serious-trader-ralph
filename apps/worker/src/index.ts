@@ -231,6 +231,7 @@ import {
   upsertRuntimeStrategyDeskScenarioRunWorkflow,
   upsertRuntimeStrategyDeskScenarioWorkflow,
 } from "./runtime_strategy_desk";
+import { executeRuntimeStrategyDeskScenarioWorkflow } from "./runtime_strategy_desk_runner";
 import { SolanaRpc } from "./solana_rpc";
 import type { Env, ExecutionConfig } from "./types";
 import type { UserRow } from "./users_db";
@@ -601,6 +602,85 @@ function parseAdminEntityDetailPath(
   } catch {
     return null;
   }
+}
+
+function parseAdminEntityActionPath(
+  pathname: string,
+  prefix: string,
+  suffix: string,
+): string | null {
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return null;
+  }
+  const entityId = pathname.slice(prefix.length, -suffix.length);
+  if (!entityId || entityId.includes("/")) return null;
+  try {
+    return decodeURIComponent(entityId);
+  } catch {
+    return null;
+  }
+}
+
+function parseRuntimeStrategyDeskExecuteRequest(payload: unknown): {
+  runKind: "shadow" | "paper";
+  requestedBy: string;
+  walletAddress: string;
+  privyWalletId?: string;
+  scenarioRunId?: string;
+  reportId?: string;
+  maxRetriesPerLeg?: number;
+  trigger?: {
+    reason?: string;
+    featureSnapshotId?: string;
+  };
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("runtime-strategy-desk-execute-invalid-body");
+  }
+  const record = payload as Record<string, unknown>;
+  const runKind =
+    record.runKind === "shadow" || record.runKind === "paper"
+      ? record.runKind
+      : null;
+  const requestedBy = String(record.requestedBy ?? "").trim();
+  const walletAddress = String(record.walletAddress ?? "").trim();
+  const privyWalletId = String(record.privyWalletId ?? "").trim();
+  const scenarioRunId = String(record.scenarioRunId ?? "").trim();
+  const reportId = String(record.reportId ?? "").trim();
+  const maxRetriesPerLeg = Number(record.maxRetriesPerLeg);
+  const trigger =
+    record.trigger &&
+    typeof record.trigger === "object" &&
+    !Array.isArray(record.trigger)
+      ? (record.trigger as Record<string, unknown>)
+      : null;
+  if (!runKind || !requestedBy || !walletAddress) {
+    throw new Error("runtime-strategy-desk-execute-invalid-body");
+  }
+  return {
+    runKind,
+    requestedBy,
+    walletAddress,
+    ...(privyWalletId ? { privyWalletId } : {}),
+    ...(scenarioRunId ? { scenarioRunId } : {}),
+    ...(reportId ? { reportId } : {}),
+    ...(Number.isFinite(maxRetriesPerLeg)
+      ? { maxRetriesPerLeg: Math.max(0, Math.trunc(maxRetriesPerLeg)) }
+      : {}),
+    ...(trigger
+      ? {
+          trigger: {
+            ...(typeof trigger.reason === "string" && trigger.reason.trim()
+              ? { reason: trigger.reason.trim() }
+              : {}),
+            ...(typeof trigger.featureSnapshotId === "string" &&
+            trigger.featureSnapshotId.trim()
+              ? { featureSnapshotId: trigger.featureSnapshotId.trim() }
+              : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 function newExecutionAttemptId(): string {
@@ -3807,6 +3887,57 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-strategy-desk-scenario-read-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      const strategyDeskExecuteScenarioId =
+        request.method === "POST"
+          ? parseAdminEntityActionPath(
+              url.pathname,
+              "/api/admin/ops/runtime/strategy-desk/scenarios/",
+              "/execute",
+            )
+          : null;
+      if (request.method === "POST" && strategyDeskExecuteScenarioId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const parsed = parseRuntimeStrategyDeskExecuteRequest(
+            await request.json(),
+          );
+          const result = await executeRuntimeStrategyDeskScenarioWorkflow({
+            env,
+            scenarioId: strategyDeskExecuteScenarioId,
+            ...parsed,
+          });
+          return withCors(
+            json({
+              ok: true,
+              scenario: result.scenario,
+              run: result.run,
+              report: result.report,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-scenario-execute-failed",
               },
               { status: 400 },
             ),

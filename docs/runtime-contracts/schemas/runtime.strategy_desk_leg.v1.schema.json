@@ -114,6 +114,72 @@
       "required": ["targetNotionalUsd"],
       "additionalProperties": false
     },
+    "intent": {
+      "type": "object",
+      "properties": {
+        "adapterKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "side": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantityAtomic": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "collateralAtomic": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "outcomeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settlementMint": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 64
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "borrowLegs": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mint": {
+                "type": "string",
+                "minLength": 32,
+                "maxLength": 64
+              },
+              "amountAtomic": {
+                "type": "string",
+                "pattern": "^\\d+(?:\\.\\d+)?$"
+              }
+            },
+            "required": ["provider", "mint"],
+            "additionalProperties": false
+          }
+        },
+        "params": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      },
+      "additionalProperties": false
+    },
     "thesis": {
       "type": "string",
       "minLength": 1
