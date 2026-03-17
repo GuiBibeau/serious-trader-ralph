@@ -148,6 +148,11 @@
       "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_desk_scenario.v1.schema.json"
     },
     {
+      "name": "strategyDeskLeg",
+      "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_leg",
+      "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_desk_leg.v1.schema.json"
+    },
+    {
       "name": "strategyDeskRun",
       "schemaId": "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_run",
       "schemaFile": "docs/runtime-contracts/schemas/runtime.strategy_desk_run.v1.schema.json"

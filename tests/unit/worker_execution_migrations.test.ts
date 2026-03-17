@@ -14,6 +14,7 @@ function withExecutionSchema(run: (db: Database) => void): void {
       "0028_strategy_lab_promotions.sql",
       "0029_strategy_lab_readiness.sql",
       "0030_strategy_lab_post_live.sql",
+      "0031_strategy_desk_registry.sql",
     ]) {
       const migrationPath = resolve(
         import.meta.dir,
@@ -111,7 +112,11 @@ describe("worker execution schema migration", () => {
               'strategy_lab_readiness_artifacts',
               'strategy_lab_readiness_canary_state',
               'strategy_lab_readiness_canary_runs',
-              'strategy_lab_post_live_artifacts'
+              'strategy_lab_post_live_artifacts',
+              'strategy_desk_scenarios',
+              'strategy_desk_scenario_legs',
+              'strategy_desk_runs',
+              'strategy_desk_reports'
             )
           ORDER BY name
           `,
@@ -127,6 +132,10 @@ describe("worker execution schema migration", () => {
         "execution_status_events",
         "runtime_canary_runs",
         "runtime_canary_state",
+        "strategy_desk_reports",
+        "strategy_desk_runs",
+        "strategy_desk_scenario_legs",
+        "strategy_desk_scenarios",
         "strategy_lab_post_live_artifacts",
         "strategy_lab_promotion_events",
         "strategy_lab_promotions",

@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trader-ralph.com/schemas/runtime/v1/strategy_desk_leg",
+  "type": "object",
+  "properties": {
+    "legId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "primary_alpha",
+        "hedge",
+        "inventory",
+        "carry",
+        "prediction",
+        "liquidity",
+        "flash_rebalance"
+      ]
+    },
+    "venueKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "intentFamily": {
+      "type": "string",
+      "enum": [
+        "spot_swap",
+        "conditional_spot_order",
+        "clob_order",
+        "perp_order",
+        "prediction_order",
+        "flash_atomic"
+      ]
+    },
+    "marketType": {
+      "type": "string",
+      "enum": ["spot", "perp", "options", "prediction"]
+    },
+    "pair": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseMint": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 64
+        },
+        "quoteMint": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 64
+        },
+        "marketType": {
+          "default": "spot",
+          "type": "string",
+          "enum": ["spot", "perp", "options"]
+        }
+      },
+      "required": ["symbol", "baseMint", "quoteMint", "marketType"],
+      "additionalProperties": false
+    },
+    "instrumentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "assetKeys": {
+      "minItems": 1,
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "enabledModes": {
+      "minItems": 1,
+      "maxItems": 3,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["shadow", "paper", "live"]
+      }
+    },
+    "sizing": {
+      "type": "object",
+      "properties": {
+        "targetNotionalUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "maxNotionalUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "reserveUsd": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)?$"
+        },
+        "maxSlippageBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      },
+      "required": ["targetNotionalUsd"],
+      "additionalProperties": false
+    },
+    "thesis": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dependencies": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "tags": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "legId",
+    "label",
+    "role",
+    "venueKey",
+    "intentFamily",
+    "marketType",
+    "assetKeys",
+    "enabledModes",
+    "sizing"
+  ],
+  "additionalProperties": false
+}

@@ -1,3 +1,8 @@
+import {
+  parseRuntimeStrategyDeskScenarioManifest,
+  parseRuntimeStrategyDeskScenarioReport,
+  parseRuntimeStrategyDeskScenarioRun,
+} from "../../../src/runtime/contracts/autonomous_runtime.js";
 import { parseRuntimeResearchBriefRequest } from "../../../src/runtime/research/briefs.js";
 import { parseRuntimeResearchCurationRequest } from "../../../src/runtime/research/curation.js";
 import { parseRuntimeResearchPolicyGateRequest } from "../../../src/runtime/research/policy_gate.js";
@@ -215,6 +220,17 @@ import {
 import { readRuntimeResearchSubstrateSnapshot } from "./runtime_research_substrate";
 import { runRuntimeResearchSynthesisWorkflow } from "./runtime_research_synthesis";
 import { runRuntimeResearchCandidateTriageWorkflow } from "./runtime_research_triage";
+import {
+  getRuntimeStrategyDeskScenarioReportWorkflow,
+  getRuntimeStrategyDeskScenarioRunWorkflow,
+  getRuntimeStrategyDeskScenarioWorkflow,
+  listRuntimeStrategyDeskScenarioReportsWorkflow,
+  listRuntimeStrategyDeskScenarioRunsWorkflow,
+  listRuntimeStrategyDeskScenariosWorkflow,
+  upsertRuntimeStrategyDeskScenarioReportWorkflow,
+  upsertRuntimeStrategyDeskScenarioRunWorkflow,
+  upsertRuntimeStrategyDeskScenarioWorkflow,
+} from "./runtime_strategy_desk";
 import { SolanaRpc } from "./solana_rpc";
 import type { Env, ExecutionConfig } from "./types";
 import type { UserRow } from "./users_db";
@@ -568,6 +584,20 @@ function parseRuntimeAdminEvaluatePath(pathname: string): string | null {
   if (!deploymentId || deploymentId.includes("/")) return null;
   try {
     return decodeURIComponent(deploymentId);
+  } catch {
+    return null;
+  }
+}
+
+function parseAdminEntityDetailPath(
+  pathname: string,
+  prefix: string,
+): string | null {
+  if (!pathname.startsWith(prefix)) return null;
+  const suffix = pathname.slice(prefix.length);
+  if (!suffix || suffix.includes("/")) return null;
+  try {
+    return decodeURIComponent(suffix);
   } catch {
     return null;
   }
@@ -3733,6 +3763,419 @@ const worker = {
                   error instanceof Error
                     ? error.message
                     : "runtime-research-post-live-list-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      const strategyDeskScenarioId =
+        request.method === "GET"
+          ? parseAdminEntityDetailPath(
+              url.pathname,
+              "/api/admin/ops/runtime/strategy-desk/scenarios/",
+            )
+          : null;
+      if (request.method === "GET" && strategyDeskScenarioId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const result = await getRuntimeStrategyDeskScenarioWorkflow({
+            env,
+            scenarioId: strategyDeskScenarioId,
+          });
+          return withCors(
+            json({
+              ok: true,
+              scenario: result.scenario,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-scenario-read-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/scenarios"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const scenario = parseRuntimeStrategyDeskScenarioManifest(
+            await request.json(),
+          );
+          const result = await upsertRuntimeStrategyDeskScenarioWorkflow({
+            env,
+            scenario,
+          });
+          return withCors(
+            json({
+              ok: true,
+              scenario: result.scenario,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-scenario-upsert-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/scenarios"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeStrategyDeskScenariosWorkflow({
+            env,
+            scenarioId: url.searchParams.get("scenarioId") ?? undefined,
+            ownerUserId: url.searchParams.get("ownerUserId") ?? undefined,
+            strategyKey: url.searchParams.get("strategyKey") ?? undefined,
+            state: url.searchParams.get("state") ?? undefined,
+            venueKey: url.searchParams.get("venueKey") ?? undefined,
+            intentFamily: url.searchParams.get("intentFamily") ?? undefined,
+            marketType: url.searchParams.get("marketType") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              filters: {
+                scenarioId: url.searchParams.get("scenarioId") ?? null,
+                ownerUserId: url.searchParams.get("ownerUserId") ?? null,
+                strategyKey: url.searchParams.get("strategyKey") ?? null,
+                state: url.searchParams.get("state") ?? null,
+                venueKey: url.searchParams.get("venueKey") ?? null,
+                intentFamily: url.searchParams.get("intentFamily") ?? null,
+                marketType: url.searchParams.get("marketType") ?? null,
+              },
+              scenarios: result.scenarios,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-scenario-list-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      const strategyDeskRunId =
+        request.method === "GET"
+          ? parseAdminEntityDetailPath(
+              url.pathname,
+              "/api/admin/ops/runtime/strategy-desk/runs/",
+            )
+          : null;
+      if (request.method === "GET" && strategyDeskRunId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const result = await getRuntimeStrategyDeskScenarioRunWorkflow({
+            env,
+            scenarioRunId: strategyDeskRunId,
+          });
+          return withCors(
+            json({
+              ok: true,
+              run: result.run,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-run-read-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/runs"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const run = parseRuntimeStrategyDeskScenarioRun(await request.json());
+          const result = await upsertRuntimeStrategyDeskScenarioRunWorkflow({
+            env,
+            run,
+          });
+          return withCors(
+            json({
+              ok: true,
+              run: result.run,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-run-upsert-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/runs"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeStrategyDeskScenarioRunsWorkflow({
+            env,
+            scenarioRunId: url.searchParams.get("scenarioRunId") ?? undefined,
+            scenarioId: url.searchParams.get("scenarioId") ?? undefined,
+            runKind: url.searchParams.get("runKind") ?? undefined,
+            state: url.searchParams.get("state") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              runs: result.runs,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-run-list-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      const strategyDeskReportId =
+        request.method === "GET"
+          ? parseAdminEntityDetailPath(
+              url.pathname,
+              "/api/admin/ops/runtime/strategy-desk/reports/",
+            )
+          : null;
+      if (request.method === "GET" && strategyDeskReportId) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const result = await getRuntimeStrategyDeskScenarioReportWorkflow({
+            env,
+            reportId: strategyDeskReportId,
+          });
+          return withCors(
+            json({
+              ok: true,
+              report: result.report,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-report-read-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/reports"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const report = parseRuntimeStrategyDeskScenarioReport(
+            await request.json(),
+          );
+          const result = await upsertRuntimeStrategyDeskScenarioReportWorkflow({
+            env,
+            report,
+          });
+          return withCors(
+            json({
+              ok: true,
+              report: result.report,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-report-upsert-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/reports"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const limitRaw = Number(url.searchParams.get("limit"));
+          const result = await listRuntimeStrategyDeskScenarioReportsWorkflow({
+            env,
+            reportId: url.searchParams.get("reportId") ?? undefined,
+            scenarioId: url.searchParams.get("scenarioId") ?? undefined,
+            scenarioRunId: url.searchParams.get("scenarioRunId") ?? undefined,
+            stage: url.searchParams.get("stage") ?? undefined,
+            status: url.searchParams.get("status") ?? undefined,
+            ...(Number.isFinite(limitRaw) && limitRaw > 0
+              ? { limit: Math.trunc(limitRaw) }
+              : {}),
+          });
+          return withCors(
+            json({
+              ok: true,
+              reports: result.reports,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-report-list-failed",
               },
               { status: 400 },
             ),

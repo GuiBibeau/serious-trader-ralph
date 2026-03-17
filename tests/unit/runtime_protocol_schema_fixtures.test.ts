@@ -186,6 +186,12 @@ describe("runtime protocol schema fixtures", () => {
     ).toBe(true);
     expect(
       validate(
+        "docs/runtime-contracts/schemas/runtime.strategy_desk_leg.v1.schema.json",
+        "docs/runtime-contracts/fixtures/runtime.strategy_desk_leg.valid.v1.json",
+      ),
+    ).toBe(true);
+    expect(
+      validate(
         "docs/runtime-contracts/schemas/runtime.strategy_desk_scenario.v1.schema.json",
         "docs/runtime-contracts/fixtures/runtime.strategy_desk_scenario.valid.v1.json",
       ),
@@ -247,6 +253,7 @@ describe("runtime protocol schema fixtures", () => {
       "docs/runtime-contracts/schemas/runtime.strategy_lab_readiness_canary_run.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.strategy_lab_post_live_artifact.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.strategy_desk_scenario.v1.schema.json",
+      "docs/runtime-contracts/schemas/runtime.strategy_desk_leg.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.strategy_desk_run.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.strategy_desk_report.v1.schema.json",
       "docs/runtime-contracts/schemas/runtime.strategy_desk_promotion_handoff.v1.schema.json",
