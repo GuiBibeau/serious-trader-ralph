@@ -113,12 +113,16 @@ describe("strategy desk repository", () => {
     );
 
     expect(persisted?.researchMatrix?.variants).toHaveLength(
-      ((scenario.researchMatrix as Record<string, unknown>).variants as unknown[])
-        .length,
+      (
+        (scenario.researchMatrix as Record<string, unknown>)
+          .variants as unknown[]
+      ).length,
     );
     expect(persisted?.researchMatrix?.windows).toHaveLength(
-      ((scenario.researchMatrix as Record<string, unknown>).windows as unknown[])
-        .length,
+      (
+        (scenario.researchMatrix as Record<string, unknown>)
+          .windows as unknown[]
+      ).length,
     );
     expect(persisted?.evidence).toHaveLength(
       (scenario.evidence as unknown[]).length,
@@ -159,14 +163,14 @@ describe("strategy desk repository", () => {
     );
 
     expect(persisted?.studyMatrix?.cells).toHaveLength(
-      (((report.studyMatrix as Record<string, unknown>)?.cells ??
-        []) as unknown[]).length,
+      (
+        ((report.studyMatrix as Record<string, unknown>)?.cells ??
+          []) as unknown[]
+      ).length,
     );
     expect(persisted?.evidence).toHaveLength(
       (report.evidence as unknown[]).length,
     );
-    expect(persisted?.checks).toHaveLength(
-      (report.checks as unknown[]).length,
-    );
+    expect(persisted?.checks).toHaveLength((report.checks as unknown[]).length);
   });
 });
