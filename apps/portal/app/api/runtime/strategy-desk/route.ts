@@ -98,17 +98,25 @@ async function requestWorkerJson(input: {
     };
   }
 
-  const response = await fetch(`${base}${input.path}`, {
-    method: input.method ?? "GET",
-    headers: {
-      authorization: input.authHeader,
-      ...(input.body !== undefined
-        ? { "content-type": "application/json" }
-        : {}),
-    },
-    ...(input.body !== undefined ? { body: JSON.stringify(input.body) } : {}),
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${base}${input.path}`, {
+      method: input.method ?? "GET",
+      headers: {
+        authorization: input.authHeader,
+        ...(input.body !== undefined
+          ? { "content-type": "application/json" }
+          : {}),
+      },
+      ...(input.body !== undefined ? { body: JSON.stringify(input.body) } : {}),
+      cache: "no-store",
+    });
+  } catch {
+    return {
+      status: 502,
+      payload: { ok: false, error: "worker-fetch-failed" },
+    };
+  }
   const payload = (await response.json().catch(() => null)) as unknown;
   return {
     status: response.status,
@@ -194,6 +202,20 @@ async function ensureAuthorizedOperator(request: Request): Promise<
   }
 
   const session = await validateOperatorSession(userAuthHeader);
+  if (session.status >= 500) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          ok: false,
+          error:
+            readString(session.payload.error) ??
+            "operator-auth-upstream-failed",
+        },
+        { status: session.status || 502 },
+      ),
+    };
+  }
   if (session.status !== 200 || session.payload.ok !== true) {
     return {
       ok: false,

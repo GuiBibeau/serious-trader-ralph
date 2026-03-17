@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { buildRunComparison } from "../../apps/portal/app/terminal/strategy-desk/strategy-desk-view";
+import {
+  buildRunComparison,
+  strategyDeskVariantRowKey,
+} from "../../apps/portal/app/terminal/strategy-desk/strategy-desk-view";
 import { safeParseRuntimeStrategyDeskScenarioManifest } from "../../apps/portal/lib/runtime-strategy-desk";
 
 const FIXTURE_TIME = "2026-03-17T03:08:10Z";
@@ -105,5 +108,17 @@ describe("portal runtime strategy desk contracts", () => {
       scenarioRunId: "desk_run_sol_composite_paper_1",
       netPnlUsd: "49.30",
     });
+  });
+
+  test("builds deterministic fallback keys for variant rows", () => {
+    expect(
+      strategyDeskVariantRowKey(
+        {
+          label: "Carry tilt",
+        },
+        3,
+      ),
+    ).toBe("Carry tilt");
+    expect(strategyDeskVariantRowKey({}, 3)).toBe("variant-3");
   });
 });

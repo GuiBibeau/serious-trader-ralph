@@ -162,6 +162,34 @@ describe("portal runtime strategy desk route", () => {
     });
   });
 
+  test("returns a structured upstream error when worker auth fetch throws", async () => {
+    process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
+    process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";
+    process.env.RUNTIME_OPERATOR_USER_ALLOWLIST = "u_1";
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) {
+        throw new Error("socket hang up");
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const response = await GET(
+      new Request("https://www.trader-ralph.com/api/runtime/strategy-desk", {
+        headers: {
+          authorization: "Bearer user-token",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: "worker-fetch-failed",
+    });
+  });
+
   test("returns strategy desk snapshot with selected scenario detail", async () => {
     process.env.NEXT_PUBLIC_EDGE_API_BASE = "https://api.trader-ralph.com";
     process.env.RUNTIME_OPERATOR_ADMIN_TOKEN = "operator-admin";

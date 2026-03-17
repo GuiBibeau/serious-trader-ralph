@@ -161,6 +161,17 @@ export function buildRunComparison(
   });
 }
 
+export function strategyDeskVariantRowKey(
+  variant: Record<string, unknown>,
+  index: number,
+): string {
+  return (
+    readString(variant.variantId) ??
+    readString(variant.label) ??
+    `variant-${index}`
+  );
+}
+
 function reportForDisplay(
   latestReport: RuntimeStrategyDeskScenarioReport | null,
   reports: RuntimeStrategyDeskScenarioReport[],
@@ -749,7 +760,7 @@ export function StrategyDeskView({
                         </td>
                       </tr>
                     ) : (
-                      variantSummaries.map((variant) => {
+                      variantSummaries.map((variant, index) => {
                         const selectionMetrics = isRecord(
                           variant.selectionMetrics,
                         )
@@ -765,10 +776,7 @@ export function StrategyDeskView({
                         return (
                           <tr
                             className="border-t border-border/60"
-                            key={
-                              readString(variant.variantId) ??
-                              Math.random().toString()
-                            }
+                            key={strategyDeskVariantRowKey(variant, index)}
                           >
                             <td className="py-3 pr-4 text-ink">
                               {readString(variant.label) ??
