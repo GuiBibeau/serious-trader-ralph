@@ -7,7 +7,10 @@ import {
   listRuntimeStrategyDeskScenarioRunsWorkflow,
   upsertRuntimeStrategyDeskScenarioWorkflow,
 } from "../../apps/worker/src/runtime_strategy_desk";
-import { executeRuntimeStrategyDeskScenarioWorkflow } from "../../apps/worker/src/runtime_strategy_desk_runner";
+import {
+  executeRuntimeStrategyDeskScenarioWorkflow,
+  readLegNetExposureUsd,
+} from "../../apps/worker/src/runtime_strategy_desk_runner";
 import type { Env } from "../../apps/worker/src/types";
 import { createWorkerLiveEnv } from "../integration/_worker_live_test_utils";
 
@@ -575,5 +578,37 @@ describe("runtime strategy desk runner", () => {
     } finally {
       sqlite.close();
     }
+  });
+
+  test("counts conditional spot legs toward net exposure overlays", () => {
+    const scenario = readFixture(
+      "runtime.strategy_desk_scenario.valid.v1.json",
+    ) as {
+      legs: Array<Record<string, unknown>>;
+    };
+    const spotLeg = scenario.legs.find((leg) => leg.legId === "leg_spot_alpha");
+    expect(spotLeg).toBeDefined();
+
+    const buyExposure = readLegNetExposureUsd({
+      ...(spotLeg as Record<string, unknown>),
+      intentFamily: "conditional_spot_order",
+      intent: {
+        side: "buy",
+        quantityAtomic: "1000000000",
+        limitPriceAtomic: "142000000",
+      },
+    } as never);
+    const sellExposure = readLegNetExposureUsd({
+      ...(spotLeg as Record<string, unknown>),
+      intentFamily: "conditional_spot_order",
+      intent: {
+        side: "sell",
+        quantityAtomic: "1000000000",
+        limitPriceAtomic: "142000000",
+      },
+    } as never);
+
+    expect(buyExposure).toBe(1000);
+    expect(sellExposure).toBe(-1000);
   });
 });

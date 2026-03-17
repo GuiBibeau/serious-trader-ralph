@@ -846,7 +846,9 @@ function readLegGrossExposureUsd(leg: RuntimeStrategyDeskScenarioLeg): number {
   return readLegTargetNotionalUsd(leg);
 }
 
-function readLegNetExposureUsd(leg: RuntimeStrategyDeskScenarioLeg): number {
+export function readLegNetExposureUsd(
+  leg: RuntimeStrategyDeskScenarioLeg,
+): number {
   const notional = readLegTargetNotionalUsd(leg);
   const side = String(leg.intent?.side ?? "")
     .trim()
@@ -854,6 +856,7 @@ function readLegNetExposureUsd(leg: RuntimeStrategyDeskScenarioLeg): number {
 
   switch (leg.intentFamily) {
     case "spot_swap":
+    case "conditional_spot_order":
     case "clob_order":
       return side === "sell" ? -notional : notional;
     case "perp_order":
