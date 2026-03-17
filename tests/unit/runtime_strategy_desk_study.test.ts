@@ -607,6 +607,60 @@ describe("runtime strategy desk study workflow", () => {
     }
   });
 
+  test("rejects selected variants whose override leg ids are not backtest-bound", async () => {
+    const { env, sqlite } = createOpsEnv();
+    try {
+      const baseScenario = buildStudyScenario();
+      const baseMatrix = baseScenario.researchMatrix as Record<string, unknown>;
+      await upsertRuntimeStrategyDeskScenarioWorkflow({
+        env,
+        scenario: {
+          ...baseScenario,
+          researchMatrix: {
+            ...baseMatrix,
+            variants: [
+              {
+                variantId: "broken",
+                label: "Broken",
+                parameterManifest: {
+                  threshold: "broken",
+                },
+                legOverrides: [
+                  {
+                    legId: "leg_missing_override",
+                    experimentId: "exp_missing_override",
+                  },
+                ],
+              },
+            ],
+          },
+        } as never,
+      });
+
+      const executeRuntimeStrategyDeskStudyWorkflow = await getStudyWorkflow();
+      await expect(
+        executeRuntimeStrategyDeskStudyWorkflow(
+          {
+            env,
+            scenarioId: "desk_sol_composite_1",
+            runKind: "backtest",
+            requestedBy: "operator_1",
+            variantIds: ["broken"],
+          },
+          {
+            async runRuntimeBacktest() {
+              throw new Error("should-not-run-backtest");
+            },
+          },
+        ),
+      ).rejects.toThrow(
+        "runtime-strategy-desk-study-leg-unknown:desk_sol_composite_1:leg_missing_override",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
   test("accepts anchored study windows when the runtime backtest report echoes anchored mode", async () => {
     const { env, sqlite } = createOpsEnv();
     try {

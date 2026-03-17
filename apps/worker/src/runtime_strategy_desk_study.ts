@@ -403,6 +403,26 @@ function scenarioLegById(
   return leg;
 }
 
+function assertVariantOverridesAreBacktestBound(input: {
+  scenario: RuntimeStrategyDeskScenarioManifest;
+  variants: StrategyDeskResearchMatrixVariant[];
+  backtestLegs: StrategyDeskResearchMatrixLeg[];
+}) {
+  const configuredBacktestLegIds = new Set(
+    input.backtestLegs.map((leg) => leg.legId),
+  );
+
+  for (const variant of input.variants) {
+    for (const override of variant.legOverrides ?? []) {
+      scenarioLegById(input.scenario, override.legId);
+      if (configuredBacktestLegIds.has(override.legId)) continue;
+      throw new Error(
+        `runtime-strategy-desk-study-variant-override-leg-missing:${input.scenario.scenarioId}:${variant.variantId}:${override.legId}`,
+      );
+    }
+  }
+}
+
 function studySelectionMetricValue(input: {
   summary: StrategyDeskStudyVariantSummary;
   metric: StrategyDeskStudySelectionMetric;
@@ -835,6 +855,11 @@ export async function executeRuntimeStrategyDeskStudyWorkflow(
   for (const legConfig of researchMatrix.backtestLegs) {
     scenarioLegById(scenario, legConfig.legId);
   }
+  assertVariantOverridesAreBacktestBound({
+    scenario,
+    variants,
+    backtestLegs: researchMatrix.backtestLegs,
+  });
 
   const createdAt = nowIso(deps);
   let run = (
