@@ -133,13 +133,19 @@ Expected effect:
 ### Prepare a bounded execution handoff
 
 ```bash
+mkdir -p \
+  .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff \
+  .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills
+
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare" \
   -X POST \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.prepare.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/01-prepare.json
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/01-prepare.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/01-prepare.json
 ```
 
 Expected effect:
@@ -152,7 +158,8 @@ Expected effect:
 Set the handoff id from the prepare response:
 
 ```bash
-export HANDOFF_ID="${HANDOFF_ID:?set HANDOFF_ID from prepare output}"
+export HANDOFF_ID="$(jq -r '.handoff.handoffId' .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/01-prepare.json)"
+test -n "${HANDOFF_ID}" && test "${HANDOFF_ID}" != "null"
 ```
 
 Submit:
@@ -164,7 +171,9 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.submit.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/02-submit.json
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/02-submit.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/02-submit.json
 ```
 
 Approve:
@@ -176,7 +185,9 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.approve.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/03-approve.json
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/03-approve.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/03-approve.json
 ```
 
 Apply:
@@ -188,7 +199,9 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.apply.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/04-apply.json
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/04-apply.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/04-apply.json
 ```
 
 Read back the handoff detail and materialized recipes:
@@ -197,7 +210,9 @@ Read back the handoff detail and materialized recipes:
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}" \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/05-detail.json
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/05-detail.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/05-detail.json
 ```
 
 Expected effect:
@@ -217,7 +232,9 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.pause.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/pause.json
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/pause.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/pause.json
 ```
 
 Kill:
@@ -229,7 +246,9 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.kill.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/kill.json
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/kill.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/kill.json
 ```
 
 Demote:
@@ -241,7 +260,9 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.demote.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/demote.json
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/demote.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/demote.json
 ```
 
 ## Rollback order of operations
