@@ -239,6 +239,7 @@ import {
   transitionRuntimeStrategyDeskPromotionHandoffWorkflow,
   upsertRuntimeStrategyDeskPromotionHandoffWorkflow,
 } from "./runtime_strategy_desk_promotion";
+import { executeRuntimeStrategyDeskResearchWorkflow } from "./runtime_strategy_desk_research";
 import { executeRuntimeStrategyDeskScenarioWorkflow } from "./runtime_strategy_desk_runner";
 import { executeRuntimeStrategyDeskStudyWorkflow } from "./runtime_strategy_desk_study";
 import { SolanaRpc } from "./solana_rpc";
@@ -738,6 +739,60 @@ function parseRuntimeStrategyDeskStudyRequest(payload: unknown): {
       : {}),
     ...(readStringArray(record.windowIds)
       ? { windowIds: readStringArray(record.windowIds) }
+      : {}),
+  };
+}
+
+function parseRuntimeStrategyDeskResearchRequest(payload: unknown): {
+  prompt: string;
+  requestedBy: string;
+  ownerUserId?: string;
+  runKind?: "shadow" | "paper";
+  walletAddress?: string;
+  privyWalletId?: string;
+  candidateCount?: number;
+  scenarioPrefix?: string;
+  maxRetriesPerLeg?: number;
+  maxConcurrency?: number;
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("runtime-strategy-desk-research-invalid-body");
+  }
+  const record = payload as Record<string, unknown>;
+  const prompt = String(record.prompt ?? "").trim();
+  const requestedBy = String(record.requestedBy ?? "").trim();
+  const ownerUserId = String(record.ownerUserId ?? "").trim();
+  const walletAddress = String(record.walletAddress ?? "").trim();
+  const privyWalletId = String(record.privyWalletId ?? "").trim();
+  const scenarioPrefix = String(record.scenarioPrefix ?? "").trim();
+  const candidateCount = Number(record.candidateCount);
+  const maxRetriesPerLeg = Number(record.maxRetriesPerLeg);
+  const maxConcurrency = Number(record.maxConcurrency);
+  const runKind =
+    record.runKind === "shadow" || record.runKind === "paper"
+      ? record.runKind
+      : undefined;
+
+  if (!prompt || !requestedBy) {
+    throw new Error("runtime-strategy-desk-research-invalid-body");
+  }
+
+  return {
+    prompt,
+    requestedBy,
+    ...(ownerUserId ? { ownerUserId } : {}),
+    ...(runKind ? { runKind } : {}),
+    ...(walletAddress ? { walletAddress } : {}),
+    ...(privyWalletId ? { privyWalletId } : {}),
+    ...(scenarioPrefix ? { scenarioPrefix } : {}),
+    ...(Number.isFinite(candidateCount)
+      ? { candidateCount: Math.max(1, Math.trunc(candidateCount)) }
+      : {}),
+    ...(Number.isFinite(maxRetriesPerLeg)
+      ? { maxRetriesPerLeg: Math.max(0, Math.trunc(maxRetriesPerLeg)) }
+      : {}),
+    ...(Number.isFinite(maxConcurrency)
+      ? { maxConcurrency: Math.max(1, Math.trunc(maxConcurrency)) }
       : {}),
   };
 }
@@ -3977,6 +4032,54 @@ const worker = {
               "/api/admin/ops/runtime/strategy-desk/scenarios/",
             )
           : null;
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/admin/ops/runtime/strategy-desk/research"
+      ) {
+        const auth = authorizeAdminRoute(request, env);
+        if (!auth.ok) {
+          return withCors(
+            json({ ok: false, error: auth.error }, { status: auth.status }),
+            env,
+          );
+        }
+        try {
+          const parsed = parseRuntimeStrategyDeskResearchRequest(
+            await request.json(),
+          );
+          const result = await executeRuntimeStrategyDeskResearchWorkflow({
+            env,
+            ...parsed,
+          });
+          return withCors(
+            json({
+              ok: true,
+              prompt: result.prompt,
+              requestedBy: result.requestedBy,
+              runKind: result.runKind,
+              generatedAt: result.generatedAt,
+              candidateCount: result.candidateCount,
+              rankings: result.rankings,
+              markdownSummary: result.markdownSummary,
+            }),
+            env,
+          );
+        } catch (error) {
+          return withCors(
+            json(
+              {
+                ok: false,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "runtime-strategy-desk-research-failed",
+              },
+              { status: 400 },
+            ),
+            env,
+          );
+        }
+      }
       if (request.method === "GET" && strategyDeskScenarioId) {
         const auth = authorizeAdminRoute(request, env);
         if (!auth.ok) {
