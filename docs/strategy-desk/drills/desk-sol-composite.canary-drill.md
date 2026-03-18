@@ -28,12 +28,15 @@ export ADMIN_TOKEN="${ADMIN_TOKEN:?set ADMIN_TOKEN first}"
 ```bash
 mkdir -p .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills
 
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.prepare.json
+
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/scenarios/desk_sol_composite_1/handoffs/prepare" \
   -X POST \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.prepare.request.json \
+  --remove-on-error \
   --output .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.prepare.json
 
 cat .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.prepare.json
@@ -54,15 +57,20 @@ Expected:
 ### 2. Submit and approve
 
 ```bash
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.submit.json
+
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}/transition" \
   -X POST \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.submit.request.json \
+  --remove-on-error \
   --output .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.submit.json
 
 cat .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.submit.json
+
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.approve.json
 
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}/transition" \
@@ -70,6 +78,7 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.approve.request.json \
+  --remove-on-error \
   --output .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.approve.json
 
 cat .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.approve.json
@@ -83,19 +92,25 @@ Expected:
 ### 3. Apply and inspect
 
 ```bash
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.apply.json
+
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}/transition" \
   -X POST \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.apply.request.json \
+  --remove-on-error \
   --output .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.apply.json
 
 cat .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.apply.json
 
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.detail.json
+
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}" \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
+  --remove-on-error \
   --output .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.detail.json
 
 cat .tmp/strategy-desk-proof/desk_sol_composite_1/06-drills/canary.detail.json

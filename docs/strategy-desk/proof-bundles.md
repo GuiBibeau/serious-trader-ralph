@@ -123,13 +123,20 @@ test -n "${HANDOFF_ID}" && test "${HANDOFF_ID}" != "null"
 Approve and apply:
 
 ```bash
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/02-submit.json
+
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}/transition" \
   -X POST \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.submit.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/02-submit.json
+  --remove-on-error \
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/02-submit.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/02-submit.json
+
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/03-approve.json
 
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}/transition" \
@@ -137,7 +144,12 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.approve.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/03-approve.json
+  --remove-on-error \
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/03-approve.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/03-approve.json
+
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/04-apply.json
 
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}/transition" \
@@ -145,12 +157,20 @@ curl -fsS \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
   -H "content-type: application/json" \
   --data @docs/strategy-desk/request-templates/desk-sol-composite/handoff.transition.apply.request.json \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/04-apply.json
+  --remove-on-error \
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/04-apply.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/04-apply.json
+
+rm -f .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/05-detail.json
 
 curl -fsS \
   "${DESK_BASE_URL}/api/admin/ops/runtime/strategy-desk/handoffs/${HANDOFF_ID}" \
   -H "authorization: Bearer ${ADMIN_TOKEN}" \
-  | tee .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/05-detail.json
+  --remove-on-error \
+  --output .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/05-detail.json
+
+cat .tmp/strategy-desk-proof/desk_sol_composite_1/05-handoff/05-detail.json
 ```
 
 ### 5. Browser proof
