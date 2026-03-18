@@ -1,0 +1,5 @@
+{
+  "action": "demote",
+  "actor": "operator_1",
+  "notes": "return scenario to paper after rollback drill"
+}

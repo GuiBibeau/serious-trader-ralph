@@ -13,6 +13,7 @@ how to verify or roll back the main operating paths.
 | Runtime control plane | Bun CLI, agent runtime, tools, policies, and journals | `src` |
 | Autonomous runtime | Rust hot path for always-on automation, reconciliation, and portfolio state | `services/runtime-rs`, `docs/product-specs/autonomous-runtime-prd.md`, `docs/design-docs/autonomous-runtime-architecture.md` |
 | Strategy lab | Research-to-production workflow for new strategies, venues, and assets | `docs/product-specs/strategy-lab-prd.md`, `docs/exec-plans/active/strategy-lab-rollout.md` |
+| Strategy desk | Harness-native composite scenario authoring, study, paper validation, and bounded execution handoffs | `apps/portal/app/terminal/strategy-desk`, `apps/worker/src/runtime_strategy_desk*.ts`, `docs/strategy-desk` |
 | Tests | Unit, integration, and terminal execution suites | `tests` |
 | Public contracts | Execution docs, schemas, fixtures, and runbooks | `docs/execution` |
 | Agent registry | Lane metadata and operator runbook | `docs/agent-registry` |
@@ -66,6 +67,9 @@ Autonomous runtime planning surfaces:
 - Strategy-lab product spec: `docs/product-specs/strategy-lab-prd.md`
 - Strategy-lab rollout plan: `docs/exec-plans/active/strategy-lab-rollout.md`
 - Strategy-lab ops runbook: `docs/reliability/strategy-lab-ops-runbook.md`
+- Strategy-desk overview: `docs/strategy-desk/README.md`
+- Strategy-desk ops runbook: `docs/reliability/strategy-desk-ops-runbook.md`
+- Strategy-desk proof bundles: `docs/strategy-desk/proof-bundles.md`
 
 The runtime service is deployed on Fly and verified independently from the
 portal and Worker lanes.
@@ -594,6 +598,31 @@ curl -fsS -X POST \
   "$API_BASE/api/admin/execution/canary/reset"
 ```
 
+### 7a. Strategy-desk verification
+
+For composite scenario authoring, study, paper validation, bounded execution
+handoffs, and drill documentation:
+
+```bash
+bun run lint
+bun test tests/unit/runtime_strategy_desk_runner.test.ts tests/unit/runtime_strategy_desk_study.test.ts
+bun test tests/unit/worker_runtime_strategy_desk_route.test.ts tests/unit/worker_runtime_strategy_desk_execute_route.test.ts tests/unit/worker_runtime_strategy_desk_study_route.test.ts
+bun test tests/unit/portal_runtime_strategy_desk_route.test.ts tests/unit/worker_execution_migrations.test.ts
+bun run harness:proof --output-dir .tmp/strategy-desk-proof/desk_sol_composite_1/07-browser-proof
+```
+
+Verify:
+
+- the strategy-desk runbook, proof-bundle spec, and drill docs agree on the
+  same scenario id, command matrix, and rollback posture,
+- request templates exist for scenario upsert, study, shadow, paper, prepare,
+  approve, apply, pause, kill, and demote flows,
+- the browser proof includes the bounded execution desk state,
+- the proof bundle layout is explicit enough for a future issue runner to
+  reproduce the same desk flow without inventing new files,
+- bounded execution remains human-gated and auditable through the handoff
+  object instead of bypassing the Worker admin boundary.
+
 ## Rollback Steps
 
 ### Code rollback
@@ -665,4 +694,8 @@ and can comment on a PR when `pr_number` is supplied.
 - Autonomous runtime architecture: `docs/design-docs/autonomous-runtime-architecture.md`
 - Autonomous runtime runbook: `docs/reliability/autonomous-runtime-ops-runbook.md`
 - Autonomous runtime rollout plan: `docs/exec-plans/active/autonomous-runtime-rollout.md`
+- Strategy-desk overview: `docs/strategy-desk/README.md`
+- Strategy-desk runbook: `docs/reliability/strategy-desk-ops-runbook.md`
+- Strategy-desk proof bundles: `docs/strategy-desk/proof-bundles.md`
+- Strategy-desk drills: `docs/strategy-desk/drills/`
 - Long-form pipeline architecture: `loop-a-loop-b-architecture.md`
