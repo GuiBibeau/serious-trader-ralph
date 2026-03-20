@@ -80,6 +80,12 @@ describe("loop A contracts", () => {
       px: "192.44",
       confidence: 0.78,
       venue: "orca",
+      lineage: {
+        protocol: "orca",
+        venue: "orca",
+        marketType: "spot",
+        pool: POOL,
+      },
       version: "v1",
       evidence: {
         sigs: [SIG],
@@ -88,6 +94,28 @@ describe("loop A contracts", () => {
     });
 
     expect(mark.confidence).toBe(0.78);
+    expect(mark.lineage?.protocol).toBe("orca");
+    expect(mark.lineage?.pool).toBe(POOL);
+  });
+
+  test("rejects mark lineage without protocol", () => {
+    const result = safeParseMark({
+      ...META,
+      slot: 200,
+      ts: "2026-02-21T00:01:00Z",
+      baseMint: SOL_MINT,
+      quoteMint: USDC_MINT,
+      px: "192.44",
+      confidence: 0.78,
+      venue: "orca",
+      lineage: {
+        venue: "orca",
+        marketType: "spot",
+      },
+      version: "v1",
+    });
+
+    expect(result.success).toBe(false);
   });
 
   test("rejects mark when confidence is out of range", () => {

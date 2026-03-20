@@ -12,6 +12,14 @@ const DECIMAL_STRING_SCHEMA = z
 const NUMERIC_STRING_SCHEMA = z
   .string()
   .regex(/^-?\d+(?:\.\d+)?$/, "invalid-numeric-string");
+const MARKET_TYPE_SCHEMA = z.enum([
+  "spot",
+  "clob",
+  "perp",
+  "prediction",
+  "flash",
+  "unknown",
+]);
 
 export const ArtifactMetaSchema = z
   .object({
@@ -110,6 +118,15 @@ export const ProtocolEventSchema = z.discriminatedUnion("kind", [
   UnknownProtocolEventSchema,
 ]);
 
+export const MarkLineageSchema = z
+  .object({
+    protocol: NON_EMPTY_STRING_SCHEMA,
+    venue: NON_EMPTY_STRING_SCHEMA,
+    marketType: MARKET_TYPE_SCHEMA,
+    pool: PUBKEY_SCHEMA.optional(),
+  })
+  .strict();
+
 export const MarkSchema = ArtifactMetaSchema.extend({
   slot: z.number().int().nonnegative(),
   ts: ISO_DATETIME_SCHEMA,
@@ -121,6 +138,7 @@ export const MarkSchema = ArtifactMetaSchema.extend({
   confidence: z.number().min(0).max(1),
   venue: NON_EMPTY_STRING_SCHEMA,
   liquidityUsd: DECIMAL_STRING_SCHEMA.optional(),
+  lineage: MarkLineageSchema.optional(),
   evidence: z
     .object({
       sigs: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
@@ -183,6 +201,7 @@ export const HealthSchema = ArtifactMetaSchema.extend({
 
 export type ArtifactMeta = z.infer<typeof ArtifactMetaSchema>;
 export type ProtocolEvent = z.infer<typeof ProtocolEventSchema>;
+export type MarkLineage = z.infer<typeof MarkLineageSchema>;
 export type Mark = z.infer<typeof MarkSchema>;
 export type StateSnapshot = z.infer<typeof StateSnapshotSchema>;
 export type Health = z.infer<typeof HealthSchema>;

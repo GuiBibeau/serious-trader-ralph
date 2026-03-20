@@ -1,11 +1,12 @@
-import type { LoopBScoreRow } from "../loop_b/minute_accumulator";
+import type {
+  LoopBScoreRow,
+  LoopBVenueLineageRow,
+} from "../loop_b/minute_accumulator";
 
 export const LOOP_C_SCHEMA_VERSION = "v1" as const;
 export const LOOP_C_CANDIDATE_POOL_LATEST_KEY = "loopC:v1:candidates:latest";
 export const LOOP_C_CANDIDATE_POOL_DEFAULT_LIMIT = 24;
 export const LOOP_C_CANDIDATE_POOL_MAX_LIMIT = 200;
-
-const KNOWN_PROTOCOLS = ["jupiter", "raydium", "orca", "meteora"] as const;
 
 export type LoopCCandidateFeatureHints = {
   markCount: number;
@@ -31,6 +32,8 @@ export type LoopCCandidateRow = {
   scoreRef: string;
   evidenceRefs: string[];
   sourceProtocols: string[];
+  sourceVenues: string[];
+  venueLineage: LoopBVenueLineageRow[];
   freshnessMs: number;
   liquidityScore: number;
   markCount: number;
@@ -90,12 +93,34 @@ function acceptancePriorFromScore(finalScore: number): number {
   return clamp01(1 / (1 + Math.exp(-scaled)));
 }
 
-function inferProtocolsFromEvidenceRefs(input: string[]): string[] {
-  const lower = input.join(" ").toLowerCase();
-  const protocols = KNOWN_PROTOCOLS.filter((protocol) =>
-    lower.includes(protocol),
-  );
-  return protocols.length > 0 ? [...protocols] : [];
+function normalizeVenueLineage(
+  input: LoopBVenueLineageRow[] | undefined,
+): LoopBVenueLineageRow[] {
+  return [...(input ?? [])]
+    .filter(
+      (entry) =>
+        entry.protocol.trim().length > 0 && entry.venue.trim().length > 0,
+    )
+    .map((entry) => ({
+      protocol: entry.protocol.trim(),
+      venue: entry.venue.trim(),
+      marketType: entry.marketType,
+      markCount: Math.max(0, Math.floor(entry.markCount)),
+      confidenceAvg: clamp01(entry.confidenceAvg),
+      firstSlot: Math.max(0, Math.floor(entry.firstSlot)),
+      lastSlot: Math.max(0, Math.floor(entry.lastSlot)),
+      lastTs: entry.lastTs,
+      inputRefs: normalizeStringList(entry.inputRefs),
+      pools: normalizeStringList(entry.pools),
+    }))
+    .sort((a, b) => {
+      if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;
+      if (a.protocol !== b.protocol) return a.protocol < b.protocol ? -1 : 1;
+      if (a.marketType !== b.marketType) {
+        return a.marketType < b.marketType ? -1 : 1;
+      }
+      return a.firstSlot - b.firstSlot;
+    });
 }
 
 function parseFeatureHints(input: LoopCCandidateFeatureHints | undefined): {
@@ -180,8 +205,10 @@ export function buildLoopCCandidatePool(input: {
     const evidenceRefs = normalizeEvidenceRefs(
       input.evidenceRefsByPair.get(row.pairId),
     );
-    const sourceProtocols = inferProtocolsFromEvidenceRefs(evidenceRefs);
     const hints = parseFeatureHints(input.featureHintsByPair.get(row.pairId));
+    const sourceProtocols = normalizeStringList(row.sourceProtocols);
+    const sourceVenues = normalizeStringList(row.sourceVenues);
+    const venueLineage = normalizeVenueLineage(row.venueLineage);
 
     const curiosity =
       Math.abs(row.contributions.momentum) + row.contributions.activity * 0.2;
@@ -209,6 +236,8 @@ export function buildLoopCCandidatePool(input: {
       scoreRef: `loopB:v1:scores:latest:pair:${row.pairId}`,
       evidenceRefs,
       sourceProtocols,
+      sourceVenues,
+      venueLineage,
       freshnessMs,
       liquidityScore: round(liquidityScore),
       markCount: hints.markCount,
@@ -221,6 +250,8 @@ export function buildLoopCCandidatePool(input: {
         `source=loopB`,
         `score_ref=loopB:v1:scores:latest:pair:${row.pairId}`,
         `evidence_refs=${evidenceRefs.length}`,
+        `source_protocols=${sourceProtocols.join("|") || "none"}`,
+        `source_venues=${sourceVenues.join("|") || "none"}`,
         `risk_tags=${riskTags.join("|") || "none"}`,
         `stability_tags=${stabilityTags.join("|") || "none"}`,
       ],
@@ -288,6 +319,58 @@ function parseLoopCCandidateRow(raw: unknown): LoopCCandidateRow | null {
           row.sourceProtocols.filter(
             (entry): entry is string => typeof entry === "string",
           ),
+        )
+      : [],
+    sourceVenues: Array.isArray(row.sourceVenues)
+      ? normalizeStringList(
+          row.sourceVenues.filter(
+            (entry): entry is string => typeof entry === "string",
+          ),
+        )
+      : [],
+    venueLineage: Array.isArray(row.venueLineage)
+      ? normalizeVenueLineage(
+          row.venueLineage.flatMap((entry) => {
+            const parsed = asRecord(entry);
+            if (!parsed) return [];
+            if (
+              typeof parsed.protocol !== "string" ||
+              typeof parsed.venue !== "string" ||
+              typeof parsed.marketType !== "string" ||
+              typeof parsed.lastTs !== "string"
+            ) {
+              return [];
+            }
+            return [
+              {
+                protocol: parsed.protocol,
+                venue: parsed.venue,
+                marketType:
+                  parsed.marketType as LoopBVenueLineageRow["marketType"],
+                markCount:
+                  typeof parsed.markCount === "number" ? parsed.markCount : 0,
+                confidenceAvg:
+                  typeof parsed.confidenceAvg === "number"
+                    ? parsed.confidenceAvg
+                    : 0,
+                firstSlot:
+                  typeof parsed.firstSlot === "number" ? parsed.firstSlot : 0,
+                lastSlot:
+                  typeof parsed.lastSlot === "number" ? parsed.lastSlot : 0,
+                lastTs: parsed.lastTs,
+                inputRefs: Array.isArray(parsed.inputRefs)
+                  ? parsed.inputRefs.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+                pools: Array.isArray(parsed.pools)
+                  ? parsed.pools.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+              },
+            ];
+          }),
         )
       : [],
     freshnessMs:

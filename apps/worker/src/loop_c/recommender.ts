@@ -1,6 +1,7 @@
 import {
   LOOP_B_SCORES_LATEST_KEY,
   type LoopBScoreRow,
+  type LoopBVenueLineageRow,
 } from "../loop_b/minute_accumulator";
 import type { Env } from "../types";
 import {
@@ -37,6 +38,9 @@ export type RecommendationRow = {
   personaBoost: number;
   acceptProb: number;
   acceptBoost: number;
+  sourceProtocols: string[];
+  sourceVenues: string[];
+  venueLineage: LoopBVenueLineageRow[];
   modelVersion: typeof LOOP_C_SCHEMA_VERSION;
   explain: string[];
 };
@@ -105,6 +109,8 @@ type RecommendationInputRow = {
   riskPenalty: number;
   stabilityBonus: number;
   sourceProtocols: string[];
+  sourceVenues: string[];
+  venueLineage: LoopBVenueLineageRow[];
   freshnessMs: number;
   liquidityScore: number;
   riskTags: string[];
@@ -156,6 +162,42 @@ function priorFromBaseSignal(baseSignal: number): number {
 function normalizePrior(input: number): number {
   if (!Number.isFinite(input)) return 0.5;
   return clamp01(input);
+}
+
+function normalizeStringArray(input: string[] | undefined): string[] {
+  return [
+    ...new Set((input ?? []).map((item) => item.trim()).filter(Boolean)),
+  ].sort();
+}
+
+function normalizeVenueLineageRows(
+  input: LoopBVenueLineageRow[] | undefined,
+): LoopBVenueLineageRow[] {
+  return [...(input ?? [])]
+    .filter(
+      (entry) =>
+        entry.protocol.trim().length > 0 && entry.venue.trim().length > 0,
+    )
+    .map((entry) => ({
+      protocol: entry.protocol.trim(),
+      venue: entry.venue.trim(),
+      marketType: entry.marketType,
+      markCount: Math.max(0, Math.floor(entry.markCount)),
+      confidenceAvg: clamp01(entry.confidenceAvg),
+      firstSlot: Math.max(0, Math.floor(entry.firstSlot)),
+      lastSlot: Math.max(0, Math.floor(entry.lastSlot)),
+      lastTs: entry.lastTs,
+      inputRefs: normalizeStringArray(entry.inputRefs),
+      pools: normalizeStringArray(entry.pools),
+    }))
+    .sort((a, b) => {
+      if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;
+      if (a.protocol !== b.protocol) return a.protocol < b.protocol ? -1 : 1;
+      if (a.marketType !== b.marketType) {
+        return a.marketType < b.marketType ? -1 : 1;
+      }
+      return a.firstSlot - b.firstSlot;
+    });
 }
 
 function parseDefaultLimit(raw: string | undefined): number {
@@ -230,6 +272,65 @@ function parseScoreRow(raw: unknown): LoopBScoreRow | null {
       activity: contributions.activity,
     },
     featuresRef: typeof row.featuresRef === "string" ? row.featuresRef : "",
+    sourceProtocols: Array.isArray(row.sourceProtocols)
+      ? normalizeStringArray(
+          row.sourceProtocols.filter(
+            (item): item is string => typeof item === "string",
+          ),
+        )
+      : [],
+    sourceVenues: Array.isArray(row.sourceVenues)
+      ? normalizeStringArray(
+          row.sourceVenues.filter(
+            (item): item is string => typeof item === "string",
+          ),
+        )
+      : [],
+    venueLineage: Array.isArray(row.venueLineage)
+      ? normalizeVenueLineageRows(
+          row.venueLineage.flatMap((entry) => {
+            const parsed = asRecord(entry);
+            if (!parsed) return [];
+            if (
+              typeof parsed.protocol !== "string" ||
+              typeof parsed.venue !== "string" ||
+              typeof parsed.marketType !== "string" ||
+              typeof parsed.lastTs !== "string"
+            ) {
+              return [];
+            }
+            return [
+              {
+                protocol: parsed.protocol,
+                venue: parsed.venue,
+                marketType:
+                  parsed.marketType as LoopBVenueLineageRow["marketType"],
+                markCount:
+                  typeof parsed.markCount === "number" ? parsed.markCount : 0,
+                confidenceAvg:
+                  typeof parsed.confidenceAvg === "number"
+                    ? parsed.confidenceAvg
+                    : 0,
+                firstSlot:
+                  typeof parsed.firstSlot === "number" ? parsed.firstSlot : 0,
+                lastSlot:
+                  typeof parsed.lastSlot === "number" ? parsed.lastSlot : 0,
+                lastTs: parsed.lastTs,
+                inputRefs: Array.isArray(parsed.inputRefs)
+                  ? parsed.inputRefs.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+                pools: Array.isArray(parsed.pools)
+                  ? parsed.pools.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+              },
+            ];
+          }),
+        )
+      : [],
     revision:
       typeof row.revision === "number" && Number.isInteger(row.revision)
         ? row.revision
@@ -264,7 +365,9 @@ function fromScoreRows(rows: LoopBScoreRow[]): RecommendationInputRow[] {
     baseSignal: row.finalScore,
     riskPenalty: row.contributions.stabilityPenalty,
     stabilityBonus: row.contributions.confidence,
-    sourceProtocols: [],
+    sourceProtocols: row.sourceProtocols,
+    sourceVenues: row.sourceVenues,
+    venueLineage: row.venueLineage,
     freshnessMs: Math.max(
       0,
       Date.parse(row.generatedAt) - Date.parse(row.minute),
@@ -286,6 +389,8 @@ function fromCandidatePoolRows(raw: string | null): RecommendationInputRow[] {
     riskPenalty: row.riskPenalty,
     stabilityBonus: row.stabilityBonus,
     sourceProtocols: row.sourceProtocols,
+    sourceVenues: row.sourceVenues,
+    venueLineage: row.venueLineage,
     freshnessMs: row.freshnessMs,
     liquidityScore: row.liquidityScore,
     riskTags: row.riskTags,
@@ -661,6 +766,9 @@ function buildRecommendations(input: {
       personaBoost: round(personaBoost),
       acceptProb,
       acceptBoost,
+      sourceProtocols: row.sourceProtocols,
+      sourceVenues: row.sourceVenues,
+      venueLineage: row.venueLineage,
       modelVersion: LOOP_C_SCHEMA_VERSION,
       explain: [
         `base_signal=${row.baseSignal.toFixed(4)}`,
@@ -669,6 +777,8 @@ function buildRecommendations(input: {
         `persona_boost=${personaBoost.toFixed(4)}`,
         `stability_boost=${stabilityBoost.toFixed(4)}`,
         `risk_penalty=${riskPenalty.toFixed(4)}`,
+        `source_protocols=${row.sourceProtocols.join("|") || "none"}`,
+        `source_venues=${row.sourceVenues.join("|") || "none"}`,
         `risk_tags=${row.riskTags.join("|") || "none"}`,
         `stability_tags=${row.stabilityTags.join("|") || "none"}`,
         ...row.explain.slice(0, 2),
@@ -752,6 +862,69 @@ function parseState(input: unknown): RecommenderState {
             ? normalizePrior(row.acceptProb)
             : 0.5,
         acceptBoost: typeof row.acceptBoost === "number" ? row.acceptBoost : 0,
+        sourceProtocols: Array.isArray(row.sourceProtocols)
+          ? normalizeStringArray(
+              row.sourceProtocols.filter(
+                (entry): entry is string => typeof entry === "string",
+              ),
+            )
+          : [],
+        sourceVenues: Array.isArray(row.sourceVenues)
+          ? normalizeStringArray(
+              row.sourceVenues.filter(
+                (entry): entry is string => typeof entry === "string",
+              ),
+            )
+          : [],
+        venueLineage: Array.isArray(row.venueLineage)
+          ? normalizeVenueLineageRows(
+              row.venueLineage.flatMap((entry) => {
+                const parsed = asRecord(entry);
+                if (!parsed) return [];
+                if (
+                  typeof parsed.protocol !== "string" ||
+                  typeof parsed.venue !== "string" ||
+                  typeof parsed.marketType !== "string" ||
+                  typeof parsed.lastTs !== "string"
+                ) {
+                  return [];
+                }
+                return [
+                  {
+                    protocol: parsed.protocol,
+                    venue: parsed.venue,
+                    marketType:
+                      parsed.marketType as LoopBVenueLineageRow["marketType"],
+                    markCount:
+                      typeof parsed.markCount === "number"
+                        ? parsed.markCount
+                        : 0,
+                    confidenceAvg:
+                      typeof parsed.confidenceAvg === "number"
+                        ? parsed.confidenceAvg
+                        : 0,
+                    firstSlot:
+                      typeof parsed.firstSlot === "number"
+                        ? parsed.firstSlot
+                        : 0,
+                    lastSlot:
+                      typeof parsed.lastSlot === "number" ? parsed.lastSlot : 0,
+                    lastTs: parsed.lastTs,
+                    inputRefs: Array.isArray(parsed.inputRefs)
+                      ? parsed.inputRefs.filter(
+                          (entry): entry is string => typeof entry === "string",
+                        )
+                      : [],
+                    pools: Array.isArray(parsed.pools)
+                      ? parsed.pools.filter(
+                          (entry): entry is string => typeof entry === "string",
+                        )
+                      : [],
+                  },
+                ];
+              }),
+            )
+          : [],
         modelVersion:
           row.modelVersion === LOOP_C_SCHEMA_VERSION
             ? LOOP_C_SCHEMA_VERSION

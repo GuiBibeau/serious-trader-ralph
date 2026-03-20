@@ -165,6 +165,11 @@ describe("worker loop A mark engine", () => {
     expect(mark.baseMint).toBe("So11111111111111111111111111111111111111112");
     expect(mark.quoteMint).toBe("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
     expect(mark.px).toBe("4");
+    expect(mark.lineage).toEqual({
+      protocol: "jupiter",
+      venue: "jupiter",
+      marketType: "spot",
+    });
     expect(mark.evidence?.sigs).toEqual(["sig-100"]);
 
     const pairKey =

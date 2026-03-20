@@ -154,6 +154,59 @@ function setScores(store: Map<string, string>, rowFinalScore: number): void {
   );
 }
 
+function setScoresWithLineage(
+  store: Map<string, string>,
+  rowFinalScore: number,
+): void {
+  store.set(
+    LOOP_B_SCORES_LATEST_KEY,
+    JSON.stringify({
+      schemaVersion: "v1",
+      generatedAt: "2026-02-21T20:00:00.000Z",
+      minute: "2026-02-21T20:00:00.000Z",
+      count: 1,
+      rows: [
+        {
+          schemaVersion: "v1",
+          generatedAt: "2026-02-21T20:00:00.000Z",
+          minute: "2026-02-21T20:00:00.000Z",
+          pairId:
+            "So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          baseMint: "So11111111111111111111111111111111111111112",
+          quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          finalScore: rowFinalScore,
+          contributions: {
+            momentum: 2.1,
+            confidence: 10.1,
+            stabilityPenalty: 1.3,
+            activity: 1.2,
+          },
+          featuresRef:
+            "loopB:v1:features:latest:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          sourceProtocols: ["jupiter"],
+          sourceVenues: ["jupiter"],
+          venueLineage: [
+            {
+              protocol: "jupiter",
+              venue: "jupiter",
+              marketType: "spot",
+              markCount: 3,
+              confidenceAvg: 0.9,
+              firstSlot: 700,
+              lastSlot: 702,
+              lastTs: "2026-02-21T20:00:00.000Z",
+              inputRefs: ["loopA/v1/events/slot=700"],
+              pools: [],
+            },
+          ],
+          revision: 1,
+          explain: ["score=momentum+confidence+activity-stability"],
+        },
+      ],
+    }),
+  );
+}
+
 function setCandidatePool(store: Map<string, string>, pairId: string): void {
   const [baseMint, quoteMint] = pairId.split(":");
   store.set(
@@ -184,6 +237,21 @@ function setCandidatePool(store: Map<string, string>, pairId: string): void {
           scoreRef: `loopB:v1:scores:latest:pair:${pairId}`,
           evidenceRefs: ["loopA/v1/events/slot=123"],
           sourceProtocols: ["jupiter"],
+          sourceVenues: ["jupiter"],
+          venueLineage: [
+            {
+              protocol: "jupiter",
+              venue: "jupiter",
+              marketType: "spot",
+              markCount: 3,
+              confidenceAvg: 0.9,
+              firstSlot: 120,
+              lastSlot: 123,
+              lastTs: "2026-02-21T20:00:00.000Z",
+              inputRefs: ["loopA/v1/events/slot=123"],
+              pools: [],
+            },
+          ],
           freshnessMs: 60000,
           liquidityScore: 2.7,
           markCount: 3,
@@ -448,7 +516,12 @@ describe("worker loop C recommender durable object", () => {
       ok: boolean;
       cacheHit: boolean;
       view: {
-        recommendations: Array<{ pairId: string; finalScore: number }>;
+        recommendations: Array<{
+          pairId: string;
+          finalScore: number;
+          sourceProtocols: string[];
+          sourceVenues: string[];
+        }>;
       };
     };
 
@@ -459,6 +532,55 @@ describe("worker loop C recommender durable object", () => {
       "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN:So11111111111111111111111111111111111111112",
     );
     expect(payload.view.recommendations[0]?.finalScore).toBeGreaterThan(7.5);
+    expect(payload.view.recommendations[0]?.sourceProtocols).toEqual([
+      "jupiter",
+    ]);
+    expect(payload.view.recommendations[0]?.sourceVenues).toEqual(["jupiter"]);
+  });
+
+  test("fallback score rows preserve structured venue lineage", async () => {
+    const { env, kvStore } = createEnv();
+    setScoresWithLineage(kvStore, 7.5);
+
+    const mock = createMockDoState();
+    const recommender = new Recommender(mock.state, env, {
+      now: () => "2026-02-21T20:15:00.000Z",
+    });
+
+    const response = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-lineage",
+          wallet: "wallet-lineage",
+          observedAt: "2026-02-21T20:15:00.000Z",
+          limit: 1,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      view: {
+        recommendations: Array<{
+          sourceProtocols: string[];
+          sourceVenues: string[];
+          venueLineage: Array<{ protocol: string; venue: string }>;
+        }>;
+      };
+    };
+
+    expect(payload.ok).toBe(true);
+    expect(payload.view.recommendations[0]?.sourceProtocols).toEqual([
+      "jupiter",
+    ]);
+    expect(payload.view.recommendations[0]?.sourceVenues).toEqual(["jupiter"]);
+    expect(payload.view.recommendations[0]?.venueLineage[0]).toMatchObject({
+      protocol: "jupiter",
+      venue: "jupiter",
+    });
   });
 
   test("feedback yes/no updates acceptance probability predictably", async () => {

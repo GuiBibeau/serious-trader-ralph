@@ -176,6 +176,8 @@ function buildMarkFromSwap(input: {
   const px = ratioAsDecimalString(outAtomic * inScale, inAtomic * outScale, 18);
   if (px === "0") return null;
 
+  const pools = extractPools(input.event);
+  const venue = input.event.venue ?? input.event.protocol;
   const evidenceInput = `${loopAEventBatchR2Key(input.commitment, input.event.slot)}#sig=${input.event.sig}`;
   return {
     schemaVersion: LOOP_A_SCHEMA_VERSION,
@@ -190,12 +192,18 @@ function buildMarkFromSwap(input: {
       hasUnitSize: inAtomic >= inScale && outAtomic >= outScale,
       hasLargeSize:
         inAtomic >= 1_000n * inScale && outAtomic >= 1_000n * outScale,
-      venue: input.event.venue,
+      venue,
     }),
-    venue: input.event.venue ?? input.event.protocol,
+    venue,
+    lineage: {
+      protocol: input.event.protocol,
+      venue,
+      marketType: "spot",
+      ...(pools?.[0] ? { pool: pools[0] } : {}),
+    },
     evidence: {
       sigs: [input.event.sig],
-      pools: extractPools(input.event),
+      pools,
       inputs: [evidenceInput],
     },
     version: LOOP_A_SCHEMA_VERSION,

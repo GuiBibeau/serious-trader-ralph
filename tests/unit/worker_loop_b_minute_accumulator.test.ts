@@ -108,6 +108,11 @@ function createMark(input: {
     px: input.px,
     confidence: input.confidence ?? 0.8,
     venue: "jupiter",
+    lineage: {
+      protocol: "jupiter",
+      venue: "jupiter",
+      marketType: "spot",
+    },
     evidence: {
       sigs: [input.sig],
       inputs: [input.inputRef ?? `loopA/v1/events/slot=${input.slot}`],
@@ -217,6 +222,13 @@ describe("worker loop B minute accumulator", () => {
     ) as {
       rows: Array<{
         pairId: string;
+        sourceProtocols: string[];
+        sourceVenues: string[];
+        venueLineage: Array<{
+          protocol: string;
+          venue: string;
+          marketType: string;
+        }>;
         slotRange: { fromSlot: number; toSlot: number };
         inputRefs: string[];
       }>;
@@ -232,6 +244,13 @@ describe("worker loop B minute accumulator", () => {
       fromSlot: 700,
       toSlot: 701,
     });
+    expect(solUsdc?.sourceProtocols).toEqual(["jupiter"]);
+    expect(solUsdc?.sourceVenues).toEqual(["jupiter"]);
+    expect(solUsdc?.venueLineage[0]).toMatchObject({
+      protocol: "jupiter",
+      venue: "jupiter",
+      marketType: "spot",
+    });
     expect(solUsdc?.inputRefs).toEqual([
       "loopA/v1/events/slot=700",
       "loopA/v1/events/slot=701",
@@ -242,6 +261,8 @@ describe("worker loop B minute accumulator", () => {
       rows: Array<{
         pairId: string;
         finalScore: number;
+        sourceProtocols: string[];
+        sourceVenues: string[];
         contributions: {
           momentum: number;
           confidence: number;
@@ -254,6 +275,8 @@ describe("worker loop B minute accumulator", () => {
     expect(scoreSet.rows.length).toBe(2);
     expect(scoreSet.rows[0]?.finalScore).toBeGreaterThan(0);
     expect(scoreSet.rows[0]?.contributions.confidence).toBeGreaterThan(0);
+    expect(scoreSet.rows[0]?.sourceProtocols).toEqual(["jupiter"]);
+    expect(scoreSet.rows[0]?.sourceVenues).toEqual(["jupiter"]);
     expect(scoreSet.rows[0]?.explain[0]).toContain("score=momentum");
     const candidatePool = JSON.parse(
       kvStore.get(LOOP_C_CANDIDATE_POOL_LATEST_KEY) ?? "{}",
@@ -264,6 +287,8 @@ describe("worker loop B minute accumulator", () => {
         featuresRef: string;
         scoreRef: string;
         sourceProtocols: string[];
+        sourceVenues: string[];
+        venueLineage: Array<{ protocol: string; venue: string }>;
         freshnessMs: number;
         liquidityScore: number;
         riskTags: string[];
@@ -276,7 +301,12 @@ describe("worker loop B minute accumulator", () => {
     expect(candidatePool.rows[0]?.scoreRef).toContain("loopB:v1:scores");
     expect(candidatePool.rows[0]?.freshnessMs).toBe(60000);
     expect(candidatePool.rows[0]?.liquidityScore).toBeGreaterThanOrEqual(0);
-    expect(candidatePool.rows[0]?.sourceProtocols).toEqual([]);
+    expect(candidatePool.rows[0]?.sourceProtocols).toEqual(["jupiter"]);
+    expect(candidatePool.rows[0]?.sourceVenues).toEqual(["jupiter"]);
+    expect(candidatePool.rows[0]?.venueLineage[0]).toMatchObject({
+      protocol: "jupiter",
+      venue: "jupiter",
+    });
     expect(candidatePool.rows[0]?.riskTags.length).toBeGreaterThanOrEqual(0);
     expect(candidatePool.rows[0]?.stabilityTags.length).toBeGreaterThanOrEqual(
       0,

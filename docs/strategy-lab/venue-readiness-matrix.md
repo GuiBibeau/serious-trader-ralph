@@ -7,6 +7,9 @@ It exists to keep venue onboarding, terminal rollout, and later real-TX smoke
 proofs on one explicit path instead of scattering readiness assumptions across
 issue bodies and PR notes.
 
+The Loop A/B/C provenance substrate for this program is defined in
+`docs/strategy-lab/venue-lineage-contracts.md`.
+
 ## How To Use It
 
 - Treat venue readiness as separate from strategy readiness.

@@ -57,6 +57,30 @@
       "type": "string",
       "pattern": "^\\d+(?:\\.\\d+)?$"
     },
+    "lineage": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "venue": {
+          "type": "string",
+          "minLength": 1
+        },
+        "marketType": {
+          "type": "string",
+          "enum": ["spot", "clob", "perp", "prediction", "flash", "unknown"]
+        },
+        "pool": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 64
+        }
+      },
+      "required": ["protocol", "venue", "marketType"],
+      "additionalProperties": false
+    },
     "evidence": {
       "type": "object",
       "properties": {

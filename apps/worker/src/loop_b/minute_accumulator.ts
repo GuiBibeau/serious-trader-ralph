@@ -25,6 +25,21 @@ export const LOOP_B_HEALTH_KEY = "loopB:v1:health";
 
 type MinuteId = `${string}T${string}:00Z`;
 
+export type LoopVenueMarketType = NonNullable<Mark["lineage"]>["marketType"];
+
+export type LoopBVenueLineageRow = {
+  protocol: string;
+  venue: string;
+  marketType: LoopVenueMarketType;
+  markCount: number;
+  confidenceAvg: number;
+  firstSlot: number;
+  lastSlot: number;
+  lastTs: string;
+  inputRefs: string[];
+  pools: string[];
+};
+
 type PairAggregate = {
   pairId: string;
   baseMint: string;
@@ -39,6 +54,9 @@ type PairAggregate = {
   lastSlot: number;
   lastTs: string;
   inputRefs: string[];
+  sourceProtocols: string[];
+  sourceVenues: string[];
+  venueLineage: LoopBVenueLineageRow[];
   revision: number;
   explain: string[];
 };
@@ -56,6 +74,9 @@ export type LoopBFeatureRow = {
   volatilityPct: number;
   confidenceAvg: number;
   markCount: number;
+  sourceProtocols: string[];
+  sourceVenues: string[];
+  venueLineage: LoopBVenueLineageRow[];
   slotRange: {
     fromSlot: number;
     toSlot: number;
@@ -126,6 +147,9 @@ export type LoopBScoreRow = {
   finalScore: number;
   contributions: LoopBScoreContributions;
   featuresRef: string;
+  sourceProtocols: string[];
+  sourceVenues: string[];
+  venueLineage: LoopBVenueLineageRow[];
   revision: number;
   explain: string[];
 };
@@ -219,6 +243,122 @@ function markEventId(mark: Mark): string {
 function asFiniteNumber(value: string): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeStringList(values: Iterable<string>): string[] {
+  const items = new Set<string>();
+  for (const value of values) {
+    const normalized = value.trim();
+    if (normalized.length > 0) items.add(normalized);
+  }
+  return [...items].sort();
+}
+
+function markProtocol(mark: Mark): string {
+  const normalized = mark.lineage?.protocol?.trim();
+  return normalized && normalized.length > 0 ? normalized : mark.venue;
+}
+
+function markVenue(mark: Mark): string {
+  const normalized = mark.lineage?.venue?.trim();
+  return normalized && normalized.length > 0 ? normalized : mark.venue;
+}
+
+function markMarketType(mark: Mark): LoopVenueMarketType {
+  return mark.lineage?.marketType ?? "unknown";
+}
+
+function summarizeVenueLineage(marks: Mark[]): {
+  sourceProtocols: string[];
+  sourceVenues: string[];
+  venueLineage: LoopBVenueLineageRow[];
+} {
+  const byVenue = new Map<
+    string,
+    Omit<LoopBVenueLineageRow, "confidenceAvg" | "inputRefs" | "pools"> & {
+      confidenceSum: number;
+      inputRefs: Set<string>;
+      pools: Set<string>;
+    }
+  >();
+
+  for (const mark of marks) {
+    const protocol = markProtocol(mark);
+    const venue = markVenue(mark);
+    const marketType = markMarketType(mark);
+    const key = `${marketType}:${protocol}:${venue}`;
+    const current = byVenue.get(key);
+    if (current) {
+      current.markCount += 1;
+      current.confidenceSum += mark.confidence;
+      current.firstSlot = Math.min(current.firstSlot, mark.slot);
+      current.lastSlot = Math.max(current.lastSlot, mark.slot);
+      if (mark.ts > current.lastTs) current.lastTs = mark.ts;
+      for (const inputRef of mark.evidence?.inputs ?? []) {
+        if (inputRef) current.inputRefs.add(inputRef);
+      }
+      if (mark.lineage?.pool) current.pools.add(mark.lineage.pool);
+      for (const pool of mark.evidence?.pools ?? []) {
+        if (pool) current.pools.add(pool);
+      }
+      continue;
+    }
+
+    byVenue.set(key, {
+      protocol,
+      venue,
+      marketType,
+      markCount: 1,
+      confidenceSum: mark.confidence,
+      firstSlot: mark.slot,
+      lastSlot: mark.slot,
+      lastTs: mark.ts,
+      inputRefs: new Set(
+        (mark.evidence?.inputs ?? []).filter(
+          (inputRef): inputRef is string => inputRef.length > 0,
+        ),
+      ),
+      pools: new Set(
+        [
+          ...(mark.lineage?.pool ? [mark.lineage.pool] : []),
+          ...(mark.evidence?.pools ?? []),
+        ].filter((pool): pool is string => pool.length > 0),
+      ),
+    });
+  }
+
+  const venueLineage = [...byVenue.values()]
+    .map((entry) => ({
+      protocol: entry.protocol,
+      venue: entry.venue,
+      marketType: entry.marketType,
+      markCount: entry.markCount,
+      confidenceAvg: round(
+        entry.confidenceSum / Math.max(1, entry.markCount),
+        8,
+      ),
+      firstSlot: entry.firstSlot,
+      lastSlot: entry.lastSlot,
+      lastTs: entry.lastTs,
+      inputRefs: [...entry.inputRefs].sort(),
+      pools: [...entry.pools].sort(),
+    }))
+    .sort((a, b) => {
+      if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;
+      if (a.protocol !== b.protocol) return a.protocol < b.protocol ? -1 : 1;
+      if (a.marketType !== b.marketType) {
+        return a.marketType < b.marketType ? -1 : 1;
+      }
+      return a.firstSlot - b.firstSlot;
+    });
+
+  return {
+    sourceProtocols: normalizeStringList(
+      venueLineage.map((entry) => entry.protocol),
+    ),
+    sourceVenues: normalizeStringList(venueLineage.map((entry) => entry.venue)),
+    venueLineage,
+  };
 }
 
 function loadState(input: unknown): MinuteAccumulatorState {
@@ -391,6 +531,7 @@ function aggregateMinutePairs(minuteRecord: MinuteRecord): PairAggregate[] {
     const pctChange = ((lastPx - firstPx) / firstPx) * 100;
     const volatility = ((maxPx - minPx) / firstPx) * 100;
     const avgConfidence = confidenceSum / marks.length;
+    const lineage = summarizeVenueLineage(marks);
 
     pairs.push({
       pairId: pairId(first),
@@ -406,6 +547,9 @@ function aggregateMinutePairs(minuteRecord: MinuteRecord): PairAggregate[] {
       lastSlot: last.slot,
       lastTs: last.ts,
       inputRefs: [...inputRefs].sort(),
+      sourceProtocols: lineage.sourceProtocols,
+      sourceVenues: lineage.sourceVenues,
+      venueLineage: lineage.venueLineage,
       revision: minuteRecord.revision,
       explain: [
         `minute=${minuteRecord.minute}`,
@@ -532,6 +676,9 @@ function buildFeatureSet(input: {
       volatilityPct: pair.volatility,
       confidenceAvg: pair.avgConfidence,
       markCount: pair.markCount,
+      sourceProtocols: pair.sourceProtocols,
+      sourceVenues: pair.sourceVenues,
+      venueLineage: pair.venueLineage,
       slotRange: {
         fromSlot: pair.firstSlot,
         toSlot: pair.lastSlot,
@@ -580,6 +727,9 @@ function buildScoreSet(input: { featureSet: LoopBFeatureSet }): LoopBScoreSet {
           activity: round(activity, 8),
         },
         featuresRef: `${LOOP_B_FEATURES_LATEST_KEY}:pair:${row.pairId}`,
+        sourceProtocols: row.sourceProtocols,
+        sourceVenues: row.sourceVenues,
+        venueLineage: row.venueLineage,
         revision: row.revision,
         explain: [
           `score=momentum+confidence+activity-stability`,
