@@ -15,6 +15,7 @@ import {
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const POOL = "Czfq3xZZD7f7mUXGQ95M5x7TQYtjY1fM6bMpiKFF9s8s";
+const MARKET = "7YttLkHDoNzpkAd3gg4MM3VQRSJ5ZK7VMBdb6Yf2mP6P";
 const SIG =
   "4QWQY8hJCF3zz7X9Y7NfKGh6y3ysK4Wi2fFx9kqvF5mkmowMrAkxAuE4L73p5udjXKSzkYsbk1XnX4QgxQeM4QVD";
 
@@ -90,12 +91,42 @@ describe("loop A contracts", () => {
       evidence: {
         sigs: [SIG],
         pools: [POOL],
+        markets: [MARKET],
       },
     });
 
     expect(mark.confidence).toBe(0.78);
     expect(mark.lineage?.protocol).toBe("orca");
     expect(mark.lineage?.pool).toBe(POOL);
+    expect(mark.evidence?.markets).toEqual([MARKET]);
+  });
+
+  test("parses valid clob mark payload with market lineage", () => {
+    const mark = parseMark({
+      ...META,
+      slot: 201,
+      ts: "2026-02-21T00:01:05Z",
+      baseMint: SOL_MINT,
+      quoteMint: USDC_MINT,
+      px: "193.01",
+      confidence: 0.82,
+      venue: "openbook",
+      lineage: {
+        protocol: "openbook",
+        venue: "openbook",
+        marketType: "clob",
+        market: MARKET,
+      },
+      version: "v1",
+      evidence: {
+        sigs: [SIG],
+        markets: [MARKET],
+      },
+    });
+
+    expect(mark.lineage?.marketType).toBe("clob");
+    expect(mark.lineage?.market).toBe(MARKET);
+    expect(mark.evidence?.markets).toEqual([MARKET]);
   });
 
   test("rejects mark lineage without protocol", () => {

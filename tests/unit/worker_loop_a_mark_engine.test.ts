@@ -61,21 +61,25 @@ function swapEvent(input: {
   outMint: string;
   inAmount: string;
   outAmount: string;
+  protocol?: string;
+  venue?: string;
+  meta?: Record<string, unknown>;
 }): Extract<ProtocolEvent, { kind: "swap" }> {
   return {
     schemaVersion: "v1",
     generatedAt: "2026-02-21T04:00:00.000Z",
     kind: "swap",
-    protocol: "jupiter",
+    protocol: input.protocol ?? "jupiter",
     slot: input.slot,
     sig: input.sig,
     ts: "2026-02-21T04:00:00.000Z",
     user: "UserSwap111111111111111111111111111111111111111",
-    venue: "jupiter",
+    venue: input.venue ?? input.protocol ?? "jupiter",
     inMint: input.inMint,
     outMint: input.outMint,
     inAmount: input.inAmount,
     outAmount: input.outAmount,
+    ...(input.meta ? { meta: input.meta } : {}),
   };
 }
 
@@ -217,6 +221,84 @@ describe("worker loop A mark engine", () => {
     expect(mark.slot).toBe(121);
     expect(mark.px).toBe("8");
     expect(mark.evidence?.sigs).toEqual(["sig-121"]);
+  });
+
+  test("preserves multiple venues on the same pair and writes venue-scoped keys", async () => {
+    const { env, store } = createEnv();
+
+    const result = await runLoopAMarkEngineTick(env, {
+      commitment: "confirmed",
+      observedAt: "2026-02-21T04:02:30.000Z",
+      decodedBatches: [
+        batch("confirmed", 122, [
+          swapEvent({
+            slot: 122,
+            sig: "sig-jupiter-122",
+            inMint: "So11111111111111111111111111111111111111112",
+            outMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            inAmount: "1000000000",
+            outAmount: "5000000",
+            protocol: "jupiter",
+            venue: "jupiter",
+          }),
+        ]),
+        batch("confirmed", 123, [
+          swapEvent({
+            slot: 123,
+            sig: "sig-openbook-123",
+            inMint: "So11111111111111111111111111111111111111112",
+            outMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            inAmount: "1000000000",
+            outAmount: "6000000",
+            protocol: "openbook",
+            venue: "openbook",
+            meta: {
+              marketType: "clob",
+              market: "7YttLkHDoNzpkAd3gg4MM3VQRSJ5ZK7VMBdb6Yf2mP6P",
+            },
+          }),
+        ]),
+      ],
+    });
+
+    expect(result.marksComputed).toBe(2);
+    expect(result.pairKeysWritten).toBe(1);
+    expect(result.latestSlot).toBe(123);
+
+    const latest = JSON.parse(
+      store.get(loopAMarksLatestKey("confirmed")) ?? "{}",
+    ) as { marks: unknown[]; count: number };
+    expect(latest.count).toBe(2);
+
+    const parsedMarks = latest.marks.map((mark) => parseMark(mark));
+    expect(parsedMarks.map((mark) => mark.venue).sort()).toEqual([
+      "jupiter",
+      "openbook",
+    ]);
+    expect(
+      parsedMarks.find((mark) => mark.venue === "openbook")?.lineage,
+    ).toMatchObject({
+      protocol: "openbook",
+      venue: "openbook",
+      marketType: "clob",
+      market: "7YttLkHDoNzpkAd3gg4MM3VQRSJ5ZK7VMBdb6Yf2mP6P",
+    });
+
+    const pairKey =
+      "loopA:v1:marks:confirmed:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:latest";
+    expect(parseMark(JSON.parse(store.get(pairKey) ?? "{}")).venue).toBe(
+      "openbook",
+    );
+    expect(
+      store.has(
+        "loopA:v1:marks:confirmed:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:venue:jupiter:ref:none:latest",
+      ),
+    ).toBe(true);
+    expect(
+      store.has(
+        "loopA:v1:marks:confirmed:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:venue:openbook:market:7YttLkHDoNzpkAd3gg4MM3VQRSJ5ZK7VMBdb6Yf2mP6P:latest",
+      ),
+    ).toBe(true);
   });
 
   test("returns zero result when no eligible swap events exist", async () => {

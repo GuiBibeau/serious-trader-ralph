@@ -11,6 +11,10 @@ import { safeParseProtocolEvent } from "../../src/loops/contracts/loop_a.js";
 
 const SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const JUPITER_PROGRAM_ID = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+const RAYDIUM_PROGRAM_ID = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+const ORCA_PROGRAM_ID = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
+const OPENBOOK_PROGRAM_ID = "opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb";
+const PHOENIX_PROGRAM_ID = "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -25,6 +29,75 @@ function encodeU64Transfer(amount: bigint): string {
   }
 
   return bs58.encode(payload);
+}
+
+function venueSwapTransaction(input: {
+  signature: string;
+  user: string;
+  sourceTokenAccount: string;
+  destinationTokenAccount: string;
+  venueAccount: string;
+  programId: string;
+  sourceMint: string;
+  destinationMint: string;
+  preSourceAmount: string;
+  postSourceAmount: string;
+  preDestinationAmount: string;
+  postDestinationAmount: string;
+  logLine: string;
+}): Record<string, unknown> {
+  return {
+    transaction: {
+      signatures: [input.signature],
+      message: {
+        accountKeys: [
+          input.venueAccount,
+          input.user,
+          input.sourceTokenAccount,
+          input.destinationTokenAccount,
+          input.programId,
+        ],
+        instructions: [
+          {
+            programIdIndex: 4,
+            accounts: [0, 2, 3, 1],
+            data: "3Bxs4f",
+          },
+        ],
+      },
+    },
+    meta: {
+      logMessages: [`Program ${input.programId} invoke [1]`, input.logLine],
+      preTokenBalances: [
+        {
+          accountIndex: 2,
+          mint: input.sourceMint,
+          owner: input.user,
+          uiTokenAmount: { amount: input.preSourceAmount },
+        },
+        {
+          accountIndex: 3,
+          mint: input.destinationMint,
+          owner: input.user,
+          uiTokenAmount: { amount: input.preDestinationAmount },
+        },
+      ],
+      postTokenBalances: [
+        {
+          accountIndex: 2,
+          mint: input.sourceMint,
+          owner: input.user,
+          uiTokenAmount: { amount: input.postSourceAmount },
+        },
+        {
+          accountIndex: 3,
+          mint: input.destinationMint,
+          owner: input.user,
+          uiTokenAmount: { amount: input.postDestinationAmount },
+        },
+      ],
+    },
+  };
 }
 
 describe("worker loop A decoder registry", () => {
@@ -209,6 +282,112 @@ describe("worker loop A decoder registry", () => {
     expect(swapEvent?.outMint).toBe(USDC_MINT);
     expect(swapEvent?.inAmount).toBe("100000000");
     expect(swapEvent?.outAmount).toBe("400000");
+  });
+
+  test("default adapters decode Raydium, Orca, OpenBook, and Phoenix venue-native swaps", () => {
+    const user = "VenueUser11111111111111111111111111111111111111";
+    const block = {
+      blockTime: 1_708_480_100,
+      transactions: [
+        venueSwapTransaction({
+          signature: "raydium-signature",
+          user,
+          sourceTokenAccount: "RaySrc1111111111111111111111111111111111111",
+          destinationTokenAccount:
+            "RayDst1111111111111111111111111111111111111",
+          venueAccount: "RayPool111111111111111111111111111111111111",
+          programId: RAYDIUM_PROGRAM_ID,
+          sourceMint: SOL_MINT,
+          destinationMint: USDC_MINT,
+          preSourceAmount: "1000000000",
+          postSourceAmount: "900000000",
+          preDestinationAmount: "1000000",
+          postDestinationAmount: "1400000",
+          logLine: "Program log: Raydium cpmm swap",
+        }),
+        venueSwapTransaction({
+          signature: "orca-signature",
+          user,
+          sourceTokenAccount: "OrcaSrc111111111111111111111111111111111111",
+          destinationTokenAccount:
+            "OrcaDst111111111111111111111111111111111111",
+          venueAccount: "OrcaPool11111111111111111111111111111111111",
+          programId: ORCA_PROGRAM_ID,
+          sourceMint: SOL_MINT,
+          destinationMint: USDC_MINT,
+          preSourceAmount: "1000000000",
+          postSourceAmount: "950000000",
+          preDestinationAmount: "2000000",
+          postDestinationAmount: "2250000",
+          logLine: "Program log: Orca whirlpool swap",
+        }),
+        venueSwapTransaction({
+          signature: "openbook-signature",
+          user,
+          sourceTokenAccount: "OpenBookSrc111111111111111111111111111111111",
+          destinationTokenAccount:
+            "OpenBookDst111111111111111111111111111111111",
+          venueAccount: "OpenBookMkt111111111111111111111111111111111",
+          programId: OPENBOOK_PROGRAM_ID,
+          sourceMint: SOL_MINT,
+          destinationMint: USDC_MINT,
+          preSourceAmount: "1000000000",
+          postSourceAmount: "920000000",
+          preDestinationAmount: "3000000",
+          postDestinationAmount: "3350000",
+          logLine: "Program log: OpenBook fill",
+        }),
+        venueSwapTransaction({
+          signature: "phoenix-signature",
+          user,
+          sourceTokenAccount: "PhoenixSrc1111111111111111111111111111111111",
+          destinationTokenAccount:
+            "PhoenixDst1111111111111111111111111111111111",
+          venueAccount: "PhoenixMkt1111111111111111111111111111111111",
+          programId: PHOENIX_PROGRAM_ID,
+          sourceMint: SOL_MINT,
+          destinationMint: USDC_MINT,
+          preSourceAmount: "1000000000",
+          postSourceAmount: "930000000",
+          preDestinationAmount: "4000000",
+          postDestinationAmount: "4300000",
+          logLine: "Program log: Phoenix fill",
+        }),
+      ],
+    } as Record<string, unknown>;
+
+    const registry = createDefaultDecoderRegistry();
+    const events = decodeProtocolEventsFromBlock({
+      slot: 401,
+      commitment: "confirmed",
+      block,
+      registry,
+      observedAt: "2026-02-21T04:11:00.000Z",
+    });
+
+    expect(events).toHaveLength(4);
+    for (const event of events) {
+      expect(safeParseProtocolEvent(event).success).toBe(true);
+    }
+
+    expect(events.map((event) => event.protocol).sort()).toEqual([
+      "openbook",
+      "orca",
+      "phoenix",
+      "raydium",
+    ]);
+    expect(
+      events.find((event) => event.protocol === "raydium")?.meta?.pool,
+    ).toBe("RayPool111111111111111111111111111111111111");
+    expect(events.find((event) => event.protocol === "orca")?.meta?.pool).toBe(
+      "OrcaPool11111111111111111111111111111111111",
+    );
+    expect(
+      events.find((event) => event.protocol === "openbook")?.meta?.market,
+    ).toBe("OpenBookMkt111111111111111111111111111111111");
+    expect(
+      events.find((event) => event.protocol === "phoenix")?.meta?.market,
+    ).toBe("PhoenixMkt1111111111111111111111111111111111");
   });
 
   test("skips failed transactions when meta.err is present", () => {

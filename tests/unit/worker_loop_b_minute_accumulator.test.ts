@@ -96,6 +96,11 @@ function createMark(input: {
   quoteMint?: string;
   confidence?: number;
   inputRef?: string;
+  protocol?: string;
+  venue?: string;
+  marketType?: "spot" | "clob";
+  pool?: string;
+  market?: string;
 }): Mark {
   return {
     schemaVersion: "v1",
@@ -107,14 +112,18 @@ function createMark(input: {
       input.quoteMint ?? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     px: input.px,
     confidence: input.confidence ?? 0.8,
-    venue: "jupiter",
+    venue: input.venue ?? input.protocol ?? "jupiter",
     lineage: {
-      protocol: "jupiter",
-      venue: "jupiter",
-      marketType: "spot",
+      protocol: input.protocol ?? "jupiter",
+      venue: input.venue ?? input.protocol ?? "jupiter",
+      marketType: input.marketType ?? "spot",
+      ...(input.pool ? { pool: input.pool } : {}),
+      ...(input.market ? { market: input.market } : {}),
     },
     evidence: {
       sigs: [input.sig],
+      ...(input.pool ? { pools: [input.pool] } : {}),
+      ...(input.market ? { markets: [input.market] } : {}),
       inputs: [input.inputRef ?? `loopA/v1/events/slot=${input.slot}`],
     },
     version: "v1",
@@ -340,6 +349,84 @@ describe("worker loop B minute accumulator", () => {
     expect(
       [...r2Store.keys()].some((key) => key.includes("/views/date=")),
     ).toBe(true);
+  });
+
+  test("preserves non-Jupiter venue lineage for the same pair", async () => {
+    const { env, kvStore } = createEnv({ withR2: false });
+    const mock = createMockDoState();
+    const accumulator = new MinuteAccumulator(mock.state, env, {
+      now: () => "2026-02-21T18:05:00.000Z",
+    });
+
+    await accumulator.fetch(
+      new Request("https://internal/loop-b/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          observedAt: "2026-02-21T18:05:00.000Z",
+          marks: [
+            createMark({
+              slot: 710,
+              ts: "2026-02-21T18:04:10.000Z",
+              px: "5.1",
+              sig: "sig-raydium-710",
+              protocol: "raydium",
+              venue: "raydium",
+              pool: "Czfq3xZZD7f7mUXGQ95M5x7TQYtjY1fM6bMpiKFF9s8s",
+            }),
+            createMark({
+              slot: 711,
+              ts: "2026-02-21T18:04:25.000Z",
+              px: "5.15",
+              sig: "sig-openbook-711",
+              protocol: "openbook",
+              venue: "openbook",
+              marketType: "clob",
+              market: "7YttLkHDoNzpkAd3gg4MM3VQRSJ5ZK7VMBdb6Yf2mP6P",
+            }),
+          ],
+        }),
+      }),
+    );
+
+    const featureSet = JSON.parse(
+      kvStore.get(LOOP_B_FEATURES_LATEST_KEY) ?? "{}",
+    ) as {
+      rows: Array<{
+        pairId: string;
+        sourceProtocols: string[];
+        sourceVenues: string[];
+        venueLineage: Array<{
+          protocol: string;
+          venue: string;
+          marketType: string;
+          pools: string[];
+          markets: string[];
+        }>;
+      }>;
+    };
+    const solUsdc = featureSet.rows.find((row) =>
+      row.pairId.startsWith("So11111111111111111111111111111111111111112:"),
+    );
+    expect(solUsdc?.sourceProtocols).toEqual(["openbook", "raydium"]);
+    expect(solUsdc?.sourceVenues).toEqual(["openbook", "raydium"]);
+    expect(solUsdc?.venueLineage).toHaveLength(2);
+    expect(
+      solUsdc?.venueLineage.find((row) => row.venue === "raydium"),
+    ).toMatchObject({
+      protocol: "raydium",
+      venue: "raydium",
+      marketType: "spot",
+      pools: ["Czfq3xZZD7f7mUXGQ95M5x7TQYtjY1fM6bMpiKFF9s8s"],
+    });
+    expect(
+      solUsdc?.venueLineage.find((row) => row.venue === "openbook"),
+    ).toMatchObject({
+      protocol: "openbook",
+      venue: "openbook",
+      marketType: "clob",
+      markets: ["7YttLkHDoNzpkAd3gg4MM3VQRSJ5ZK7VMBdb6Yf2mP6P"],
+    });
   });
 
   test("late correction re-finalizes the minute with updated scores", async () => {

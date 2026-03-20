@@ -189,6 +189,7 @@ function normalizeVenueLineageRows(
       lastTs: entry.lastTs,
       inputRefs: normalizeStringArray(entry.inputRefs),
       pools: normalizeStringArray(entry.pools),
+      markets: normalizeStringArray(entry.markets),
     }))
     .sort((a, b) => {
       if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;
@@ -323,6 +324,11 @@ function parseScoreRow(raw: unknown): LoopBScoreRow | null {
                   : [],
                 pools: Array.isArray(parsed.pools)
                   ? parsed.pools.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+                markets: Array.isArray(parsed.markets)
+                  ? parsed.markets.filter(
                       (item): item is string => typeof item === "string",
                     )
                   : [],

@@ -1,5 +1,6 @@
 import type {
   Mark,
+  MarkLineage,
   ProtocolEvent,
 } from "../../../../src/loops/contracts/loop_a";
 import type { Env } from "../types";
@@ -100,6 +101,31 @@ function extractPools(event: ProtocolEvent): string[] | undefined {
   return undefined;
 }
 
+function extractMarkets(event: ProtocolEvent): string[] | undefined {
+  const maybeMarket = event.meta?.market;
+  if (typeof maybeMarket === "string" && maybeMarket.length >= 32) {
+    return [maybeMarket];
+  }
+  return undefined;
+}
+
+function readLineageMarketType(
+  event: ProtocolEvent,
+): MarkLineage["marketType"] {
+  const maybeMarketType = event.meta?.marketType;
+  switch (maybeMarketType) {
+    case "spot":
+    case "clob":
+    case "perp":
+    case "prediction":
+    case "flash":
+    case "unknown":
+      return maybeMarketType;
+    default:
+      return typeof event.meta?.market === "string" ? "clob" : "spot";
+  }
+}
+
 function scoreConfidence(input: {
   protocol: string;
   hasUnitSize: boolean;
@@ -125,6 +151,16 @@ function markPairKey(
   return `loopA:${LOOP_A_SCHEMA_VERSION}:marks:${commitment}:pair:${baseMint}:${quoteMint}:latest`;
 }
 
+function markPairVenueKey(commitment: SlotCommitment, mark: Mark): string {
+  const lineageRef = mark.lineage?.market ?? mark.lineage?.pool ?? "none";
+  const lineageRefType = mark.lineage?.market
+    ? "market"
+    : mark.lineage?.pool
+      ? "pool"
+      : "ref";
+  return `loopA:${LOOP_A_SCHEMA_VERSION}:marks:${commitment}:pair:${mark.baseMint}:${mark.quoteMint}:venue:${mark.venue}:${lineageRefType}:${lineageRef}:latest`;
+}
+
 export function loopAMarksLatestKey(commitment: SlotCommitment): string {
   return `loopA:${LOOP_A_SCHEMA_VERSION}:marks:${commitment}:latest`;
 }
@@ -139,6 +175,24 @@ function pickLatestMarkPerPair(marks: Mark[]): Mark[] {
     }
   }
   return [...byPair.values()].sort((a, b) => b.slot - a.slot);
+}
+
+function pickLatestMarkPerVenueIdentity(marks: Mark[]): Mark[] {
+  const byIdentity = new Map<string, Mark>();
+  for (const mark of marks) {
+    const key = [
+      mark.baseMint,
+      mark.quoteMint,
+      mark.venue,
+      mark.lineage?.pool ?? "no_pool",
+      mark.lineage?.market ?? "no_market",
+    ].join(":");
+    const previous = byIdentity.get(key);
+    if (!previous || mark.slot >= previous.slot) {
+      byIdentity.set(key, mark);
+    }
+  }
+  return [...byIdentity.values()].sort((a, b) => b.slot - a.slot);
 }
 
 function buildMarkFromSwap(input: {
@@ -177,6 +231,7 @@ function buildMarkFromSwap(input: {
   if (px === "0") return null;
 
   const pools = extractPools(input.event);
+  const markets = extractMarkets(input.event);
   const venue = input.event.venue ?? input.event.protocol;
   const evidenceInput = `${loopAEventBatchR2Key(input.commitment, input.event.slot)}#sig=${input.event.sig}`;
   return {
@@ -198,12 +253,14 @@ function buildMarkFromSwap(input: {
     lineage: {
       protocol: input.event.protocol,
       venue,
-      marketType: "spot",
+      marketType: readLineageMarketType(input.event),
       ...(pools?.[0] ? { pool: pools[0] } : {}),
+      ...(markets?.[0] ? { market: markets[0] } : {}),
     },
     evidence: {
       sigs: [input.event.sig],
       pools,
+      markets,
       inputs: [evidenceInput],
     },
     version: LOOP_A_SCHEMA_VERSION,
@@ -228,7 +285,7 @@ function computeMarksFromBatches(input: {
       if (mark) marks.push(mark);
     }
   }
-  return pickLatestMarkPerPair(marks);
+  return pickLatestMarkPerVenueIdentity(marks);
 }
 
 export function resolveMarkCommitment(raw: string | undefined): SlotCommitment {
@@ -266,9 +323,18 @@ export async function runLoopAMarkEngineTick(
     };
   }
 
-  for (const mark of marks) {
+  const latestByPair = pickLatestMarkPerPair(marks);
+
+  for (const mark of latestByPair) {
     await env.CONFIG_KV.put(
       markPairKey(input.commitment, mark.baseMint, mark.quoteMint),
+      JSON.stringify(mark),
+    );
+  }
+
+  for (const mark of marks) {
+    await env.CONFIG_KV.put(
+      markPairVenueKey(input.commitment, mark),
       JSON.stringify(mark),
     );
   }
@@ -293,7 +359,7 @@ export async function runLoopAMarkEngineTick(
     marksComputed: marks.length,
     latestSlot,
     latestKey,
-    pairKeysWritten: marks.length,
+    pairKeysWritten: latestByPair.length,
     marks,
   };
 }
