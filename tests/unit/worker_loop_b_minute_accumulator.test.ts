@@ -98,9 +98,11 @@ function createMark(input: {
   inputRef?: string;
   protocol?: string;
   venue?: string;
-  marketType?: "spot" | "clob";
+  marketType?: "spot" | "clob" | "perp" | "prediction";
   pool?: string;
   market?: string;
+  positionAccount?: string;
+  settlementMint?: string;
 }): Mark {
   return {
     schemaVersion: "v1",
@@ -119,11 +121,21 @@ function createMark(input: {
       marketType: input.marketType ?? "spot",
       ...(input.pool ? { pool: input.pool } : {}),
       ...(input.market ? { market: input.market } : {}),
+      ...(input.positionAccount
+        ? { positionAccount: input.positionAccount }
+        : {}),
+      ...(input.settlementMint ? { settlementMint: input.settlementMint } : {}),
     },
     evidence: {
       sigs: [input.sig],
       ...(input.pool ? { pools: [input.pool] } : {}),
       ...(input.market ? { markets: [input.market] } : {}),
+      ...(input.positionAccount
+        ? { positionAccounts: [input.positionAccount] }
+        : {}),
+      ...(input.settlementMint
+        ? { settlementMints: [input.settlementMint] }
+        : {}),
       inputs: [input.inputRef ?? `loopA/v1/events/slot=${input.slot}`],
     },
     version: "v1",
@@ -490,6 +502,60 @@ describe("worker loop B minute accumulator", () => {
     expect(solUsdc?.sourceProtocols).toEqual(["openbook", "raydium"]);
     expect(solUsdc?.sourceVenues).toEqual(["openbook", "raydium"]);
     expect(solUsdc?.venueLineage).toHaveLength(2);
+  });
+
+  test("preserves position-account and settlement lineage in venue summaries", async () => {
+    const { env, kvStore } = createEnv({ withR2: false });
+    const mock = createMockDoState();
+    const accumulator = new MinuteAccumulator(mock.state, env, {
+      now: () => "2026-02-21T18:07:00.000Z",
+    });
+
+    await accumulator.fetch(
+      new Request("https://internal/loop-b/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          observedAt: "2026-02-21T18:07:00.000Z",
+          marks: [
+            createMark({
+              slot: 730,
+              ts: "2026-02-21T18:06:20.000Z",
+              px: "153.3",
+              sig: "sig-drift-730",
+              protocol: "drift",
+              venue: "drift",
+              marketType: "perp",
+              market: "SOL-PERP",
+              positionAccount: "drift-user-account",
+              settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            }),
+          ],
+        }),
+      }),
+    );
+
+    const featureSet = JSON.parse(
+      kvStore.get(LOOP_B_FEATURES_LATEST_KEY) ?? "{}",
+    ) as {
+      rows: Array<{
+        venueLineage: Array<{
+          venue: string;
+          marketType: string;
+          markets: string[];
+          positionAccounts: string[];
+          settlementMints: string[];
+        }>;
+      }>;
+    };
+
+    expect(featureSet.rows[0]?.venueLineage[0]).toMatchObject({
+      venue: "drift",
+      marketType: "perp",
+      markets: ["SOL-PERP"],
+      positionAccounts: ["drift-user-account"],
+      settlementMints: ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
+    });
   });
 
   test("late correction re-finalizes the minute with updated scores", async () => {

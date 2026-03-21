@@ -316,6 +316,8 @@ function setCandidatePoolWithMarketLineage(
               inputRefs: ["loopA/v1/events/slot=123"],
               pools: [],
               markets: ["PhoenixMkt1111111111111111111111111111111111"],
+              positionAccounts: ["phoenix-seat-1"],
+              settlementMints: ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
             },
           ],
           freshnessMs: 60000,
@@ -679,7 +681,11 @@ describe("worker loop C recommender durable object", () => {
       cacheHit: boolean;
       view: {
         recommendations: Array<{
-          venueLineage: Array<{ markets: string[] }>;
+          venueLineage: Array<{
+            markets: string[];
+            positionAccounts: string[];
+            settlementMints: string[];
+          }>;
         }>;
       };
     };
@@ -689,6 +695,12 @@ describe("worker loop C recommender durable object", () => {
     expect(
       firstPayload.view.recommendations[0]?.venueLineage[0]?.markets,
     ).toEqual(["PhoenixMkt1111111111111111111111111111111111"]);
+    expect(
+      firstPayload.view.recommendations[0]?.venueLineage[0]?.positionAccounts,
+    ).toEqual(["phoenix-seat-1"]);
+    expect(
+      firstPayload.view.recommendations[0]?.venueLineage[0]?.settlementMints,
+    ).toEqual(["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"]);
 
     const secondResponse = await recommender.fetch(
       new Request("https://internal/loop-c/recommend", {
@@ -707,7 +719,11 @@ describe("worker loop C recommender durable object", () => {
       cacheHit: boolean;
       view: {
         recommendations: Array<{
-          venueLineage: Array<{ markets: string[] }>;
+          venueLineage: Array<{
+            markets: string[];
+            positionAccounts: string[];
+            settlementMints: string[];
+          }>;
         }>;
       };
     };
@@ -717,6 +733,12 @@ describe("worker loop C recommender durable object", () => {
     expect(
       secondPayload.view.recommendations[0]?.venueLineage[0]?.markets,
     ).toEqual(["PhoenixMkt1111111111111111111111111111111111"]);
+    expect(
+      secondPayload.view.recommendations[0]?.venueLineage[0]?.positionAccounts,
+    ).toEqual(["phoenix-seat-1"]);
+    expect(
+      secondPayload.view.recommendations[0]?.venueLineage[0]?.settlementMints,
+    ).toEqual(["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"]);
   });
 
   test("feedback yes/no updates acceptance probability predictably", async () => {

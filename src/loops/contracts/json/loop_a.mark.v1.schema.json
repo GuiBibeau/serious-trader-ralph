@@ -74,13 +74,19 @@
         },
         "pool": {
           "type": "string",
-          "minLength": 32,
-          "maxLength": 64
+          "minLength": 1
         },
         "market": {
           "type": "string",
-          "minLength": 32,
-          "maxLength": 64
+          "minLength": 1
+        },
+        "positionAccount": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settlementMint": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": ["protocol", "venue", "marketType"],
@@ -100,16 +106,28 @@
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 32,
-            "maxLength": 64
+            "minLength": 1
           }
         },
         "markets": {
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 32,
-            "maxLength": 64
+            "minLength": 1
+          }
+        },
+        "positionAccounts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "settlementMints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "inputs": {

@@ -95,7 +95,7 @@ function clampConfidence(value: number): number {
 
 function extractPools(event: ProtocolEvent): string[] | undefined {
   const maybePool = event.meta?.pool;
-  if (typeof maybePool === "string" && maybePool.length >= 32) {
+  if (typeof maybePool === "string" && maybePool.trim().length > 0) {
     return [maybePool];
   }
   return undefined;
@@ -103,7 +103,7 @@ function extractPools(event: ProtocolEvent): string[] | undefined {
 
 function extractMarkets(event: ProtocolEvent): string[] | undefined {
   const maybeMarket = event.meta?.market;
-  if (typeof maybeMarket === "string" && maybeMarket.length >= 32) {
+  if (typeof maybeMarket === "string" && maybeMarket.trim().length > 0) {
     return [maybeMarket];
   }
   return undefined;
@@ -151,14 +151,24 @@ function markPairKey(
   return `loopA:${LOOP_A_SCHEMA_VERSION}:marks:${commitment}:pair:${baseMint}:${quoteMint}:latest`;
 }
 
+function markLineageRefTokens(mark: Mark): [string, string][] {
+  const refs: [string, string][] = [];
+  if (mark.lineage?.market) refs.push(["market", mark.lineage.market]);
+  if (mark.lineage?.pool) refs.push(["pool", mark.lineage.pool]);
+  if (mark.lineage?.positionAccount) {
+    refs.push(["position", mark.lineage.positionAccount]);
+  }
+  if (mark.lineage?.settlementMint) {
+    refs.push(["settlement", mark.lineage.settlementMint]);
+  }
+  return refs.length > 0 ? refs : [["ref", "none"]];
+}
+
 function markPairVenueKey(commitment: SlotCommitment, mark: Mark): string {
-  const lineageRef = mark.lineage?.market ?? mark.lineage?.pool ?? "none";
-  const lineageRefType = mark.lineage?.market
-    ? "market"
-    : mark.lineage?.pool
-      ? "pool"
-      : "ref";
-  return `loopA:${LOOP_A_SCHEMA_VERSION}:marks:${commitment}:pair:${mark.baseMint}:${mark.quoteMint}:venue:${mark.venue}:${lineageRefType}:${lineageRef}:latest`;
+  const refSuffix = markLineageRefTokens(mark)
+    .map(([type, value]) => `${type}:${value}`)
+    .join(":");
+  return `loopA:${LOOP_A_SCHEMA_VERSION}:marks:${commitment}:pair:${mark.baseMint}:${mark.quoteMint}:venue:${mark.venue}:${refSuffix}:latest`;
 }
 
 export function loopAMarksLatestKey(commitment: SlotCommitment): string {
@@ -186,6 +196,8 @@ function pickLatestMarkPerVenueIdentity(marks: Mark[]): Mark[] {
       mark.venue,
       mark.lineage?.pool ?? "no_pool",
       mark.lineage?.market ?? "no_market",
+      mark.lineage?.positionAccount ?? "no_position",
+      mark.lineage?.settlementMint ?? "no_settlement",
     ].join(":");
     const previous = byIdentity.get(key);
     if (!previous || mark.slot >= previous.slot) {
@@ -267,7 +279,7 @@ function buildMarkFromSwap(input: {
   };
 }
 
-function computeMarksFromBatches(input: {
+export function computeLoopAMarksFromBatches(input: {
   decodedBatches: LoopAEventBatch[];
   commitment: SlotCommitment;
   generatedAt: string;
@@ -288,15 +300,10 @@ function computeMarksFromBatches(input: {
   return pickLatestMarkPerVenueIdentity(marks);
 }
 
-export function resolveMarkCommitment(raw: string | undefined): SlotCommitment {
-  const normalized = String(raw ?? "").trim();
-  return isSlotCommitment(normalized) ? normalized : DEFAULT_MARK_COMMITMENT;
-}
-
-export async function runLoopAMarkEngineTick(
+export async function publishLoopAMarks(
   env: Env,
   input: {
-    decodedBatches: LoopAEventBatch[];
+    marks: Mark[];
     commitment: SlotCommitment;
     observedAt?: string;
   },
@@ -306,12 +313,7 @@ export async function runLoopAMarkEngineTick(
   }
 
   const observedAt = input.observedAt ?? new Date().toISOString();
-  const marks = computeMarksFromBatches({
-    decodedBatches: input.decodedBatches,
-    commitment: input.commitment,
-    generatedAt: observedAt,
-  });
-
+  const marks = pickLatestMarkPerVenueIdentity(input.marks);
   if (marks.length === 0) {
     return {
       commitment: input.commitment,
@@ -362,4 +364,34 @@ export async function runLoopAMarkEngineTick(
     pairKeysWritten: latestByPair.length,
     marks,
   };
+}
+
+export function resolveMarkCommitment(raw: string | undefined): SlotCommitment {
+  const normalized = String(raw ?? "").trim();
+  return isSlotCommitment(normalized) ? normalized : DEFAULT_MARK_COMMITMENT;
+}
+
+export async function runLoopAMarkEngineTick(
+  env: Env,
+  input: {
+    decodedBatches: LoopAEventBatch[];
+    commitment: SlotCommitment;
+    observedAt?: string;
+  },
+): Promise<LoopAMarkEngineTickResult> {
+  if (!env.CONFIG_KV) {
+    throw new Error("loop-a-config-kv-missing");
+  }
+
+  const observedAt = input.observedAt ?? new Date().toISOString();
+  const marks = computeLoopAMarksFromBatches({
+    decodedBatches: input.decodedBatches,
+    commitment: input.commitment,
+    generatedAt: observedAt,
+  });
+  return publishLoopAMarks(env, {
+    marks,
+    commitment: input.commitment,
+    observedAt,
+  });
 }

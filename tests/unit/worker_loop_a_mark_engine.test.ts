@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { LoopAEventBatch } from "../../apps/worker/src/loop_a/canonical_state";
 import {
   loopAMarksLatestKey,
+  publishLoopAMarks,
   resolveMarkCommitment,
   runLoopAMarkEngineTick,
 } from "../../apps/worker/src/loop_a/mark_engine";
@@ -340,6 +341,51 @@ describe("worker loop A mark engine", () => {
 
     expect(result.marksComputed).toBe(0);
     expect(store.has(loopAMarksLatestKey("confirmed"))).toBe(false);
+  });
+
+  test("publishes venue-native marks with market, position, and settlement lineage", async () => {
+    const { env, store } = createEnv();
+
+    const result = await publishLoopAMarks(env, {
+      commitment: "confirmed",
+      observedAt: "2026-03-20T12:00:00.000Z",
+      marks: [
+        parseMark({
+          schemaVersion: "v1",
+          generatedAt: "2026-03-20T12:00:00.000Z",
+          slot: 880,
+          ts: "2026-03-20T11:59:30.000Z",
+          baseMint: "So11111111111111111111111111111111111111112",
+          quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          px: "153.3",
+          confidence: 0.88,
+          venue: "drift",
+          lineage: {
+            protocol: "drift",
+            venue: "drift",
+            marketType: "perp",
+            market: "SOL-PERP",
+            positionAccount: "drift-user-account",
+            settlementMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          },
+          evidence: {
+            markets: ["SOL-PERP"],
+            positionAccounts: ["drift-user-account"],
+            settlementMints: ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
+            inputs: ["loopA:v1:bridge:drift:slot:880:market:SOL-PERP"],
+          },
+          version: "v1",
+        }),
+      ],
+    });
+
+    expect(result.marksComputed).toBe(1);
+    expect(result.pairKeysWritten).toBe(1);
+    expect(
+      store.has(
+        "loopA:v1:marks:confirmed:pair:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:venue:drift:market:SOL-PERP:position:drift-user-account:settlement:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:latest",
+      ),
+    ).toBe(true);
   });
 
   test("throws when CONFIG_KV is missing", async () => {

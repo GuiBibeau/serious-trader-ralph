@@ -190,6 +190,8 @@ function normalizeVenueLineageRows(
       inputRefs: normalizeStringArray(entry.inputRefs),
       pools: normalizeStringArray(entry.pools),
       markets: normalizeStringArray(entry.markets),
+      positionAccounts: normalizeStringArray(entry.positionAccounts),
+      settlementMints: normalizeStringArray(entry.settlementMints),
     }))
     .sort((a, b) => {
       if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;
@@ -329,6 +331,16 @@ function parseScoreRow(raw: unknown): LoopBScoreRow | null {
                   : [],
                 markets: Array.isArray(parsed.markets)
                   ? parsed.markets.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+                positionAccounts: Array.isArray(parsed.positionAccounts)
+                  ? parsed.positionAccounts.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+                settlementMints: Array.isArray(parsed.settlementMints)
+                  ? parsed.settlementMints.filter(
                       (item): item is string => typeof item === "string",
                     )
                   : [],
@@ -928,6 +940,16 @@ function parseState(input: unknown): RecommenderState {
                       : [],
                     markets: Array.isArray(parsed.markets)
                       ? parsed.markets.filter(
+                          (entry): entry is string => typeof entry === "string",
+                        )
+                      : [],
+                    positionAccounts: Array.isArray(parsed.positionAccounts)
+                      ? parsed.positionAccounts.filter(
+                          (entry): entry is string => typeof entry === "string",
+                        )
+                      : [],
+                    settlementMints: Array.isArray(parsed.settlementMints)
+                      ? parsed.settlementMints.filter(
                           (entry): entry is string => typeof entry === "string",
                         )
                       : [],

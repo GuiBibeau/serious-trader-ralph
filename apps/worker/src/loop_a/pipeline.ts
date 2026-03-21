@@ -16,9 +16,14 @@ import {
   writeLoopACursorStateToKv,
 } from "./cursor_store_kv";
 import { decodeProtocolEventsFromBlock } from "./decoder_registry";
-import { resolveMarkCommitment, runLoopAMarkEngineTick } from "./mark_engine";
+import {
+  computeLoopAMarksFromBatches,
+  publishLoopAMarks,
+  resolveMarkCommitment,
+} from "./mark_engine";
 import { runLoopASlotSourceTick } from "./slot_source";
 import type { LoopACursorState } from "./types";
+import { collectLoopAVenueBridgeMarks } from "./venue_bridge";
 
 export type LoopAPipelineTickResult = {
   cursorState: LoopACursorState;
@@ -167,9 +172,33 @@ export async function runLoopATickPipeline(
 
   if (markEngineEnabled) {
     const markCommitment = resolveMarkCommitment(env.LOOP_A_MARK_COMMITMENT);
-    const markResult = await runLoopAMarkEngineTick(env, {
+    const observedAt = new Date().toISOString();
+    const decodedMarks = computeLoopAMarksFromBatches({
       decodedBatches,
       commitment: markCommitment,
+      generatedAt: observedAt,
+    });
+    const bridgeResult = await collectLoopAVenueBridgeMarks(env, {
+      commitment: markCommitment,
+      slot: cursorState.headCursor[markCommitment],
+      observedAt,
+    });
+    if (
+      bridgeResult.observedVenues.length > 0 ||
+      bridgeResult.marks.length > 0
+    ) {
+      console.log("loop_a.venue_bridge.tick", {
+        commitment: bridgeResult.commitment,
+        slot: bridgeResult.slot,
+        observedAt: bridgeResult.observedAt,
+        observedVenues: bridgeResult.observedVenues,
+        marksProduced: bridgeResult.marks.length,
+      });
+    }
+    const markResult = await publishLoopAMarks(env, {
+      marks: [...decodedMarks, ...bridgeResult.marks],
+      commitment: markCommitment,
+      observedAt,
     });
     console.log("loop_a.mark_engine.tick", markResult);
 

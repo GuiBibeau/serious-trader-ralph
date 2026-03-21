@@ -15,7 +15,8 @@ A, Loop B, and Loop C.
 
 - Loop A marks keep their existing pair-level identity and `venue` field.
 - Loop A marks now optionally carry `lineage`, which records `protocol`,
-  `venue`, `marketType`, and optional `pool` or `market` identifiers.
+  `venue`, `marketType`, and optional `pool`, `market`, `positionAccount`, or
+  `settlementMint` identifiers.
 - Loop B feature and score rows remain pair-level rows keyed by the same
   `pairId`, `baseMint`, and `quoteMint`.
 - Loop B now carries additive provenance fields:
@@ -56,7 +57,8 @@ That means:
 
 - Treat `sourceProtocols` and `sourceVenues` as convenience summaries.
 - Treat `venueLineage` as the authoritative structured provenance slice for a
-  pair row, including pool or market identifiers when they are available.
+  pair row, including pool, market, position-account, and settlement lineage
+  when they are available.
 - Do not assume a pair row maps to only one venue.
 - Do not create venue-specific ranking behavior in VP1 by rewriting pair keys;
   that belongs to later venue-parity phases built on this substrate.

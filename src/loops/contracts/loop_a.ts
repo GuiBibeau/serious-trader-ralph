@@ -123,8 +123,10 @@ export const MarkLineageSchema = z
     protocol: NON_EMPTY_STRING_SCHEMA,
     venue: NON_EMPTY_STRING_SCHEMA,
     marketType: MARKET_TYPE_SCHEMA,
-    pool: PUBKEY_SCHEMA.optional(),
-    market: PUBKEY_SCHEMA.optional(),
+    pool: NON_EMPTY_STRING_SCHEMA.optional(),
+    market: NON_EMPTY_STRING_SCHEMA.optional(),
+    positionAccount: NON_EMPTY_STRING_SCHEMA.optional(),
+    settlementMint: NON_EMPTY_STRING_SCHEMA.optional(),
   })
   .strict();
 
@@ -143,8 +145,10 @@ export const MarkSchema = ArtifactMetaSchema.extend({
   evidence: z
     .object({
       sigs: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
-      pools: z.array(PUBKEY_SCHEMA).optional(),
-      markets: z.array(PUBKEY_SCHEMA).optional(),
+      pools: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
+      markets: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
+      positionAccounts: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
+      settlementMints: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
       inputs: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
     })
     .strict()

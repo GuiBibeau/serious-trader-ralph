@@ -39,6 +39,8 @@ export type LoopBVenueLineageRow = {
   inputRefs: string[];
   pools: string[];
   markets: string[];
+  positionAccounts: string[];
+  settlementMints: string[];
 };
 
 type PairAggregate = {
@@ -243,6 +245,8 @@ function markVenueIdentity(mark: Mark): string {
     mark.lineage?.venue ?? mark.venue,
     mark.lineage?.pool ?? "no_pool",
     mark.lineage?.market ?? "no_market",
+    mark.lineage?.positionAccount ?? "no_position",
+    mark.lineage?.settlementMint ?? "no_settlement",
   ].join(":");
 }
 
@@ -288,12 +292,19 @@ function summarizeVenueLineage(marks: Mark[]): {
     string,
     Omit<
       LoopBVenueLineageRow,
-      "confidenceAvg" | "inputRefs" | "pools" | "markets"
+      | "confidenceAvg"
+      | "inputRefs"
+      | "pools"
+      | "markets"
+      | "positionAccounts"
+      | "settlementMints"
     > & {
       confidenceSum: number;
       inputRefs: Set<string>;
       pools: Set<string>;
       markets: Set<string>;
+      positionAccounts: Set<string>;
+      settlementMints: Set<string>;
     }
   >();
 
@@ -314,11 +325,23 @@ function summarizeVenueLineage(marks: Mark[]): {
       }
       if (mark.lineage?.pool) current.pools.add(mark.lineage.pool);
       if (mark.lineage?.market) current.markets.add(mark.lineage.market);
+      if (mark.lineage?.positionAccount) {
+        current.positionAccounts.add(mark.lineage.positionAccount);
+      }
+      if (mark.lineage?.settlementMint) {
+        current.settlementMints.add(mark.lineage.settlementMint);
+      }
       for (const pool of mark.evidence?.pools ?? []) {
         if (pool) current.pools.add(pool);
       }
       for (const market of mark.evidence?.markets ?? []) {
         if (market) current.markets.add(market);
+      }
+      for (const positionAccount of mark.evidence?.positionAccounts ?? []) {
+        if (positionAccount) current.positionAccounts.add(positionAccount);
+      }
+      for (const settlementMint of mark.evidence?.settlementMints ?? []) {
+        if (settlementMint) current.settlementMints.add(settlementMint);
       }
       continue;
     }
@@ -349,6 +372,28 @@ function summarizeVenueLineage(marks: Mark[]): {
           ...(mark.evidence?.markets ?? []),
         ].filter((market): market is string => market.length > 0),
       ),
+      positionAccounts: new Set(
+        [
+          ...(mark.lineage?.positionAccount
+            ? [mark.lineage.positionAccount]
+            : []),
+          ...(mark.evidence?.positionAccounts ?? []),
+        ].filter(
+          (positionAccount): positionAccount is string =>
+            positionAccount.length > 0,
+        ),
+      ),
+      settlementMints: new Set(
+        [
+          ...(mark.lineage?.settlementMint
+            ? [mark.lineage.settlementMint]
+            : []),
+          ...(mark.evidence?.settlementMints ?? []),
+        ].filter(
+          (settlementMint): settlementMint is string =>
+            settlementMint.length > 0,
+        ),
+      ),
     });
   }
 
@@ -368,6 +413,8 @@ function summarizeVenueLineage(marks: Mark[]): {
       inputRefs: [...entry.inputRefs].sort(),
       pools: [...entry.pools].sort(),
       markets: [...entry.markets].sort(),
+      positionAccounts: [...entry.positionAccounts].sort(),
+      settlementMints: [...entry.settlementMints].sort(),
     }))
     .sort((a, b) => {
       if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;

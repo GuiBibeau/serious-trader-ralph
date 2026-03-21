@@ -11,6 +11,8 @@ The Loop A/B/C provenance substrate for this program is defined in
 `docs/strategy-lab/venue-lineage-contracts.md`.
 Loop A spot-family venue parity status for VP2 is recorded in
 `docs/strategy-lab/loop-a-spot-venue-parity.md`.
+Loop A perp and prediction venue parity status for VP3 is recorded in
+`docs/strategy-lab/loop-a-perp-prediction-venue-parity.md`.
 
 ## How To Use It
 

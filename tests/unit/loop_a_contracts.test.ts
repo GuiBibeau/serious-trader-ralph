@@ -129,6 +129,41 @@ describe("loop A contracts", () => {
     expect(mark.evidence?.markets).toEqual([MARKET]);
   });
 
+  test("parses valid perp mark payload with generic market and account lineage", () => {
+    const mark = parseMark({
+      ...META,
+      slot: 202,
+      ts: "2026-02-21T00:01:10Z",
+      baseMint: SOL_MINT,
+      quoteMint: USDC_MINT,
+      px: "153.3",
+      confidence: 0.88,
+      venue: "drift",
+      lineage: {
+        protocol: "drift",
+        venue: "drift",
+        marketType: "perp",
+        market: "SOL-PERP",
+        positionAccount: "drift-user-account",
+        settlementMint: USDC_MINT,
+      },
+      version: "v1",
+      evidence: {
+        markets: ["SOL-PERP"],
+        positionAccounts: ["drift-user-account"],
+        settlementMints: [USDC_MINT],
+        inputs: ["loopA:v1:bridge:drift:slot:202:market:SOL-PERP"],
+      },
+    });
+
+    expect(mark.lineage?.market).toBe("SOL-PERP");
+    expect(mark.lineage?.positionAccount).toBe("drift-user-account");
+    expect(mark.lineage?.settlementMint).toBe(USDC_MINT);
+    expect(mark.evidence?.markets).toEqual(["SOL-PERP"]);
+    expect(mark.evidence?.positionAccounts).toEqual(["drift-user-account"]);
+    expect(mark.evidence?.settlementMints).toEqual([USDC_MINT]);
+  });
+
   test("rejects mark lineage without protocol", () => {
     const result = safeParseMark({
       ...META,

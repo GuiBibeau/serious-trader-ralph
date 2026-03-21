@@ -113,6 +113,8 @@ function normalizeVenueLineage(
       inputRefs: normalizeStringList(entry.inputRefs),
       pools: normalizeStringList(entry.pools),
       markets: normalizeStringList(entry.markets),
+      positionAccounts: normalizeStringList(entry.positionAccounts),
+      settlementMints: normalizeStringList(entry.settlementMints),
     }))
     .sort((a, b) => {
       if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;
@@ -371,6 +373,16 @@ function parseLoopCCandidateRow(raw: unknown): LoopCCandidateRow | null {
                   : [],
                 markets: Array.isArray(parsed.markets)
                   ? parsed.markets.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+                positionAccounts: Array.isArray(parsed.positionAccounts)
+                  ? parsed.positionAccounts.filter(
+                      (item): item is string => typeof item === "string",
+                    )
+                  : [],
+                settlementMints: Array.isArray(parsed.settlementMints)
+                  ? parsed.settlementMints.filter(
                       (item): item is string => typeof item === "string",
                     )
                   : [],
