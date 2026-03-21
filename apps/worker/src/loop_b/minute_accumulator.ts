@@ -277,6 +277,13 @@ type LoopBParityView = {
   rows: LoopBParityRow[];
 };
 
+type LoopBParityStatusOverride = {
+  venueKey: string;
+  marketType: LoopVenueMarketType;
+  reasonDetail: string;
+  artifactRef: string;
+};
+
 type LoopBHealth = {
   schemaVersion: typeof LOOP_B_SCHEMA_VERSION;
   generatedAt: string;
@@ -293,6 +300,7 @@ type MinuteRecord = {
   revision: number;
   finalizedRevision: number;
   marksById: Record<string, Mark>;
+  publishedVenueRowIds: string[];
   updatedAt: string;
 };
 
@@ -303,6 +311,23 @@ type MinuteAccumulatorState = {
   lastFinalizedMinute: MinuteId | null;
   minutes: Record<string, MinuteRecord>;
 };
+
+const LOOP_A_BLOCKED_PARITY_OVERRIDES: LoopBParityStatusOverride[] = [
+  {
+    venueKey: "magicblock",
+    marketType: "spot",
+    reasonDetail:
+      "MagicBlock stays fail-closed for direct Loop A marks because the repo path is an ephemeral rollup execution adapter, not a deterministic L1 event feed.",
+    artifactRef: "docs/strategy-lab/loop-a-spot-venue-parity.md",
+  },
+  {
+    venueKey: "flash_liquidity",
+    marketType: "spot",
+    reasonDetail:
+      "Flash Liquidity stays fail-closed for direct Loop A marks because the current repo path is an atomic flash substrate, not a venue-native quote or fill stream.",
+    artifactRef: "docs/strategy-lab/loop-a-spot-venue-parity.md",
+  },
+];
 
 type IngestRequest = {
   marks: unknown[];
@@ -602,6 +627,14 @@ function loadState(input: unknown): MinuteAccumulatorState {
         revision,
         finalizedRevision,
         marksById,
+        publishedVenueRowIds: Array.isArray(rawRecord.publishedVenueRowIds)
+          ? normalizeStringList(
+              rawRecord.publishedVenueRowIds.filter(
+                (value): value is string =>
+                  typeof value === "string" && value.trim().length > 0,
+              ),
+            )
+          : [],
         updatedAt:
           typeof rawRecord.updatedAt === "string"
             ? rawRecord.updatedAt
@@ -637,6 +670,7 @@ function createMinuteRecord(
     revision: 0,
     finalizedRevision: 0,
     marksById: {},
+    publishedVenueRowIds: [],
     updatedAt: observedAt,
   };
 }
@@ -984,10 +1018,22 @@ function expectedVenueCandidates(marketTypes: LoopVenueMarketType[]): Array<{
 }> {
   const expectedTypes = new Set(marketTypes);
   const parityIndex = new Map(
-    listLoopAVenueParityStatuses().map((status) => [
-      `${status.venueKey}:${status.marketType}`,
-      status,
-    ]),
+    [
+      ...listLoopAVenueParityStatuses().map((status) => ({
+        venueKey: status.venueKey,
+        marketType: status.marketType,
+        mode: status.mode,
+        summary: status.summary,
+        artifactRef: status.artifactRef,
+      })),
+      ...LOOP_A_BLOCKED_PARITY_OVERRIDES.map((status) => ({
+        venueKey: status.venueKey,
+        marketType: status.marketType,
+        mode: "blocked" as const,
+        summary: status.reasonDetail,
+        artifactRef: status.artifactRef,
+      })),
+    ].map((status) => [`${status.venueKey}:${status.marketType}`, status]),
   );
   const candidates = new Map<
     string,
@@ -1490,6 +1536,11 @@ async function putKvJson(
   await env.CONFIG_KV.put(key, JSON.stringify(payload));
 }
 
+async function deleteKvKey(env: Env, key: string): Promise<void> {
+  if (!env.CONFIG_KV) return;
+  await env.CONFIG_KV.delete(key);
+}
+
 function pairScoreKey(pairIdValue: string): string {
   return `loopB:v1:scores:latest:pair:${pairIdValue}`;
 }
@@ -1591,6 +1642,23 @@ async function publishFinalizedMinute(input: {
   const venueScoreRowsById = new Map(
     venueScoreSet.rows.map((row) => [row.venueRowId, row] as const),
   );
+  const currentVenueRowIds = normalizeStringList(
+    venueFeatureSet.rows.map((row) => row.venueRowId),
+  );
+  const previousVenueRowIds = normalizeStringList(
+    input.minuteRecord.publishedVenueRowIds,
+  );
+  const currentVenueRowIdSet = new Set(currentVenueRowIds);
+  const staleVenueRowIds = previousVenueRowIds.filter(
+    (venueRowId) => !currentVenueRowIdSet.has(venueRowId),
+  );
+
+  await Promise.all(
+    staleVenueRowIds.flatMap((venueRowId) => [
+      deleteKvKey(input.env, venueFeatureRowKey(venueRowId)),
+      deleteKvKey(input.env, venueScoreRowKey(venueRowId)),
+    ]),
+  );
 
   for (const pair of pairs) {
     const scoreRow = scoreRowsByPair.get(pair.pairId) ?? null;
@@ -1617,6 +1685,8 @@ async function publishFinalizedMinute(input: {
       await putKvJson(input.env, venueScoreRowKey(row.venueRowId), scoreRow);
     }
   }
+
+  input.minuteRecord.publishedVenueRowIds = currentVenueRowIds;
 
   if (input.env.LOGS_BUCKET) {
     await Promise.all([

@@ -548,11 +548,27 @@ describe("worker loop B minute accumulator", () => {
     );
     expect(solUsdc?.availableVenues).toEqual(["openbook", "raydium"]);
     expect(solUsdc?.unavailableVenues).toContain("jupiter");
+    expect(solUsdc?.unavailableVenues).toContain("magicblock");
+    expect(solUsdc?.unavailableVenues).toContain("flash_liquidity");
     expect(
       solUsdc?.venues.find((row) => row.venue === "jupiter"),
     ).toMatchObject({
       status: "unavailable",
       reasonCode: "no_mark_for_pair_in_minute",
+    });
+    expect(
+      solUsdc?.venues.find((row) => row.venue === "magicblock"),
+    ).toMatchObject({
+      status: "unavailable",
+      reasonCode: "blocked_in_loop_a",
+      artifactRef: "docs/strategy-lab/loop-a-spot-venue-parity.md",
+    });
+    expect(
+      solUsdc?.venues.find((row) => row.venue === "flash_liquidity"),
+    ).toMatchObject({
+      status: "unavailable",
+      reasonCode: "blocked_in_loop_a",
+      artifactRef: "docs/strategy-lab/loop-a-spot-venue-parity.md",
     });
   });
 
@@ -746,6 +762,65 @@ describe("worker loop B minute accumulator", () => {
     expect(parityView.minute).toBe("2026-02-21T18:07:00.000Z");
     expect(parityView.count).toBe(0);
     expect(parityView.rows).toEqual([]);
+  });
+
+  test("removes stale venue row keys when a late correction drops a venue row", async () => {
+    const { env, kvStore } = createEnv({ withR2: false });
+    const mock = createMockDoState();
+    const accumulator = new MinuteAccumulator(mock.state, env, {
+      now: () => "2026-02-21T18:09:00.000Z",
+    });
+
+    await accumulator.fetch(
+      new Request("https://internal/loop-b/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          observedAt: "2026-02-21T18:09:00.000Z",
+          marks: [
+            createMark({
+              slot: 750,
+              ts: "2026-02-21T18:08:10.000Z",
+              px: "5.1",
+              sig: "sig-raydium-750",
+              protocol: "raydium",
+              venue: "raydium",
+            }),
+          ],
+        }),
+      }),
+    );
+
+    const initialVenueFeatureKey =
+      "loopB:v1:features:by_venue:latest:row:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:spot:raydium:raydium";
+    const initialVenueScoreKey =
+      "loopB:v1:scores:by_venue:latest:row:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:spot:raydium:raydium";
+
+    expect(kvStore.has(initialVenueFeatureKey)).toBe(true);
+    expect(kvStore.has(initialVenueScoreKey)).toBe(true);
+
+    await accumulator.fetch(
+      new Request("https://internal/loop-b/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          observedAt: "2026-02-21T18:10:00.000Z",
+          marks: [
+            createMark({
+              slot: 750,
+              ts: "2026-02-21T18:08:10.000Z",
+              px: "0",
+              sig: "sig-raydium-750",
+              protocol: "raydium",
+              venue: "raydium",
+            }),
+          ],
+        }),
+      }),
+    );
+
+    expect(kvStore.has(initialVenueFeatureKey)).toBe(false);
+    expect(kvStore.has(initialVenueScoreKey)).toBe(false);
   });
 
   test("late correction re-finalizes the minute with updated scores", async () => {
