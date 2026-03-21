@@ -300,7 +300,6 @@ type MinuteRecord = {
   revision: number;
   finalizedRevision: number;
   marksById: Record<string, Mark>;
-  publishedVenueRowIds: string[];
   updatedAt: string;
 };
 
@@ -309,6 +308,7 @@ type MinuteAccumulatorState = {
   updatedAt: string;
   currentMinute: MinuteId | null;
   lastFinalizedMinute: MinuteId | null;
+  lastPublishedVenueRowIds: string[];
   minutes: Record<string, MinuteRecord>;
 };
 
@@ -588,6 +588,7 @@ function loadState(input: unknown): MinuteAccumulatorState {
       updatedAt: new Date().toISOString(),
       currentMinute: null,
       lastFinalizedMinute: null,
+      lastPublishedVenueRowIds: [],
       minutes: {},
     };
   }
@@ -627,14 +628,6 @@ function loadState(input: unknown): MinuteAccumulatorState {
         revision,
         finalizedRevision,
         marksById,
-        publishedVenueRowIds: Array.isArray(rawRecord.publishedVenueRowIds)
-          ? normalizeStringList(
-              rawRecord.publishedVenueRowIds.filter(
-                (value): value is string =>
-                  typeof value === "string" && value.trim().length > 0,
-              ),
-            )
-          : [],
         updatedAt:
           typeof rawRecord.updatedAt === "string"
             ? rawRecord.updatedAt
@@ -657,6 +650,14 @@ function loadState(input: unknown): MinuteAccumulatorState {
       typeof record.lastFinalizedMinute === "string"
         ? (toMinuteId(record.lastFinalizedMinute) ?? null)
         : null,
+    lastPublishedVenueRowIds: Array.isArray(record.lastPublishedVenueRowIds)
+      ? normalizeStringList(
+          record.lastPublishedVenueRowIds.filter(
+            (value): value is string =>
+              typeof value === "string" && value.trim().length > 0,
+          ),
+        )
+      : [],
     minutes: outMinutes,
   };
 }
@@ -670,7 +671,6 @@ function createMinuteRecord(
     revision: 0,
     finalizedRevision: 0,
     marksById: {},
-    publishedVenueRowIds: [],
     updatedAt: observedAt,
   };
 }
@@ -1096,97 +1096,116 @@ function buildParityView(input: {
   const scoreByVenueRowId = new Map(
     input.venueScoreSet.rows.map((row) => [row.venueRowId, row] as const),
   );
+  const pairsById = new Map(
+    input.pairs.map((pair) => [pair.pairId, pair] as const),
+  );
+  const pairIds = normalizeStringList([
+    ...input.pairs.map((pair) => pair.pairId),
+    ...input.venueFeatureSet.rows.map((row) => row.pairId),
+  ]);
 
-  const rows: LoopBParityRow[] = input.pairs.map((pair) => {
-    const venueFeatures = featuresByPair.get(pair.pairId) ?? [];
-    const marketTypes = [
-      ...new Set(venueFeatures.map((row) => row.marketType)),
-    ].sort() as LoopVenueMarketType[];
-    const availableByKey = new Map(
-      venueFeatures.map((row) => [
-        `${row.marketType}:${row.protocol}:${row.venue}`,
-        row,
-      ]),
-    );
-    const venues: LoopBParityVenueStatusRow[] = venueFeatures.map((row) => {
-      const scoreRow = scoreByVenueRowId.get(row.venueRowId) ?? null;
-      return {
-        protocol: row.protocol,
-        venue: row.venue,
-        marketType: row.marketType,
-        status: "available",
-        reasonCode: "observed_marks",
-        markCount: row.markCount,
-        confidenceAvg: row.confidenceAvg,
-        featureRef: venueFeatureRowKey(row.venueRowId),
-        ...(scoreRow
-          ? { scoreRef: venueScoreRowKey(scoreRow.venueRowId) }
-          : {}),
-        pools: row.pools,
-        markets: row.markets,
-        positionAccounts: row.positionAccounts,
-        settlementMints: row.settlementMints,
-      };
-    });
+  const rows: LoopBParityRow[] = pairIds
+    .map((pairId) => {
+      const pair = pairsById.get(pairId) ?? null;
+      const venueFeatures = featuresByPair.get(pairId) ?? [];
+      const exemplar = venueFeatures[0] ?? null;
+      if (!pair && !exemplar) return null;
 
-    for (const candidate of expectedVenueCandidates(marketTypes)) {
-      const existing = availableByKey.get(
-        `${candidate.marketType}:${candidate.protocol}:${candidate.venue}`,
+      const marketTypes = normalizeStringList([
+        ...venueFeatures.map((row) => row.marketType),
+        ...((pair?.venueLineage ?? []).map(
+          (row) => row.marketType,
+        ) as string[]),
+      ]) as LoopVenueMarketType[];
+      const availableByKey = new Map(
+        venueFeatures.map((row) => [
+          `${row.marketType}:${row.protocol}:${row.venue}`,
+          row,
+        ]),
       );
-      if (existing) continue;
-      venues.push({
-        protocol: candidate.protocol,
-        venue: candidate.venue,
-        marketType: candidate.marketType,
-        status: "unavailable",
-        reasonCode: candidate.reasonCode,
-        ...(candidate.reasonDetail
-          ? { reasonDetail: candidate.reasonDetail }
-          : {}),
-        ...(candidate.artifactRef
-          ? { artifactRef: candidate.artifactRef }
-          : {}),
-        markCount: 0,
-        confidenceAvg: 0,
-        pools: [],
-        markets: [],
-        positionAccounts: [],
-        settlementMints: [],
+      const venues: LoopBParityVenueStatusRow[] = venueFeatures.map((row) => {
+        const scoreRow = scoreByVenueRowId.get(row.venueRowId) ?? null;
+        return {
+          protocol: row.protocol,
+          venue: row.venue,
+          marketType: row.marketType,
+          status: "available",
+          reasonCode: "observed_marks",
+          markCount: row.markCount,
+          confidenceAvg: row.confidenceAvg,
+          featureRef: venueFeatureRowKey(row.venueRowId),
+          ...(scoreRow
+            ? { scoreRef: venueScoreRowKey(scoreRow.venueRowId) }
+            : {}),
+          pools: row.pools,
+          markets: row.markets,
+          positionAccounts: row.positionAccounts,
+          settlementMints: row.settlementMints,
+        };
       });
-    }
 
-    venues.sort((a, b) => {
-      if (a.status !== b.status) return a.status === "available" ? -1 : 1;
-      if (a.marketType !== b.marketType) {
-        return a.marketType < b.marketType ? -1 : 1;
+      for (const candidate of expectedVenueCandidates(marketTypes)) {
+        const existing = availableByKey.get(
+          `${candidate.marketType}:${candidate.protocol}:${candidate.venue}`,
+        );
+        if (existing) continue;
+        venues.push({
+          protocol: candidate.protocol,
+          venue: candidate.venue,
+          marketType: candidate.marketType,
+          status: "unavailable",
+          reasonCode: candidate.reasonCode,
+          ...(candidate.reasonDetail
+            ? { reasonDetail: candidate.reasonDetail }
+            : {}),
+          ...(candidate.artifactRef
+            ? { artifactRef: candidate.artifactRef }
+            : {}),
+          markCount: 0,
+          confidenceAvg: 0,
+          pools: [],
+          markets: [],
+          positionAccounts: [],
+          settlementMints: [],
+        });
       }
-      if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;
-      if (a.protocol !== b.protocol) return a.protocol < b.protocol ? -1 : 1;
-      return 0;
-    });
 
-    return {
-      pairId: pair.pairId,
-      baseMint: pair.baseMint,
-      quoteMint: pair.quoteMint,
-      marketTypes,
-      availableVenues: normalizeStringList(
-        venues
-          .filter((row) => row.status === "available")
-          .map((row) => row.venue),
-      ),
-      unavailableVenues: normalizeStringList(
-        venues
-          .filter((row) => row.status === "unavailable")
-          .map((row) => row.venue),
-      ),
-      venues,
-      explain: [
-        `available=${venues.filter((row) => row.status === "available").length}`,
-        `unavailable=${venues.filter((row) => row.status === "unavailable").length}`,
-      ],
-    };
-  });
+      venues.sort((a, b) => {
+        if (a.status !== b.status) return a.status === "available" ? -1 : 1;
+        if (a.marketType !== b.marketType) {
+          return a.marketType < b.marketType ? -1 : 1;
+        }
+        if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;
+        if (a.protocol !== b.protocol) return a.protocol < b.protocol ? -1 : 1;
+        return 0;
+      });
+
+      return {
+        pairId,
+        baseMint:
+          pair?.baseMint ?? exemplar?.baseMint ?? pairId.split(":")[0] ?? "",
+        quoteMint:
+          pair?.quoteMint ?? exemplar?.quoteMint ?? pairId.split(":")[1] ?? "",
+        marketTypes,
+        availableVenues: normalizeStringList(
+          venues
+            .filter((row) => row.status === "available")
+            .map((row) => row.venue),
+        ),
+        unavailableVenues: normalizeStringList(
+          venues
+            .filter((row) => row.status === "unavailable")
+            .map((row) => row.venue),
+        ),
+        venues,
+        explain: [
+          `available=${venues.filter((row) => row.status === "available").length}`,
+          `unavailable=${venues.filter((row) => row.status === "unavailable").length}`,
+          `source_pair_aggregate=${pair ? "present" : "missing"}`,
+        ],
+      };
+    })
+    .filter((row): row is LoopBParityRow => row !== null);
 
   rows.sort((a, b) => (a.pairId < b.pairId ? -1 : a.pairId > b.pairId ? 1 : 0));
 
@@ -1556,7 +1575,8 @@ async function publishFinalizedMinute(input: {
   generatedAt: string;
   topLimit: number;
   candidateLimit: number;
-}): Promise<void> {
+  previousVenueRowIds: string[];
+}): Promise<string[]> {
   const pairs = aggregateMinutePairs(input.minuteRecord);
   const venueFeatureSet = buildVenueFeatureSet({
     minute: input.minute,
@@ -1645,9 +1665,7 @@ async function publishFinalizedMinute(input: {
   const currentVenueRowIds = normalizeStringList(
     venueFeatureSet.rows.map((row) => row.venueRowId),
   );
-  const previousVenueRowIds = normalizeStringList(
-    input.minuteRecord.publishedVenueRowIds,
-  );
+  const previousVenueRowIds = normalizeStringList(input.previousVenueRowIds);
   const currentVenueRowIdSet = new Set(currentVenueRowIds);
   const staleVenueRowIds = previousVenueRowIds.filter(
     (venueRowId) => !currentVenueRowIdSet.has(venueRowId),
@@ -1685,8 +1703,6 @@ async function publishFinalizedMinute(input: {
       await putKvJson(input.env, venueScoreRowKey(row.venueRowId), scoreRow);
     }
   }
-
-  input.minuteRecord.publishedVenueRowIds = currentVenueRowIds;
 
   if (input.env.LOGS_BUCKET) {
     await Promise.all([
@@ -1775,6 +1791,8 @@ async function publishFinalizedMinute(input: {
       ),
     ]);
   }
+
+  return currentVenueRowIds;
 }
 
 function parseTopLimit(raw: string | undefined): number {
@@ -1871,14 +1889,16 @@ export class MinuteAccumulator {
       if (!minuteRecord) continue;
       if (minuteRecord.revision === minuteRecord.finalizedRevision) continue;
 
-      await publishFinalizedMinute({
+      const publishedVenueRowIds = await publishFinalizedMinute({
         env: this.env,
         minute: minuteId,
         minuteRecord,
         generatedAt: input.observedAt,
         topLimit,
         candidateLimit,
+        previousVenueRowIds: input.state.lastPublishedVenueRowIds,
       });
+      input.state.lastPublishedVenueRowIds = publishedVenueRowIds;
       minuteRecord.finalizedRevision = minuteRecord.revision;
       minuteRecord.updatedAt = input.observedAt;
       finalizedMinutes += 1;

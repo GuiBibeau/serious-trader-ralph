@@ -764,6 +764,60 @@ describe("worker loop B minute accumulator", () => {
     expect(parityView.rows).toEqual([]);
   });
 
+  test("builds parity rows from venue features even when pair aggregates drop the pair", async () => {
+    const { env, kvStore } = createEnv({ withR2: false });
+    const mock = createMockDoState();
+    const accumulator = new MinuteAccumulator(mock.state, env, {
+      now: () => "2026-02-21T18:11:00.000Z",
+    });
+
+    await accumulator.fetch(
+      new Request("https://internal/loop-b/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          observedAt: "2026-02-21T18:11:00.000Z",
+          marks: [
+            createMark({
+              slot: 760,
+              ts: "2026-02-21T18:10:05.000Z",
+              px: "0",
+              sig: "sig-raydium-760",
+              protocol: "raydium",
+              venue: "raydium",
+            }),
+            createMark({
+              slot: 761,
+              ts: "2026-02-21T18:10:20.000Z",
+              px: "5.2",
+              sig: "sig-openbook-761",
+              protocol: "openbook",
+              venue: "openbook",
+              marketType: "clob",
+              market: "7YttLkHDoNzpkAd3gg4MM3VQRSJ5ZK7VMBdb6Yf2mP6P",
+            }),
+          ],
+        }),
+      }),
+    );
+
+    const parityView = JSON.parse(
+      kvStore.get(LOOP_B_PARITY_VIEW_KEY) ?? "{}",
+    ) as {
+      rows: Array<{
+        pairId: string;
+        availableVenues: string[];
+        explain: string[];
+      }>;
+    };
+
+    const solUsdc = parityView.rows.find((row) =>
+      row.pairId.startsWith("So11111111111111111111111111111111111111112:"),
+    );
+    expect(solUsdc?.availableVenues).toEqual(["openbook"]);
+    expect(solUsdc?.explain).toContain("source_pair_aggregate=missing");
+  });
+
   test("removes stale venue row keys when a late correction drops a venue row", async () => {
     const { env, kvStore } = createEnv({ withR2: false });
     const mock = createMockDoState();
@@ -821,6 +875,66 @@ describe("worker loop B minute accumulator", () => {
 
     expect(kvStore.has(initialVenueFeatureKey)).toBe(false);
     expect(kvStore.has(initialVenueScoreKey)).toBe(false);
+  });
+
+  test("removes stale venue row keys when the latest minute rolls over to a new venue set", async () => {
+    const { env, kvStore } = createEnv({ withR2: false });
+    const mock = createMockDoState();
+    const accumulator = new MinuteAccumulator(mock.state, env, {
+      now: () => "2026-02-21T18:10:00.000Z",
+    });
+
+    await accumulator.fetch(
+      new Request("https://internal/loop-b/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          observedAt: "2026-02-21T18:10:00.000Z",
+          marks: [
+            createMark({
+              slot: 770,
+              ts: "2026-02-21T18:09:10.000Z",
+              px: "5.1",
+              sig: "sig-raydium-770",
+              protocol: "raydium",
+              venue: "raydium",
+            }),
+          ],
+        }),
+      }),
+    );
+
+    const raydiumVenueFeatureKey =
+      "loopB:v1:features:by_venue:latest:row:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:spot:raydium:raydium";
+    const openbookVenueFeatureKey =
+      "loopB:v1:features:by_venue:latest:row:So11111111111111111111111111111111111111112:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:clob:openbook:openbook";
+
+    expect(kvStore.has(raydiumVenueFeatureKey)).toBe(true);
+
+    await accumulator.fetch(
+      new Request("https://internal/loop-b/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          observedAt: "2026-02-21T18:11:00.000Z",
+          marks: [
+            createMark({
+              slot: 771,
+              ts: "2026-02-21T18:10:15.000Z",
+              px: "5.2",
+              sig: "sig-openbook-771",
+              protocol: "openbook",
+              venue: "openbook",
+              marketType: "clob",
+              market: "7YttLkHDoNzpkAd3gg4MM3VQRSJ5ZK7VMBdb6Yf2mP6P",
+            }),
+          ],
+        }),
+      }),
+    );
+
+    expect(kvStore.has(raydiumVenueFeatureKey)).toBe(false);
+    expect(kvStore.has(openbookVenueFeatureKey)).toBe(true);
   });
 
   test("late correction re-finalizes the minute with updated scores", async () => {
