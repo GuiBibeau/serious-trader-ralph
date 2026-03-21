@@ -38,6 +38,7 @@ export type LoopBVenueLineageRow = {
   lastTs: string;
   inputRefs: string[];
   pools: string[];
+  markets: string[];
 };
 
 type PairAggregate = {
@@ -235,9 +236,19 @@ function pairId(mark: Mark): string {
   return `${mark.baseMint}:${mark.quoteMint}`;
 }
 
+function markVenueIdentity(mark: Mark): string {
+  return [
+    mark.lineage?.marketType ?? "unknown",
+    mark.lineage?.protocol ?? mark.venue,
+    mark.lineage?.venue ?? mark.venue,
+    mark.lineage?.pool ?? "no_pool",
+    mark.lineage?.market ?? "no_market",
+  ].join(":");
+}
+
 function markEventId(mark: Mark): string {
   const sig = mark.evidence?.sigs?.[0] ?? "no_sig";
-  return `${pairId(mark)}:${mark.slot}:${sig}`;
+  return `${pairId(mark)}:${mark.slot}:${sig}:${markVenueIdentity(mark)}`;
 }
 
 function asFiniteNumber(value: string): number | null {
@@ -275,10 +286,14 @@ function summarizeVenueLineage(marks: Mark[]): {
 } {
   const byVenue = new Map<
     string,
-    Omit<LoopBVenueLineageRow, "confidenceAvg" | "inputRefs" | "pools"> & {
+    Omit<
+      LoopBVenueLineageRow,
+      "confidenceAvg" | "inputRefs" | "pools" | "markets"
+    > & {
       confidenceSum: number;
       inputRefs: Set<string>;
       pools: Set<string>;
+      markets: Set<string>;
     }
   >();
 
@@ -298,8 +313,12 @@ function summarizeVenueLineage(marks: Mark[]): {
         if (inputRef) current.inputRefs.add(inputRef);
       }
       if (mark.lineage?.pool) current.pools.add(mark.lineage.pool);
+      if (mark.lineage?.market) current.markets.add(mark.lineage.market);
       for (const pool of mark.evidence?.pools ?? []) {
         if (pool) current.pools.add(pool);
+      }
+      for (const market of mark.evidence?.markets ?? []) {
+        if (market) current.markets.add(market);
       }
       continue;
     }
@@ -324,6 +343,12 @@ function summarizeVenueLineage(marks: Mark[]): {
           ...(mark.evidence?.pools ?? []),
         ].filter((pool): pool is string => pool.length > 0),
       ),
+      markets: new Set(
+        [
+          ...(mark.lineage?.market ? [mark.lineage.market] : []),
+          ...(mark.evidence?.markets ?? []),
+        ].filter((market): market is string => market.length > 0),
+      ),
     });
   }
 
@@ -342,6 +367,7 @@ function summarizeVenueLineage(marks: Mark[]): {
       lastTs: entry.lastTs,
       inputRefs: [...entry.inputRefs].sort(),
       pools: [...entry.pools].sort(),
+      markets: [...entry.markets].sort(),
     }))
     .sort((a, b) => {
       if (a.venue !== b.venue) return a.venue < b.venue ? -1 : 1;

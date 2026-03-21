@@ -124,6 +124,7 @@ export const MarkLineageSchema = z
     venue: NON_EMPTY_STRING_SCHEMA,
     marketType: MARKET_TYPE_SCHEMA,
     pool: PUBKEY_SCHEMA.optional(),
+    market: PUBKEY_SCHEMA.optional(),
   })
   .strict();
 
@@ -143,6 +144,7 @@ export const MarkSchema = ArtifactMetaSchema.extend({
     .object({
       sigs: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
       pools: z.array(PUBKEY_SCHEMA).optional(),
+      markets: z.array(PUBKEY_SCHEMA).optional(),
       inputs: z.array(NON_EMPTY_STRING_SCHEMA).optional(),
     })
     .strict()

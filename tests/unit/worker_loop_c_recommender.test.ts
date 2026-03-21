@@ -197,6 +197,7 @@ function setScoresWithLineage(
               lastTs: "2026-02-21T20:00:00.000Z",
               inputRefs: ["loopA/v1/events/slot=700"],
               pools: [],
+              markets: [],
             },
           ],
           revision: 1,
@@ -250,6 +251,7 @@ function setCandidatePool(store: Map<string, string>, pairId: string): void {
               lastTs: "2026-02-21T20:00:00.000Z",
               inputRefs: ["loopA/v1/events/slot=123"],
               pools: [],
+              markets: [],
             },
           ],
           freshnessMs: 60000,
@@ -257,6 +259,70 @@ function setCandidatePool(store: Map<string, string>, pairId: string): void {
           markCount: 3,
           volatilityPct: 0.8,
           confidenceAvg: 0.9,
+          riskTags: [],
+          stabilityTags: ["low_volatility", "high_confidence"],
+          revision: 2,
+          explain: ["source=loopB", "evidence_refs=1"],
+        },
+      ],
+    }),
+  );
+}
+
+function setCandidatePoolWithMarketLineage(
+  store: Map<string, string>,
+  pairId: string,
+): void {
+  const [baseMint, quoteMint] = pairId.split(":");
+  store.set(
+    LOOP_C_CANDIDATE_POOL_LATEST_KEY,
+    JSON.stringify({
+      schemaVersion: "v1",
+      generatedAt: "2026-02-21T20:00:00.000Z",
+      minute: "2026-02-21T20:00:00.000Z",
+      source: "loopB",
+      maxCandidates: 10,
+      count: 1,
+      rows: [
+        {
+          schemaVersion: "v1",
+          generatedAt: "2026-02-21T20:00:00.000Z",
+          minute: "2026-02-21T20:00:00.000Z",
+          candidateId: `2026-02-21T20:00:00.000Z:${pairId}`,
+          pairId,
+          baseMint,
+          quoteMint,
+          finalScore: 7.7,
+          baseSignal: 7.7,
+          curiosity: 1.2,
+          riskPenalty: 0.4,
+          stabilityBonus: 5,
+          acceptProbPrior: 0.63,
+          featuresRef: `loopB:v1:features:latest:pair:${pairId}`,
+          scoreRef: `loopB:v1:scores:latest:pair:${pairId}`,
+          evidenceRefs: ["loopA/v1/events/slot=123"],
+          sourceProtocols: ["phoenix"],
+          sourceVenues: ["phoenix"],
+          venueLineage: [
+            {
+              protocol: "phoenix",
+              venue: "phoenix",
+              marketType: "clob",
+              markCount: 2,
+              confidenceAvg: 0.92,
+              firstSlot: 120,
+              lastSlot: 123,
+              lastTs: "2026-02-21T20:00:00.000Z",
+              inputRefs: ["loopA/v1/events/slot=123"],
+              pools: [],
+              markets: ["PhoenixMkt1111111111111111111111111111111111"],
+            },
+          ],
+          freshnessMs: 60000,
+          liquidityScore: 2.7,
+          markCount: 2,
+          volatilityPct: 0.8,
+          confidenceAvg: 0.92,
           riskTags: [],
           stabilityTags: ["low_volatility", "high_confidence"],
           revision: 2,
@@ -581,6 +647,76 @@ describe("worker loop C recommender durable object", () => {
       protocol: "jupiter",
       venue: "jupiter",
     });
+  });
+
+  test("cached recommendations preserve venue lineage markets", async () => {
+    const { env, kvStore } = createEnv();
+    setScores(kvStore, 99);
+    setCandidatePoolWithMarketLineage(
+      kvStore,
+      "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN:So11111111111111111111111111111111111111112",
+    );
+
+    const mock = createMockDoState();
+    const recommender = new Recommender(mock.state, env, {
+      now: () => "2026-02-21T20:16:00.000Z",
+    });
+
+    const firstResponse = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-cache-lineage",
+          wallet: "wallet-cache-lineage",
+          observedAt: "2026-02-21T20:16:00.000Z",
+          limit: 1,
+        }),
+      }),
+    );
+    const firstPayload = (await firstResponse.json()) as {
+      ok: boolean;
+      cacheHit: boolean;
+      view: {
+        recommendations: Array<{
+          venueLineage: Array<{ markets: string[] }>;
+        }>;
+      };
+    };
+
+    expect(firstPayload.ok).toBe(true);
+    expect(firstPayload.cacheHit).toBe(false);
+    expect(
+      firstPayload.view.recommendations[0]?.venueLineage[0]?.markets,
+    ).toEqual(["PhoenixMkt1111111111111111111111111111111111"]);
+
+    const secondResponse = await recommender.fetch(
+      new Request("https://internal/loop-c/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: "user-cache-lineage",
+          wallet: "wallet-cache-lineage",
+          observedAt: "2026-02-21T20:16:20.000Z",
+          limit: 1,
+        }),
+      }),
+    );
+    const secondPayload = (await secondResponse.json()) as {
+      ok: boolean;
+      cacheHit: boolean;
+      view: {
+        recommendations: Array<{
+          venueLineage: Array<{ markets: string[] }>;
+        }>;
+      };
+    };
+
+    expect(secondPayload.ok).toBe(true);
+    expect(secondPayload.cacheHit).toBe(true);
+    expect(
+      secondPayload.view.recommendations[0]?.venueLineage[0]?.markets,
+    ).toEqual(["PhoenixMkt1111111111111111111111111111111111"]);
   });
 
   test("feedback yes/no updates acceptance probability predictably", async () => {

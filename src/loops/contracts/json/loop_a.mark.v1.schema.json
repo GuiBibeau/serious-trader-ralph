@@ -76,6 +76,11 @@
           "type": "string",
           "minLength": 32,
           "maxLength": 64
+        },
+        "market": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 64
         }
       },
       "required": ["protocol", "venue", "marketType"],
@@ -92,6 +97,14 @@
           }
         },
         "pools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 64
+          }
+        },
+        "markets": {
           "type": "array",
           "items": {
             "type": "string",
