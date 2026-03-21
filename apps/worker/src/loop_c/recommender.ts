@@ -926,6 +926,11 @@ function parseState(input: unknown): RecommenderState {
                           (entry): entry is string => typeof entry === "string",
                         )
                       : [],
+                    markets: Array.isArray(parsed.markets)
+                      ? parsed.markets.filter(
+                          (entry): entry is string => typeof entry === "string",
+                        )
+                      : [],
                   },
                 ];
               }),

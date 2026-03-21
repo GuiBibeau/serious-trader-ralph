@@ -1,6 +1,9 @@
 import { OPENBOOK_PROGRAM_ID } from "@openbook-dex/openbook-v2";
 import type { ProtocolAdapter } from "../decoder_registry";
-import { createBalanceDeltaSwapAdapter } from "./balance_delta_swap_adapter";
+import {
+  createBalanceDeltaSwapAdapter,
+  JUPITER_ROUTE_PROGRAM_IDS,
+} from "./balance_delta_swap_adapter";
 
 export function createOpenBookSwapAdapter(): ProtocolAdapter {
   return createBalanceDeltaSwapAdapter({
@@ -12,5 +15,6 @@ export function createOpenBookSwapAdapter(): ProtocolAdapter {
     identifierKind: "market",
     identifierAccountIndex: 0,
     logHintPatterns: ["openbook", "orderbook"],
+    blockedTopLevelProgramIds: [...JUPITER_ROUTE_PROGRAM_IDS],
   });
 }

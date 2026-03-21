@@ -390,6 +390,97 @@ describe("worker loop A decoder registry", () => {
     ).toBe("PhoenixMkt1111111111111111111111111111111111");
   });
 
+  test("does not double-count routed Jupiter swaps as venue-native inner fills", () => {
+    const user = "RoutedUser1111111111111111111111111111111111111";
+    const block = {
+      blockTime: 1_708_480_110,
+      transactions: [
+        {
+          transaction: {
+            signatures: ["jupiter-routed-signature"],
+            message: {
+              accountKeys: [
+                "RayPool111111111111111111111111111111111111",
+                "RouteSrc111111111111111111111111111111111111",
+                "RouteDst111111111111111111111111111111111111",
+                user,
+                JUPITER_PROGRAM_ID,
+                RAYDIUM_PROGRAM_ID,
+              ],
+              instructions: [
+                {
+                  programIdIndex: 4,
+                  accounts: [1, 2, 3, 0],
+                  data: "3Bxs4f",
+                },
+              ],
+            },
+          },
+          meta: {
+            logMessages: [
+              `Program ${JUPITER_PROGRAM_ID} invoke [1]`,
+              `Program ${RAYDIUM_PROGRAM_ID} invoke [2]`,
+              "Program log: jupiter route via raydium",
+            ],
+            innerInstructions: [
+              {
+                index: 0,
+                instructions: [
+                  {
+                    programIdIndex: 5,
+                    accounts: [0, 1, 2, 3],
+                    data: "3Bxs4f",
+                  },
+                ],
+              },
+            ],
+            preTokenBalances: [
+              {
+                accountIndex: 1,
+                mint: SOL_MINT,
+                owner: user,
+                uiTokenAmount: { amount: "1000000000" },
+              },
+              {
+                accountIndex: 2,
+                mint: USDC_MINT,
+                owner: user,
+                uiTokenAmount: { amount: "5000000" },
+              },
+            ],
+            postTokenBalances: [
+              {
+                accountIndex: 1,
+                mint: SOL_MINT,
+                owner: user,
+                uiTokenAmount: { amount: "950000000" },
+              },
+              {
+                accountIndex: 2,
+                mint: USDC_MINT,
+                owner: user,
+                uiTokenAmount: { amount: "5250000" },
+              },
+            ],
+          },
+        },
+      ],
+    } as Record<string, unknown>;
+
+    const registry = createDefaultDecoderRegistry();
+    const events = decodeProtocolEventsFromBlock({
+      slot: 402,
+      commitment: "confirmed",
+      block,
+      registry,
+      observedAt: "2026-02-21T04:12:00.000Z",
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.protocol).toBe("jupiter");
+    expect(events[0]?.venue).toBe("jupiter");
+  });
+
   test("skips failed transactions when meta.err is present", () => {
     const sourceTokenAccount =
       "FailSrcToken111111111111111111111111111111111111";

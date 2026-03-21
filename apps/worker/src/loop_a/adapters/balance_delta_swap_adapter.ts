@@ -26,7 +26,13 @@ type BalanceDeltaSwapAdapterConfig = {
   identifierKind?: "pool" | "market";
   identifierAccountIndex?: number;
   logHintPatterns?: string[];
+  blockedTopLevelProgramIds?: string[];
 };
+
+export const JUPITER_ROUTE_PROGRAM_IDS = [
+  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+  "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB",
+] as const;
 
 function parseAtomicAmount(value: string): bigint {
   try {
@@ -150,16 +156,31 @@ function chooseSwapPair(deltas: OwnerMintDelta): SwapPair | null {
 function findRelevantInstruction(
   context: DecodingContext,
   programIds: string[],
+  blockedTopLevelProgramIds: string[] = [],
 ): DecodedInstruction | null {
   const normalizedProgramIds = new Set(programIds);
-  for (const instruction of [
-    ...context.instructions,
-    ...context.innerInstructions,
-  ]) {
+  for (const instruction of context.instructions) {
     if (normalizedProgramIds.has(instruction.programId)) {
       return instruction;
     }
   }
+
+  const blockedPrograms = new Set(blockedTopLevelProgramIds);
+  if (
+    blockedPrograms.size > 0 &&
+    context.instructions.some((instruction) =>
+      blockedPrograms.has(instruction.programId),
+    )
+  ) {
+    return null;
+  }
+
+  for (const instruction of context.innerInstructions) {
+    if (normalizedProgramIds.has(instruction.programId)) {
+      return instruction;
+    }
+  }
+
   return null;
 }
 
@@ -200,7 +221,12 @@ export function createBalanceDeltaSwapAdapter(
       const swapPair = chooseSwapPair(ownerDeltas);
       if (!swapPair) return [];
 
-      const instruction = findRelevantInstruction(context, config.programIds);
+      const instruction = findRelevantInstruction(
+        context,
+        config.programIds,
+        config.blockedTopLevelProgramIds,
+      );
+      if (!instruction) return [];
       const identifier =
         config.identifierKind &&
         Number.isInteger(config.identifierAccountIndex) &&

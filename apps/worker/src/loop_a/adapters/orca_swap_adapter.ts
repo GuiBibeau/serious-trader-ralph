@@ -1,5 +1,8 @@
 import type { ProtocolAdapter } from "../decoder_registry";
-import { createBalanceDeltaSwapAdapter } from "./balance_delta_swap_adapter";
+import {
+  createBalanceDeltaSwapAdapter,
+  JUPITER_ROUTE_PROGRAM_IDS,
+} from "./balance_delta_swap_adapter";
 
 // Mainnet Whirlpool program id from Orca's official whirlpools repository.
 const ORCA_WHIRLPOOLS_PROGRAM_ID =
@@ -15,5 +18,6 @@ export function createOrcaSwapAdapter(): ProtocolAdapter {
     identifierKind: "pool",
     identifierAccountIndex: 0,
     logHintPatterns: ["orca", "whirlpool"],
+    blockedTopLevelProgramIds: [...JUPITER_ROUTE_PROGRAM_IDS],
   });
 }

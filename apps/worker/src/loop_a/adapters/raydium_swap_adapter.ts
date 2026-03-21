@@ -1,5 +1,8 @@
 import type { ProtocolAdapter } from "../decoder_registry";
-import { createBalanceDeltaSwapAdapter } from "./balance_delta_swap_adapter";
+import {
+  createBalanceDeltaSwapAdapter,
+  JUPITER_ROUTE_PROGRAM_IDS,
+} from "./balance_delta_swap_adapter";
 
 // Mainnet Raydium program addresses from Raydium's official program-addresses doc.
 const RAYDIUM_PROGRAM_IDS = [
@@ -19,5 +22,6 @@ export function createRaydiumSwapAdapter(): ProtocolAdapter {
     identifierKind: "pool",
     identifierAccountIndex: 0,
     logHintPatterns: ["raydium", "cpmm", "clmm", "amm"],
+    blockedTopLevelProgramIds: [...JUPITER_ROUTE_PROGRAM_IDS],
   });
 }
