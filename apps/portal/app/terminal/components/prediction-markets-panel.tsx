@@ -141,7 +141,7 @@ export function PredictionMarketsPanel(props: PredictionMarketsPanelProps) {
               Active DFlow markets
             </p>
             <span className="text-[10px] text-muted uppercase tracking-wider">
-              paper only
+              guarded
             </span>
           </div>
           <div className="mt-2 space-y-2">

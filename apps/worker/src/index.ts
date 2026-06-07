@@ -4908,7 +4908,7 @@ const worker = {
             ok: true,
             source:
               readOptionalString(deploymentResult.payload.source) ??
-              "runtime-rs",
+              "worker-runtime",
             deploymentId: runtimeDetailDeploymentId,
             deployment: isRecord(deploymentResult.payload.deployment)
               ? deploymentResult.payload.deployment

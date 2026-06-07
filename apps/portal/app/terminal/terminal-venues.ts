@@ -282,7 +282,7 @@ export function getTerminalVenueExecutionReadinessLabel(
     case "bounded_live":
       return "Bounded live";
     case "shadow_paper":
-      return "Shadow / paper";
+      return "Guarded";
     case "research":
       return "Research";
     default:

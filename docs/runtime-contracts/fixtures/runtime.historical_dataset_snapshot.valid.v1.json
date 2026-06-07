@@ -14,14 +14,14 @@
   "assetKeys": ["SOL", "USDC"],
   "pairSymbols": ["SOL/USDC"],
   "chainKeys": ["solana-mainnet"],
-  "uri": "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+  "uri": "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
   "contentDigest": "sha256:fixture",
   "provenance": {
     "acquisitionKind": "research_fixture",
-    "collectedFrom": "services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+    "collectedFrom": "docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json",
     "provider": "repo-fixture",
     "collectedAt": "2026-03-10T00:00:00.000Z",
-    "generator": "runtime-rs",
+    "generator": "worker-runtime",
     "generatorRevision": "feed-replay-seed-v1",
     "notes": "Seeded from deterministic market events slice."
   },

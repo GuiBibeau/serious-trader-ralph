@@ -3,7 +3,7 @@
 import { usePrivy } from "@privy-io/react-auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ApiError, apiFetchJson, BTN_PRIMARY, BTN_SECONDARY } from "../lib";
+import { BTN_PRIMARY, BTN_SECONDARY } from "../lib";
 
 function isSignInHostAllowed(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
@@ -17,11 +17,12 @@ function isSignInHostAllowed(hostname: string): boolean {
 }
 
 export default function LoginPage() {
-  const { ready, authenticated, login, getAccessToken, logout } = usePrivy();
+  const { ready, authenticated, login } = usePrivy();
   const router = useRouter();
   const [signInAllowed, setSignInAllowed] = useState<boolean | null>(null);
-  const [checkingAccess, setCheckingAccess] = useState(false);
-  const [accessError, setAccessError] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<"origin-not-allowed" | null>(
+    null,
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -30,48 +31,8 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!ready || !authenticated || signInAllowed !== true) return;
-    let active = true;
-
-    const checkAccess = async () => {
-      setCheckingAccess(true);
-      setAccessError(null);
-      try {
-        const token = await getAccessToken();
-        if (!token || !token.trim()) {
-          throw new Error("unauthorized");
-        }
-        await apiFetchJson("/api/me", token, { method: "GET" });
-        if (active) {
-          router.replace("/terminal");
-        }
-      } catch (error) {
-        const message =
-          error instanceof ApiError
-            ? error.message
-            : error instanceof Error
-              ? error.message
-              : "auth-check-failed";
-        if (active) {
-          setAccessError(
-            message === "waitlist-required" ||
-              message === "waitlist-email-required"
-              ? "waitlist-required"
-              : "auth-check-failed",
-          );
-        }
-        await logout();
-      } finally {
-        if (active) {
-          setCheckingAccess(false);
-        }
-      }
-    };
-
-    void checkAccess();
-    return () => {
-      active = false;
-    };
-  }, [ready, authenticated, signInAllowed, getAccessToken, logout, router]);
+    router.replace("/terminal");
+  }, [ready, authenticated, signInAllowed, router]);
 
   if (!process.env.NEXT_PUBLIC_PRIVY_APP_ID) {
     return (
@@ -123,8 +84,8 @@ export default function LoginPage() {
                 domains.
               </p>
               <div className="flex flex-wrap items-center gap-3 mt-6">
-                <a className={BTN_SECONDARY} href="/">
-                  Back to landing
+                <a className={BTN_SECONDARY} href="/terminal">
+                  Terminal
                 </a>
               </div>
             </div>
@@ -144,18 +105,7 @@ export default function LoginPage() {
             <p className="text-muted mt-3 max-w-[540px]">
               Authenticate with email to access the Trader Ralph terminal.
             </p>
-            {accessError === "waitlist-required" ? (
-              <p className="text-sm text-amber-300 mt-3">
-                This account is not on the waitlist yet. Request access from the
-                landing page.
-              </p>
-            ) : null}
-            {accessError === "auth-check-failed" ? (
-              <p className="text-sm text-amber-300 mt-3">
-                Sign in verification failed. Please try again.
-              </p>
-            ) : null}
-            {accessError === "origin-not-allowed" ? (
+            {loginError === "origin-not-allowed" ? (
               <p className="text-sm text-amber-300 mt-3">
                 This Privy app id does not allow the current origin. Add{" "}
                 <code>http://localhost:3000</code> and{" "}
@@ -167,32 +117,26 @@ export default function LoginPage() {
               <button
                 className={BTN_PRIMARY}
                 onClick={async () => {
-                  setAccessError(null);
+                  setLoginError(null);
                   try {
                     await login();
                   } catch (error) {
                     const message =
                       error instanceof Error
                         ? error.message
-                        : String(error ?? "auth-check-failed");
-                    setAccessError(
-                      /origin not allowed/i.test(message)
-                        ? "origin-not-allowed"
-                        : "auth-check-failed",
-                    );
+                        : String(error ?? "login-failed");
+                    if (/origin not allowed/i.test(message)) {
+                      setLoginError("origin-not-allowed");
+                    }
                   }
                 }}
-                disabled={!ready || checkingAccess}
+                disabled={!ready}
                 type="button"
               >
-                {checkingAccess
-                  ? "Checking access..."
-                  : ready
-                    ? "Sign in"
-                    : "Loading..."}
+                {ready ? "Sign in" : "Loading..."}
               </button>
-              <a className={BTN_SECONDARY} href="/">
-                Back to landing
+              <a className={BTN_SECONDARY} href="/terminal">
+                Terminal
               </a>
             </div>
           </div>

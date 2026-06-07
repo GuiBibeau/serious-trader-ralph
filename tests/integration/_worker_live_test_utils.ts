@@ -178,7 +178,7 @@ export function createWorkerLiveEnv(options?: {
     ),
     RUNTIME_INTERNAL_SERVICE_NAME: readLiveEnv(
       "RUNTIME_INTERNAL_SERVICE_NAME",
-      "runtime-rs",
+      "worker-runtime",
     ),
     RUNTIME_INTERNAL_STUB_MODE: readLiveEnv("RUNTIME_INTERNAL_STUB_MODE", "1"),
     LOOP_ENABLED_DEFAULT: "false",

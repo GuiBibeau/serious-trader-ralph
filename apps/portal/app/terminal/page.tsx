@@ -3372,7 +3372,7 @@ const PositionsOrdersFillsPanel = memo(
                 Drift Perps
               </p>
               <span className="text-[10px] text-muted">
-                {driftPerpsEnabled ? "paper enabled" : "rollout gated"}
+                {driftPerpsEnabled ? "enabled" : "rollout gated"}
               </span>
             </div>
             {perpMessage ? (
@@ -3449,7 +3449,7 @@ const PositionsOrdersFillsPanel = memo(
             </p>
             <div className="mt-2 space-y-1.5">
               {perpPositions.length === 0 ? (
-                <p className="text-muted">No perp paper positions yet.</p>
+                <p className="text-muted">No perp positions yet.</p>
               ) : null}
               {perpPositions.map((position) => (
                 <div

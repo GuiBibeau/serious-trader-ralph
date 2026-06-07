@@ -1,5 +1,0 @@
-{
-  "action": "kill",
-  "actor": "operator_1",
-  "notes": "kill bounded execution during venue-disable drill"
-}

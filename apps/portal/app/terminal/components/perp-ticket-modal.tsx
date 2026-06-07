@@ -269,7 +269,7 @@ export function PerpTicketModal({
         },
         { idempotencyKey },
       );
-      toast.success("Perp paper order submitted", {
+      toast.success("Perp order submitted", {
         description: `${intent.instrumentLabel} • ${signedSideLabel(intent.side)}`,
         position: "bottom-right",
         duration: 4000,
@@ -311,7 +311,7 @@ export function PerpTicketModal({
               {intent.instrumentLabel} • {signedSideLabel(intent.side)}
             </p>
             <p className="text-[11px] text-muted">
-              Drift paper mode only. Venue constraints are surfaced directly.
+              Drift perps. Venue constraints are surfaced directly.
             </p>
           </div>
           <button className={BTN_SECONDARY} onClick={onClose} type="button">
@@ -442,7 +442,7 @@ export function PerpTicketModal({
                 </div>
               ) : (
                 <p className="mt-3 text-[11px] text-muted">
-                  No existing paper position for this contract.
+                  No existing position for this contract.
                 </p>
               )}
             </div>
@@ -555,7 +555,7 @@ export function PerpTicketModal({
 
         <div className="flex items-center justify-between gap-2 border-t border-border px-4 py-3">
           <p className="text-[11px] text-muted">
-            Paper execution only. This does not promote Drift to live.
+            Routed through the configured guarded perps execution lane.
           </p>
           <div className="flex items-center gap-2">
             <button className={BTN_SECONDARY} onClick={onClose} type="button">
@@ -570,7 +570,7 @@ export function PerpTicketModal({
             >
               {submitState === "submitting"
                 ? "Submitting…"
-                : "Submit paper perp"}
+                : "Submit perp order"}
             </button>
           </div>
         </div>

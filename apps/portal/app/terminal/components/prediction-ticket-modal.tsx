@@ -10,10 +10,7 @@ import {
   newExecutionIdempotencyKey,
 } from "../../execution-client";
 import { BTN_PRIMARY, BTN_SECONDARY } from "../../lib";
-import {
-  getTerminalVenueExecutionReadinessLabel,
-  type TerminalVenueRolloutPolicy,
-} from "../terminal-venues";
+import type { TerminalVenueRolloutPolicy } from "../terminal-venues";
 
 type PredictionTicketModalProps = {
   open: boolean;
@@ -206,8 +203,8 @@ export function PredictionTicketModal(props: PredictionTicketModalProps) {
               {market.title}
             </h2>
             <p className="mt-1 text-xs text-muted">
-              {market.eventTitle ?? "DFlow tokenized event market"} •{" "}
-              {getTerminalVenueExecutionReadinessLabel("shadow_paper")}
+              {market.eventTitle ?? "DFlow tokenized event market"} • Guarded
+              execution
             </p>
           </div>
           <button
@@ -226,9 +223,9 @@ export function PredictionTicketModal(props: PredictionTicketModalProps) {
             </div>
           ) : (
             <div className="rounded border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
-              Prediction orders stay paper-only here. The terminal persists the
-              simulated request/receipt path so positions and settlement remain
-              auditable.
+              Prediction orders use the guarded execution lane. The terminal
+              persists the request and receipt path so positions and settlement
+              remain auditable.
             </div>
           )}
 
@@ -415,7 +412,7 @@ export function PredictionTicketModal(props: PredictionTicketModalProps) {
               }}
               type="button"
             >
-              {submitBusy ? "Submitting..." : "Submit Paper Order"}
+              {submitBusy ? "Submitting..." : "Submit order"}
             </button>
           </div>
         </div>

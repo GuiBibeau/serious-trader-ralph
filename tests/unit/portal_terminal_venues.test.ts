@@ -27,7 +27,7 @@ describe("portal terminal venue substrate", () => {
     ).toEqual(["market", "limit"]);
     expect(parseTerminalVenueKey("openbook_v2")).toBe("openbook");
     expect(getTerminalVenueExecutionReadinessLabel("shadow_paper")).toBe(
-      "Shadow / paper",
+      "Guarded",
     );
     expect(getTerminalOrderTypeLabel("trigger")).toBe("Trigger");
   });

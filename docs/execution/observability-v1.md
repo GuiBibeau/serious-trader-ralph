@@ -74,18 +74,11 @@ Use the endpoint payload to build 4 core execution panels per environment:
 3. Lane and mode comparison (`dimensions.lane`, `dimensions.mode`)
 4. Provider quality (`dimensions.provider`)
 
-The repo-level ops dashboard for issue `#238` extends that with:
+Use the admin control and canary endpoints alongside this payload when
+investigating production behavior:
 
 - execution kill-switch state from `GET /api/admin/ops/controls`
 - canary state and latest runs from `GET /api/admin/execution/canary`
-- preview health summaries derived from PR preview metadata comments
-- runner health from the repo-local heartbeat file when the runner is online
-
-Workflow surface:
-
-- `.github/workflows/ops-dashboard.yml`
-- schedule: every 6 hours
-- output: GitHub Actions summary + `ops-dashboard-<run_id>` artifact
 
 ## Operational Notes
 

@@ -25,7 +25,7 @@
       "datasetId": "dataset_feature_cache_sol_usdc_market_events",
       "snapshotId": "snapshot_2026_03_07_backtest",
       "capturedAt": "2026-03-10T14:00:00.000Z",
-      "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+      "uri": "repo://docs/runtime-contracts/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
       "contentDigest": "sha256:feature-cache"
     }
   ],
@@ -43,7 +43,7 @@
         "datasetId": "dataset_feature_cache_sol_usdc_market_events",
         "snapshotId": "snapshot_2026_03_07_backtest",
         "capturedAt": "2026-03-10T14:00:00.000Z",
-        "uri": "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+        "uri": "repo://docs/runtime-contracts/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
         "contentDigest": "sha256:feature-cache"
       }
     ],

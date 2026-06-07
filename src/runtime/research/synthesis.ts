@@ -729,18 +729,19 @@ function buildImplementationPlan(input: {
     issueBody,
     scaffoldFiles: [
       {
-        path: "crates/strategy-core/src/lib.rs",
-        purpose: "Register the candidate StrategySpec and planner entrypoint.",
+        path: "apps/worker/src/runtime_research_synthesis.ts",
+        purpose:
+          "Keep synthesis output compatible with the Worker-hosted research contract.",
       },
       {
-        path: "crates/execution-planner/src/lib.rs",
+        path: "apps/worker/src/execution/router.ts",
         purpose:
-          "Add execution-planning logic or bounded stubs for the candidate strategy.",
+          "Add execution-routing logic or bounded stubs if the candidate affects terminal execution.",
       },
       {
-        path: "services/runtime-rs/src/lib.rs",
+        path: "src/runtime/contracts/autonomous_runtime.ts",
         purpose:
-          "Wire evaluation, replay, and paper lifecycle handling for the candidate.",
+          "Update shared contract parsing if the candidate introduces new fields.",
       },
       {
         path: "docs/runtime-contracts/fixtures/runtime.strategy_spec.valid.v1.json",
@@ -750,9 +751,9 @@ function buildImplementationPlan(input: {
     ],
     testFiles: [
       {
-        path: "services/runtime-rs/src/lib.rs",
+        path: "tests/unit/runtime_research_synthesis.test.ts",
         purpose:
-          "Add replay tests proving the candidate emits bounded shadow or paper plans.",
+          "Protect synthesis behavior for Worker-hosted research payloads.",
       },
       {
         path: "tests/unit/runtime_protocol_contracts.test.ts",
@@ -768,8 +769,8 @@ function buildImplementationPlan(input: {
     validationCommands: [
       "bun run lint",
       "bun run typecheck",
-      "cargo test --workspace",
-      "bun run harness:proof",
+      "bun run test:unit",
+      "bun run test:e2e",
     ],
   };
 }

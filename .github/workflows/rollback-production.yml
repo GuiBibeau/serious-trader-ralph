@@ -159,14 +159,16 @@ jobs:
             STATUS="success"
           fi
 
-          bun run src/bin/rollback_summary.ts \
-            --output .tmp/rollback/summary.md \
-            --target-sha "${TARGET_SHA}" \
-            --previous-main-sha "${PREVIOUS_MAIN_SHA}" \
-            --portal-url "https://trader-ralph.com" \
-            --api-url "https://api.trader-ralph.com" \
-            --status "${STATUS}" \
-            --reason "${REASON}"
+          cat > .tmp/rollback/summary.md <<EOF
+          # Production Rollback
+
+          - Status: ${STATUS}
+          - Target SHA: ${TARGET_SHA}
+          - Previous main SHA: ${PREVIOUS_MAIN_SHA}
+          - Portal URL: https://trader-ralph.com
+          - API URL: https://api.trader-ralph.com
+          - Reason: ${REASON}
+          EOF
 
           cat .tmp/rollback/summary.md >> "$GITHUB_STEP_SUMMARY"
 

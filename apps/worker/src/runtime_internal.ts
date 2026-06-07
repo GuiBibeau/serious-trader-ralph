@@ -75,7 +75,7 @@ const INTERNAL_RUNTIME_COST_MODEL_OBSERVATIONS_PATH = `${INTERNAL_RUNTIME_PREFIX
 const FIXTURE_TIMESTAMP = "2026-03-07T00:00:00.000Z";
 const FIXTURE_BASE_MINT = "So11111111111111111111111111111111111111112";
 const FIXTURE_QUOTE_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-const DEFAULT_RUNTIME_SERVICE = "runtime-rs";
+const DEFAULT_RUNTIME_SERVICE = "worker-runtime";
 
 export type RuntimeControlAction = "pause" | "resume" | "kill";
 
@@ -1053,7 +1053,7 @@ function createRuntimeBacktestFixture(
         datasetId: "dataset_feature_cache_sol_usdc_market_events",
         snapshotId: "snapshot_2026_03_07_backtest",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
+        uri: "repo://docs/runtime-contracts/fixtures/runtime-feature-cache-replay.sol_usdc.v1.json#marketEvents",
         contentDigest: "sha256:feature-cache",
       },
     ],
@@ -1458,8 +1458,8 @@ function createRuntimeCostModelFixture(
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
         uri: isDrift
-          ? "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_perp.v1.json#marketEvents"
-          : "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+          ? "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_perp.v1.json#marketEvents"
+          : "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
         contentDigest: "sha256:fixture",
       },
       {
@@ -1469,8 +1469,8 @@ function createRuntimeCostModelFixture(
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
         uri: isDrift
-          ? "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_perp.v1.json#slotEvents"
-          : "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+          ? "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_perp.v1.json#slotEvents"
+          : "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
         contentDigest: "sha256:fixture",
       },
     ],
@@ -1636,14 +1636,14 @@ function createRuntimeFeatureDefinitionFixture(
         datasetId: "dataset_feed_replay_sol_usdc_market_events",
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+        uri: "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
         contentDigest: "sha256:fixture",
       },
       {
         datasetId: "dataset_feed_replay_sol_usdc_slot_events",
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+        uri: "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
         contentDigest: "sha256:fixture",
       },
     ],
@@ -1703,14 +1703,14 @@ function createRuntimeRegimeTagFixture(
         datasetId: "dataset_feed_replay_sol_usdc_market_events",
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+        uri: "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
         contentDigest: "sha256:fixture",
       },
       {
         datasetId: "dataset_feed_replay_sol_usdc_slot_events",
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+        uri: "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
         contentDigest: "sha256:fixture",
       },
     ],
@@ -1758,17 +1758,17 @@ function createRuntimeHistoricalDatasetSnapshotFixture(
     assetKeys: ["SOL", "USDC"],
     pairSymbols: ["SOL/USDC"],
     chainKeys: ["solana-mainnet"],
-    uri: `repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#${
+    uri: `repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#${
       isSlotDataset ? "slotEvents" : "marketEvents"
     }`,
     contentDigest: "sha256:fixture",
     provenance: {
       acquisitionKind: "research_fixture",
       collectedFrom:
-        "services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+        "docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json",
       provider: "repo-fixture",
       collectedAt: FIXTURE_TIMESTAMP,
-      generator: "runtime-rs",
+      generator: "worker-runtime",
       generatorRevision: "feed-replay-seed-v1",
       notes: "Stubbed historical dataset provenance.",
     },
@@ -1798,19 +1798,19 @@ function createRuntimeReplayCorpusFixture(): RuntimeReplayCorpusRecord {
         datasetId: "dataset_feed_replay_sol_usdc_market_events",
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
+        uri: "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#marketEvents",
         contentDigest: "sha256:fixture",
       },
       {
         datasetId: "dataset_feed_replay_sol_usdc_slot_events",
         snapshotId: "snapshot_2026_03_07_seed",
         capturedAt: FIXTURE_TIMESTAMP,
-        uri: "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
+        uri: "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json#slotEvents",
         contentDigest: "sha256:fixture",
       },
     ],
     fixtureUri:
-      "repo://services/runtime-rs/fixtures/runtime-feed-replay.sol_usdc.v1.json",
+      "repo://docs/runtime-contracts/fixtures/runtime-feed-replay.sol_usdc.v1.json",
     contentDigest: "sha256:fixture",
     deterministicSeed: 100,
     tags: ["seed", "deterministic", "feed-gateway"],
@@ -2107,7 +2107,7 @@ export async function readRuntimeAdminSnapshot(
     : null;
   const source =
     readStringOrNull(healthResult.payload.source) ??
-    (integration.stubModeEnabled ? "stub" : "runtime-rs");
+    (integration.stubModeEnabled ? "stub" : "worker-runtime");
 
   const deploymentsResult = await dispatchRuntimeInternalJson({
     env,

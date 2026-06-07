@@ -1,6 +1,0 @@
-{
-  "scenarioId": "desk_sol_composite_1",
-  "runKind": "backtest",
-  "requestedBy": "operator_1",
-  "selectionMetric": "excess_vs_flat_cash_bps"
-}

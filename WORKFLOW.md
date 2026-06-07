@@ -1,35 +1,29 @@
 ---
-version: 1
+version: 2
 tracker:
   kind: github
   repository: GuiBibeau/serious-trader-ralph
-  ready_labels:
-    - harness
-    - agent-ready
-  exclude_labels:
-    - blocked
-    - agent-running
-    - human-review
 branching:
   branch_prefix: codex/
-  branch_format: codex/issue-<number>-<slug>
+  branch_format: codex/<short-task-slug>
   default_pr_base: main
 validation:
   default:
     - bun run lint
     - bun run typecheck
-  docs_only:
-    - bun run lint
+  terminal:
+    - bun run test:e2e
+  worker:
+    - bun run test:unit
 proof_bundle:
   required:
     - summary_of_changes
     - validation_commands_and_results
-    - preview_or_local_urls
+    - preview_or_local_urls_for_ui_changes
     - browser_artifacts_for_ui_changes
-    - benchmark_delta_for_performance_sensitive_changes
     - risk_notes_and_follow_ups
 approval:
-  posture: high-trust repo-owned execution with mandatory human review before merge
+  posture: high-trust repo-owned execution with human review before merge
 secrets:
   never_commit:
     - .env*
@@ -44,80 +38,33 @@ secrets:
 
 # Trader Ralph Execution Contract
 
-This file is the repo-owned contract for future issue runners and for humans
-working the harness backlog manually. It defines how work is selected, how code
-is validated, and what evidence must be attached before a PR is ready for
-review.
+This file is the repo-owned contract for humans and agents working on the
+terminal and Worker APIs.
 
-## Eligible Work
+## Scope
 
-Take an issue only when all of the following are true:
+The repo is now focused on:
 
-- It is in `GuiBibeau/serious-trader-ralph`.
-- It includes both `harness` and `agent-ready`.
-- It does not include `blocked`, `agent-running`, or `human-review`.
+- The terminal UI in `apps/portal`.
+- The Cloudflare Worker in `apps/worker`.
+- Shared TypeScript contracts under `src/runtime` and `src/loops` that are
+  still consumed by the Worker.
+- Execution, market-information, discovery, and agent-registry documentation.
 
-When a run starts, add `agent-running`. When the PR is ready for review, remove
-`agent-running` and add `human-review`.
-The `human-review` label marks the merge gate. It can be cleared either by a
-human GitHub review or by an explicitly authorized agent merge after OpenAI or
-Codex review reports no blocking findings and all required checks are green.
+The removed root CLI, harness runner, proof routes, Rust sidecar, and
+strategy-desk UI are not valid workflow targets.
 
 ## Branching and PR Rules
 
-- Branch names must follow `codex/issue-<number>-<slug>`.
-- Include `Fixes #<issue-number>` in the PR body when the work should close the
-  issue on merge.
+- Use `codex/<short-task-slug>` for agent branches.
 - Open PRs against `main` by default.
-- `dev` remains available as an optional soak lane, but it is not a promotion
-  gate.
+- Keep PRs scoped to the terminal, Worker API, docs, tests, or deploy workflow
+  touched by the task.
 - Do not push directly to `dev` or `main`.
-
-## Strategy Lab Lifecycle
-
-The strategy-lab program adds explicit promotion states for strategies and
-separate onboarding states for venues and assets.
-
-Strategy promotion states:
-
-- `candidate`
-- `draft`
-- `shadow`
-- `paper`
-- `limited_live`
-- `broad_live`
-- `paused`
-- `deprecated`
-
-Venue and asset onboarding states stay separate from strategy promotion so the
-repo can distinguish a weak strategy from an unready venue or asset:
-
-- `candidate`
-- `integrated`
-- `shadow_ready`
-- `paper_ready`
-- `limited_live_ready`
-- `broad_live_ready`
-- `paused`
-- `deprecated`
-
-See:
-
-- `docs/product-specs/strategy-lab-prd.md`
-- `docs/exec-plans/active/strategy-lab-rollout.md`
-- `docs/reliability/strategy-lab-ops-runbook.md`
-
-Operator entry points for venue or asset onboarding now stay on the same
-harness-managed admin boundary:
-
-- `bun run strategy-lab:readiness --operation readiness --request-file ...`
-- `bun run strategy-lab:readiness --operation canary --request-file ...`
-- `bun run strategy-lab:readiness --operation control --request-file ...`
 
 ## Validation Requirements
 
-Always run the smallest relevant validation set and report the exact commands in
-the PR summary.
+Always run the smallest relevant validation set and report the exact commands.
 
 Default validation:
 
@@ -126,70 +73,35 @@ bun run lint
 bun run typecheck
 ```
 
-Use a narrower set only when the issue is documentation-only or when a more
-focused test suite is clearly sufficient. Examples:
+Use targeted additions when appropriate:
 
-- docs-only: `bun run lint`
-- worker changes: add `bun run test:unit` and the most relevant integration
-  suite
-- portal or terminal changes: add `bun run test:e2e` and browser proof once the
-  proof harness exists
-- deployment or environment changes: include the relevant smoke checks and any
-  branch-specific verification notes
-
-For strategy-lab work, add the evaluation commands that match the promotion
-target. Examples:
-
-- candidate or draft docs-only: `bun run lint`
-- shadow readiness: relevant replay, backtest, or contract suites
-- paper readiness: paper simulation and scorecard checks
-- limited-live or broad-live promotion: canary or live-readiness checks and
-  explicit rollout notes
+- terminal UI changes: add `bun run test:e2e` and a browser smoke check.
+- Worker execution or market-data changes: add `bun run test:unit` and the
+  narrowest relevant integration suite.
+- docs-only changes: `bun run lint` is usually enough.
+- deployment or environment changes: include the relevant Vercel, Cloudflare,
+  or GitHub Actions smoke check.
 
 ## Proof Bundle Requirements
 
-Every PR must include a proof bundle in its summary comment or description. The
-bundle must include:
+Every PR summary should include:
 
 1. A short change summary.
 2. The exact validation commands run and whether they passed.
-3. The preview URL or local harness URLs used for verification.
+3. The preview URL or local URL used for UI verification.
 4. Browser screenshots, traces, or videos for UI-affecting changes.
-5. Benchmark deltas for performance-sensitive changes.
-6. Risk notes, follow-ups, and anything intentionally deferred.
+5. Risk notes, follow-ups, and anything intentionally deferred.
 
-If a proof item is not applicable, say so explicitly instead of omitting it.
-
-Strategy-lab proof bundles must also include the evidence bundle relevant to
-the target state transition:
-
-- source provenance and publication dates for `candidate` or `draft`
-- StrategySpec, replay, and backtest evidence for `shadow`
-- paper scorecards, cost assumptions, and reproducibility manifests for
-  `paper`
-- canary plans, risk budgets, venue and asset readiness, and named human
-  approval for `limited_live`
-- soak summaries and drift review for `broad_live`
+If a proof item is not applicable, say so explicitly.
 
 ## Approval Posture
 
-- This repo is operated in a high-trust mode for engineering execution.
-- Human GitHub review is preferred, but it is not mandatory when the repo owner
-  or operator explicitly authorizes agent merge in-thread.
-- An agent may merge from `human-review` when OpenAI or Codex review reports no
-  blocking findings and all required checks are green.
-- Prefer reversible changes and call out any deployment or rollout risk in the
-  PR summary.
-
-Money-state approval boundaries:
-
-- Merging a PR does not authorize real-money promotion by itself.
-- `shadow` may begin only after a merged PR.
-- `paper` requires explicit operator approval.
-- `limited_live` requires explicit human approval, allowlist changes, kill
-  controls, and bounded canary notes.
-- `broad_live` requires successful limited-live evidence and explicit human
-  approval.
+- Human GitHub review is preferred before merge.
+- An explicitly authorized agent merge may proceed only when review feedback has
+  no blocking findings and required checks are green.
+- Merging a PR does not authorize real-money trading behavior by itself.
+- Any live execution rollout requires separate operator approval, allowlist
+  posture, kill controls, and rollback notes.
 
 ## Secret Boundaries
 
@@ -197,15 +109,15 @@ Money-state approval boundaries:
   data.
 - Use GitHub Actions secrets, Cloudflare secrets, and Vercel environment
   variables for deployment-time configuration.
-- Local verification may read from approved local secret stores, but those
-  values must never be copied into tracked files, issue comments, PR comments,
-  or logs.
+- Local verification may read approved local secret stores, but those values
+  must never be copied into tracked files, issue comments, PR comments, or logs.
 
 ## Repository-Specific Guardrails
 
 - The public API boundary is the Cloudflare Worker in `apps/worker`.
 - Existing x402 and execution endpoint contracts must remain stable unless the
   issue explicitly calls for a contract change.
-- Prefer issue-by-issue PRs with focused scope and explicit dependency handling.
+- Keep terminal changes ergonomic and dense; do not reintroduce admin proof or
+  strategy-lab screens into the primary UI.
 - When deploy behavior changes, include CI and environment changes in the same
-  PR so the lane configuration does not drift.
+  PR so lane configuration does not drift.

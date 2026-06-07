@@ -22,9 +22,8 @@ Terminal UX cutover sequencing and cohort-mode gates are documented in
   - Cloudflare Worker variables/secrets for target env
   - `ADMIN_TOKEN` for observability and ops-control endpoints
 
-GitHub workflow surfaces added for issue `#238`:
+GitHub workflow surface:
 
-- `.github/workflows/ops-dashboard.yml`
 - `.github/workflows/rollback-production.yml`
 
 ## Operational Toggles
