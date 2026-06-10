@@ -7,41 +7,20 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "turbo run dev --parallel",
-    "build": "turbo run build",
-    "dev:local": "NEXT_PUBLIC_EDGE_API_BASE=http://127.0.0.1:8888 NEXT_PUBLIC_SITE_URL=http://localhost:3000 bun run dev",
-    "test": "bun test",
-    "test:unit": "bun test tests/unit",
-    "test:integration": "bun test tests/integration",
-    "test:e2e": "bun test tests/integration/terminal_execution_e2e.integration.test.ts",
-    "test:integration:worker:live": "RUN_INTEGRATION_TESTS=1 RUN_WORKER_LIVE_TESTS=1 bun test tests/integration/worker_x402_live.integration.test.ts",
-    "agent-registry:validate": "bun run scripts/agent_registry/sync.ts --step validate",
-    "agent-registry:sync": "bun run scripts/agent_registry/sync.ts",
-    "agent-registry:submit": "bun run scripts/agent_registry/sync.ts --step submit",
-    "contracts:loop-a:schemas": "bun run scripts/generate_loop_a_schemas.ts",
-    "contracts:runtime:schemas": "bun run scripts/generate_runtime_contract_schemas.ts",
-    "typecheck": "bunx tsc --noEmit",
+    "dev": "bun run --cwd apps/portal dev",
+    "build": "bun run --cwd apps/portal build",
+    "start": "bun run --cwd apps/portal start",
+    "typecheck": "bun run --cwd apps/portal typecheck",
     "lint": "biome check .",
     "lint:fix": "biome check . --write",
-    "edge:dev": "cd apps/worker && bun run dev",
-    "edge:db:migrate:local": "cd apps/worker && bun run db:migrate:local"
-  },
-  "dependencies": {
-    "8004-solana": "^0.7.8",
-    "@solana/web3.js": "^1.98.4",
-    "zod": "^4.3.6"
+    "test": "bun run typecheck"
   },
   "devDependencies": {
-    "@playwright/test": "^1.50.0",
     "@biomejs/biome": "^2.3.15",
+    "@playwright/test": "^1.50.0",
     "@types/node": "^25.2.3",
-    "ajv": "^8.17.1",
     "turbo": "^2.8.7",
     "typescript": "^5.9.3"
   },
-  "packageManager": "bun@1.3.0",
-  "patchedDependencies": {
-    "@orca-so/common-sdk@0.7.0": "patches/@orca-so%2Fcommon-sdk@0.7.0.patch",
-    "@drift-labs/sdk@2.159.0-beta.2": "patches/@drift-labs%2Fsdk@2.159.0-beta.2.patch"
-  }
+  "packageManager": "bun@1.3.0"
 }

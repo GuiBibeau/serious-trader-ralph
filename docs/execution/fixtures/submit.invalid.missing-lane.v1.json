@@ -1,8 +1,0 @@
-{
-  "schemaVersion": "v1",
-  "mode": "relay_signed",
-  "relaySigned": {
-    "encoding": "base64",
-    "signedTransaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAED"
-  }
-}

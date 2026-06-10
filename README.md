@@ -1,150 +1,80 @@
 # Trader Ralph
 
-Trader Ralph is a Solana trading terminal with a Cloudflare Worker execution and
-market-intelligence API.
+Trader Ralph is a frontend-only SvelteKit trading terminal UI. The app opens
+directly to `/terminal`. Market chart, order book, trade tape, and market-list
+panels use read-only public Phoenix perpetuals data. The dashboard also calls
+the configured Trader Ralph edge API for macro, orders, private position, and
+prediction-market panels. When Privy is configured, authenticated account-gated
+edge routes receive the user's bearer token; if the edge route is unavailable
+or still requires auth, the UI shows that real response instead of generating
+placeholder rows.
+
+No Cloudflare Worker, database, x402 service, Solana execution backend, React,
+Next.js, Tailwind, icon library, dashboard-grid library, or motion library is
+required to run the local UI. Privy is optional for local UI boot and only needed
+for authenticated account-gated edge reads. Live execution workflows still
+require the external edge/auth/payment stack.
 
 ## What This Repo Contains
 
-- `apps/portal`: Next.js terminal UI.
-- `apps/worker`: Cloudflare Worker API for execution, x402 paid reads,
-  discovery, market data, macro data, perps intelligence, and local D1 state.
-- `src/runtime/contracts`, `src/runtime/research`, `src/runtime/venues`, and
-  `src/loops/contracts`: shared TypeScript contracts still consumed by the
-  Worker and tests.
-- `docs/execution`: public execution API contracts, schemas, fixtures, and
-  operations notes.
-- `docs/agent-registry`: agent registry metadata and sync runbook.
-- `tests`: unit, integration, terminal E2E, and Worker live-test suites.
+- `apps/portal`: SvelteKit dashboard UI.
+- `apps/portal/src/lib/phoenix-market-data.ts`: read-only Phoenix perpetuals
+  REST and WebSocket market data adapter.
+- `apps/portal/src/lib/edge-data.ts`: Trader Ralph edge API reader for plain
+  read routes plus auth-bound order, perp, and prediction panels.
+- `apps/portal/src/routes/terminal/+page.svelte`: the terminal workstation.
 
-The old root CLI, isolated harness runner, Rust runtime sidecar, proof routes,
-and strategy-desk UI have been removed. Repo workflows now center on the
-terminal and Worker APIs.
-
-## What Is Live
-
-- Terminal UI at `/terminal`.
-- Terminal modes (`Regular`, `Degen`, `Custom`) with profile persistence.
-- Exchange-grade shell regions: chart, depth, order entry, open orders,
-  positions, fills, account risk, status, diagnostics, and command palette.
-- Advanced tickets for spot swaps, perps intents, and prediction-market intents.
-- Realtime terminal transport with stream reconnect, polling fallback, and
-  staleness badges.
-- Macro and market modules for FRED, ETF flows, stablecoin health, oil,
-  Solana loop marks, scores, and top views.
-- x402 paid APIs for market, macro, Solana loop, perps intelligence, and
-  execution submit/status/receipt.
-- Agent Registry + discovery artifacts:
-  - `GET /api/agent/query`
-  - `GET /openapi.json`
-  - `GET /agent-registry/metadata.json`
+The old worker, runtime contracts, backend tests, backend docs, deployment
+workflows, schema-generation scripts, and React/Next portal have been removed.
 
 ## Quick Start
 
 ```bash
 bun install
-bun run dev:local
+bun run dev
 ```
 
-- Portal: `http://localhost:3000`
-- Worker health: `http://127.0.0.1:8888/api/health`
+Open `http://localhost:3000/terminal`.
 
-Useful local commands:
+Useful commands:
 
 ```bash
+bun run typecheck
 bun run build
 bun run lint
-bun run typecheck
-bun run test:unit
-bun run test:integration
-bun run test:e2e
-bun run edge:db:migrate:local
-bun run edge:dev
+bun run test
 ```
 
-Optional portal env:
+## UI Surface
 
-- `NEXT_PUBLIC_TERMINAL_DEFAULT_MODE=regular|degen|custom`
-- `NEXT_PUBLIC_TERMINAL_ALLOWED_MODES` (CSV from `regular,degen,custom`;
-  default all)
-- `NEXT_PUBLIC_TERMINAL_DEGEN_COHORT=all|onboarded|experienced|degen_acknowledged`
-- `NEXT_PUBLIC_TERMINAL_CUSTOM_COHORT=all|onboarded|experienced|degen_acknowledged`
-- `NEXT_PUBLIC_TERMINAL_RISK_INITIAL_MARGIN_RATIO` (default `0.1`)
-- `NEXT_PUBLIC_TERMINAL_RISK_MAINT_MARGIN_RATIO` (default `0.05`)
-- `NEXT_PUBLIC_TERMINAL_RISK_CONCENTRATION_WARNING` (default `0.55`)
-- `NEXT_PUBLIC_TERMINAL_RISK_CONCENTRATION_CRITICAL` (default `0.75`)
-- `NEXT_PUBLIC_TERMINAL_RISK_LIQ_WARNING_BUFFER_PCT` (default `15`)
-- `NEXT_PUBLIC_TERMINAL_RISK_LIQ_CRITICAL_BUFFER_PCT` (default `5`)
-- `NEXT_PUBLIC_TERMINAL_RISK_MIN_EQUITY_QUOTE` (default `25`)
+- Dashboard modules: chart, depth, order entry, open orders, positions, account
+  risk, status bar, macro widgets, Phoenix markets, event hooks, perps, and
+  prediction markets.
+- Real read-only Phoenix perpetuals data: market list, live candles, L2
+  orderbook, market stats, funding, all-mids, and recent fills.
+- Real edge API status for plain read routes and gated account, order, perp,
+  and prediction endpoints.
+- Optional Privy email authentication for passing bearer tokens to account-gated
+  edge API routes.
+- No simulated wallet balances, execution receipts, open orders, perps, or
+  prediction positions.
 
-## Market-Information Tools
+## Optional Env
 
-x402 paid read routes (`POST`, under `/api/x402/read/*`):
+The app runs without private keys. `NEXT_PUBLIC_EDGE_API_BASE`,
+`PUBLIC_EDGE_API_BASE`, or `VITE_EDGE_API_BASE` can point the UI at the Trader
+Ralph edge API. Public read data is expected under `/api/read/<routeKey>` with
+no x402 payment wrapper.
 
-- Market: `market_snapshot`, `market_snapshot_v2`, `market_token_balance`,
-  `market_jupiter_quote`, `market_jupiter_quote_batch`, `market_ohlcv`,
-  `market_indicators`
-- Solana loop views: `solana_marks_latest`, `solana_scores_latest`,
-  `solana_views_top`
-- Macro: `macro_signals`, `macro_fred_indicators`, `macro_etf_flows`,
-  `macro_stablecoin_health`, `macro_oil_analytics`
-- Perps: `perps_funding_surface`, `perps_open_interest_surface`,
-  `perps_venue_score`
+Privy email auth can be enabled with `NEXT_PUBLIC_PRIVY_APP_ID`,
+`PUBLIC_PRIVY_APP_ID`, or `VITE_PRIVY_APP_ID`. If your Privy app requires a
+client ID, set `NEXT_PUBLIC_PRIVY_CLIENT_ID`, `PUBLIC_PRIVY_CLIENT_ID`, or
+`VITE_PRIVY_CLIENT_ID` as well. Private API keys, wallet keys, and manually
+issued bearer tokens must stay out of the browser.
 
-Use discovery/openapi for the machine-readable catalog:
+## Important
 
-- `/api`
-- `/endpoints.json`
-- `/endpoints.txt`
-- `/llms.txt`
-- `/openapi.json`
-
-## Execution API
-
-- Contract doc: `docs/execution/exec-api-v1.md`
-- Schemas: `docs/execution/schemas/*`
-- Fixtures: `docs/execution/fixtures/*`
-- Operations runbook: `docs/execution/operations-runbook-v1.md`
-- Rollout plan: `docs/execution/rollout-plan-v1.md`
-- Terminal cutover plan: `docs/execution/terminal-cutover-plan-v1.md`
-- Fills ledger CSV format: `docs/execution/terminal-fills-ledger-export-v1.md`
-
-x402 execution routes:
-
-- Paid submit: `POST /api/x402/exec/submit`
-- Public polling: `GET /api/x402/exec/status/:requestId`
-- Public receipt: `GET /api/x402/exec/receipt/:requestId`
-
-## Agent Registry
-
-- Metadata source-of-truth:
-  - `docs/agent-registry/metadata.dev.json`
-  - `docs/agent-registry/metadata.production.json`
-- Runbook: `docs/agent-registry/runbook.md`
-
-Manual tooling:
-
-```bash
-bun run agent-registry:validate -- --lane dev
-bun run agent-registry:sync -- --lane dev --step all --dry-run
-bun run agent-registry:sync -- --lane production --step all
-```
-
-## Branch and Deploy Model
-
-- Promotion flow: `codex/*` or `feature/*` -> PR preview -> `main`.
-- Branch environments:
-  - `dev` -> `dev.trader-ralph.com` and `dev.api.trader-ralph.com`
-  - `main` -> `trader-ralph.com`, `www.trader-ralph.com`,
-    `api.trader-ralph.com`
-- Internal pull requests provision a Vercel portal preview and an ephemeral
-  Cloudflare Worker named `ralph-edge-pr-<pr-number>`.
-- Cloudflare Worker and Vercel deploys are branch-driven in CI.
-
-## Tests
-
-```bash
-bun run test:unit
-bun run test:integration
-bun run test:e2e
-bun run test:integration:worker:live
-```
+This repo does not submit live trades. Browser-visible data is either fetched
+from public read-only market APIs, fetched from the configured edge API, or
+shown as unavailable/auth-required. It should not invent live account or
+execution state.

@@ -29,9 +29,13 @@
   "files": {
     "includes": [
       "**/*",
+      "!!**/*.svelte",
       "!!**/node_modules",
       "!!**/dist",
       "!!**/.next",
+      "!!**/.svelte-kit",
+      "!!**/.vercel",
+      "!!**/build",
       "!!**/.wrangler",
       "!!**/out",
       "!!**/runs",
