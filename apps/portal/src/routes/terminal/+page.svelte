@@ -68,6 +68,7 @@
     getJupiterSwapTransaction,
     type JupiterQuote,
   } from "$lib/funding";
+  import BrandMark from "$lib/site/BrandMark.svelte";
   import {
     clearJournal,
     entriesToday,
@@ -3158,6 +3159,7 @@
 
   <header class="topbar">
     <a class="brand" href="/terminal" aria-label="Trader Ralph terminal">
+      <span class="brand-mark"><BrandMark /></span>
       <span>Trader Ralph</span>
       <strong>Terminal</strong>
     </a>
@@ -4986,11 +4988,18 @@
   .brand {
     display: flex;
     gap: 0.55rem;
-    align-items: baseline;
+    align-items: center;
     text-decoration: none;
     font-size: 0.9rem;
     font-weight: 700;
     white-space: nowrap;
+  }
+
+  .brand .brand-mark {
+    display: flex;
+    width: 1.05rem;
+    height: 1.05rem;
+    color: var(--ink);
   }
 
   .brand strong {

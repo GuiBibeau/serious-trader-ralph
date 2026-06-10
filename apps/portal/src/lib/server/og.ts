@@ -60,15 +60,47 @@ export function text(
   return el("div", style, content);
 }
 
-/** Top row: brand left, context (url / timestamp) right. */
+/** The Candle R mark as a satori-compatible inline SVG. */
+export function brandMark(size = 34): Record<string, unknown> {
+  return {
+    type: "svg",
+    props: {
+      width: size,
+      height: size,
+      viewBox: "0 0 512 512",
+      style: { display: "flex" },
+      children: [
+        { type: "rect", props: { x: 170, y: 74, width: 20, height: 54, fill: C.accent } },
+        { type: "rect", props: { x: 170, y: 384, width: 20, height: 54, fill: C.accent } },
+        { type: "rect", props: { x: 152, y: 126, width: 56, height: 260, fill: C.ink } },
+        {
+          type: "path",
+          props: {
+            d: "M 206 126 H 284 A 78 78 0 0 1 284 282 H 206 V 226 H 284 A 22 22 0 0 0 284 182 H 206 Z",
+            fill: C.ink,
+          },
+        },
+        {
+          type: "path",
+          props: { d: "M 240 280 L 296 280 L 360 386 L 304 386 Z", fill: C.ink },
+        },
+      ],
+    },
+  };
+}
+
+/** Top row: mark + brand left, context (url / timestamp) right. */
 export function brandRow(right: string): Record<string, unknown> {
   return el(
     "div",
     { justifyContent: "space-between", alignItems: "center", width: "100%" },
     [
-      el("div", { fontSize: "26px", fontWeight: 700, letterSpacing: "4px" }, [
-        text("RALPH", { color: C.ink }),
-        text("·TERMINAL", { color: C.accent }),
+      el("div", { alignItems: "center", gap: "14px" }, [
+        brandMark(34),
+        el("div", { fontSize: "26px", fontWeight: 700, letterSpacing: "4px" }, [
+          text("RALPH", { color: C.ink }),
+          text("·TERMINAL", { color: C.accent }),
+        ]),
       ]),
       text(right, { fontSize: "21px", color: C.muted }),
     ],

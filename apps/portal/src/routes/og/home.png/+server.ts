@@ -3,6 +3,7 @@
 
 import { read } from "$app/server";
 import satori from "satori";
+import { brandMark } from "$lib/server/og";
 import { Resvg } from "@resvg/resvg-js";
 import type { RequestHandler } from "./$types";
 
@@ -44,9 +45,10 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
         {
           type: "div",
           props: {
-            style: { display: "flex", fontSize: "26px", fontWeight: 700, letterSpacing: "4px" },
+            style: { display: "flex", alignItems: "center", fontSize: "26px", fontWeight: 700, letterSpacing: "4px" },
             children: [
-              { type: "span", props: { children: "RALPH" } },
+              brandMark(34),
+              { type: "span", props: { style: { marginLeft: "14px" }, children: "RALPH" } },
               { type: "span", props: { style: { color: "#ff4d97" }, children: "·TERMINAL" } },
             ],
           },
