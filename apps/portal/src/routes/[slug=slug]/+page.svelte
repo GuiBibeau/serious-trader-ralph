@@ -147,13 +147,13 @@
     name="description"
     content={`Live ${asset.name} (${asset.symbol}) price, desk analysis and news. Trade ${asset.symbol} spot${data.hasPerp ? " or perps" : ""} on Solana with USDC — email login, no seed phrase.`}
   />
-  <link rel="canonical" href={`https://trader-ralph.com/${asset.slug}`} />
+  <link rel="canonical" href={`https://traderralph.com/${asset.slug}`} />
   <meta property="og:title" content={`${asset.symbol} — ${asset.name} | Trader Ralph`} />
   <meta
     property="og:description"
     content={`Live ${asset.name} (${asset.symbol}) price, desk analysis and news. Trade ${asset.symbol} on Solana with USDC.`}
   />
-  <meta property="og:image" content={`https://trader-ralph.com/og/${asset.slug}.png`} />
+  <meta property="og:image" content={`https://traderralph.com/og/${asset.slug}.png`} />
   <meta name="twitter:card" content="summary_large_image" />
 </svelte:head>
 

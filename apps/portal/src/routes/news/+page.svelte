@@ -30,13 +30,13 @@
     name="description"
     content="The wire: live headlines across crypto, tokenized equities and pre-IPO names, tagged to tradable markets."
   />
-  <link rel="canonical" href="https://trader-ralph.com/news" />
+  <link rel="canonical" href="https://traderralph.com/news" />
   <meta property="og:title" content="Market news — crypto & tokenized stocks | Trader Ralph" />
   <meta
     property="og:description"
     content="The wire: live headlines across crypto, tokenized equities and pre-IPO names, tagged to tradable markets."
   />
-  <meta property="og:image" content="https://trader-ralph.com/og/news.png" />
+  <meta property="og:image" content="https://traderralph.com/og/news.png" />
   <meta name="twitter:card" content="summary_large_image" />
 </svelte:head>
 

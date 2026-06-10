@@ -37,10 +37,10 @@
 <svelte:head>
   <title>{data.title} — trade on Solana | Trader Ralph</title>
   <meta name="description" content={data.blurb} />
-  <link rel="canonical" href={`https://trader-ralph.com/${data.hub}`} />
+  <link rel="canonical" href={`https://traderralph.com/${data.hub}`} />
   <meta property="og:title" content={`${data.title} — trade on Solana | Trader Ralph`} />
   <meta property="og:description" content={data.blurb} />
-  <meta property="og:image" content={`https://trader-ralph.com/og/${data.hub}.png`} />
+  <meta property="og:image" content={`https://traderralph.com/og/${data.hub}.png`} />
   <meta name="twitter:card" content="summary_large_image" />
 </svelte:head>
 

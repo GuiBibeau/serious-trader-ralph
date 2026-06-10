@@ -2,7 +2,7 @@ import { error } from "@sveltejs/kit";
 import { getCatalog } from "$lib/server/tokensxyz";
 import type { RequestHandler } from "./$types";
 
-const SITE = "https://trader-ralph.com";
+const SITE = "https://traderralph.com";
 
 export const GET: RequestHandler = async ({ setHeaders }) => {
   // Fail rather than cache an asset-less llms.txt at the CDN for an hour.

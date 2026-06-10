@@ -5,7 +5,7 @@ export function GET() {
     "Disallow: /api/",
     "Disallow: /terminal",
     "",
-    "Sitemap: https://trader-ralph.com/sitemap.xml",
+    "Sitemap: https://traderralph.com/sitemap.xml",
     "",
   ].join("\n");
   return new Response(body, {

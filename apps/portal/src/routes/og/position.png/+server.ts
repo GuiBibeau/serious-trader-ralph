@@ -76,7 +76,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
                 type: "div",
                 props: {
                   style: { display: "flex", fontSize: "22px", color: "#8c95a4" },
-                  children: "trader-ralph.com",
+                  children: "traderralph.com",
                 },
               },
             ],

@@ -92,10 +92,10 @@
     name="description"
     content={`Spot and perps across ${data.marketCount} Solana markets: crypto, tokenized stocks, pre-IPO names. Settled in USDC. Email login, no seed phrase.`}
   />
-  <link rel="canonical" href="https://trader-ralph.com/" />
+  <link rel="canonical" href="https://traderralph.com/" />
   <meta property="og:title" content="Trader Ralph — SOL to SPACEX. One account." />
   <meta property="og:description" content={`Spot and perps across ${data.marketCount} Solana markets. Settled in USDC. Email login, no seed phrase.`} />
-  <meta property="og:image" content="https://trader-ralph.com/og/home.png" />
+  <meta property="og:image" content="https://traderralph.com/og/home.png" />
   <meta name="twitter:card" content="summary_large_image" />
 </svelte:head>
 

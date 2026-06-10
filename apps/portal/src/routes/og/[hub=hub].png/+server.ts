@@ -45,7 +45,7 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
   const count = assets.filter((asset) => asset.hub === params.hub).length;
 
   const tree = frame([
-    brandRow(`trader-ralph.com/${params.hub} · ${utcStamp()}`),
+    brandRow(`traderralph.com/${params.hub} · ${utcStamp()}`),
 
     el("div", { alignItems: "baseline", gap: "20px", marginTop: "36px" }, [
       text(copy.title, { fontSize: "44px", fontWeight: 700, letterSpacing: "4px" }),

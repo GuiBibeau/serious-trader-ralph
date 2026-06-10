@@ -5,7 +5,7 @@
   let { data } = $props();
 
   const share = $derived(data.share);
-  const imageUrl = $derived(`https://trader-ralph.com/og/position.png?${data.query}`);
+  const imageUrl = $derived(`https://traderralph.com/og/position.png?${data.query}`);
   const up = $derived(share.pnl >= 0);
   const pnlText = $derived(
     `${up ? "+" : "-"}$${Math.abs(share.pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
