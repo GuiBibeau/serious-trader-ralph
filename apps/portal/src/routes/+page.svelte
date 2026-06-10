@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import BrandMark from "$lib/site/BrandMark.svelte";
 
   let { data } = $props();
 
@@ -118,7 +119,10 @@
   <!-- Nav -->
   <header class="navbar">
     <div class="nav">
-      <a class="brand" href="/">RALPH<span>·TERMINAL</span></a>
+      <a class="brand" href="/">
+        <span class="brand-mark"><BrandMark /></span>
+        RALPH<span>·TERMINAL</span>
+      </a>
       <nav>
         <a href="/news">News</a>
         <a href="/equities">Equities</a>
@@ -339,11 +343,15 @@
     padding: 1.1rem 1.5rem;
   }
   .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-weight: 800;
     letter-spacing: 0.12em;
     font-size: 0.95rem;
   }
+  .brand span.brand-mark { display: flex; width: 1.15rem; height: 1.15rem; color: var(--ink); }
   .brand span { color: var(--accent); }
   .nav nav { display: flex; gap: 1.4rem; flex: 1; }
   .nav nav a { color: var(--muted); font-size: 0.86rem; }
