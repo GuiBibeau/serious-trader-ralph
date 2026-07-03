@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { NewsItem, SiteFooter, SiteNav, StatCard } from "@trader-ralph/ui";
   import { fmtPct, fmtUsd } from "@trader-ralph/ui/format";
 
   let { data } = $props();
@@ -206,22 +206,10 @@
 
     <!-- Stats -->
     <section class="stats">
-      <div class="stat">
-        <b>{fmtUsd(asset.marketCap, true)}</b>
-        <span>Market cap <em>what the market says it's all worth</em></span>
-      </div>
-      <div class="stat">
-        <b>{fmtUsd(asset.volume24hUsd, true)}</b>
-        <span>24h volume <em>how much changed hands today</em></span>
-      </div>
-      <div class="stat">
-        <b>{fmtUsd(asset.liquidityUsd, true)}</b>
-        <span>Liquidity <em>how easily you can get in and out</em></span>
-      </div>
-      <div class="stat">
-        <b>{fmtUsd(data.profile?.allTimeHigh ?? null)}</b>
-        <span>All-time high <em>the highest it has ever traded</em></span>
-      </div>
+      <StatCard value={fmtUsd(asset.marketCap, true)} label="Market cap" hint="what the market says it's all worth" />
+      <StatCard value={fmtUsd(asset.volume24hUsd, true)} label="24h volume" hint="how much changed hands today" />
+      <StatCard value={fmtUsd(asset.liquidityUsd, true)} label="Liquidity" hint="how easily you can get in and out" />
+      <StatCard value={fmtUsd(data.profile?.allTimeHigh ?? null)} label="All-time high" hint="the highest it has ever traded" />
     </section>
 
     <div class="columns">
@@ -258,10 +246,7 @@
             <h2>{data.newsIsAssetScoped ? `${asset.symbol} in the news` : "Market headlines"}</h2>
             <div class="news-list">
               {#each data.news as item (item.url)}
-                <a class="news-item" href={item.url} target="_blank" rel="noopener noreferrer">
-                  <span class="src">{item.source}</span>
-                  <span class="ttl">{item.title}</span>
-                </a>
+                <NewsItem source={item.source} title={item.title} href={item.url} />
               {/each}
             </div>
           </section>
@@ -429,17 +414,6 @@
     gap: 0.7rem;
     margin: 0.9rem 0 2rem;
   }
-  .stat {
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: var(--surface);
-    padding: 0.8rem 0.9rem;
-    display: grid;
-    gap: 0.2rem;
-  }
-  .stat b { font-family: ui-monospace, monospace; font-size: 1.2rem; font-variant-numeric: tabular-nums; }
-  .stat span { font-size: 0.74rem; color: var(--muted); }
-  .stat em { display: block; font-style: normal; color: var(--faint); font-size: 0.68rem; margin-top: 0.1rem; }
 
   /* Columns */
   .columns { display: grid; grid-template-columns: minmax(0, 1fr) 17rem; gap: 2rem; }
@@ -467,16 +441,6 @@
   .pulse li::before { content: "·"; position: absolute; left: 0.2rem; color: var(--accent); font-weight: 800; }
 
   .news-list { display: grid; }
-  .news-item {
-    display: grid;
-    grid-template-columns: 8rem minmax(0, 1fr);
-    gap: 1rem;
-    padding: 0.6rem 0;
-    border-bottom: 1px solid var(--line-soft);
-  }
-  .news-item .src { color: var(--accent); font-size: 0.66rem; text-transform: uppercase; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .news-item .ttl { color: var(--ink); font-size: 0.9rem; }
-  .news-item:hover .ttl { color: var(--accent); }
 
   .about p { color: var(--muted); font-size: 0.9rem; line-height: 1.65; }
 

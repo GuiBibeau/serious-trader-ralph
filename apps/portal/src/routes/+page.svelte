@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { BrandMark } from "@trader-ralph/ui";
-  import { fmtCompact, fmtPct, fmtPrice } from "@trader-ralph/ui/format";
+  import { AssetTable, BrandMark, Button, NewsItem, TabNav } from "@trader-ralph/ui";
+  import { fmtPct, fmtPrice } from "@trader-ralph/ui/format";
 
   let { data } = $props();
 
@@ -24,6 +24,14 @@
     live[asset.symbol]?.price ?? asset.price;
   const changeOf = (asset: { symbol: string; change24hPct: number | null }) =>
     live[asset.symbol]?.change ?? asset.change24hPct;
+
+  const rows = $derived(
+    universe.slice(0, 14).map((asset) => ({
+      ...asset,
+      price: priceOf(asset),
+      change24hPct: changeOf(asset),
+    })),
+  );
 
   const regime = $derived(
     data.vix === null
@@ -112,7 +120,7 @@
         <a href="/pre-ipo">Pre-IPO</a>
         <a href="/crypto">Crypto</a>
       </nav>
-      <a class="cta" href="/terminal">Open terminal</a>
+      <Button href="/terminal">Open terminal</Button>
     </div>
   </header>
 
@@ -126,8 +134,8 @@
         phrase.
       </p>
       <div class="hero-ctas">
-        <a class="cta" href="/terminal">Open the terminal</a>
-        <a class="ghost" href="#universe">Browse the markets</a>
+        <Button href="/terminal">Open the terminal</Button>
+        <Button variant="ghost" href="#universe">Browse the markets</Button>
       </div>
       <p class="hero-foot">Jupiter routes spot. Phoenix runs perps.</p>
     </div>
@@ -155,37 +163,19 @@
     <div class="universe-head">
       <h2>The universe</h2>
       <span class="count">{data.marketCount} markets</span>
-      <div class="tabs" role="tablist">
-        {#each [["all", "All"], ["crypto", "Crypto"], ["equities", "Equities"], ["pre-ipo", "Pre-IPO"]] as [key, label] (key)}
-          <button
-            role="tab"
-            aria-selected={tab === key}
-            class:active={tab === key}
-            onclick={() => (tab = key as typeof tab)}
-          >
-            {label}
-          </button>
-        {/each}
-      </div>
+      <TabNav
+        tabs={[
+          { key: "all", label: "All" },
+          { key: "crypto", label: "Crypto" },
+          { key: "equities", label: "Equities" },
+          { key: "pre-ipo", label: "Pre-IPO" },
+        ]}
+        active={tab}
+        onselect={(key) => (tab = key as typeof tab)}
+      />
       <input class="filter" placeholder="Filter…" bind:value={filter} aria-label="Filter assets" />
     </div>
-    <div class="list">
-      <div class="list-row list-header" aria-hidden="true">
-        <span></span><span>Asset</span><span class="r">Price</span><span class="r">24h</span>
-        <span class="r wide">Volume</span>
-      </div>
-      {#each universe.slice(0, 14) as asset (asset.slug)}
-        <a class="list-row" href={`/${asset.slug}`}>
-          <span class="logo">{#if asset.imageUrl}<img src={asset.imageUrl} alt="" loading="lazy" />{/if}</span>
-          <span class="id"><b>{asset.symbol}</b><small>{asset.name}</small></span>
-          <span class="r mono">{fmtPrice(priceOf(asset))}</span>
-          <span class="r mono chg" class:up={(changeOf(asset) ?? 0) >= 0} class:down={(changeOf(asset) ?? 0) < 0}>
-            {fmtPct(changeOf(asset))}
-          </span>
-          <span class="r mono wide">{fmtCompact(asset.volume24hUsd)}</span>
-        </a>
-      {/each}
-    </div>
+    <AssetTable assets={rows} />
     <a class="more" href={tab === "all" ? "/equities" : `/${tab}`}>
       All {tab === "all" ? "markets" : tab === "pre-ipo" ? "pre-IPO names" : tab} →
     </a>
@@ -229,10 +219,7 @@
       <h2>On the wire</h2>
       <div class="news-list">
         {#each data.news as item (item.url)}
-          <a class="news-item" href={item.url} target="_blank" rel="noopener noreferrer">
-            <span class="src">{item.source}</span>
-            <span class="ttl">{item.title}</span>
-          </a>
+          <NewsItem source={item.source} title={item.title} href={item.url} />
         {/each}
       </div>
       <a class="more" href="/news">All news →</a>
@@ -339,22 +326,6 @@
   .nav nav { display: flex; gap: 1.4rem; flex: 1; }
   .nav nav a { color: var(--muted); font-size: 0.86rem; }
   .nav nav a:hover { color: var(--ink); }
-  .cta {
-    background: var(--accent);
-    color: var(--accent-contrast);
-    font-weight: 700;
-    padding: 0.55rem 1.1rem;
-    border-radius: var(--radius);
-    font-size: 0.88rem;
-  }
-  .cta:hover { filter: brightness(1.08); }
-  .ghost {
-    border: 1px solid var(--line);
-    color: var(--ink);
-    padding: 0.55rem 1.1rem;
-    border-radius: var(--radius);
-    font-size: 0.88rem;
-  }
 
   /* Hero — copy column sits higher than the panel on purpose */
   .hero {
@@ -380,7 +351,7 @@
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--surface);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow-hard);
     overflow: hidden;
     margin-top: 2.5rem;
   }
@@ -419,19 +390,6 @@
   .universe-head { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
   .universe-head h2 { margin: 0; font-size: 1.4rem; letter-spacing: -0.01em; }
   .count { color: var(--faint); font-size: 0.76rem; font-family: ui-monospace, monospace; }
-  .tabs { display: flex; gap: 0.2rem; margin-left: 1rem; }
-  .tabs button {
-    border: 0;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    color: var(--muted);
-    padding: 0.35rem 0.7rem;
-    font-size: 0.82rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .tabs button:hover { color: var(--ink); }
-  .tabs button.active { color: var(--ink); border-bottom-color: var(--accent); }
   .filter {
     margin-left: auto;
     background: var(--surface);
@@ -443,33 +401,6 @@
     width: 11rem;
   }
 
-  .list { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
-  .list-row {
-    display: grid;
-    grid-template-columns: 2.4rem minmax(0, 1fr) 6.5rem 5rem 6rem;
-    gap: 0.7rem;
-    align-items: center;
-    padding: 0.55rem 0.9rem;
-    border-bottom: 1px solid var(--line-soft);
-    color: var(--ink);
-  }
-  .list-row:last-child { border-bottom: 0; }
-  a.list-row:hover { background: rgba(255, 77, 151, 0.04); }
-  .list-header {
-    color: var(--faint);
-    font-size: 0.64rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    font-family: ui-monospace, monospace;
-    background: rgba(255, 255, 255, 0.015);
-  }
-  .logo { width: 1.6rem; height: 1.6rem; }
-  .logo img { width: 100%; height: 100%; border-radius: 50%; display: block; }
-  .id { display: grid; line-height: 1.25; min-width: 0; }
-  .id b { font-size: 0.9rem; }
-  .id small { color: var(--faint); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .r { text-align: right; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; font-size: 0.84rem; }
   .more { color: var(--accent); font-size: 0.86rem; font-weight: 600; display: inline-block; margin-top: 0.9rem; }
 
   /* How it works — asymmetric editorial */
@@ -513,16 +444,6 @@
   .newsstrip { max-width: 72rem; margin: 0 auto; padding: 0 1.5rem 4rem; }
   .newsstrip h2 { font-size: 1.4rem; margin: 0 0 1rem; }
   .news-list { display: grid; gap: 0.1rem; }
-  .news-item {
-    display: grid;
-    grid-template-columns: 9rem minmax(0,1fr);
-    gap: 1rem;
-    padding: 0.6rem 0;
-    border-bottom: 1px solid var(--line-soft);
-  }
-  .news-item .src { color: var(--accent); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .news-item .ttl { color: var(--ink); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .news-item:hover .ttl { color: var(--accent); }
 
   /* Footer */
   .footer {
@@ -549,7 +470,5 @@
     .how { grid-template-columns: 1fr; gap: 1.5rem; }
     .footer { grid-template-columns: 1fr; }
     .nav nav { display: none; }
-    .list-row { grid-template-columns: 2.2rem minmax(0, 1fr) 5.6rem 4.4rem; }
-    .wide { display: none; }
   }
 </style>

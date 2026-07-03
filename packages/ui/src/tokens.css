@@ -27,6 +27,10 @@
   /* Marketing surfaces: square, print-like — the AI default is round and
      glowing, we go the other way. (Terminal keeps its own metrics.) */
   --radius: 3px;
+  /* Neo-brutalist accents — hard offset shadows, no blur, pure black alpha.
+     Marketing surfaces only; the terminal stays flat and dense. */
+  --shadow-hard: 4px 4px 0 rgba(0, 0, 0, 0.55);
+  --shadow-hard-sm: 2px 2px 0 rgba(0, 0, 0, 0.55);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;

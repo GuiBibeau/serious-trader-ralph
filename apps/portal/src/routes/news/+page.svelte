@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { Button, SiteFooter, SiteNav } from "@trader-ralph/ui";
   import { fmtPct, fmtPrice } from "@trader-ralph/ui/format";
 
   let { data } = $props();
@@ -69,7 +69,7 @@
             </span>
           </a>
         {/each}
-        <a class="cta" href="/terminal">Open terminal</a>
+        <div class="side-cta"><Button block href="/terminal">Open terminal</Button></div>
       </aside>
     </div>
   </main>
@@ -120,18 +120,7 @@
   .mover:hover .sym { color: var(--accent); }
   .up { color: var(--up); }
   .down { color: var(--down); }
-  .cta {
-    display: block;
-    margin-top: 1rem;
-    text-align: center;
-    background: var(--accent);
-    color: var(--accent-contrast);
-    font-weight: 700;
-    font-size: 0.85rem;
-    padding: 0.55rem;
-    border-radius: var(--radius);
-    text-decoration: none;
-  }
+  .side-cta { margin-top: 1rem; }
 
   @media (max-width: 880px) {
     .layout { grid-template-columns: 1fr; }
