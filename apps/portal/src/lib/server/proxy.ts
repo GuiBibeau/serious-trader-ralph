@@ -3,8 +3,8 @@
 // the dev proxies intercept these paths first; in production these handlers
 // serve them. Client code is identical in both environments.
 
-import { env } from "$env/dynamic/private";
 import type { RequestEvent } from "@sveltejs/kit";
+import { env } from "$env/dynamic/private";
 
 type ProxyOptions = {
   target: string;
@@ -59,7 +59,9 @@ export const upstreams = {
   deepseek: (): ProxyOptions => ({
     target: "https://api.deepseek.com",
     headers: () => ({
-      authorization: env.DEEPSEEK_API_KEY ? `Bearer ${env.DEEPSEEK_API_KEY}` : "",
+      authorization: env.DEEPSEEK_API_KEY
+        ? `Bearer ${env.DEEPSEEK_API_KEY}`
+        : "",
     }),
   }),
   jupiter: (): ProxyOptions => ({

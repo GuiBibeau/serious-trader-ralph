@@ -36,7 +36,9 @@ export const load: PageServerLoad = async () => {
     })),
     movers: assets
       .filter((asset) => asset.change24hPct !== null)
-      .sort((a, b) => Math.abs(b.change24hPct ?? 0) - Math.abs(a.change24hPct ?? 0))
+      .sort(
+        (a, b) => Math.abs(b.change24hPct ?? 0) - Math.abs(a.change24hPct ?? 0),
+      )
       .slice(0, 10)
       .map((asset) => ({
         slug: asset.slug,
