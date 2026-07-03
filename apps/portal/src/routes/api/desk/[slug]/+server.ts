@@ -103,7 +103,9 @@ async function generateRead(asset: Asset): Promise<string | null> {
 /** Every numeric token in the output must appear in the input facts. */
 function numbersAreGrounded(output: string, facts: string): boolean {
   const factNumbers = new Set(
-    (facts.match(/\d[\d,]*\.?\d*/g) ?? []).map((value) => value.replace(/,/g, "")),
+    (facts.match(/\d[\d,]*\.?\d*/g) ?? []).map((value) =>
+      value.replace(/,/g, ""),
+    ),
   );
   const outputNumbers = (output.match(/\d[\d,]*\.?\d*/g) ?? []).map((value) =>
     value.replace(/,/g, ""),

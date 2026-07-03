@@ -54,14 +54,18 @@ export function clearJournal(): void {
   }
 }
 
-export function entriesToday(entries: JournalEntry[], now: number): JournalEntry[] {
+export function entriesToday(
+  entries: JournalEntry[],
+  now: number,
+): JournalEntry[] {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   return entries.filter((entry) => entry.ts >= start.getTime());
 }
 
 export function journalToCsv(entries: JournalEntry[]): string {
-  const header = "time_utc,venue,symbol,action,notional_usd,price,leverage,signature";
+  const header =
+    "time_utc,venue,symbol,action,notional_usd,price,leverage,signature";
   const rows = entries.map((entry) =>
     [
       new Date(entry.ts).toISOString(),

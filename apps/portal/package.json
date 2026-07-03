@@ -17,6 +17,7 @@
     "@solana/web3.js": "^1.98.4",
     "@trader-ralph/ui": "workspace:*",
     "@vercel/analytics": "^2.0.1",
+    "buffer": "^6.0.3",
     "lightweight-charts": "^5.2.0",
     "qrcode": "^1.5.4",
     "satori": "^0.26.0"

@@ -52,7 +52,9 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
     lines.push(
       `## ${bundle.newsIsAssetScoped ? "News" : "Market headlines"}`,
       "",
-      ...bundle.news.map((item) => `- [${item.title}](${item.url}) — ${item.source}`),
+      ...bundle.news.map(
+        (item) => `- [${item.title}](${item.url}) — ${item.source}`,
+      ),
       "",
     );
   }

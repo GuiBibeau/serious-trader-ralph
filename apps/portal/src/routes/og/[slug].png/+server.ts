@@ -4,8 +4,6 @@
 // attention comes from hierarchy, not decoration.
 
 import { error } from "@sveltejs/kit";
-import { getPerpSymbols } from "$lib/server/phoenix-markets";
-import { findBySlug, getSpotlightBundle } from "$lib/server/tokensxyz";
 import {
   brandRow,
   C,
@@ -19,6 +17,8 @@ import {
   text,
   utcStamp,
 } from "$lib/server/og";
+import { getPerpSymbols } from "$lib/server/phoenix-markets";
+import { findBySlug, getSpotlightBundle } from "$lib/server/tokensxyz";
 import type { RequestHandler } from "./$types";
 
 export const GET: RequestHandler = async ({ params, setHeaders }) => {
@@ -42,7 +42,8 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
     const prior = bundle.candles.slice(0, -96);
     const recentVol = recent.reduce((sum, candle) => sum + candle.volume, 0);
     const priorAvg =
-      (prior.reduce((sum, candle) => sum + candle.volume, 0) / prior.length) * 96;
+      (prior.reduce((sum, candle) => sum + candle.volume, 0) / prior.length) *
+      96;
     if (priorAvg > 0) {
       const ratio = recentVol / priorAvg;
       facts.push({
@@ -53,7 +54,9 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
   }
   if (asset.price !== null && bundle.profile?.allTimeHigh) {
     const drawdown =
-      ((bundle.profile.allTimeHigh - asset.price) / bundle.profile.allTimeHigh) * 100;
+      ((bundle.profile.allTimeHigh - asset.price) /
+        bundle.profile.allTimeHigh) *
+      100;
     facts.push(
       drawdown <= 1
         ? { label: "AT ALL-TIME HIGH", tone: C.up }
@@ -88,7 +91,12 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
     // Identity + price block
     el(
       "div",
-      { alignItems: "flex-end", justifyContent: "space-between", marginTop: "44px", width: "100%" },
+      {
+        alignItems: "flex-end",
+        justifyContent: "space-between",
+        marginTop: "44px",
+        width: "100%",
+      },
       [
         el("div", { flexDirection: "column" }, [
           el("div", { alignItems: "center", gap: "18px" }, [
@@ -112,7 +120,11 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
             }),
           ]),
           el("div", { alignItems: "baseline", gap: "26px", marginTop: "6px" }, [
-            text(asset.symbol, { fontSize: "64px", fontWeight: 700, letterSpacing: "-1px" }),
+            text(asset.symbol, {
+              fontSize: "64px",
+              fontWeight: 700,
+              letterSpacing: "-1px",
+            }),
             text(fmtPrice(asset.price), {
               fontSize: "96px",
               fontWeight: 700,
@@ -124,7 +136,9 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
         el(
           "div",
           {
-            backgroundColor: up ? "rgba(44,233,127,0.12)" : "rgba(255,90,106,0.12)",
+            backgroundColor: up
+              ? "rgba(44,233,127,0.12)"
+              : "rgba(255,90,106,0.12)",
             border: `2px solid ${sparkColor}`,
             borderRadius: "0",
             padding: "14px 26px",
@@ -132,8 +146,16 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
             alignItems: "flex-end",
           },
           [
-            text(fmtPct(change), { fontSize: "52px", fontWeight: 700, color: sparkColor }),
-            text("24 HOURS", { fontSize: "18px", color: C.muted, letterSpacing: "2px" }),
+            text(fmtPct(change), {
+              fontSize: "52px",
+              fontWeight: 700,
+              color: sparkColor,
+            }),
+            text("24 HOURS", {
+              fontSize: "18px",
+              color: C.muted,
+              letterSpacing: "2px",
+            }),
           ],
         ),
       ],
@@ -174,9 +196,18 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
     // Fact chips + CTA line
     el(
       "div",
-      { marginTop: "auto", justifyContent: "space-between", alignItems: "center", width: "100%" },
+      {
+        marginTop: "auto",
+        justifyContent: "space-between",
+        alignItems: "center",
+        width: "100%",
+      },
       [
-        el("div", { gap: "14px" }, facts.slice(0, 3).map((fact) => chip(fact.label, fact.tone))),
+        el(
+          "div",
+          { gap: "14px" },
+          facts.slice(0, 3).map((fact) => chip(fact.label, fact.tone)),
+        ),
         text(`Trade ${asset.symbol} · settled in USDC`, {
           fontSize: "22px",
           color: C.faint,

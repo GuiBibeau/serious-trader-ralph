@@ -1,19 +1,19 @@
 // Static OG card for the landing, hubs and /news — same satori pipeline as
 // the spotlight cards.
 
-import { read } from "$app/server";
-import satori from "satori";
-import { brandMark, C } from "$lib/server/og";
 import { Resvg } from "@resvg/resvg-js";
-import type { RequestHandler } from "./$types";
-
-import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
+import satori from "satori";
+import { read } from "$app/server";
 import interBold from "$lib/server/fonts/Inter-Bold.ttf";
+import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
+import { brandMark, C } from "$lib/server/og";
+import type { RequestHandler } from "./$types";
 
 const W = 1200;
 const H = 630;
 
-let fontsPromise: Promise<{ regular: ArrayBuffer; bold: ArrayBuffer }> | null = null;
+let fontsPromise: Promise<{ regular: ArrayBuffer; bold: ArrayBuffer }> | null =
+  null;
 function loadFonts() {
   fontsPromise ??= (async () => {
     const [regular, bold] = await Promise.all([
@@ -45,11 +45,23 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
         {
           type: "div",
           props: {
-            style: { display: "flex", alignItems: "center", fontSize: "26px", fontWeight: 700, letterSpacing: "4px" },
+            style: {
+              display: "flex",
+              alignItems: "center",
+              fontSize: "26px",
+              fontWeight: 700,
+              letterSpacing: "4px",
+            },
             children: [
               brandMark(34),
-              { type: "span", props: { style: { marginLeft: "14px" }, children: "RALPH" } },
-              { type: "span", props: { style: { color: C.accent }, children: "·TERMINAL" } },
+              {
+                type: "span",
+                props: { style: { marginLeft: "14px" }, children: "RALPH" },
+              },
+              {
+                type: "span",
+                props: { style: { color: C.accent }, children: "·TERMINAL" },
+              },
             ],
           },
         },
@@ -66,23 +78,46 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
               marginTop: "96px",
             },
             children: [
-              { type: "div", props: { style: { display: "flex" }, children: "SOL to SPACEX." } },
-              { type: "div", props: { style: { display: "flex", color: C.accent }, children: "One account." } },
+              {
+                type: "div",
+                props: {
+                  style: { display: "flex" },
+                  children: "SOL to SPACEX.",
+                },
+              },
+              {
+                type: "div",
+                props: {
+                  style: { display: "flex", color: C.accent },
+                  children: "One account.",
+                },
+              },
             ],
           },
         },
         {
           type: "div",
           props: {
-            style: { display: "flex", fontSize: "30px", color: C.muted, marginTop: "40px" },
+            style: {
+              display: "flex",
+              fontSize: "30px",
+              color: C.muted,
+              marginTop: "40px",
+            },
             children: "Spot and perps on 300+ Solana markets, settled in USDC",
           },
         },
         {
           type: "div",
           props: {
-            style: { display: "flex", marginTop: "auto", fontSize: "24px", color: C.muted },
-            children: "Spot by Jupiter · perps on Phoenix · email login, no seed phrase",
+            style: {
+              display: "flex",
+              marginTop: "auto",
+              fontSize: "24px",
+              color: C.muted,
+            },
+            children:
+              "Spot by Jupiter · perps on Phoenix · email login, no seed phrase",
           },
         },
       ],
@@ -98,7 +133,9 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
     ],
   });
 
-  const png = new Resvg(svg, { fitTo: { mode: "width", value: W } }).render().asPng();
+  const png = new Resvg(svg, { fitTo: { mode: "width", value: W } })
+    .render()
+    .asPng();
   setHeaders({
     "content-type": "image/png",
     "cache-control": "public, s-maxage=604800, stale-while-revalidate=86400",

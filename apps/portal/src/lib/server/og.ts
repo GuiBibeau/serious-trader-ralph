@@ -3,13 +3,12 @@
 // 1200×630 satori trees rendered to PNG via resvg with bundled Inter — no
 // network fonts, no client involvement.
 
-import { read } from "$app/server";
-import satori from "satori";
 import { Resvg } from "@resvg/resvg-js";
 import { colors } from "@trader-ralph/ui/tokens";
-
-import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
+import satori from "satori";
+import { read } from "$app/server";
 import interBold from "$lib/server/fonts/Inter-Bold.ttf";
+import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
 
 export const OG_W = 1200;
 export const OG_H = 630;
@@ -29,7 +28,8 @@ export const C = {
   down: colors.down,
 } as const;
 
-let fontsPromise: Promise<{ regular: ArrayBuffer; bold: ArrayBuffer }> | null = null;
+let fontsPromise: Promise<{ regular: ArrayBuffer; bold: ArrayBuffer }> | null =
+  null;
 function loadFonts() {
   fontsPromise ??= (async () => {
     const [regular, bold] = await Promise.all([
@@ -73,9 +73,18 @@ export function brandMark(size = 34): Record<string, unknown> {
       viewBox: "0 0 512 512",
       style: { display: "flex" },
       children: [
-        { type: "rect", props: { x: 170, y: 74, width: 20, height: 54, fill: C.accent } },
-        { type: "rect", props: { x: 170, y: 384, width: 20, height: 54, fill: C.accent } },
-        { type: "rect", props: { x: 152, y: 126, width: 56, height: 260, fill: C.ink } },
+        {
+          type: "rect",
+          props: { x: 170, y: 74, width: 20, height: 54, fill: C.accent },
+        },
+        {
+          type: "rect",
+          props: { x: 170, y: 384, width: 20, height: 54, fill: C.accent },
+        },
+        {
+          type: "rect",
+          props: { x: 152, y: 126, width: 56, height: 260, fill: C.ink },
+        },
         {
           type: "path",
           props: {
@@ -85,7 +94,10 @@ export function brandMark(size = 34): Record<string, unknown> {
         },
         {
           type: "path",
-          props: { d: "M 240 280 L 296 280 L 360 386 L 304 386 Z", fill: C.ink },
+          props: {
+            d: "M 240 280 L 296 280 L 360 386 L 304 386 Z",
+            fill: C.ink,
+          },
         },
       ],
     },
@@ -111,7 +123,10 @@ export function brandRow(right: string): Record<string, unknown> {
 }
 
 /** Bordered data chip for the fact strips. */
-export function chip(label: string, tone: string = C.muted): Record<string, unknown> {
+export function chip(
+  label: string,
+  tone: string = C.muted,
+): Record<string, unknown> {
   return el(
     "div",
     {
@@ -179,7 +194,9 @@ export async function renderOgPng(
       { name: "Inter", data: fonts.bold, weight: 700, style: "normal" },
     ],
   });
-  const png = new Resvg(svg, { fitTo: { mode: "width", value: OG_W } }).render().asPng();
+  const png = new Resvg(svg, { fitTo: { mode: "width", value: OG_W } })
+    .render()
+    .asPng();
   return new Uint8Array(png);
 }
 

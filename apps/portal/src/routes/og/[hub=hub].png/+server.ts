@@ -2,7 +2,6 @@
 // mover table for the hub — the share IS the market data.
 
 import { error } from "@sveltejs/kit";
-import { getCatalog } from "$lib/server/tokensxyz";
 import {
   brandRow,
   C,
@@ -14,6 +13,7 @@ import {
   text,
   utcStamp,
 } from "$lib/server/og";
+import { getCatalog } from "$lib/server/tokensxyz";
 import type { RequestHandler } from "./$types";
 
 const COPY: Record<string, { title: string; tagline: string }> = {
@@ -40,7 +40,9 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
 
   const rows = assets
     .filter((asset) => asset.hub === params.hub && asset.price !== null)
-    .sort((a, b) => Math.abs(b.change24hPct ?? 0) - Math.abs(a.change24hPct ?? 0))
+    .sort(
+      (a, b) => Math.abs(b.change24hPct ?? 0) - Math.abs(a.change24hPct ?? 0),
+    )
     .slice(0, 5);
   const count = assets.filter((asset) => asset.hub === params.hub).length;
 
@@ -48,7 +50,11 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
     brandRow(`traderralph.com/${params.hub} · ${utcStamp()}`),
 
     el("div", { alignItems: "baseline", gap: "20px", marginTop: "36px" }, [
-      text(copy.title, { fontSize: "44px", fontWeight: 700, letterSpacing: "4px" }),
+      text(copy.title, {
+        fontSize: "44px",
+        fontWeight: 700,
+        letterSpacing: "4px",
+      }),
       text(`${count} MARKETS`, {
         fontSize: "20px",
         fontWeight: 700,
@@ -75,13 +81,17 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
             justifyContent: "space-between",
             alignItems: "center",
             padding: "16px 28px",
-            borderBottom: index === rows.length - 1 ? "none" : `1px solid ${C.line}`,
+            borderBottom:
+              index === rows.length - 1 ? "none" : `1px solid ${C.line}`,
             width: "100%",
           },
           [
             el("div", { gap: "20px", alignItems: "baseline", width: "420px" }, [
               text(asset.symbol, { fontSize: "30px", fontWeight: 700 }),
-              text(asset.name.slice(0, 22), { fontSize: "20px", color: C.faint }),
+              text(asset.name.slice(0, 22), {
+                fontSize: "20px",
+                color: C.faint,
+              }),
             ]),
             text(fmtPrice(asset.price), {
               fontSize: "30px",
@@ -102,10 +112,18 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
 
     el(
       "div",
-      { marginTop: "auto", justifyContent: "space-between", alignItems: "center", width: "100%" },
+      {
+        marginTop: "auto",
+        justifyContent: "space-between",
+        alignItems: "center",
+        width: "100%",
+      },
       [
         text(copy.tagline, { fontSize: "22px", color: C.muted }),
-        text("Email login · no seed phrase", { fontSize: "20px", color: C.faint }),
+        text("Email login · no seed phrase", {
+          fontSize: "20px",
+          color: C.faint,
+        }),
       ],
     ),
   ]);

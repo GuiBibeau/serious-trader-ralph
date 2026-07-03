@@ -3,7 +3,6 @@
 // always look (and are) current. Re-rendered every 15 minutes at the CDN.
 
 import { error } from "@sveltejs/kit";
-import { getCatalog, getNewsFeed } from "$lib/server/tokensxyz";
 import {
   brandRow,
   C,
@@ -14,6 +13,7 @@ import {
   text,
   utcStamp,
 } from "$lib/server/og";
+import { getCatalog, getNewsFeed } from "$lib/server/tokensxyz";
 import type { RequestHandler } from "./$types";
 
 const clip = (value: string, max: number): string =>
@@ -28,8 +28,13 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
   ]);
 
   const movers = assets
-    .filter((asset) => asset.change24hPct !== null && (asset.volume24hUsd ?? 0) > 100_000)
-    .sort((a, b) => Math.abs(b.change24hPct ?? 0) - Math.abs(a.change24hPct ?? 0))
+    .filter(
+      (asset) =>
+        asset.change24hPct !== null && (asset.volume24hUsd ?? 0) > 100_000,
+    )
+    .sort(
+      (a, b) => Math.abs(b.change24hPct ?? 0) - Math.abs(a.change24hPct ?? 0),
+    )
     .slice(0, 4);
 
   const tree = frame([
@@ -83,14 +88,23 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
     // Movers strip
     el(
       "div",
-      { marginTop: "auto", justifyContent: "space-between", alignItems: "center", width: "100%" },
+      {
+        marginTop: "auto",
+        justifyContent: "space-between",
+        alignItems: "center",
+        width: "100%",
+      },
       [
         el(
           "div",
           { gap: "30px", alignItems: "baseline" },
           movers.map((asset) =>
             el("div", { gap: "10px", alignItems: "baseline" }, [
-              text(asset.symbol, { fontSize: "24px", fontWeight: 700, color: C.ink }),
+              text(asset.symbol, {
+                fontSize: "24px",
+                fontWeight: 700,
+                color: C.ink,
+              }),
               text(fmtPct(asset.change24hPct), {
                 fontSize: "24px",
                 fontWeight: 700,
@@ -99,7 +113,10 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
             ]),
           ),
         ),
-        text("Tagged to tradable markets", { fontSize: "19px", color: C.faint }),
+        text("Tagged to tradable markets", {
+          fontSize: "19px",
+          color: C.faint,
+        }),
       ],
     ),
   ]);

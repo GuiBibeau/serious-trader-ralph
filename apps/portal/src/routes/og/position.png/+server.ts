@@ -2,21 +2,21 @@
 // deterministic state (never computed here, never by AI) and are strictly
 // validated/clamped — this endpoint just paints them.
 
-import { error } from "@sveltejs/kit";
-import { read } from "$app/server";
-import satori from "satori";
-import { brandMark, C } from "$lib/server/og";
 import { Resvg } from "@resvg/resvg-js";
+import { error } from "@sveltejs/kit";
+import satori from "satori";
+import { read } from "$app/server";
+import interBold from "$lib/server/fonts/Inter-Bold.ttf";
+import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
+import { brandMark, C } from "$lib/server/og";
 import { parsePositionParams } from "$lib/server/share";
 import type { RequestHandler } from "./$types";
-
-import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
-import interBold from "$lib/server/fonts/Inter-Bold.ttf";
 
 const W = 1200;
 const H = 630;
 
-let fontsPromise: Promise<{ regular: ArrayBuffer; bold: ArrayBuffer }> | null = null;
+let fontsPromise: Promise<{ regular: ArrayBuffer; bold: ArrayBuffer }> | null =
+  null;
 function loadFonts() {
   fontsPromise ??= (async () => {
     const [regular, bold] = await Promise.all([
@@ -61,23 +61,49 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
         {
           type: "div",
           props: {
-            style: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+            style: {
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            },
             children: [
               {
                 type: "div",
                 props: {
-                  style: { display: "flex", alignItems: "center", fontSize: "26px", fontWeight: 700, letterSpacing: "4px" },
+                  style: {
+                    display: "flex",
+                    alignItems: "center",
+                    fontSize: "26px",
+                    fontWeight: 700,
+                    letterSpacing: "4px",
+                  },
                   children: [
                     brandMark(34),
-                    { type: "span", props: { style: { marginLeft: "14px" }, children: "RALPH" } },
-                    { type: "span", props: { style: { color: C.accent }, children: "·TERMINAL" } },
+                    {
+                      type: "span",
+                      props: {
+                        style: { marginLeft: "14px" },
+                        children: "RALPH",
+                      },
+                    },
+                    {
+                      type: "span",
+                      props: {
+                        style: { color: C.accent },
+                        children: "·TERMINAL",
+                      },
+                    },
                   ],
                 },
               },
               {
                 type: "div",
                 props: {
-                  style: { display: "flex", fontSize: "22px", color: C.muted },
+                  style: {
+                    display: "flex",
+                    fontSize: "22px",
+                    color: C.muted,
+                  },
                   children: "traderralph.com",
                 },
               },
@@ -114,15 +140,28 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
           ? {
               type: "div",
               props: {
-                style: { display: "flex", fontSize: "30px", color: C.muted, marginTop: "18px" },
+                style: {
+                  display: "flex",
+                  fontSize: "30px",
+                  color: C.muted,
+                  marginTop: "18px",
+                },
                 children: `entry $${fmtPrice(params.prices.entry)}  →  mark $${fmtPrice(params.prices.mark)}`,
               },
             }
-          : { type: "div", props: { style: { display: "flex" }, children: "" } },
+          : {
+              type: "div",
+              props: { style: { display: "flex" }, children: "" },
+            },
         {
           type: "div",
           props: {
-            style: { display: "flex", marginTop: "auto", fontSize: "24px", color: C.muted },
+            style: {
+              display: "flex",
+              marginTop: "auto",
+              fontSize: "24px",
+              color: C.muted,
+            },
             children: "Perps on Phoenix · spot by Jupiter · settled in USDC",
           },
         },
@@ -139,7 +178,9 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
     ],
   });
 
-  const png = new Resvg(svg, { fitTo: { mode: "width", value: W } }).render().asPng();
+  const png = new Resvg(svg, { fitTo: { mode: "width", value: W } })
+    .render()
+    .asPng();
   setHeaders({
     "content-type": "image/png",
     "cache-control": "public, s-maxage=86400, immutable",

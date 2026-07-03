@@ -8,7 +8,9 @@ export default defineConfig(({ mode }) => {
   const deepseekKey = env.DEEPSEEK_API_KEY?.trim();
   const tokensXyzKey = env.TOKENS_XYZ_API_KEY?.trim();
   const discordWebhook = env.DISCORD_WEBHOOK_URL?.trim();
-  const discordPath = discordWebhook ? new URL(discordWebhook).pathname + new URL(discordWebhook).search : "";
+  const discordPath = discordWebhook
+    ? new URL(discordWebhook).pathname + new URL(discordWebhook).search
+    : "";
 
   return {
     envPrefix: ["VITE_", "PUBLIC_", "NEXT_PUBLIC_"],

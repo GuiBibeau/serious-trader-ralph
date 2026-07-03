@@ -10,9 +10,9 @@
 import {
   buildCancelUpToIx,
   buildDepositIxsResolved,
-  createPhoenixClient,
   buildRegisterTraderIx,
   buildWithdrawIxsResolved,
+  createPhoenixClient,
   decodeTrader,
   getEmberStateAddress,
   getEmberVaultAddress,
@@ -23,14 +23,14 @@ import {
   toMaxPositions,
 } from "@ellipsis-labs/rise";
 import {
+  type BlockhashWithExpiryBlockHeight,
   Connection,
   PublicKey,
   TransactionInstruction,
   TransactionMessage,
-  type BlockhashWithExpiryBlockHeight,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { Buffer } from "buffer";
+import { Buffer as BrowserBuffer } from "buffer/";
 import { USDC_MINT } from "./funding";
 import { isRecord } from "./utils";
 
@@ -282,7 +282,7 @@ function apiIxToWeb3(ix: ApiInstruction): TransactionInstruction {
       isSigner: key.isSigner,
       isWritable: key.isWritable,
     })),
-    data: Buffer.from(Uint8Array.from(ix.data)),
+    data: BrowserBuffer.from(Uint8Array.from(ix.data)) as unknown as Buffer,
   });
 }
 
@@ -301,7 +301,7 @@ function kitIxToWeb3(ix: KitInstruction): TransactionInstruction {
       isSigner: account.role >= 2,
       isWritable: account.role === 1 || account.role === 3,
     })),
-    data: Buffer.from(ix.data ?? new Uint8Array()),
+    data: BrowserBuffer.from(ix.data ?? new Uint8Array()) as unknown as Buffer,
   });
 }
 
@@ -407,7 +407,9 @@ export async function activatePhoenixReferral(
         return signTransaction(transaction);
       },
     });
-    const response = await client.api.invite().activateReferralTx(built.request);
+    const response = await client.api
+      .invite()
+      .activateReferralTx(built.request);
     return {
       ok: true,
       message:
