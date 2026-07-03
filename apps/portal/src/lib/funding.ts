@@ -18,7 +18,14 @@ export async function fetchUsdcBalance(
       jsonrpc: "2.0",
       id: "trader-ralph-usdc-balance",
       method: "getTokenAccountsByOwner",
-      params: [owner, { mint: USDC_MINT }, { encoding: "jsonParsed" }],
+      // "processed" surfaces incoming funds about a slot after they land
+      // instead of waiting ~12s for finality — the right trade-off for a
+      // balance display (worst case a rolled-back slot briefly overstates).
+      params: [
+        owner,
+        { mint: USDC_MINT },
+        { encoding: "jsonParsed", commitment: "processed" },
+      ],
     }),
   });
   const payload = (await response.json().catch(() => null)) as unknown;
