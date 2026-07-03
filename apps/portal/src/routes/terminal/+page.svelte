@@ -10,7 +10,6 @@
     aiParseCommand,
     aiScannerSetups,
     aiTradeIdeas,
-    aiTradeRead,
     IDLE_READ,
     type AiRead,
   } from "$lib/ai";
@@ -36,6 +35,7 @@
     DEFAULT_PHOENIX_SYMBOL,
     fetchPhoenixCandles,
     fetchPhoenixInitialMarketData,
+    fetchPhoenixDailyStats,
     fetchPhoenixMarkets,
     getCachedCandles,
     phoenixSource,
@@ -44,6 +44,7 @@
     upsertLiveCandle,
     type DepthLevel,
     type MarketPoint,
+    type PhoenixDailyStat,
     type PhoenixMarketConfig,
     type PhoenixMarketStats,
     type PhoenixTimeframe,
@@ -104,6 +105,7 @@
     buildWithdrawIxs,
     checkPhoenixAccess,
     ensureTraderRegisteredIxs,
+    fetchOnChainCollateralUsd,
     fetchPhoenixTraderState,
     PHOENIX_REFERRAL_CODE,
     type PhoenixPosition,
@@ -184,6 +186,42 @@
   let bids: DepthLevel[] = [];
   let asks: DepthLevel[] = [];
   let trades: TradeTick[] = [];
+  // 24h change/volume for EVERY perp market (palette + monitor); the ws
+  // stream only carries stats for the subscribed market.
+  let dailyStats: Record<string, PhoenixDailyStat> = {};
+
+  async function refreshDailyStats(): Promise<void> {
+    if (markets.length === 0) return;
+    try {
+      dailyStats = await fetchPhoenixDailyStats(
+        markets.map((market) => market.symbol),
+      );
+    } catch {
+      // sweep is best-effort; keep last values
+    }
+  }
+
+  let monitorSort: "volume" | "change" | "symbol" = "volume";
+  $: monitorRows = markets
+    .map((config) => ({
+      symbol: config.symbol,
+      lev: config.maxLeverage,
+      mid: marketMids[config.symbol] ?? dailyStats[config.symbol]?.lastPrice ?? null,
+      change: dailyStats[config.symbol]?.change24hPct ?? null,
+      volume: dailyStats[config.symbol]?.volume24hUsd ?? null,
+    }))
+    .sort((a, b) =>
+      monitorSort === "symbol"
+        ? a.symbol.localeCompare(b.symbol)
+        : monitorSort === "change"
+          ? (b.change ?? -1e9) - (a.change ?? -1e9)
+          : (b.volume ?? -1) - (a.volume ?? -1),
+    );
+
+  function chooseMonitorRow(symbol: string): void {
+    if (tradeMode !== "perps") setTradeMode("perps", false);
+    if (symbol !== selectedSymbol) void switchPhoenixMarket(symbol);
+  }
   let bookVersion = 0;
   let marketSourceLabel = "loading";
   let marketVolume24h: number | null = null;
@@ -253,14 +291,15 @@
   let macroRead: AiRead = IDLE_READ;
   let fundingRead: AiRead = IDLE_READ;
   let scannerRead: AiRead = IDLE_READ;
-  let tradeRead: AiRead = IDLE_READ;
   let tradeLeverage = 2;
   let tradeType: "market" | "limit" = "market";
   let tradeLimitPrice = "";
   let tradeTakeProfit = "";
   let tradeStopLoss = "";
   // Right-rail tab: order book vs inline trade ticket.
-  let bookTab: "book" | "trade" = "book";
+  // Trade is the default right-rail mode — trading is the product; the
+  // book is one tab away. Deep links (?tab=book) still override.
+  let bookTab: "book" | "trade" = "trade";
 
   // Spot venue (tokens.xyz catalog + Jupiter execution).
   let tradeMode: "perps" | "spot" = "perps";
@@ -285,7 +324,6 @@
   let tokenBalances: Record<string, number> = {};
   let pendingTradeMode: "spot" | null = null;
   let pendingSpotAssetId: string | null = null;
-  let commandText = "";
 
   // Watchlist: starred symbols (uppercase), persisted in prefs.
   let watchlist: string[] = [];
@@ -309,9 +347,6 @@
   let triggerWallet = "";
   // Liquidation price lines for open positions on the perp chart.
   let liqLines: IPriceLine[] = [];
-  let commandBusy = false;
-  let commandError = "";
-  let tradeReadTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Intel feeds (Crucix-inspired): event radar, news ticker, sanctions, ideas.
   let news: NewsItem[] = [];
@@ -342,6 +377,7 @@
   // Draggable dashboard: reorderable info panels (chart + book stay anchored).
   const DEFAULT_PANEL_ORDER = [
     "watch",
+    "markets",
     "perp",
     "spot",
     "screener",
@@ -371,10 +407,22 @@
   const MARKETS_MAX_AGE = 24 * 60 * 60_000;
 
   $: selectedMarket = markets.find((market) => market.symbol === selectedSymbol) ?? null;
+  // Funds = everything the user considers theirs: wallet USDC + ALL Phoenix
+  // collateral (free cross margin plus isolated position margin). The
+  // account dropdown row shows the wallet/phoenix split underneath.
+  $: phoenixTotalCollateral =
+    phoenixTrader?.totalCollateralUsd ?? phoenixCollateral;
+  $: totalFundsText =
+    usdcBalanceValue === null
+      ? usdcBalanceText
+      : `${(usdcBalanceValue + phoenixTotalCollateral).toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })} USDC`;
   $: balanceText = walletFundsLabel(
     $privyAuth,
     walletBalanceStatus,
-    usdcBalanceText,
+    totalFundsText,
   );
   $: connectLabel =
     $privyAuth.status === "loading"
@@ -482,6 +530,120 @@
     requiredMarginUsd > 0 &&
     phoenixCollateral + 0.01 < requiredMarginUsd;
 
+  // ── Ambient risk (Bloomberg posture) ───────────────────────────────
+  // The trader API stopped shipping uPnL/liq per position; reconstruct
+  // client-side: uPnL from live mids, liq from the isolated subaccount's
+  // margin with an estimated maintenance ratio (half the initial margin at
+  // max leverage). Labeled "est." wherever rendered.
+  $: enrichedPositions = (phoenixTrader?.positions ?? []).map((position) => {
+    const mark =
+      marketMids[position.symbol] ??
+      (position.symbol === selectedSymbol ? latestPrice : null);
+    const entry = position.entryPrice;
+    const upnl =
+      mark !== null && entry !== null
+        ? (mark - entry) * position.size
+        : position.unrealizedPnl;
+    const config = markets.find((m) => m.symbol === position.symbol);
+    const mmr = config?.maxLeverage ? 0.5 / config.maxLeverage : 0.005;
+    const margin = position.marginUsd;
+    let liq: number | null = position.liquidationPrice;
+    if (entry !== null && margin !== null && position.size !== 0) {
+      const denom = position.size - mmr * Math.abs(position.size);
+      if (denom !== 0) {
+        const estimate = (entry * position.size - margin) / denom;
+        liq = Number.isFinite(estimate) && estimate > 0 ? estimate : null;
+      }
+    }
+    return { ...position, unrealizedPnl: upnl, liquidationPrice: liq };
+  });
+  $: accountUpnlUsd = enrichedPositions.reduce(
+    (sum, position) => sum + (position.unrealizedPnl ?? 0),
+    0,
+  );
+  $: accountEquityUsd = phoenixTotalCollateral + accountUpnlUsd;
+  $: marginInUseUsd = enrichedPositions.reduce(
+    (sum, position) => sum + (position.marginUsd ?? 0),
+    0,
+  );
+  $: marginUsedPct =
+    phoenixTotalCollateral > 0
+      ? (marginInUseUsd / phoenixTotalCollateral) * 100
+      : 0;
+  $: selectedPosition =
+    enrichedPositions.find((position) => position.symbol === selectedSymbol) ??
+    null;
+  $: selectedLiqDistancePct =
+    selectedPosition?.liquidationPrice != null && latestPrice
+      ? (Math.abs(latestPrice - selectedPosition.liquidationPrice) /
+          latestPrice) *
+        100
+      : null;
+
+  // ── TP/SL selection ────────────────────────────────────────────────
+  // Chips quick-set trigger prices relative to the same reference price the
+  // submit validation uses; the inputs stay the source of truth so precise
+  // hand-entry still works. Wrong-side values are flagged as you type
+  // instead of failing at submit.
+  const TP_CHIP_PCTS = [2, 5, 10];
+  const SL_CHIP_PCTS = [1, 2, 5];
+  $: triggerRefPrice =
+    tradeType === "limit" && Number(tradeLimitPrice) > 0
+      ? Number(tradeLimitPrice)
+      : (tradePreview?.entry ?? latestPrice) || null;
+  $: tpValue = Number(tradeTakeProfit);
+  $: slValue = Number(tradeStopLoss);
+  $: tpSet = Number.isFinite(tpValue) && tpValue > 0;
+  $: slSet = Number.isFinite(slValue) && slValue > 0;
+  $: tpWrongSide =
+    tpSet && triggerRefPrice !== null
+      ? tradeSide === "buy"
+        ? tpValue <= triggerRefPrice
+        : tpValue >= triggerRefPrice
+      : false;
+  $: slWrongSide =
+    slSet && triggerRefPrice !== null
+      ? tradeSide === "buy"
+        ? slValue >= triggerRefPrice
+        : slValue <= triggerRefPrice
+      : false;
+  $: tpPct =
+    tpSet && triggerRefPrice
+      ? ((tpValue - triggerRefPrice) / triggerRefPrice) * 100
+      : null;
+  $: slPct =
+    slSet && triggerRefPrice
+      ? ((slValue - triggerRefPrice) / triggerRefPrice) * 100
+      : null;
+  $: tpPnlUsd =
+    tpPct !== null && tradePreview
+      ? tradePreview.notionalUsd * (tpPct / 100) * (tradeSide === "buy" ? 1 : -1)
+      : null;
+  $: slPnlUsd =
+    slPct !== null && tradePreview
+      ? tradePreview.notionalUsd * (slPct / 100) * (tradeSide === "buy" ? 1 : -1)
+      : null;
+
+  // Plain Number()-parseable price string, precision scaled to magnitude.
+  function fmtTriggerPrice(value: number): string {
+    if (value >= 1000) return value.toFixed(1);
+    if (value >= 10) return value.toFixed(2);
+    if (value >= 1) return value.toFixed(3);
+    return value.toFixed(5);
+  }
+
+  function setTakeProfitPct(pct: number): void {
+    if (!triggerRefPrice) return;
+    const factor = tradeSide === "buy" ? 1 + pct / 100 : 1 - pct / 100;
+    tradeTakeProfit = fmtTriggerPrice(triggerRefPrice * factor);
+  }
+
+  function setStopLossPct(pct: number): void {
+    if (!triggerRefPrice) return;
+    const factor = tradeSide === "buy" ? 1 - pct / 100 : 1 + pct / 100;
+    tradeStopLoss = fmtTriggerPrice(triggerRefPrice * factor);
+  }
+
   // ── Cross-venue twins: basis between the perp and its spot token ──
   $: spotTwin =
     spotAssets.find((asset) => asset.symbol.toUpperCase() === selectedSymbol) ?? null;
@@ -569,7 +731,7 @@
   }
 
   // Liq lines re-render when positions, market, or chart mode change.
-  $: refreshLiqLines(phoenixTrader?.positions ?? [], selectedSymbol, tradeMode);
+  $: refreshLiqLines(enrichedPositions, selectedSymbol, tradeMode);
 
   // Spot limit orders follow the connected wallet.
   $: if ($privyAuth.walletAddress !== triggerWallet) {
@@ -579,11 +741,9 @@
 
   // Stable key: deliberately excludes live price so the desk read doesn't
   // re-run (and re-flow) on every tick while the ticket is open.
-  $: tradeReadKey =
-    ticketActive && tradePreview
-      ? `${selectedSymbol}|${tradeSide}|${tradeType}|${Math.round(tradePreview.notionalUsd)}|${tradeLeverage}`
-      : "";
-  $: if (tradeReadKey) scheduleTradeRead();
+  // Desk read removed from the ticket (2026-07-02): no per-keystroke AI
+  // calls for a line that no longer renders. AiReadLine still serves the
+  // other panels (funding, brief, events, ideas, scanner, recap).
   $: if (prefsReady)
     persistPrefs(
       selectedSymbol,
@@ -630,7 +790,9 @@
         void refreshEdgeModules();
       }, 60_000),
       window.setInterval(() => {
-        if (walletBalanceAddress) void refreshWalletBalance(walletBalanceAddress);
+        if (walletBalanceAddress) {
+          void refreshWalletBalance(walletBalanceAddress, { quiet: true });
+        }
       }, 30_000),
       window.setInterval(() => {
         void refreshAiReads();
@@ -638,6 +800,12 @@
       window.setInterval(() => {
         if (phoenixAuthority) void refreshPhoenixTrader();
       }, 12_000),
+      window.setInterval(() => {
+        void refreshDailyStats();
+      }, 60_000),
+      window.setInterval(() => {
+        void probeRpc();
+      }, 15_000),
     ];
     const onVisible = () => {
       if (document.visibilityState === "visible") {
@@ -651,8 +819,8 @@
       window.cancelAnimationFrame(bookFrame);
       document.removeEventListener("visibilitychange", onVisible);
       for (const timer of timers) window.clearInterval(timer);
+      if (fundsPollTimer !== null) window.clearInterval(fundsPollTimer);
       if (copyResetTimer) clearTimeout(copyResetTimer);
-      if (tradeReadTimer) clearTimeout(tradeReadTimer);
       if (swapQuoteTimer) clearTimeout(swapQuoteTimer);
       if (spotQuoteTimer) clearTimeout(spotQuoteTimer);
       if (spotChartTimer) clearInterval(spotChartTimer);
@@ -686,6 +854,8 @@
     streamHealth = "connecting";
     try {
       markets = await fetchPhoenixMarkets();
+      void refreshDailyStats();
+      void probeRpc();
       const defaultMarket =
         markets.find((market) => market.symbol === selectedSymbol) ??
         markets.find((market) => market.symbol === DEFAULT_PHOENIX_SYMBOL) ??
@@ -909,7 +1079,7 @@
     }));
     eventRead = { phase: "loading", text: eventRead.text };
     try {
-      eventRead = { phase: "ready", text: await aiEventRead(headlines) };
+      eventRead = { phase: "ready", asOf: Date.now(), text: await aiEventRead(headlines) };
     } catch (error) {
       eventRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -930,7 +1100,7 @@
     };
     ideasRead = { phase: "loading", text: ideasRead.text };
     try {
-      ideasRead = { phase: "ready", text: await aiTradeIdeas(snapshot) };
+      ideasRead = { phase: "ready", asOf: Date.now(), text: await aiTradeIdeas(snapshot) };
     } catch (error) {
       ideasRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -1007,6 +1177,26 @@
     saveAlerts();
   }
 
+  // News coded to the tape: filter the headline panel to the active
+  // market (toggleable), and track last-hour headline velocity for it.
+  let newsLinked = true;
+  $: activeNewsSymbol =
+    tradeMode === "spot" ? (spotAsset?.symbol ?? null) : selectedSymbol;
+  function headlineMatches(title: string, symbol: string): boolean {
+    return title.toUpperCase().includes(symbol.toUpperCase());
+  }
+  $: linkedNews =
+    newsLinked && activeNewsSymbol
+      ? news.filter((item) => headlineMatches(item.title, activeNewsSymbol))
+      : news;
+  $: headlineVelocity = activeNewsSymbol
+    ? news.filter(
+        (item) =>
+          headlineMatches(item.title, activeNewsSymbol) &&
+          nowMs - item.seenMs < 3_600_000,
+      ).length
+    : 0;
+
   function checkAlerts(price: number | null): void {
     if (price === null || alerts.length === 0) return;
     let changed = false;
@@ -1029,7 +1219,44 @@
     }
   }
 
+  // Fired alerts become a persistent, timestamped log plus toasts —
+  // Bloomberg's message-pane pattern in miniature.
+  type FiredAlert = { ts: number; title: string; body: string };
+  const ALERT_LOG_KEY = "trader-ralph-alert-log";
+  let alertLog: FiredAlert[] = [];
+  let toasts: (FiredAlert & { toastId: number })[] = [];
+  let toastSeq = 0;
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(ALERT_LOG_KEY);
+      const parsed = raw ? (JSON.parse(raw) as FiredAlert[]) : [];
+      if (Array.isArray(parsed)) alertLog = parsed.slice(0, 50);
+    } catch {
+      // storage unavailable — start empty
+    }
+  }
+
+  function pushToast(entry: FiredAlert): void {
+    const toastId = ++toastSeq;
+    toasts = [...toasts, { ...entry, toastId }];
+    window.setTimeout(() => {
+      toasts = toasts.filter((toast) => toast.toastId !== toastId);
+    }, 6_000);
+  }
+
+  function recordFiredAlert(title: string, body: string): void {
+    const entry: FiredAlert = { ts: Date.now(), title, body };
+    alertLog = [entry, ...alertLog].slice(0, 50);
+    try {
+      window.localStorage.setItem(ALERT_LOG_KEY, JSON.stringify(alertLog));
+    } catch {
+      // non-fatal
+    }
+    pushToast(entry);
+  }
+
   async function fireAlert(title: string, body: string): Promise<void> {
+    recordFiredAlert(title, body);
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
       try {
         new Notification(title, { body });
@@ -1250,7 +1477,7 @@
     };
     macroRead = { phase: "loading", text: macroRead.text };
     try {
-      macroRead = { phase: "ready", text: await aiMacroRead(snapshot) };
+      macroRead = { phase: "ready", asOf: Date.now(), text: await aiMacroRead(snapshot) };
     } catch (error) {
       macroRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -1269,7 +1496,7 @@
     };
     fundingRead = { phase: "loading", text: fundingRead.text };
     try {
-      fundingRead = { phase: "ready", text: await aiFundingRead(snapshot) };
+      fundingRead = { phase: "ready", asOf: Date.now(), text: await aiFundingRead(snapshot) };
     } catch (error) {
       fundingRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -1287,38 +1514,9 @@
     };
     scannerRead = { phase: "loading", text: scannerRead.text };
     try {
-      scannerRead = { phase: "ready", text: await aiScannerSetups(snapshot) };
+      scannerRead = { phase: "ready", asOf: Date.now(), text: await aiScannerSetups(snapshot) };
     } catch (error) {
       scannerRead = { phase: "error", text: "", error: aiErr(error) };
-    }
-  }
-
-  function scheduleTradeRead(): void {
-    if (aiDisabled() || !ticketActive) return;
-    if (tradeReadTimer) clearTimeout(tradeReadTimer);
-    tradeReadTimer = setTimeout(() => void runTradeRead(), 500);
-  }
-
-  async function runTradeRead(): Promise<void> {
-    if (!tradePreview) return;
-    const snapshot = {
-      symbol: selectedSymbol,
-      side: tradeSide,
-      orderType: tradeType,
-      notionalUsd: tradePreview.notionalUsd,
-      leverage: tradeLeverage,
-      estEntry: tradePreview.entry,
-      slippageBps: tradePreview.slippageBps,
-      spreadBps: Number.isFinite(spreadBps) ? Math.round(spreadBps * 10) / 10 : null,
-      fundingPct8h: fundingPercent,
-      estLiqPrice: tradePreview.liqPrice,
-      bookFillable: tradePreview.fillable,
-    };
-    tradeRead = { phase: "loading", text: tradeRead.text };
-    try {
-      tradeRead = { phase: "ready", text: await aiTradeRead(snapshot) };
-    } catch (error) {
-      tradeRead = { phase: "error", text: "", error: aiErr(error) };
     }
   }
 
@@ -1375,15 +1573,14 @@
     return { notionalUsd, entry, slippageBps, liqPrice, fundingPer8hUsd, fillable };
   }
 
-  async function submitCommand(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
-    const text = commandText.trim();
-    if (!text || commandBusy) return;
-    commandBusy = true;
-    commandError = "";
+  // Headless command parse — the visible "Parse" field is gone, but the
+  // ?cmd= deep link (distribution surface contract) still lands orders by
+  // filling the ticket. Failures fall back to the default ticket silently.
+  async function runCommand(text: string): Promise<void> {
+    if (!text.trim()) return;
     try {
       const intent = await aiParseCommand(
-        text,
+        text.trim(),
         markets.map((market) => market.symbol),
       );
       if (intent.symbol && intent.symbol !== selectedSymbol) {
@@ -1407,12 +1604,8 @@
         }
       }
       tradeOpen = true;
-      commandText = "";
-      scheduleTradeRead();
-    } catch (error) {
-      commandError = aiErr(error);
-    } finally {
-      commandBusy = false;
+    } catch {
+      // Deep-link parse failure: leave the default ticket in place.
     }
   }
 
@@ -1449,6 +1642,7 @@
 
   async function refreshWalletBalance(
     address = walletBalanceAddress,
+    opts: { quiet?: boolean } = {},
   ): Promise<void> {
     const wallet = address.trim();
     if (!wallet) {
@@ -1458,7 +1652,8 @@
       walletBalanceError = "";
       return;
     }
-    walletBalanceStatus = "loading";
+    // Background polls stay quiet so the Refresh control doesn't strobe.
+    if (!opts.quiet) walletBalanceStatus = "loading";
     walletBalanceError = "";
     try {
       const [lamports, usdc] = await Promise.all([
@@ -1481,6 +1676,65 @@
     }
   }
 
+  // Fast-poll balances while the funding modal is open: an incoming deposit
+  // should appear in seconds (processed commitment + 4s cadence), not on the
+  // 30s background tick. Timer is cleared on close and on unmount.
+  let fundsPollTimer: number | null = null;
+  $: if (fundsOpen && walletBalanceAddress) {
+    if (fundsPollTimer === null) {
+      void refreshWalletBalance(walletBalanceAddress, { quiet: true });
+      fundsPollTimer = window.setInterval(() => {
+        if (walletBalanceAddress) {
+          void refreshWalletBalance(walletBalanceAddress, { quiet: true });
+        }
+      }, 4_000);
+    }
+  } else if (fundsPollTimer !== null) {
+    window.clearInterval(fundsPollTimer);
+    fundsPollTimer = null;
+  }
+
+  // Provenance: RPC round-trip + chain tip, compared with the Phoenix
+  // indexer's snapshot slot — divergence is shown, not hidden.
+  let rpcLatencyMs: number | null = null;
+  let chainSlot: number | null = null;
+  $: apiSlotLag =
+    chainSlot !== null && phoenixTrader?.apiSlot != null
+      ? Math.max(0, chainSlot - phoenixTrader.apiSlot)
+      : null;
+
+  async function probeRpc(): Promise<void> {
+    const started = performance.now();
+    try {
+      const response = await fetch(solanaRpcUrl(), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "slot", method: "getSlot" }),
+      });
+      const payload = (await response.json()) as { result?: number };
+      rpcLatencyMs = Math.round(performance.now() - started);
+      if (typeof payload.result === "number") chainSlot = payload.result;
+    } catch {
+      rpcLatencyMs = null;
+    }
+  }
+
+  // Session state for the selected market from its exchange calendar.
+  $: sessionNote = (() => {
+    if (tradeMode === "spot") return "24/7 · Jupiter";
+    const next = selectedMarket?.nextTransitionUtc;
+    if (!next) return "24/7";
+    const ms = Date.parse(next) - nowMs;
+    if (!Number.isFinite(ms)) return "24/7";
+    const hours = Math.floor(Math.abs(ms) / 3_600_000);
+    const minutes = Math.floor((Math.abs(ms) % 3_600_000) / 60_000);
+    const span = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+    if (ms <= 0) return "session transition due";
+    return selectedMarket?.marketStatus === "active"
+      ? `closes ${span}`
+      : `opens ${span}`;
+  })();
+
   function humanizeBalanceError(raw: string): string {
     if (/-40[13]$/.test(raw) || /forbidden/i.test(raw)) {
       return "RPC blocked the request. Set PUBLIC_SOLANA_RPC_URL to a browser-accessible endpoint.";
@@ -1498,7 +1752,10 @@
         jsonrpc: "2.0",
         id: "trader-ralph-wallet-balance",
         method: "getBalance",
-        params: [address],
+        // "processed" over the default "finalized": received SOL shows in
+        // about a slot instead of ~12s. Display-only, so the tiny rollback
+        // window is acceptable.
+        params: [address, { commitment: "processed" }],
       }),
     });
     const payload = (await response.json().catch(() => null)) as unknown;
@@ -1551,32 +1808,31 @@
       sigVerify: false,
     });
     if (simulation.value.err) {
+      // Program logs carry the actual failure reason — the err object alone
+      // is an opaque {"InstructionError":[n,{"Custom":x}]}. Keep the full
+      // logs in the console and append the most telling line to the message.
+      const logs = simulation.value.logs ?? [];
+      console.error("phoenix simulation failed", simulation.value.err, logs);
+      const reason = [...logs]
+        .reverse()
+        .find((line) => /error|failed|insufficient|invalid/i.test(line));
       throw new Error(
-        `simulation-failed-${JSON.stringify(simulation.value.err)}`,
+        `simulation-failed-${JSON.stringify(simulation.value.err)}${reason ? ` — ${reason.replace(/^Program log:\s*/, "")}` : ""}`,
       );
     }
 
-    const feePayer =
-      summary.feePayer ??
-      transaction.message.staticAccountKeys[0]?.toBase58() ??
-      "unknown";
-    const programs = summary.programs?.length
-      ? summary.programs.join(", ")
-      : "transaction-built route";
-    const ok = window.confirm(
-      [
-        summary.title,
-        "",
-        ...summary.details,
-        `Fee payer: ${feePayer}`,
-        `Cluster: Solana mainnet`,
-        `Programs: ${programs}`,
-        `Simulation: passed${simulation.value.unitsConsumed ? ` (${simulation.value.unitsConsumed} CU)` : ""}`,
-        "",
-        "Continue to wallet signature?",
-      ].join("\n"),
+    // Auto-sign: the button click is the consent — no blocking native
+    // confirm in a fast-paced trading UI (ratified 2026-07-02). The
+    // simulation above remains the safety gate (failing transactions never
+    // reach the wallet); the summary goes to the console as an audit trail.
+    console.info(
+      "phoenix tx",
+      summary.title,
+      summary.details.join(" · "),
+      `fee payer: ${summary.feePayer ?? transaction.message.staticAccountKeys[0]?.toBase58() ?? "unknown"}`,
+      `programs: ${summary.programs?.join(", ") ?? "transaction-built route"}`,
+      `simulated: ${simulation.value.unitsConsumed ?? "?"} CU`,
     );
-    if (!ok) throw new Error("signature-cancelled");
 
     statusMessage = "awaiting-wallet-signature";
     const signature = await signAndSendSolanaTransaction(
@@ -1973,7 +2229,19 @@
   async function refreshPhoenixTrader(): Promise<void> {
     if (!phoenixAuthority) return;
     try {
-      phoenixTrader = await fetchPhoenixTraderState(phoenixAuthority);
+      // API supplies positions/orders; the chain supplies collateral. The
+      // trader PDA reflects a deposit the moment it confirms, while the
+      // Phoenix indexer lags — without the overlay, "Deposit first" kept
+      // showing after a successful deposit.
+      const [state, chainCollateralUsd] = await Promise.all([
+        fetchPhoenixTraderState(phoenixAuthority),
+        fetchOnChainCollateralUsd(solanaRpcUrl(), phoenixAuthority),
+      ]);
+      if (chainCollateralUsd !== null) {
+        state.registered = true;
+        state.collateralUsd = chainCollateralUsd;
+      }
+      phoenixTrader = state;
     } catch {
       // transient API hiccup — keep last state
     }
@@ -2036,6 +2304,7 @@
         if (!valid) throw new Error(`Stop loss must be ${side === "bid" ? "below" : "above"} entry`);
       }
       const registerIxs = await ensureTraderRegisteredIxs(
+        solanaRpcUrl(),
         phoenixAuthority,
         phoenixTrader?.registered ?? false,
       );
@@ -2180,6 +2449,7 @@
     collateralSignature = "";
     try {
       const registerIxs = await ensureTraderRegisteredIxs(
+        solanaRpcUrl(),
         phoenixAuthority,
         phoenixTrader?.registered ?? false,
       );
@@ -2351,6 +2621,24 @@
     if (!chartContainer || lwChart) return;
     lwChart = createChart(chartContainer, {
       autoSize: true,
+      // Direct manipulation, stated explicitly rather than left to library
+      // defaults: drag to pan, wheel/pinch to zoom, drag an axis to scale
+      // it, double-click an axis to reset. Vertical touch-drag stays off so
+      // the chart never hijacks page scrolling; kinetic momentum is
+      // touch-only (mouse panning should stop where you stop).
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: { time: true, price: true },
+        axisDoubleClickReset: { time: true, price: true },
+      },
+      kineticScroll: { mouse: false, touch: true },
       layout: {
         background: { type: ColorType.Solid, color: colors.chartBg },
         textColor: colors.muted,
@@ -2400,6 +2688,63 @@
       scaleMargins: { top: 0.82, bottom: 0 },
     });
     applyPriceScaleMode(chartPriceScaleMode);
+    // Hand cursor: the pan affordance is visible before you try it, and the
+    // grip closes while dragging. The library's own axis-resize cursors
+    // still win on the price/time scales.
+    const container = chartContainer;
+    container.style.cursor = "grab";
+    // Vertical panning: the library ignores the vertical drag component
+    // while the price scale autoscales. First clear vertical intent in a
+    // press switches autoscale off so the price axis follows the hand;
+    // FIT or a double-click on the price axis re-arms auto-fit.
+    let pressPoint: { x: number; y: number } | null = null;
+    container.addEventListener("mousedown", (event) => {
+      container.style.cursor = "grabbing";
+      pressPoint = { x: event.clientX, y: event.clientY };
+    });
+    container.addEventListener("mousemove", (event) => {
+      if (!pressPoint || event.buttons !== 1) return;
+      const dx = Math.abs(event.clientX - pressPoint.x);
+      const dy = Math.abs(event.clientY - pressPoint.y);
+      if (dy > 4 && dy > dx) {
+        lwChart?.priceScale("right").applyOptions({ autoScale: false });
+        pressPoint = null;
+      }
+    });
+    container.addEventListener("mouseup", () => {
+      container.style.cursor = "grab";
+      pressPoint = null;
+    });
+    container.addEventListener("mouseleave", () => {
+      container.style.cursor = "grab";
+      pressPoint = null;
+    });
+    // Alt+click sets a price alert at the cursor — drag infra's cousin.
+    container.addEventListener("click", (event) => {
+      if (!event.altKey || !candleSeries || tradeMode !== "perps") return;
+      const rect = container.getBoundingClientRect();
+      const raw = candleSeries.coordinateToPrice(event.clientY - rect.top);
+      const price = Number(raw);
+      if (!Number.isFinite(price) || price <= 0) return;
+      const op = latestPrice !== null && price < latestPrice ? "below" : "above";
+      alerts = [
+        ...alerts,
+        {
+          id: `${selectedSymbol}-${op}-${price}-${alerts.length}`,
+          symbol: selectedSymbol,
+          op,
+          price,
+          tier: "ROUTINE",
+          triggered: false,
+        },
+      ];
+      saveAlerts();
+      pushToast({
+        ts: Date.now(),
+        title: `Alert set · ${selectedSymbol}-PERP`,
+        body: `${op} ${formatPrice(price)}`,
+      });
+    });
     lwChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
       const points = tradeMode === "spot" ? spotChartPoints : chartPoints;
@@ -2409,7 +2754,7 @@
     setChartData();
     // Series was just (re)created — re-draw liq lines for open positions.
     liqLines = [];
-    refreshLiqLines(phoenixTrader?.positions ?? [], selectedSymbol, tradeMode);
+    refreshLiqLines(enrichedPositions, selectedSymbol, tradeMode);
   }
 
   function renderChartSeries(points: MarketPoint[]): void {
@@ -2500,6 +2845,8 @@
 
   function resetChartView(): void {
     visibleCandleCount = DEFAULT_VISIBLE_CANDLES;
+    // FIT also re-arms price auto-fit after a manual vertical pan.
+    lwChart?.priceScale("right").applyOptions({ autoScale: true });
     lwChart?.timeScale().fitContent();
   }
 
@@ -2860,8 +3207,8 @@
 
     const cmd = str("cmd");
     if (cmd) {
-      commandText = cmd.slice(0, 200);
-      bookTab = "trade"; // the command bar lives in the ticket
+      bookTab = "trade";
+      void runCommand(cmd.slice(0, 200)); // parses straight into the ticket
     }
 
     // Overlays — at most one (funds > ticket > alerts), modals never stack.
@@ -2967,7 +3314,7 @@
     };
     briefRead = { phase: "loading", text: briefRead.text };
     try {
-      briefRead = { phase: "ready", text: await aiPositionBrief(snapshot) };
+      briefRead = { phase: "ready", asOf: Date.now(), text: await aiPositionBrief(snapshot) };
     } catch (error) {
       briefRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -2987,7 +3334,7 @@
     };
     recapRead = { phase: "loading", text: recapRead.text };
     try {
-      recapRead = { phase: "ready", text: await aiSessionRecap(snapshot) };
+      recapRead = { phase: "ready", asOf: Date.now(), text: await aiSessionRecap(snapshot) };
     } catch (error) {
       recapRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -3221,6 +3568,172 @@
     if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  // ── Market palette — the "/" picker for every tradable market ──────
+  // One primitive for both venues: perp markets (live mids) and the spot
+  // catalog (full 24h stats). Selecting a row switches venue if needed.
+  type PaletteRow = {
+    kind: "perp" | "spot";
+    key: string;
+    symbol: string;
+    name: string;
+    imageUrl: string | null;
+    lev: number | null;
+    price: number | null;
+    change24hPct: number | null;
+    volumeUsd: number | null;
+    hub: "perps" | "crypto" | "equities" | "pre-ipo";
+    asset?: SpotAsset;
+  };
+  type PaletteTab = "all" | "perps" | "crypto" | "equities" | "pre-ipo";
+  const PALETTE_TABS: { key: PaletteTab; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "perps", label: "Perps" },
+    { key: "crypto", label: "Crypto" },
+    { key: "equities", label: "Equities" },
+    { key: "pre-ipo", label: "Pre-IPO" },
+  ];
+  let paletteOpen = false;
+  let paletteQuery = "";
+  let paletteTab: PaletteTab = "all";
+  let paletteIndex = 0;
+  let paletteInput: HTMLInputElement | null = null;
+  let paletteList: HTMLDivElement | null = null;
+
+  function buildPaletteRows(
+    perpMarkets: PhoenixMarketConfig[],
+    assets: SpotAsset[],
+    mids: Record<string, number>,
+    stats: Record<string, PhoenixDailyStat>,
+    query: string,
+    tab: PaletteTab,
+  ): PaletteRow[] {
+    const perps: PaletteRow[] = perpMarkets.map((market) => ({
+      kind: "perp",
+      key: `perp:${market.symbol}`,
+      symbol: market.symbol,
+      name: `${market.symbol}-PERP`,
+      imageUrl: null,
+      lev: market.maxLeverage,
+      price: mids[market.symbol] ?? stats[market.symbol]?.lastPrice ?? null,
+      change24hPct: stats[market.symbol]?.change24hPct ?? null,
+      volumeUsd: stats[market.symbol]?.volume24hUsd ?? null,
+      hub: "perps",
+    }));
+    const spots: PaletteRow[] = assets.map((asset) => ({
+      kind: "spot",
+      key: `spot:${asset.assetId}`,
+      symbol: asset.symbol,
+      name: asset.name,
+      imageUrl: asset.imageUrl || null,
+      lev: null,
+      price: asset.price,
+      change24hPct: asset.change24hPct,
+      volumeUsd: asset.volume24hUsd,
+      hub: asset.hub,
+    }));
+    for (const [index, asset] of assets.entries()) spots[index].asset = asset;
+    spots.sort((a, b) => (b.volumeUsd ?? -1) - (a.volumeUsd ?? -1));
+    // Perps lead — this is a perp terminal first; spot follows by volume.
+    let rows =
+      tab === "perps"
+        ? perps
+        : tab === "all"
+          ? [...perps, ...spots]
+          : spots.filter((row) => row.hub === tab);
+    const q = query.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter(
+        (row) =>
+          row.symbol.toLowerCase().includes(q) ||
+          row.name.toLowerCase().includes(q),
+      );
+    }
+    return rows.slice(0, 80);
+  }
+
+  $: paletteRows = buildPaletteRows(
+    markets,
+    spotAssets,
+    marketMids,
+    dailyStats,
+    paletteQuery,
+    paletteTab,
+  );
+  $: if (paletteIndex >= paletteRows.length) {
+    paletteIndex = Math.max(0, paletteRows.length - 1);
+  }
+
+  function openPalette(): void {
+    paletteOpen = true;
+    paletteQuery = "";
+    paletteTab = "all";
+    paletteIndex = 0;
+    void tick().then(() => paletteInput?.focus());
+  }
+
+  function choosePalette(row: PaletteRow): void {
+    if (row.kind === "perp") {
+      if (tradeMode !== "perps") setTradeMode("perps", false);
+      if (row.symbol !== selectedSymbol) void switchPhoenixMarket(row.symbol);
+    } else if (row.asset) {
+      if (tradeMode !== "spot") setTradeMode("spot", false);
+      selectSpotAsset(row.asset);
+    }
+    paletteOpen = false;
+  }
+
+  function scrollPaletteRowIntoView(): void {
+    void tick().then(() =>
+      paletteList?.children[paletteIndex]?.scrollIntoView({ block: "nearest" }),
+    );
+  }
+
+  function onPaletteKeydown(event: KeyboardEvent): void {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      paletteIndex = Math.min(paletteIndex + 1, paletteRows.length - 1);
+      scrollPaletteRowIntoView();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      paletteIndex = Math.max(paletteIndex - 1, 0);
+      scrollPaletteRowIntoView();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const row = paletteRows[paletteIndex];
+      if (row) choosePalette(row);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      paletteOpen = false;
+    }
+  }
+
+  let cheatOpen = false;
+
+  function cycleWatchlist(direction: number): void {
+    if (watchlist.length === 0) return;
+    const current =
+      tradeMode === "spot" ? (spotAsset?.symbol ?? "") : selectedSymbol;
+    const index = watchlist.indexOf(current.toUpperCase());
+    const next =
+      watchlist[
+        (index + direction + watchlist.length) % watchlist.length
+      ];
+    if (!next || next === current.toUpperCase()) return;
+    const perp = markets.find((market) => market.symbol === next);
+    if (perp) {
+      if (tradeMode !== "perps") setTradeMode("perps", false);
+      void switchPhoenixMarket(next);
+      return;
+    }
+    const asset = spotAssets.find(
+      (candidate) => candidate.symbol.toUpperCase() === next,
+    );
+    if (asset) {
+      if (tradeMode !== "spot") setTradeMode("spot", false);
+      selectSpotAsset(asset);
+    }
+  }
+
   function onGlobalKeydown(event: KeyboardEvent): void {
     closeAccountMenuOnKey(event);
     if (event.key === "Escape") {
@@ -3228,6 +3741,8 @@
       if (authOpen) authOpen = false;
       if (alertsOpen) alertsOpen = false;
       if (fundsOpen) fundsOpen = false;
+      if (paletteOpen) paletteOpen = false;
+      if (cheatOpen) cheatOpen = false;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target;
@@ -3238,7 +3753,19 @@
     ) {
       return;
     }
-    if (authOpen || tradeOpen || alertsOpen || fundsOpen) return;
+    if (authOpen || tradeOpen || alertsOpen || fundsOpen || paletteOpen) {
+      return;
+    }
+    if (event.key === "/") {
+      event.preventDefault();
+      openPalette();
+      return;
+    }
+    if (event.key === "?") {
+      event.preventDefault();
+      cheatOpen = true;
+      return;
+    }
     const tfIndex = PHOENIX_TIMEFRAMES.indexOf(selectedTimeframe);
     switch (event.key.toLowerCase()) {
       case "b":
@@ -3262,6 +3789,12 @@
         break;
       case "f":
         resetChartView();
+        break;
+      case ",":
+        cycleWatchlist(-1);
+        break;
+      case ".":
+        cycleWatchlist(1);
         break;
       case "[":
         if (tfIndex > 0) onTimeframeChange(PHOENIX_TIMEFRAMES[tfIndex - 1]);
@@ -3378,12 +3911,22 @@
 
               <div class="account-row">
                 <span class="account-row-label">Funds</span>
-                <span class="account-row-value mono">{balanceText}</span>
+                <span class="account-row-value mono">
+                  {balanceText}
+                  {#if phoenixTotalCollateral > 0 && usdcBalanceValue !== null}
+                    <small class="funds-split">
+                      {formatNumber(usdcBalanceValue, 2)} wallet · {formatNumber(phoenixTotalCollateral, 2)} phoenix
+                    </small>
+                  {/if}
+                </span>
                 <button
                   class="row-action"
                   type="button"
                   disabled={!$privyAuth.walletAddress || walletBalanceStatus === "loading"}
-                  onclick={() => refreshWalletBalance()}
+                  onclick={() => {
+                    void refreshWalletBalance();
+                    void refreshPhoenixTrader();
+                  }}
                 >
                   {walletBalanceStatus === "loading" ? "…" : "Refresh"}
                 </button>
@@ -3451,7 +3994,10 @@
           aria-label="Toggle watchlist"
           onclick={() => spotAsset && toggleWatch(spotAsset.symbol)}
         >{watchlist.includes(spotAsset.symbol.toUpperCase()) ? "★" : "☆"}</button>
-        <strong>{spotAsset.symbol}</strong>
+        <button class="ticker-market" type="button" onclick={openPalette} title="Change market — press /">
+          <strong>{spotAsset.symbol}</strong>
+          <span class="ticker-caret" aria-hidden="true">▾</span>
+        </button>
         <span class="ticker-health">spot</span>
       </div>
       <div class="ticker-price">
@@ -3493,7 +4039,10 @@
           aria-label="Toggle watchlist"
           onclick={() => toggleWatch(selectedSymbol)}
         >{watchlist.includes(selectedSymbol) ? "★" : "☆"}</button>
-        <strong>{selectedSymbol}-PERP</strong>
+        <button class="ticker-market" type="button" onclick={openPalette} title="Change market — press /">
+          <strong>{selectedSymbol}-PERP</strong>
+          <span class="ticker-caret" aria-hidden="true">▾</span>
+        </button>
         <span class="ticker-health">{streamHealth}</span>
       </div>
       <div class="ticker-price">
@@ -3587,7 +4136,11 @@
         </div>
 
         <div class="chart-market-tools">
-          <div class="price-mode-toggle venue-toggle" aria-label="Trading mode">
+          <div
+            class="price-mode-toggle venue-toggle"
+            class:spot={tradeMode === "spot"}
+            aria-label="Trading mode"
+          >
             <button
               class:active={tradeMode === "perps"}
               type="button"
@@ -3603,41 +4156,23 @@
               Spot
             </button>
           </div>
-          {#if tradeMode === "perps"}
-            <select
-              class="market-select"
-              value={selectedSymbol}
-              onchange={(event) =>
-                onMarketChange((event.currentTarget as HTMLSelectElement).value)}
-            >
-              {#each markets as market}
-                <option value={market.symbol}>
-                  {market.symbol}-PERP · {market.marketStatus}
-                </option>
+          <button
+            class="market-select market-open"
+            type="button"
+            onclick={openPalette}
+            title="Change market — press /"
+          >
+            <span class="market-open-label">
+              {#if tradeMode === "perps"}
+                {selectedSymbol}-PERP · {selectedMarket?.marketStatus ?? "active"}
+              {:else if spotAsset}
+                {spotAsset.symbol} · {spotAsset.name}
               {:else}
-                <option value={selectedSymbol}>{selectedSymbol}-PERP</option>
-              {/each}
-            </select>
-          {:else}
-            <select
-              class="market-select"
-              value={spotAsset?.assetId ?? ""}
-              onchange={(event) => {
-                const next = spotAssets.find(
-                  (asset) =>
-                    asset.assetId ===
-                    (event.currentTarget as HTMLSelectElement).value,
-                );
-                if (next) selectSpotAsset(next);
-              }}
-            >
-              {#each spotAssets.slice(0, 100) as asset}
-                <option value={asset.assetId}>{asset.symbol} · {asset.name}</option>
-              {:else}
-                <option value="">Loading spot assets…</option>
-              {/each}
-            </select>
-          {/if}
+                Select market…
+              {/if}
+            </span>
+            <span class="market-open-hint" aria-hidden="true">/</span>
+          </button>
         </div>
 
         {#if tradeMode === "perps"}
@@ -3776,16 +4311,7 @@
     </section>
 
     <section id="section-book" class="panel orderbook-panel">
-      <div class="book-tabs" role="tablist" aria-label="Order book and trade">
-        <button
-          role="tab"
-          aria-selected={bookTab === "book"}
-          class:active={bookTab === "book"}
-          type="button"
-          onclick={() => (bookTab = "book")}
-        >
-          Order Book
-        </button>
+      <div class="book-tabs" role="tablist" aria-label="Trade and order book">
         <button
           role="tab"
           aria-selected={bookTab === "trade"}
@@ -3794,6 +4320,15 @@
           onclick={() => (bookTab = "trade")}
         >
           Trade
+        </button>
+        <button
+          role="tab"
+          aria-selected={bookTab === "book"}
+          class:active={bookTab === "book"}
+          type="button"
+          onclick={() => (bookTab = "book")}
+        >
+          Order Book
         </button>
       </div>
 
@@ -3856,6 +4391,20 @@
             <div class="empty">No live order book levels loaded.</div>
           {/each}
         </div>
+
+        <!-- Time & sales: the prints are the heartbeat. -->
+        <div class="tape" aria-label="Time and sales">
+          <div class="tape-header"><span>Time</span><span>Price</span><span>Size</span></div>
+          {#each trades.slice(0, 18) as tick (tick.seq)}
+            <div class="tape-row" class:bid={tick.side === "buy"} class:ask={tick.side === "sell"}>
+              <span>{new Date(tick.ts).toISOString().slice(11, 19)}</span>
+              <span>{formatBookPrice(tick.price)}</span>
+              <span>{formatNumber(tick.size * tick.price, 0)}</span>
+            </div>
+          {:else}
+            <div class="empty">No prints yet.</div>
+          {/each}
+        </div>
       {:else}
         <div class="panel-ticket">
           {#if tradeMode === "spot"}
@@ -3865,6 +4414,60 @@
           {/if}
         </div>
       {/if}
+    </section>
+
+    <section
+      class="panel monitor-panel"
+      role="group"
+      data-panel="markets"
+      style={panelStyle("markets", panelOrder)}
+      class:dragging={draggedPanel === "markets"}
+      class:drag-over={dragOverPanel === "markets"}
+      ondragover={(event) => onPanelDragOver(event, "markets")}
+      ondragleave={() => {
+        if (dragOverPanel === "markets") dragOverPanel = null;
+      }}
+      ondrop={(event) => onPanelDrop(event, "markets")}
+    >
+      <div class="panel-head">
+        {@render DragHead("markets", "MARKETS", `${markets.length} perp markets`)}
+        <div class="monitor-sorts" role="group" aria-label="Sort monitor">
+          {#each ["volume", "change", "symbol"] as key (key)}
+            <button
+              type="button"
+              class:active={monitorSort === key}
+              onclick={() => (monitorSort = key as typeof monitorSort)}
+            >{key}</button>
+          {/each}
+        </div>
+      </div>
+      <div class="monitor-list">
+        <div class="monitor-row monitor-head" aria-hidden="true">
+          <span>Market</span><span class="r">Mark</span><span class="r">24h</span><span class="r">Volume</span>
+        </div>
+        {#each monitorRows as row (row.symbol)}
+          <button
+            type="button"
+            class="monitor-row"
+            class:active={row.symbol === selectedSymbol && tradeMode === "perps"}
+            onclick={() => chooseMonitorRow(row.symbol)}
+          >
+            <span class="monitor-sym">
+              {row.symbol}
+              {#if row.lev}<i>{row.lev}x</i>{/if}
+            </span>
+            <span class="r mono">{formatPrice(row.mid)}</span>
+            <span
+              class="r mono"
+              class:positive={(row.change ?? 0) > 0}
+              class:negative={(row.change ?? 0) < 0}
+            >{row.change === null ? "--" : formatPercent(row.change)}</span>
+            <span class="r mono">{row.volume === null ? "--" : `$${formatNumber(row.volume, 0)}`}</span>
+          </button>
+        {:else}
+          <div class="empty">Markets loading…</div>
+        {/each}
+      </div>
     </section>
 
     <section
@@ -3919,9 +4522,9 @@
           <p class="auth-note error venue-note">{phoenixActionError}</p>
         {/if}
 
-        {#if phoenixTrader.positions.length > 0}
+        {#if enrichedPositions.length > 0}
           <div class="venue-section">Positions</div>
-          {#each phoenixTrader.positions as position}
+          {#each enrichedPositions as position}
             <div class="venue-row">
               <span class={position.size > 0 ? "positive" : "negative"}>
                 {position.size > 0 ? "LONG" : "SHORT"} {position.symbol}
@@ -3931,7 +4534,7 @@
                 class:positive={(position.unrealizedPnl ?? 0) >= 0}
                 class:negative={(position.unrealizedPnl ?? 0) < 0}
               >{position.unrealizedPnl !== null ? `$${formatNumber(position.unrealizedPnl, 2)}` : "--"}</em>
-              <small>liq {formatPrice(position.liquidationPrice)}</small>
+              <small>liq est {formatPrice(position.liquidationPrice)}</small>
               {#if position.unrealizedPnl !== null}
                 <button
                   class="row-action"
@@ -4019,16 +4622,30 @@
     >
       <div class="panel-head">
         {@render DragHead("events", "EVENT_RADAR", "Live headlines")}
+        <button
+          class="link-chip"
+          class:on={newsLinked}
+          type="button"
+          title="Filter headlines to the active market"
+          onclick={() => (newsLinked = !newsLinked)}
+        >{newsLinked && activeNewsSymbol ? activeNewsSymbol : "ALL"}</button>
+        {#if newsLinked && headlineVelocity > 3}
+          <span class="velocity-chip">{headlineVelocity}/h</span>
+        {/if}
       </div>
       {@render AiReadLine(eventRead)}
       <div class="news-list">
-        {#each news.slice(0, 6) as item}
+        {#each linkedNews.slice(0, 6) as item (item.url)}
           <a class="news-row" href={item.url} target="_blank" rel="noopener noreferrer">
             <span class="news-row-title">{item.title}</span>
             <em>{item.domain} · {formatAge(item.seenMs)}</em>
           </a>
         {:else}
-          <div class="empty">No headlines loaded.</div>
+          <div class="empty">
+            {newsLinked && activeNewsSymbol
+              ? `No ${activeNewsSymbol} headlines in feed.`
+              : "No headlines loaded."}
+          </div>
         {/each}
       </div>
     </section>
@@ -4270,7 +4887,7 @@
               class:negative={entry.action === "sell" || entry.action === "short" || entry.action === "limit-sell"}
             >{entry.action.toUpperCase()}</span>
             <span class="journal-sym">{entry.symbol}</span>
-            <b>{entry.notionalUsd !== null ? `$${formatNumber(entry.notionalUsd, 0)}` : "—"}{entry.leverage ? ` · ${entry.leverage}x` : ""}</b>
+            <b>{entry.notionalUsd !== null ? `$${formatNumber(entry.notionalUsd, 0)}` : "--"}{entry.leverage ? ` · ${entry.leverage}x` : ""}</b>
             {#if entry.signature}
               <a
                 class="journal-tx"
@@ -4287,7 +4904,71 @@
     </section>
 
   </section>
+  <footer class="status-line" aria-label="Terminal status">
+    <span class="mono">{new Date(nowMs).toISOString().slice(11, 19)} UTC</span>
+    <span class="sl-sep" aria-hidden="true"></span>
+    <span>{tradeMode === "perps" ? selectedSymbol : (spotAsset?.symbol ?? "--")} · {sessionNote}</span>
+    <span class="sl-sep" aria-hidden="true"></span>
+    <span class:positive={streamHealth === "live"} class:warn-txt={streamHealth !== "live"}>WS {streamHealth}</span>
+    <span>RPC {rpcLatencyMs !== null ? `${rpcLatencyMs}ms` : "--"}</span>
+    {#if apiSlotLag !== null}
+      <span class:warn-txt={apiSlotLag > 150} title="Phoenix indexer slots behind the chain tip">
+        SYNC −{apiSlotLag}
+      </span>
+    {/if}
+    <span class="sl-grow" aria-hidden="true"></span>
+    {#if $privyAuth.walletAddress}
+      <span class="mono">{shortAddress($privyAuth.walletAddress)}</span>
+      <span class="sl-sep" aria-hidden="true"></span>
+    {/if}
+    <button type="button" class="sl-help" onclick={() => (cheatOpen = true)}>? shortcuts</button>
+  </footer>
 </main>
+
+{#if toasts.length > 0}
+  <div class="toast-stack" role="status" aria-live="polite">
+    {#each toasts as toast (toast.toastId)}
+      <div class="toast">
+        <b>{toast.title}</b>
+        <span>{toast.body}</span>
+      </div>
+    {/each}
+  </div>
+{/if}
+
+{#if cheatOpen}
+  <div class="modal-backdrop" role="presentation" onclick={() => (cheatOpen = false)}>
+    <div
+      class="modal cheat"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard shortcuts"
+      tabindex="-1"
+      onclick={(event) => event.stopPropagation()}
+      onkeydown={(event) => event.stopPropagation()}
+    >
+      <div class="panel-head">
+        <div><p>KEYBOARD</p><h2>Shortcuts</h2></div>
+        <button class="modal-close" type="button" aria-label="Close" onclick={() => (cheatOpen = false)}>×</button>
+      </div>
+      <div class="modal-body cheat-body">
+        {#each [
+          ["/", "Market palette"],
+          ["B / S", "Long / Short ticket"],
+          ["[ ]", "Previous / next timeframe"],
+          [", .", "Cycle watchlist"],
+          ["F", "Fit chart + re-arm autoscale"],
+          ["Alt+Click", "Set price alert at cursor"],
+          ["Drag axis", "Scale price/time · double-click resets"],
+          ["?", "This sheet"],
+          ["Esc", "Close any overlay"],
+        ] as [keys, what] (keys)}
+          <div class="cheat-row"><kbd>{keys}</kbd><span>{what}</span></div>
+        {/each}
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if authOpen}
   <div class="modal-backdrop" role="presentation" onclick={() => (authOpen = false)}>
@@ -4460,8 +5141,112 @@
             <div class="empty">No alerts armed. Add a price trigger above.</div>
           {/each}
         </div>
+        {#if alertLog.length > 0}
+          <div class="venue-section">Fired</div>
+          <div class="alert-list">
+            {#each alertLog.slice(0, 10) as fired (fired.ts)}
+              <div class="alert-row done">
+                <span class="mono alert-when">{new Date(fired.ts).toISOString().slice(5, 16).replace("T", " ")}Z</span>
+                <b>{fired.title}</b>
+                <em>{fired.body}</em>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     </section>
+  </div>
+{/if}
+
+{#if paletteOpen}
+  <div class="modal-backdrop" role="presentation" onclick={() => (paletteOpen = false)}>
+    <div
+      class="modal palette"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Select market"
+      tabindex="-1"
+      onclick={(event) => event.stopPropagation()}
+      onkeydown={onPaletteKeydown}
+    >
+      <div class="palette-search">
+        <span class="palette-glass" aria-hidden="true">⌕</span>
+        <input
+          bind:this={paletteInput}
+          bind:value={paletteQuery}
+          placeholder="Search markets"
+          aria-label="Search markets"
+          oninput={() => (paletteIndex = 0)}
+        />
+      </div>
+      <div class="palette-tabs" role="tablist" aria-label="Market category">
+        {#each PALETTE_TABS as tab (tab.key)}
+          <button
+            role="tab"
+            aria-selected={paletteTab === tab.key}
+            class:active={paletteTab === tab.key}
+            type="button"
+            onclick={() => {
+              paletteTab = tab.key;
+              paletteIndex = 0;
+            }}
+          >
+            {tab.label}
+          </button>
+        {/each}
+      </div>
+      <div class="palette-row palette-head" aria-hidden="true">
+        <span></span>
+        <span>Market</span>
+        <span class="r">Price</span>
+        <span class="r">24h</span>
+        <span class="r pal-wide">Volume</span>
+      </div>
+      <div class="palette-list" bind:this={paletteList}>
+        {#each paletteRows as row, index (row.key)}
+          <button
+            type="button"
+            class="palette-row"
+            class:active={index === paletteIndex}
+            onclick={() => choosePalette(row)}
+            onmousemove={() => (paletteIndex = index)}
+          >
+            <span
+              class="pal-star"
+              class:starred={watchlist.includes(row.symbol.toUpperCase())}
+              role="presentation"
+              onclick={(event) => {
+                event.stopPropagation();
+                toggleWatch(row.symbol);
+              }}
+            >{watchlist.includes(row.symbol.toUpperCase()) ? "★" : "☆"}</span>
+            <span class="pal-id">
+              {#if row.imageUrl}<img src={row.imageUrl} alt="" loading="lazy" />{/if}
+              <b>{row.kind === "perp" ? `${row.symbol}` : row.symbol}</b>
+              {#if row.lev}<i class="pal-lev">{row.lev}x</i>{/if}
+              <small>{row.kind === "perp" ? "PERP · Phoenix" : row.name}</small>
+            </span>
+            <span class="r mono">{formatPrice(row.price)}</span>
+            <span
+              class="r mono"
+              class:positive={(row.change24hPct ?? 0) > 0 && row.change24hPct !== null}
+              class:negative={(row.change24hPct ?? 0) < 0}
+            >{row.change24hPct === null ? "--" : formatPercent(row.change24hPct)}</span>
+            <span class="r mono pal-wide">
+              {row.volumeUsd === null ? "--" : `$${formatNumber(row.volumeUsd, 0)}`}
+            </span>
+          </button>
+        {:else}
+          <p class="palette-empty">No markets match “{paletteQuery}”.</p>
+        {/each}
+      </div>
+      <div class="palette-foot" aria-hidden="true">
+        <span><kbd>/</kbd> Open</span>
+        <span><kbd>↑↓</kbd> Navigate</span>
+        <span><kbd>Enter</kbd> Select</span>
+        <span><kbd>Esc</kbd> Close</span>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -4523,7 +5308,7 @@
             </div>
             <div class="preview-row">
               <span>Price impact</span>
-              <b>{swapQuote ? `${(swapQuote.priceImpactPct * 100).toFixed(2)}%` : "—"}</b>
+              <b>{swapQuote ? `${(swapQuote.priceImpactPct * 100).toFixed(2)}%` : "--"}</b>
             </div>
             <div class="preview-row"><span>Wallet SOL</span><b>{walletBalanceText}</b></div>
           </div>
@@ -4715,7 +5500,7 @@
       <div class="preview-row">
         <span>Price impact</span>
         <b class:negative={spotQuote ? spotQuote.priceImpactPct * 100 > 1 : false}>
-          {spotQuote ? `${(spotQuote.priceImpactPct * 100).toFixed(2)}%` : "—"}
+          {spotQuote ? `${(spotQuote.priceImpactPct * 100).toFixed(2)}%` : "--"}
         </b>
       </div>
       <div class="preview-row">
@@ -4728,46 +5513,48 @@
       </div>
     </div>
 
-    <p class="ticket-status" class:error={spotQuoteStatus === "error"}>
-      {#if spotQuoteStatus === "error"}
-        {spotQuoteError}
-      {:else if spotSignature}
-        Swap submitted ·
-        <a class="news-domain" href={`https://solscan.io/tx/${spotSignature}`} target="_blank" rel="noopener noreferrer">view tx</a>
-      {:else}
-        &nbsp;
-      {/if}
-    </p>
+    <div class="ticket-actions">
+      <p class="ticket-status" class:error={spotQuoteStatus === "error"}>
+        {#if spotQuoteStatus === "error"}
+          {spotQuoteError}
+        {:else if spotSignature}
+          Swap submitted ·
+          <a class="news-domain" href={`https://solscan.io/tx/${spotSignature}`} target="_blank" rel="noopener noreferrer">view tx</a>
+        {:else}
+          &nbsp;
+        {/if}
+      </p>
 
-    {#if !phoenixAuthority}
-      <button class="primary wide" type="button" onclick={openAuthModal}>
-        Connect account to trade
-      </button>
-    {:else if spotOrderType === "limit"}
-      <button
-        class="primary wide"
-        type="button"
-        disabled={spotBusy || !(Number(spotLimitPrice) > 0) || !(Number(spotAmount) > 0) || walletScreen.flagged}
-        onclick={submitSpotLimitOrder}
-      >
-        {#if spotBusy}<span class="spinner" aria-hidden="true"></span>{/if}
-        {spotBusy
-          ? "Signing…"
-          : `Limit ${spotSide} ${spotAsset.symbol} @ ${spotLimitPrice || "—"}`}
-      </button>
-    {:else}
-      <button
-        class="primary wide"
-        type="button"
-        disabled={spotBusy || !spotQuote || spotQuoteStatus !== "quoted" || walletScreen.flagged}
-        onclick={executeSpotSwap}
-      >
-        {#if spotBusy}<span class="spinner" aria-hidden="true"></span>{/if}
-        {spotBusy
-          ? "Signing…"
-          : `${spotSide === "buy" ? "Buy" : "Sell"} ${spotAsset.symbol} · spot`}
-      </button>
-    {/if}
+      {#if !phoenixAuthority}
+        <button class="primary wide" type="button" onclick={openAuthModal}>
+          Connect account to trade
+        </button>
+      {:else if spotOrderType === "limit"}
+        <button
+          class="primary wide"
+          type="button"
+          disabled={spotBusy || !(Number(spotLimitPrice) > 0) || !(Number(spotAmount) > 0) || walletScreen.flagged}
+          onclick={submitSpotLimitOrder}
+        >
+          {#if spotBusy}<span class="spinner" aria-hidden="true"></span>{/if}
+          {spotBusy
+            ? "Signing…"
+            : `Limit ${spotSide} ${spotAsset.symbol} @ ${spotLimitPrice || "—"}`}
+        </button>
+      {:else}
+        <button
+          class="primary wide"
+          type="button"
+          disabled={spotBusy || !spotQuote || spotQuoteStatus !== "quoted" || walletScreen.flagged}
+          onclick={executeSpotSwap}
+        >
+          {#if spotBusy}<span class="spinner" aria-hidden="true"></span>{/if}
+          {spotBusy
+            ? "Signing…"
+            : `${spotSide === "buy" ? "Buy" : "Sell"} ${spotAsset.symbol} · spot`}
+        </button>
+      {/if}
+    </div>
 
     {#if triggerOrders.length > 0}
       <div class="venue-section">Open limit orders</div>
@@ -4779,7 +5566,7 @@
               LIMIT {view.side.toUpperCase()} {view.symbol}
             </span>
             <b>
-              {view.notionalUsd !== null ? `$${formatNumber(view.notionalUsd, 2)}` : "—"}
+              {view.notionalUsd !== null ? `$${formatNumber(view.notionalUsd, 2)}` : "--"}
               @ {formatPrice(view.limitPrice)}
             </b>
             <button
@@ -4800,21 +5587,6 @@
 {/snippet}
 
 {#snippet TicketForm()}
-    <form class="ticket-command" onsubmit={submitCommand}>
-      <input
-        bind:value={commandText}
-        placeholder="Type an order — “long SOL 5x, 1% stop”"
-        aria-label="Describe a trade in plain language"
-      />
-      <button class="ghost" type="submit" disabled={commandBusy || !commandText.trim()}>
-        {#if commandBusy}<span class="spinner" aria-hidden="true"></span>{/if}
-        {commandBusy ? "Parsing" : "Parse"}
-      </button>
-    </form>
-    {#if commandError}
-      <p class="auth-note error">{commandError}</p>
-    {/if}
-
     <div class="side-toggle" role="group" aria-label="Side">
       <button class:active={tradeSide === "buy"} type="button" onclick={() => (tradeSide = "buy")}>Long</button>
       <button class:active={tradeSide === "sell"} type="button" onclick={() => (tradeSide = "sell")}>Short</button>
@@ -4828,7 +5600,7 @@
             class="mode-flip"
             type="button"
             onclick={() => (sizingMode = sizingMode === "usd" ? "risk" : "usd")}
-          >{sizingMode === "usd" ? "size from stop →" : "← plain size"}</button>
+          >{sizingMode === "usd" ? "from stop →" : "← plain size"}</button>
         </span>
         {#if sizingMode === "usd"}
           <input bind:value={tradeAmount} inputmode="decimal" />
@@ -4862,18 +5634,56 @@
           disabled={tradeType !== "limit"}
         />
       </label>
-      <label>
-        Take profit
-        <input bind:value={tradeTakeProfit} inputmode="decimal" placeholder="optional" />
-      </label>
-      <label>
-        Stop loss
-        <input
-          bind:value={tradeStopLoss}
-          inputmode="decimal"
-          placeholder={sizingMode === "risk" ? "required for risk sizing" : "optional"}
-        />
-      </label>
+      <div class="field" class:field-error={tpWrongSide}>
+        <label>
+          <span class="label-row">
+            Take profit
+            {#if tpWrongSide}
+              <em class="field-note">{tradeSide === "buy" ? "above" : "below"} entry</em>
+            {/if}
+          </span>
+          <input bind:value={tradeTakeProfit} inputmode="decimal" placeholder="optional" />
+        </label>
+        <div class="chip-row" role="group" aria-label="Quick take profit">
+          {#each TP_CHIP_PCTS as pct (pct)}
+            <button
+              class="pct-chip"
+              type="button"
+              disabled={!triggerRefPrice}
+              onclick={() => setTakeProfitPct(pct)}
+            >
+              {tradeSide === "buy" ? "+" : "-"}{pct}%
+            </button>
+          {/each}
+        </div>
+      </div>
+      <div class="field" class:field-error={slWrongSide}>
+        <label>
+          <span class="label-row">
+            Stop loss
+            {#if slWrongSide}
+              <em class="field-note">{tradeSide === "buy" ? "below" : "above"} entry</em>
+            {/if}
+          </span>
+          <input
+            bind:value={tradeStopLoss}
+            inputmode="decimal"
+            placeholder={sizingMode === "risk" ? "required" : "optional"}
+          />
+        </label>
+        <div class="chip-row" role="group" aria-label="Quick stop loss">
+          {#each SL_CHIP_PCTS as pct (pct)}
+            <button
+              class="pct-chip"
+              type="button"
+              disabled={!triggerRefPrice}
+              onclick={() => setStopLossPct(pct)}
+            >
+              {tradeSide === "buy" ? "-" : "+"}{pct}%
+            </button>
+          {/each}
+        </div>
+      </div>
     </div>
 
     <div class="ticket-preview">
@@ -4886,7 +5696,7 @@
       <div class="preview-row"><span>Est. entry</span><b>{formatPrice(tradePreview?.entry)}</b></div>
       <div class="preview-row">
         <span>Slippage</span>
-        <b>{tradePreview?.slippageBps != null ? `${formatNumber(tradePreview.slippageBps, 1)} bps` : "—"}</b>
+        <b>{tradePreview?.slippageBps != null ? `${formatNumber(tradePreview.slippageBps, 1)} bps` : "--"}</b>
       </div>
       <div class="preview-row"><span>Spread</span><b>{formatNumber(spreadBps, 1)} bps</b></div>
       <div class="preview-row">
@@ -4902,6 +5712,24 @@
           <em class="warn ticket-thin-note">thin book</em>
         {/if}
       </div>
+      {#if tpPct !== null && !tpWrongSide}
+        <div class="preview-row">
+          <span>At take profit</span>
+          <b class="positive">
+            {tpPct >= 0 ? "+" : ""}{formatNumber(tpPct, 1)}%
+            {#if tpPnlUsd !== null}· +${formatNumber(Math.abs(tpPnlUsd), 2)}{/if}
+          </b>
+        </div>
+      {/if}
+      {#if slPct !== null && !slWrongSide}
+        <div class="preview-row">
+          <span>At stop loss</span>
+          <b class="negative">
+            {slPct >= 0 ? "+" : ""}{formatNumber(slPct, 1)}%
+            {#if slPnlUsd !== null}· -${formatNumber(Math.abs(slPnlUsd), 2)}{/if}
+          </b>
+        </div>
+      {/if}
       <div class="preview-row">
         <span>Margin required</span>
         <b class:negative={needsPhoenixFunding}>
@@ -4911,41 +5739,84 @@
       </div>
     </div>
 
-    {@render AiReadLine(tradeRead)}
-
-    <!-- Single reserved status line: error, tx link, or quiet hint. -->
-    <p class="ticket-status" class:error={Boolean(phoenixActionError)}>
-      {#if phoenixActionError}
-        {phoenixActionError}
-      {:else if lastTradeSignature}
-        Order submitted ·
-        <a class="news-domain" href={`https://solscan.io/tx/${lastTradeSignature}`} target="_blank" rel="noopener noreferrer">view tx</a>
+    <!-- Always-on ladder: book and ticket are simultaneous, not tabs. -->
+    <div class="mini-book" aria-label="Order book preview">
+      {#each asks.slice(0, 5).reverse() as level (level.price)}
+        <button type="button" class="mini-row ask" onclick={() => prefillFromBook(level.price, "ask")}>
+          <span>{formatBookPrice(level.price)}</span>
+          <span>{formatNumber(bookLevelNotional(level), 0)}</span>
+        </button>
+      {/each}
+      <div class="mini-spread">
+        <span>{formatBookPrice(spread)}</span>
+        <em>spread</em>
+        <span>{formatNumber(spreadPercent, 3)}%</span>
+      </div>
+      {#each bids.slice(0, 5) as level (level.price)}
+        <button type="button" class="mini-row bid" onclick={() => prefillFromBook(level.price, "bid")}>
+          <span>{formatBookPrice(level.price)}</span>
+          <span>{formatNumber(bookLevelNotional(level), 0)}</span>
+        </button>
       {:else}
-        &nbsp;
-      {/if}
-    </p>
+        <div class="mini-empty">book warming up</div>
+      {/each}
+    </div>
 
-    {#if !phoenixAuthority}
-      <button class="primary wide" type="button" onclick={openAuthModal}>
-        Connect account to trade
-      </button>
-    {:else if needsPhoenixFunding}
-      <button class="primary wide" type="button" onclick={openPhoenixFunding}>
-        Deposit first · ${formatNumber(Math.max(0, requiredMarginUsd - phoenixCollateral), 2)}
-      </button>
-    {:else}
-      <button
-        class="primary wide"
-        type="button"
-        disabled={phoenixBusy || !tradePreview || walletScreen.flagged}
-        onclick={submitPhoenixOrder}
-      >
-        {#if phoenixBusy}<span class="spinner" aria-hidden="true"></span>{/if}
-        {phoenixBusy
-          ? "Signing…"
-          : `${tradeSide === "buy" ? "Long" : "Short"} ${selectedSymbol}-PERP · ${tradeLeverage}x`}
-      </button>
-    {/if}
+    <div class="ticket-actions">
+      {#if phoenixAuthority && phoenixTotalCollateral > 0}
+        <div
+          class="risk-strip"
+          class:warn={marginUsedPct > 60}
+          class:danger={marginUsedPct > 85 ||
+            (selectedLiqDistancePct !== null && selectedLiqDistancePct < 5)}
+        >
+          <span>EQ ${formatNumber(accountEquityUsd, 2)}</span>
+          <span>USED {formatNumber(marginUsedPct, 0)}%</span>
+          <span>
+            {selectedLiqDistancePct !== null
+              ? `LIQ Δ ${formatNumber(selectedLiqDistancePct, 1)}%`
+              : "LIQ --"}
+          </span>
+          <span
+            class:positive={accountUpnlUsd >= 0}
+            class:negative={accountUpnlUsd < 0}
+          >uPNL ${formatNumber(accountUpnlUsd, 2)}</span>
+        </div>
+      {/if}
+      <!-- Single reserved status line: error, tx link, or quiet hint. -->
+      <p class="ticket-status" class:error={Boolean(phoenixActionError)}>
+        {#if phoenixActionError}
+          {phoenixActionError}
+        {:else if lastTradeSignature}
+          Order submitted ·
+          <a class="news-domain" href={`https://solscan.io/tx/${lastTradeSignature}`} target="_blank" rel="noopener noreferrer">view tx</a>
+        {:else}
+          &nbsp;
+        {/if}
+      </p>
+
+      {#if !phoenixAuthority}
+        <button class="primary wide" type="button" onclick={openAuthModal}>
+          Connect account to trade
+        </button>
+      {:else if needsPhoenixFunding}
+        <button class="primary wide" type="button" onclick={openPhoenixFunding}>
+          Deposit first · ${formatNumber(Math.max(0, requiredMarginUsd - phoenixCollateral), 2)}
+        </button>
+      {:else}
+        <button
+          class="primary wide"
+          type="button"
+          disabled={phoenixBusy || !tradePreview || walletScreen.flagged}
+          onclick={submitPhoenixOrder}
+        >
+          {#if phoenixBusy}<span class="spinner" aria-hidden="true"></span>{/if}
+          {phoenixBusy
+            ? "Signing…"
+            : `${tradeSide === "buy" ? "Long" : "Short"} ${selectedSymbol}-PERP · ${tradeLeverage}x`}
+        </button>
+      {/if}
+    </div>
 {/snippet}
 
 {#snippet TickerStat(
@@ -4987,6 +5858,9 @@
       <span class="desk-text desk-dim">{read.error}</span>
     {:else if read.phase === "ready" || read.text}
       <span class="desk-text" class:desk-soft-pulse={read.phase === "loading"}>{read.text}</span>
+      {#if read.asOf}
+        <em class="desk-asof">as of {new Date(read.asOf).toISOString().slice(11, 19)}Z</em>
+      {/if}
     {:else}
       <span class="desk-skeleton" aria-hidden="true">
         <i></i>
@@ -5441,6 +6315,13 @@
     white-space: nowrap;
   }
 
+  /* Wallet/phoenix split under the combined Funds figure. */
+  .funds-split {
+    display: block;
+    color: var(--faint);
+    font-size: 0.64rem;
+  }
+
   .mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-variant-numeric: tabular-nums;
@@ -5725,7 +6606,12 @@
   }
 
   .chart-panel {
-    --market-panel-height: clamp(30rem, 56vh, 40rem);
+    /* Bloomberg posture: the chart + ticket row IS the first screen. Fill
+       the viewport below the fixed chrome (topbar + ticker rail + news
+       strip + dashboard padding ≈ 11.5rem); secondary panels start cleanly
+       below the fold. Floor keeps laptops usable, ceiling keeps ultra-tall
+       monitors from stretching candles into noodles. */
+    --market-panel-height: clamp(30rem, calc(100dvh - 13.4rem), 72rem);
     grid-column: span 9;
     display: flex;
     flex-direction: column;
@@ -5739,7 +6625,7 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
-    height: var(--market-panel-height, clamp(30rem, 56vh, 40rem));
+    height: var(--market-panel-height, clamp(30rem, calc(100dvh - 13.4rem), 72rem));
   }
 
   .perp-panel {
@@ -5749,6 +6635,13 @@
   .macro-panel,
   .watchlist-panel {
     grid-column: span 4;
+  }
+
+  .monitor-panel {
+    grid-column: span 4;
+    display: flex;
+    flex-direction: column;
+    max-height: 26rem;
   }
 
   select,
@@ -5767,6 +6660,20 @@
     gap: 0.35rem;
     color: var(--muted);
     font-size: 0.72rem;
+  }
+
+  /* Panel-header dialect on ticket labels; inputs keep body sizing. */
+  .panel-ticket label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.62rem;
+  }
+
+  .panel-ticket label input,
+  .panel-ticket label select {
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 0.85rem;
   }
 
   .positive,
@@ -5815,6 +6722,63 @@
   .market-select {
     min-width: 12rem;
     max-width: 18rem;
+  }
+
+  /* Palette opener styled like the select it replaced, plus the "/" hint. */
+  button.market-select {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line);
+    min-height: 2rem;
+    padding: 0.3rem 0.45rem 0.3rem 0.6rem;
+    cursor: pointer;
+    text-align: left;
+    font-size: 0.82rem;
+  }
+
+  button.market-select:hover {
+    border-color: var(--muted);
+  }
+
+  .market-open-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .market-open-hint {
+    flex: 0 0 auto;
+    font-family: ui-monospace, monospace;
+    font-size: 0.66rem;
+    color: var(--faint);
+    border: 1px solid var(--line);
+    padding: 0 0.3rem;
+  }
+
+  /* Ticker symbol doubles as a palette opener. */
+  .ticker-market {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .ticker-caret {
+    color: var(--faint);
+    font-size: 0.7rem;
+  }
+
+  .ticker-market:hover .ticker-caret {
+    color: var(--ink);
   }
 
   .price-mode-toggle {
@@ -6056,17 +7020,87 @@
 
   .panel-ticket {
     display: grid;
-    gap: 0.7rem;
-    padding: 0.75rem;
+    /* Tight vertical budget: the whole ticket should fit without scrolling
+       at typical heights; the submit action is pinned regardless. */
+    gap: 0.5rem;
+    padding: 0.6rem 0.65rem 0;
     min-height: 0;
     overflow-y: auto;
   }
 
+  /* The primary action never requires scrolling: status + submit stick to
+     the bottom of the ticket scroller on an opaque footer. */
+  .ticket-actions {
+    position: sticky;
+    bottom: 0;
+    display: grid;
+    gap: 0.45rem;
+    margin: 0 -0.65rem;
+    padding: 0.35rem 0.65rem 0.6rem;
+    background: var(--surface);
+    border-top: 1px solid var(--line-soft);
+  }
+
   /* ── Spot venue ───────────────────────────────────────────────────── */
+  /* Venue switch: the selection thumb physically slides to the chosen
+     venue (state indication), 160ms transform-only, interruptible
+     mid-flight. Equal grid halves keep the thumb math exact. */
+  .venue-toggle {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .venue-toggle::before {
+    content: "";
+    position: absolute;
+    inset: 0.15rem auto 0.15rem 0.15rem;
+    width: calc(50% - 0.15rem);
+    background: var(--accent-soft);
+    border: 1px solid rgba(255, 77, 151, 0.7);
+    transition: transform 160ms cubic-bezier(0.77, 0, 0.175, 1);
+  }
+  .venue-toggle.spot::before {
+    transform: translateX(100%);
+  }
+  .venue-toggle button {
+    position: relative;
+    z-index: 1;
+    transition: color 140ms ease;
+  }
   .venue-toggle button.active {
     color: var(--accent);
-    background: var(--accent-soft);
-    border-color: rgba(255, 77, 151, 0.7);
+    background: transparent;
+    border-color: transparent;
+  }
+
+  /* Venue swap: replaced controls (market select, price-mode block, chart
+     labels) fade in fast; exits are instant. Entry-only keeps the swap
+     snappy — no overlap, no layout shift. The chart canvas itself is never
+     dimmed: price visibility is continuous. */
+  .market-select,
+  .price-mode-toggle,
+  .chart-symbol-line > *,
+  .chart-empty {
+    transition:
+      opacity 140ms cubic-bezier(0.23, 1, 0.32, 1),
+      transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
+    @starting-style {
+      opacity: 0;
+      transform: translateY(2px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .venue-toggle::before {
+      transition-duration: 0ms;
+    }
+    /* Reduced motion, not zero: keep the opacity fade, drop the movement. */
+    .market-select,
+    .price-mode-toggle,
+    .chart-symbol-line > *,
+    .chart-empty {
+      transition-property: opacity;
+    }
   }
 
   .spot-venue-tag {
@@ -6153,20 +7187,6 @@
     font-size: 0.5rem;
   }
 
-  .panel-ticket .desk-note {
-    min-height: 3.1rem;
-    max-height: 4.9rem;
-    overflow: hidden;
-    margin: 0;
-  }
-
-  .panel-ticket .desk-text {
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
 
   .orderbook-controls {
     display: grid;
@@ -6413,6 +7433,183 @@
     /* Top-anchored: content growth extends downward only (no recentering). */
     place-items: start center;
     padding: clamp(1rem, 6vh, 4rem) 1rem 1rem;
+  }
+
+  /* ── Market palette ──────────────────────────────────────────────── */
+  .modal.palette {
+    width: min(52rem, 100%);
+    max-height: min(40rem, calc(100dvh - 4rem));
+  }
+
+  .palette-search {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .palette-glass {
+    color: var(--faint);
+    font-size: 1.1rem;
+  }
+
+  .palette-search input {
+    flex: 1;
+    border: 0;
+    background: transparent;
+    font-size: 1rem;
+    color: var(--ink);
+  }
+
+  .palette-search input:focus {
+    outline: none;
+  }
+
+  .palette-tabs {
+    display: flex;
+    gap: 0.2rem;
+    padding: 0 0.6rem;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .palette-tabs button {
+    border: 0;
+    border-bottom: 3px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    padding: 0.5rem 0.7rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .palette-tabs button:hover {
+    color: var(--ink);
+  }
+
+  .palette-tabs button.active {
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+  }
+
+  .palette-row {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr) 7rem 5.5rem 8rem;
+    gap: 0.6rem;
+    align-items: center;
+    width: 100%;
+    padding: 0.5rem 1rem;
+    border: 0;
+    border-bottom: 1px solid var(--line-soft);
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+
+  .palette-head {
+    color: var(--faint);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-family: ui-monospace, monospace;
+    cursor: default;
+    padding-block: 0.4rem;
+  }
+
+  .palette-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .palette-list .palette-row.active {
+    background: var(--surface-2);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  .pal-star {
+    color: var(--faint);
+    cursor: pointer;
+    text-align: center;
+  }
+
+  .pal-star:hover,
+  .pal-star.starred {
+    color: var(--amber);
+  }
+
+  .pal-id {
+    display: flex;
+    align-items: baseline;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+
+  .pal-id img {
+    width: 1.15rem;
+    height: 1.15rem;
+    border-radius: 50%;
+    align-self: center;
+    flex: 0 0 auto;
+  }
+
+  .pal-id b {
+    font-size: 0.9rem;
+  }
+
+  .pal-id small {
+    color: var(--faint);
+    font-size: 0.7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pal-lev {
+    font-style: normal;
+    font-family: ui-monospace, monospace;
+    font-size: 0.64rem;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    padding: 0.02rem 0.3rem;
+  }
+
+  .palette-empty {
+    padding: 1.2rem 1rem;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  .palette-foot {
+    display: flex;
+    gap: 1.2rem;
+    padding: 0.55rem 1rem;
+    border-top: 1px solid var(--line-soft);
+    color: var(--muted);
+    font-size: 0.72rem;
+  }
+
+  .palette-foot kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 0.68rem;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line);
+    padding: 0.05rem 0.35rem;
+    margin-right: 0.3rem;
+  }
+
+  @media (max-width: 720px) {
+    .palette-row {
+      grid-template-columns: 2rem minmax(0, 1fr) 6rem 4.5rem;
+    }
+
+    .pal-wide {
+      display: none;
+    }
   }
 
   .modal {
@@ -7100,14 +8297,317 @@
     animation-delay: 180ms;
   }
 
-  /* ── Trade ticket ─────────────────────────────────────────────────── */
-  .ticket-command {
+
+  /* ── Ambient risk strip ──────────────────────────────────────────── */
+  .risk-strip {
     display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.25rem 0.45rem;
+    border: 1px solid var(--line-soft);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.64rem;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .risk-strip.warn {
+    border-color: rgba(255, 180, 84, 0.5);
+    color: var(--amber);
+  }
+
+  .risk-strip.danger {
+    border-color: rgba(255, 90, 106, 0.6);
+    color: var(--down);
+  }
+
+  /* ── Mini book inside the ticket ─────────────────────────────────── */
+  .mini-book {
+    border: 1px solid var(--line-soft);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+  }
+
+  .mini-row {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 0.14rem 0.5rem;
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .mini-row.ask { color: var(--down); }
+  .mini-row.bid { color: var(--up); }
+  .mini-row:hover { background: rgba(255, 255, 255, 0.04); }
+  .mini-row span:last-child { color: var(--muted); }
+
+  .mini-spread {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.14rem 0.5rem;
+    border-block: 1px solid var(--line-soft);
+    color: var(--muted);
+  }
+
+  .mini-spread em { font-style: normal; color: var(--faint); }
+  .mini-empty { padding: 0.4rem 0.5rem; color: var(--faint); }
+
+  /* ── Time & sales ────────────────────────────────────────────────── */
+  .tape {
+    border-top: 1px solid var(--line-soft);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.68rem;
+    overflow-y: auto;
+    max-height: 12rem;
+  }
+
+  .tape-header,
+  .tape-row {
+    display: grid;
+    grid-template-columns: 4.6rem 1fr 4.5rem;
+    gap: 0.6rem;
+    padding: 0.12rem 0.9rem;
+  }
+
+  .tape-header {
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.6rem;
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+  }
+
+  .tape-row span:first-child { color: var(--faint); }
+  .tape-row.bid span:nth-child(2) { color: var(--up); }
+  .tape-row.ask span:nth-child(2) { color: var(--down); }
+  .tape-row span:last-child { text-align: right; color: var(--muted); }
+
+  /* ── Markets monitor panel ───────────────────────────────────────── */
+  .monitor-sorts {
+    display: flex;
+    gap: 0.2rem;
+  }
+
+  .monitor-sorts button {
+    border: 0;
+    background: transparent;
+    color: var(--faint);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.2rem 0.35rem;
+    cursor: pointer;
+  }
+
+  .monitor-sorts button.active { color: var(--accent); }
+
+  .monitor-list {
+    overflow-y: auto;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .monitor-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 5.5rem 4.5rem 6rem;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.3rem 0.9rem;
+    border: 0;
+    border-bottom: 1px solid var(--line-soft);
+    background: transparent;
+    color: var(--ink);
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .monitor-row:hover { background: rgba(255, 77, 151, 0.04); }
+  .monitor-row.active { box-shadow: inset 2px 0 0 var(--accent); background: var(--surface-2); }
+
+  .monitor-head {
+    color: var(--faint);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-family: ui-monospace, monospace;
+    cursor: default;
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+  }
+
+  .monitor-sym { font-weight: 700; display: flex; gap: 0.35rem; align-items: baseline; }
+  .monitor-sym i {
+    font-style: normal;
+    font-family: ui-monospace, monospace;
+    font-size: 0.6rem;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    padding: 0 0.25rem;
+  }
+
+  /* ── Status line ─────────────────────────────────────────────────── */
+  .status-line {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    height: 1.9rem;
+    padding: 0 1rem;
+    border-top: 1px solid var(--line);
+    background: rgba(8, 10, 13, 0.92);
+    backdrop-filter: blur(10px);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.66rem;
+    color: var(--muted);
+  }
+
+  .sl-sep { width: 1px; height: 0.9rem; background: var(--line-soft); }
+  .sl-grow { flex: 1; }
+  .warn-txt { color: var(--amber); }
+
+  .sl-help {
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    padding: 0.06rem 0.4rem;
+    cursor: pointer;
+  }
+
+  .sl-help:hover { color: var(--ink); }
+
+  .dashboard { padding-bottom: 2.6rem; }
+
+  /* ── Toasts ──────────────────────────────────────────────────────── */
+  .toast-stack {
+    position: fixed;
+    top: 4rem;
+    right: 1rem;
+    z-index: 90;
+    display: grid;
     gap: 0.4rem;
   }
 
-  .ticket-command input {
+  .toast {
+    display: grid;
+    gap: 0.1rem;
+    min-width: 16rem;
+    max-width: 22rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--accent);
+    background: var(--surface);
+    font-size: 0.74rem;
+  }
+
+  .toast b { color: var(--accent); font-size: 0.68rem; letter-spacing: 0.04em; }
+
+  /* ── Cheat sheet ─────────────────────────────────────────────────── */
+  .cheat-body { display: grid; gap: 0.3rem; }
+
+  .cheat-row {
+    display: grid;
+    grid-template-columns: 7rem 1fr;
+    gap: 0.8rem;
+    align-items: baseline;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .cheat-row kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 0.7rem;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line);
+    padding: 0.08rem 0.4rem;
+    text-align: center;
+  }
+
+  /* ── News linking chips ──────────────────────────────────────────── */
+  .link-chip {
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--faint);
+    font-family: ui-monospace, monospace;
+    font-size: 0.62rem;
+    padding: 0.1rem 0.4rem;
+    cursor: pointer;
+  }
+
+  .link-chip.on { color: var(--accent); border-color: rgba(255, 77, 151, 0.6); }
+
+  .velocity-chip {
+    font-family: ui-monospace, monospace;
+    font-size: 0.62rem;
+    color: var(--amber);
+    border: 1px solid rgba(255, 180, 84, 0.5);
+    padding: 0.1rem 0.35rem;
+  }
+
+  /* ── Desk read provenance ────────────────────────────────────────── */
+  .desk-asof {
+    display: block;
+    font-style: normal;
+    font-family: ui-monospace, monospace;
+    font-size: 0.58rem;
+    color: var(--faint);
+    margin-top: 0.15rem;
+  }
+
+  .alert-when { color: var(--faint); font-size: 0.62rem; }
+
+  /* ── Trade ticket ─────────────────────────────────────────────────── */
+  .field {
+    display: grid;
+    gap: 0.3rem;
+    align-content: start;
+  }
+
+  .chip-row {
+    display: flex;
+    gap: 0.3rem;
+  }
+
+  .pct-chip {
     flex: 1;
+    min-height: 1.4rem;
+    padding: 0.05rem 0.2rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.66rem;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line);
+    cursor: pointer;
+  }
+
+  .pct-chip:hover:not(:disabled) {
+    color: var(--ink);
+    border-color: var(--muted);
+  }
+
+  .pct-chip:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .field-error input {
+    border-color: var(--down);
+  }
+
+  .field-note {
+    color: var(--down);
+    font-size: 0.62rem;
+    font-style: normal;
+    font-weight: 600;
   }
 
   .side-toggle {
@@ -7142,7 +8642,7 @@
   .ticket-grid-2 {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 0.6rem;
+    gap: 0.45rem 0.6rem;
   }
 
   .ticket-preview {
@@ -7150,7 +8650,7 @@
     gap: 0.05rem;
     border: 1px solid var(--line-soft);
     border-radius: 0;
-    padding: 0.4rem 0.65rem;
+    padding: 0.3rem 0.65rem;
     background: rgba(255, 255, 255, 0.02);
   }
 
@@ -7159,7 +8659,7 @@
     align-items: baseline;
     justify-content: space-between;
     gap: 0.6rem;
-    padding: 0.18rem 0;
+    padding: 0.12rem 0;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-variant-numeric: tabular-nums;
     font-size: 0.76rem;
@@ -7583,6 +9083,11 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
+    gap: 0.4rem;
+    /* Mode/side flips change these strings — never let them wrap, so the
+       fields below sit at identical positions in every mode. */
+    white-space: nowrap;
+    min-width: 0;
     gap: 0.5rem;
   }
   .mode-flip {

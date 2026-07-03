@@ -16,6 +16,8 @@ export type AiRead = {
   phase: AiPhase;
   text: string;
   error?: string;
+  /** When the read landed — rendered as an "as of" stamp. */
+  asOf?: number;
 };
 
 export const IDLE_READ: AiRead = { phase: "idle", text: "" };

@@ -13,6 +13,7 @@ import {
   buildRegisterTraderIx,
   buildWithdrawIxsResolved,
   createPhoenixClient,
+  decodeTrader,
   getEmberStateAddress,
   getEmberVaultAddress,
   getTraderAddresses,
@@ -57,6 +58,8 @@ export type PhoenixPosition = {
   /** Which subaccount holds it (needed to close). */
   traderPdaIndex: number;
   subaccountIndex: number;
+  /** Collateral of the isolated subaccount holding it — drives liq est. */
+  marginUsd: number | null;
 };
 
 export type PhoenixOpenOrder = {
@@ -70,7 +73,12 @@ export type PhoenixOpenOrder = {
 
 export type PhoenixTraderState = {
   registered: boolean;
+  /** Indexer snapshot slot — compared against the chain tip for sync lag. */
+  apiSlot: number | null;
+  /** Free cross collateral in the parent subaccount — gates new orders. */
   collateralUsd: number | null;
+  /** Parent + every isolated subaccount's margin — "money in Phoenix". */
+  totalCollateralUsd: number | null;
   effectiveCollateralUsd: number | null;
   unrealizedPnlUsd: number | null;
   riskTier: string | null;
@@ -96,6 +104,8 @@ type ExchangeMarket = {
   symbol: string;
   marketPubkey: string;
   splinePubkey: string;
+  /** Base lots are 10^-decimals base units (COPPER: 1 → lot = 0.1). */
+  baseLotsDecimals: number;
 };
 
 type ExchangeConfig = { keys: ExchangeKeys; markets: ExchangeMarket[] };
@@ -118,6 +128,7 @@ export async function fetchExchangeConfig(): Promise<ExchangeConfig> {
       symbol: market.symbol,
       marketPubkey: market.marketPubkey,
       splinePubkey: market.splinePubkey,
+      baseLotsDecimals: Number(market.baseLotsDecimals ?? 0),
     })),
   };
   return exchangeCache;
@@ -125,14 +136,20 @@ export async function fetchExchangeConfig(): Promise<ExchangeConfig> {
 
 // ── Trader state ──────────────────────────────────────────────────────
 
-function tokenAmount(value: unknown): number | null {
-  if (!isRecord(value)) return null;
-  const ui = Number(value.ui ?? NaN);
-  if (Number.isFinite(ui)) return ui;
-  const raw = Number(value.value ?? NaN);
-  const decimals = Number(value.decimals ?? NaN);
-  if (Number.isFinite(raw) && Number.isFinite(decimals)) {
-    return raw / 10 ** decimals;
+function lotsToUsd(value: unknown): number | null {
+  const lots = Number(value);
+  return Number.isFinite(lots) ? lots / 10 ** USDC_DECIMALS : null;
+}
+
+// Trigger entries: probe the plausible price keys defensively — the trader
+// endpoint's field names have shifted before (see schema note below).
+function triggerPriceUsd(list: unknown): number | null {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const first: unknown = list[0];
+  if (!isRecord(first)) return null;
+  for (const key of ["triggerPriceUsd", "priceUsd", "price"]) {
+    const value = Number(first[key]);
+    if (Number.isFinite(value) && value > 0) return value;
   }
   return null;
 }
@@ -142,7 +159,9 @@ export async function fetchPhoenixTraderState(
 ): Promise<PhoenixTraderState> {
   const empty: PhoenixTraderState = {
     registered: false,
+    apiSlot: null,
     collateralUsd: null,
+    totalCollateralUsd: null,
     effectiveCollateralUsd: null,
     unrealizedPnlUsd: null,
     riskTier: null,
@@ -154,63 +173,97 @@ export async function fetchPhoenixTraderState(
   );
   if (response.status === 404) return empty;
   if (!response.ok) throw new Error(`phoenix-trader-${response.status}`);
-  const data = (await response.json()) as { traders?: unknown[] };
-  const traders = Array.isArray(data.traders)
-    ? data.traders.filter(isRecord)
+  // Live schema (2026-07-03): { traderPdaIndex, snapshot: { subaccounts:
+  // [{ subaccountIndex, collateral: "<quote lots>", positions?: [{ symbol,
+  // basePositionLots, entryPriceUsd, virtualQuotePositionLots,
+  // takeProfitTriggers, stopLossTriggers }] }] } }. The previous
+  // { traders: [...] } shape is gone — parsing it silently reported every
+  // wallet as unregistered with no positions.
+  const data = (await response.json()) as Record<string, unknown>;
+  const snapshot = isRecord(data.snapshot) ? data.snapshot : null;
+  if (!snapshot) return empty;
+  const subaccounts = Array.isArray(snapshot.subaccounts)
+    ? snapshot.subaccounts.filter(isRecord)
     : [];
-  if (traders.length === 0) return empty;
+  const pdaIndex = Number(data.traderPdaIndex ?? 0);
+  const markets =
+    (await fetchExchangeConfig().catch(() => null))?.markets ?? [];
+  const lotDecimalsFor = (symbol: string): number =>
+    markets.find((market) => market.symbol === symbol)?.baseLotsDecimals ?? 0;
 
   const state: PhoenixTraderState = { ...empty, registered: true };
-  for (const trader of traders) {
-    const pdaIndex = Number(trader.traderPdaIndex ?? 0);
-    const subIndex = Number(trader.traderSubaccountIndex ?? 0);
-    // Parent (0/0) carries the cross collateral headline.
-    if (pdaIndex === 0 && subIndex === 0) {
-      state.collateralUsd = tokenAmount(trader.collateralBalance);
-      state.effectiveCollateralUsd = tokenAmount(trader.effectiveCollateral);
-      state.riskTier =
-        typeof trader.riskTier === "string" ? trader.riskTier : null;
-    }
-    const upnl = tokenAmount(trader.unrealizedPnl);
-    if (upnl !== null) {
-      state.unrealizedPnlUsd = (state.unrealizedPnlUsd ?? 0) + upnl;
-    }
-    const positions = Array.isArray(trader.positions)
-      ? trader.positions.filter(isRecord)
+  state.apiSlot = Number.isFinite(Number(data.slot)) ? Number(data.slot) : null;
+  let totalUsd = 0;
+  for (const sub of subaccounts) {
+    const subIndex = Number(sub.subaccountIndex ?? 0);
+    const collateral = lotsToUsd(sub.collateral);
+    if (collateral !== null) totalUsd += collateral;
+    // Parent (0/0) holds the free cross collateral that gates new orders.
+    if (pdaIndex === 0 && subIndex === 0) state.collateralUsd = collateral;
+    const positions = Array.isArray(sub.positions)
+      ? sub.positions.filter(isRecord)
       : [];
     for (const position of positions) {
-      const size = tokenAmount(position.positionSize) ?? 0;
-      if (size === 0) continue;
+      const symbol = String(position.symbol ?? "?");
+      const baseLots = Number(position.basePositionLots ?? 0);
+      if (!Number.isFinite(baseLots) || baseLots === 0) continue;
+      const entryPrice = Number(position.entryPriceUsd);
+      const quoteLots = Number(position.virtualQuotePositionLots);
       state.positions.push({
-        symbol: String(position.symbol ?? "?"),
-        size,
-        entryPrice: tokenAmount(position.entryPrice),
-        liquidationPrice: tokenAmount(position.liquidationPrice),
-        unrealizedPnl: tokenAmount(position.unrealizedPnl),
-        positionValue: tokenAmount(position.positionValue),
-        takeProfitPrice: tokenAmount(position.takeProfitPrice),
-        stopLossPrice: tokenAmount(position.stopLossPrice),
+        symbol,
+        size: baseLots / 10 ** lotDecimalsFor(symbol),
+        entryPrice: Number.isFinite(entryPrice) ? entryPrice : null,
+        // Not in this schema — panel renders "--" and the chart skips the
+        // LIQ line rather than drawing a wrong one.
+        liquidationPrice: null,
+        unrealizedPnl: null,
+        positionValue: Number.isFinite(quoteLots)
+          ? Math.abs(quoteLots) / 10 ** USDC_DECIMALS
+          : null,
+        takeProfitPrice: triggerPriceUsd(position.takeProfitTriggers),
+        stopLossPrice: triggerPriceUsd(position.stopLossTriggers),
         traderPdaIndex: pdaIndex,
         subaccountIndex: subIndex,
+        marginUsd: collateral,
       });
     }
-    const orderMap = isRecord(trader.limitOrders) ? trader.limitOrders : {};
-    for (const [symbol, list] of Object.entries(orderMap)) {
-      if (!Array.isArray(list)) continue;
-      for (const order of list.filter(isRecord)) {
-        state.orders.push({
-          symbol,
-          side:
-            Number(order.side) === 1 || order.side === "ask" ? "ask" : "bid",
-          price: tokenAmount(order.price),
-          remaining: tokenAmount(order.tradeSizeRemaining),
-          orderSequenceNumber: String(order.orderSequenceNumber ?? ""),
-          isStopLoss: Boolean(order.isStopLoss),
-        });
-      }
-    }
   }
+  state.totalCollateralUsd = totalUsd;
+  // Open limit orders are not present in this schema snapshot; the orders
+  // panel stays empty until the endpoint exposes them again.
   return state;
+}
+
+// The trader PDA on-chain reflects a deposit the moment it confirms; the
+// Phoenix API indexer can lag behind it by many seconds, which left "Deposit
+// first" showing after a successful deposit. Chain is truth for collateral;
+// callers overlay this onto the API state (which still supplies positions
+// and orders). Returns null when the trader account doesn't exist yet or
+// the RPC/decode fails — callers then fall back to the API value.
+export async function fetchOnChainCollateralUsd(
+  rpcUrl: string,
+  authority: string,
+): Promise<number | null> {
+  try {
+    const exchange = await fetchExchangeConfig();
+    const addresses = await getTraderAddresses(
+      authority as never,
+      exchange.keys.canonicalMint as never,
+      0,
+      0,
+    );
+    const connection = new Connection(rpcUrl, "confirmed");
+    const info = await connection.getAccountInfo(
+      new PublicKey(String(addresses.traderAccount)),
+    );
+    if (!info) return null;
+    const trader = decodeTrader(new Uint8Array(info.data));
+    // Quote lots are USDC atoms (QUOTE_LOTS_DECIMALS = 6 in the SDK).
+    const usd = Number(trader.state.quoteLotCollateral) / 10 ** USDC_DECIMALS;
+    return Number.isFinite(usd) && usd >= 0 && usd < 1e9 ? usd : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Instruction plumbing ─────────────────────────────────────────────
@@ -380,11 +433,24 @@ export async function activatePhoenixReferral(
 
 // Returns the register-parent-trader instruction if the wallet has never
 // traded on Phoenix; empty array otherwise. Prepended to the first action.
+//
+// The API's `registered` flag is only a hint: it lags right after referral
+// activation (indexer catch-up) and registering twice fails the whole
+// transaction with an opaque Custom program error. The trader PDA on-chain
+// is the source of truth, so check its existence via RPC and only fall back
+// to the hint when the RPC lookup itself fails.
+// Phoenix trader PDA size in bytes — registration creates it and the payer
+// funds its rent-exempt deposit (5,360 bytes ≈ 0.0382 SOL on mainnet,
+// verified by simulation). Locked in the account, not spent.
+const TRADER_ACCOUNT_SIZE = 5360;
+// Headroom for transaction fees on top of the rent deposit (~0.002 SOL).
+const REGISTER_FEE_BUFFER_LAMPORTS = 2_000_000;
+
 export async function ensureTraderRegisteredIxs(
+  rpcUrl: string,
   authority: string,
-  registered: boolean,
+  registeredHint: boolean,
 ): Promise<TransactionInstruction[]> {
-  if (registered) return [];
   const exchange = await fetchExchangeConfig();
   type Reg = Parameters<typeof buildRegisterTraderIx>[0];
   const addresses = await getTraderAddresses(
@@ -393,6 +459,39 @@ export async function ensureTraderRegisteredIxs(
     0,
     0,
   );
+  const connection = new Connection(rpcUrl, "confirmed");
+  let registered = registeredHint;
+  try {
+    const info = await connection.getAccountInfo(
+      new PublicKey(String(addresses.traderAccount)),
+    );
+    registered = info !== null;
+  } catch {
+    // RPC hiccup — keep the API-derived hint rather than blocking the action.
+  }
+  if (registered) return [];
+
+  // Registration funds the trader PDA's rent from the wallet. Without this
+  // check an underfunded wallet fails simulation with an opaque program
+  // error 0x1 (System: insufficient lamports, propagated) — say it plainly.
+  let shortfallMessage: string | null = null;
+  try {
+    const [balance, rent] = await Promise.all([
+      connection.getBalance(new PublicKey(authority)),
+      connection.getMinimumBalanceForRentExemption(TRADER_ACCOUNT_SIZE),
+    ]);
+    const needed = rent + REGISTER_FEE_BUFFER_LAMPORTS;
+    if (balance < needed) {
+      const fmt = (lamports: number) => (lamports / 1e9).toFixed(4);
+      shortfallMessage =
+        `Registering your Phoenix margin account needs a one-time ` +
+        `~${fmt(rent)} SOL rent deposit plus fees. Wallet has ` +
+        `${fmt(balance)} SOL — add ~${fmt(needed - balance)} SOL and retry.`;
+    }
+  } catch {
+    // RPC hiccup — let the simulation surface whatever happens.
+  }
+  if (shortfallMessage) throw new Error(shortfallMessage);
   const ix = buildRegisterTraderIx({
     payer: authority as Reg["payer"],
     trader: authority as Reg["trader"],
