@@ -14,6 +14,7 @@
     type AiRead,
   } from "$lib/ai";
   import {
+    chartLinePrefs,
     freshSnapshot,
     recordSnapshot,
     traderSnapshots,
@@ -113,6 +114,7 @@
     fetchOnChainCollateralUsd,
     fetchPhoenixTraderState,
     PHOENIX_REFERRAL_CODE,
+    type PhoenixOpenOrder,
     type PhoenixPosition,
     type PhoenixSide,
     type PhoenixTraderState,
@@ -590,6 +592,16 @@
     phoenixTotalCollateral > 0
       ? (marginInUseUsd / phoenixTotalCollateral) * 100
       : 0;
+  function liqDistancePctOf(position: PhoenixPosition): number | null {
+    const mark =
+      marketMids[position.symbol] ??
+      (position.symbol === selectedSymbol ? latestPrice : null);
+    if (mark === null || position.liquidationPrice === null || mark === 0) {
+      return null;
+    }
+    return (Math.abs(mark - position.liquidationPrice) / mark) * 100;
+  }
+
   $: selectedPosition =
     enrichedPositions.find((position) => position.symbol === selectedSymbol) ??
     null;
@@ -751,7 +763,16 @@
   }
 
   // Liq lines re-render when positions, market, or chart mode change.
-  $: refreshLiqLines(enrichedPositions, selectedSymbol, tradeMode);
+  $: lineLabelTick = Math.floor(nowMs / 2_000);
+  $: perpOpenOrders = phoenixTrader?.orders ?? [];
+  $: refreshChartLines(
+    enrichedPositions,
+    perpOpenOrders,
+    alerts,
+    $chartLinePrefs,
+    selectedSymbol,
+    tradeMode,
+  ), lineLabelTick;
 
   // Spot limit orders follow the connected wallet.
   $: if ($privyAuth.walletAddress !== triggerWallet) {
@@ -2777,7 +2798,14 @@
     setChartData();
     // Series was just (re)created — re-draw liq lines for open positions.
     liqLines = [];
-    refreshLiqLines(enrichedPositions, selectedSymbol, tradeMode);
+    refreshChartLines(
+      enrichedPositions,
+      perpOpenOrders,
+      alerts,
+      $chartLinePrefs,
+      selectedSymbol,
+      tradeMode,
+    );
   }
 
   function renderChartSeries(points: MarketPoint[]): void {
@@ -3273,27 +3301,103 @@
   }
 
   // ── Liquidation lines: open positions drawn where the user looks ──
-  function refreshLiqLines(
+  // ── Chart overlay lines ────────────────────────────────────────────
+  // Your live trading state drawn on the chart: position entry (with live
+  // uPnL in the label), TP/SL triggers, liq estimate, open orders, armed
+  // alerts. Toggleable per group, persisted per device. Lines are cheap to
+  // rebuild wholesale; labels refresh on a 2s tick.
+  function refreshChartLines(
     positions: PhoenixPosition[],
+    orders: PhoenixOpenOrder[],
+    armed: Alert[],
+    prefs: { pos: boolean; tpsl: boolean; orders: boolean; alerts: boolean },
     symbol: string,
     mode: "perps" | "spot",
   ): void {
-    if (!candleSeries) return;
-    for (const line of liqLines) candleSeries.removePriceLine(line);
+    const series = candleSeries;
+    if (!series) return;
+    for (const line of liqLines) series.removePriceLine(line);
     liqLines = [];
     if (mode !== "perps") return;
+    const add = (options: Parameters<typeof series.createPriceLine>[0]) =>
+      liqLines.push(series.createPriceLine(options));
+
     for (const position of positions) {
-      if (position.symbol !== symbol || !position.liquidationPrice) continue;
-      liqLines.push(
-        candleSeries.createPriceLine({
+      if (position.symbol !== symbol) continue;
+      const side = position.size > 0 ? "LONG" : "SHORT";
+      const sideColor = position.size > 0 ? colors.up : colors.down;
+      if (prefs.pos && position.entryPrice !== null) {
+        const upnl =
+          position.unrealizedPnl !== null
+            ? ` · ${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
+            : "";
+        add({
+          price: position.entryPrice,
+          color: sideColor,
+          lineWidth: 2,
+          lineStyle: 0, // solid
+          axisLabelVisible: true,
+          title: `${side} ${formatNumber(Math.abs(position.size), 4)} @ ${formatPrice(position.entryPrice)}${upnl}`,
+        });
+      }
+      if (prefs.pos && position.liquidationPrice !== null) {
+        add({
           price: position.liquidationPrice,
           color: colors.down,
           lineWidth: 1,
           lineStyle: 2, // dashed
           axisLabelVisible: true,
-          title: "LIQ",
-        }),
-      );
+          title: "LIQ est",
+        });
+      }
+      if (prefs.tpsl && position.takeProfitPrice !== null && position.entryPrice !== null) {
+        const gain = Math.abs(position.takeProfitPrice - position.entryPrice) * Math.abs(position.size);
+        add({
+          price: position.takeProfitPrice,
+          color: colors.up,
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `TP · +$${formatNumber(gain, 2)}`,
+        });
+      }
+      if (prefs.tpsl && position.stopLossPrice !== null && position.entryPrice !== null) {
+        const loss = Math.abs(position.stopLossPrice - position.entryPrice) * Math.abs(position.size);
+        add({
+          price: position.stopLossPrice,
+          color: colors.down,
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `SL · -$${formatNumber(loss, 2)}`,
+        });
+      }
+    }
+    if (prefs.orders) {
+      for (const order of orders) {
+        if (order.symbol !== symbol || order.price === null) continue;
+        add({
+          price: order.price,
+          color: colors.amber,
+          lineWidth: 1,
+          lineStyle: 1, // dotted
+          axisLabelVisible: true,
+          title: `${order.side === "bid" ? "BID" : "ASK"} ${order.remaining !== null ? formatNumber(order.remaining, 4) : ""}`.trim(),
+        });
+      }
+    }
+    if (prefs.alerts) {
+      for (const alert of armed) {
+        if (alert.symbol !== symbol || alert.triggered) continue;
+        add({
+          price: alert.price,
+          color: colors.accent,
+          lineWidth: 1,
+          lineStyle: 1,
+          axisLabelVisible: true,
+          title: `ALERT ${alert.op === "above" ? "↑" : "↓"}`,
+        });
+      }
     }
   }
 
@@ -4246,6 +4350,23 @@
                 <small>{marketFresh}</small>
               {/if}
             </div>
+            {#if tradeMode === "perps" && selectedPosition}
+              <div
+                class="pos-badge"
+                class:positive={selectedPosition.size > 0}
+                class:negative={selectedPosition.size < 0}
+              >
+                {selectedPosition.size > 0 ? "LONG" : "SHORT"}
+                {formatNumber(Math.abs(selectedPosition.size), 4)}
+                @ {formatPrice(selectedPosition.entryPrice)}
+                {#if selectedPosition.unrealizedPnl !== null}
+                  · {selectedPosition.unrealizedPnl >= 0 ? "+" : "-"}${formatNumber(Math.abs(selectedPosition.unrealizedPnl), 2)}
+                {/if}
+                {#if selectedPosition.liquidationPrice !== null}
+                  · liq {formatPrice(selectedPosition.liquidationPrice)} est
+                {/if}
+              </div>
+            {/if}
             <div class="chart-legend">
               <span><i>O</i><b>{formatPrice(activeCandle?.open)}</b></span>
               <span><i>H</i><b>{formatPrice(activeCandle?.high)}</b></span>
@@ -4300,6 +4421,25 @@
         >
           180
         </button>
+        {#if tradeMode === "perps"}
+          <span class="line-toggle-group" role="group" aria-label="Chart lines">
+            {#each [["pos", "POS"], ["tpsl", "TP/SL"], ["orders", "ORD"], ["alerts", "ALRT"]] as [key, label] (key)}
+              <button
+                class="line-toggle"
+                class:active={$chartLinePrefs[key as keyof typeof $chartLinePrefs]}
+                type="button"
+                title={`Toggle ${label} lines`}
+                onclick={() =>
+                  chartLinePrefs.update((prefs) => ({
+                    ...prefs,
+                    [key]: !prefs[key as keyof typeof prefs],
+                  }))}
+              >
+                {label}
+              </button>
+            {/each}
+          </span>
+        {/if}
         <strong>{chartRangeLabel} · UTC · {candleCountdown}</strong>
         <button
           class:active={chartScale === "percent"}
@@ -4547,33 +4687,129 @@
 
         {#if enrichedPositions.length > 0}
           <div class="venue-section">Positions</div>
-          {#each enrichedPositions as position}
-            <div class="venue-row">
-              <span class={position.size > 0 ? "positive" : "negative"}>
-                {position.size > 0 ? "LONG" : "SHORT"} {position.symbol}
-              </span>
-              <b>{formatNumber(Math.abs(position.size), 4)} @ {formatPrice(position.entryPrice)}</b>
-              <em
-                class:positive={(position.unrealizedPnl ?? 0) >= 0}
-                class:negative={(position.unrealizedPnl ?? 0) < 0}
-              >{position.unrealizedPnl !== null ? `$${formatNumber(position.unrealizedPnl, 2)}` : "--"}</em>
-              <small>liq est {formatPrice(position.liquidationPrice)}</small>
-              {#if position.unrealizedPnl !== null}
+          {#each enrichedPositions as position (`${position.symbol}:${position.subaccountIndex}`)}
+            {@const roePct =
+              position.unrealizedPnl !== null && position.marginUsd
+                ? (position.unrealizedPnl / position.marginUsd) * 100
+                : null}
+            {@const liqDist = liqDistancePctOf(position)}
+            <div class="pos-card">
+              <div class="pos-card-top">
+                <span
+                  class="pos-side"
+                  class:positive={position.size > 0}
+                  class:negative={position.size < 0}
+                >{position.size > 0 ? "LONG" : "SHORT"}</span>
+                <button
+                  class="pos-symbol"
+                  type="button"
+                  title="Show on chart"
+                  onclick={() => chooseMonitorRow(position.symbol)}
+                >{position.symbol}</button>
+                <b class="mono">
+                  {formatNumber(Math.abs(position.size), 4)}
+                  {#if position.positionValue !== null}(${formatNumber(position.positionValue, 2)}){/if}
+                </b>
+                <em
+                  class="mono"
+                  class:positive={(position.unrealizedPnl ?? 0) >= 0}
+                  class:negative={(position.unrealizedPnl ?? 0) < 0}
+                >
+                  {position.unrealizedPnl !== null
+                    ? `${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
+                    : "--"}
+                  {#if roePct !== null}({roePct >= 0 ? "+" : ""}{formatNumber(roePct, 1)}%){/if}
+                </em>
+              </div>
+              <div class="pos-card-mid mono">
+                <span>entry {formatPrice(position.entryPrice)}</span>
+                <span>
+                  mark {formatPrice(
+                    marketMids[position.symbol] ??
+                      (position.symbol === selectedSymbol ? latestPrice : null),
+                  )}
+                </span>
+                <span>
+                  TP {position.takeProfitPrice !== null ? formatPrice(position.takeProfitPrice) : "--"}
+                  · SL {position.stopLossPrice !== null ? formatPrice(position.stopLossPrice) : "--"}
+                </span>
+              </div>
+              <div class="pos-card-bottom">
+                {#if liqDist !== null}
+                  <div
+                    class="liq-bar"
+                    class:warn={liqDist < 25}
+                    class:danger={liqDist < 10}
+                    title={`Liquidation est ${formatNumber(liqDist, 1)}% away`}
+                  >
+                    <i style={`width: ${Math.min(100, (liqDist / 50) * 100)}%;`}></i>
+                    <span class="mono">liq {formatNumber(liqDist, 1)}% away</span>
+                  </div>
+                {:else}
+                  <span class="mono liq-none">liq --</span>
+                {/if}
+                {#if position.unrealizedPnl !== null}
+                  <button
+                    class="row-action"
+                    type="button"
+                    onclick={() => sharePhoenixPosition(position, marketMids)}
+                  >
+                    Share
+                  </button>
+                {/if}
                 <button
                   class="row-action"
                   type="button"
-                  onclick={() => sharePhoenixPosition(position, marketMids)}
+                  disabled={phoenixBusy}
+                  onclick={() => closePhoenixPosition(position.symbol, position.size)}
                 >
-                  Share
+                  Close
                 </button>
-              {/if}
+              </div>
+            </div>
+          {/each}
+          <div class="pos-total mono">
+            <span>TOTAL</span>
+            <span>
+              exp ${formatNumber(
+                enrichedPositions.reduce(
+                  (sum, position) => sum + (position.positionValue ?? 0),
+                  0,
+                ),
+                2,
+              )}
+            </span>
+            <span
+              class:positive={accountUpnlUsd >= 0}
+              class:negative={accountUpnlUsd < 0}
+            >uPNL {accountUpnlUsd >= 0 ? "+" : "-"}${formatNumber(Math.abs(accountUpnlUsd), 2)}</span>
+          </div>
+        {/if}
+
+        {#if perpOpenOrders.length > 0}
+          <div class="venue-section">Open orders</div>
+          {#each perpOpenOrders as order (order.orderSequenceNumber)}
+            {@const mark = marketMids[order.symbol] ?? (order.symbol === selectedSymbol ? latestPrice : null)}
+            <div class="venue-row">
+              <span class={order.side === "bid" ? "positive" : "negative"}>
+                {order.isStopLoss ? "STOP" : "LIMIT"} {order.side.toUpperCase()} {order.symbol}
+              </span>
+              <b class="mono">
+                {order.remaining !== null ? formatNumber(order.remaining, 4) : "--"}
+                @ {formatPrice(order.price)}
+              </b>
+              <em class="mono">
+                {mark !== null && order.price !== null
+                  ? `${formatNumber((Math.abs(order.price - mark) / mark) * 100, 2)}% away`
+                  : "--"}
+              </em>
               <button
                 class="row-action"
                 type="button"
                 disabled={phoenixBusy}
-                onclick={() => closePhoenixPosition(position.symbol, position.size)}
+                onclick={() => cancelPhoenixOrders(order.symbol, order.side)}
               >
-                Close
+                Cancel {order.side}s
               </button>
             </div>
           {/each}
@@ -6520,12 +6756,144 @@
     font-style: normal;
   }
 
-  .venue-row small {
+  .venue-note {
+    margin: 0 0.75rem 0.4rem;
+  }
+
+  /* ── Position cards ──────────────────────────────────────────────── */
+  .pos-card {
+    display: grid;
+    gap: 0.3rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .pos-card-top {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  .pos-side {
+    font-family: ui-monospace, monospace;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    border: 1px solid currentcolor;
+    padding: 0.05rem 0.3rem;
+  }
+
+  .pos-symbol {
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font-weight: 800;
+    font-size: 0.85rem;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .pos-symbol:hover {
+    color: var(--accent);
+  }
+
+  .pos-card-top b {
+    font-size: 0.76rem;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .pos-card-top em {
+    margin-left: auto;
+    font-style: normal;
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
+
+  .pos-card-mid {
+    display: flex;
+    gap: 0.9rem;
+    font-size: 0.68rem;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+
+  .pos-card-bottom {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .liq-bar {
+    position: relative;
+    flex: 1;
+    height: 1.05rem;
+    border: 1px solid var(--line-soft);
+    overflow: hidden;
+  }
+
+  .liq-bar i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: rgba(44, 233, 127, 0.14);
+  }
+
+  .liq-bar.warn i {
+    background: rgba(255, 180, 84, 0.18);
+  }
+
+  .liq-bar.danger i {
+    background: rgba(255, 90, 106, 0.22);
+  }
+
+  .liq-bar span {
+    position: relative;
+    display: block;
+    padding: 0.08rem 0.4rem;
+    font-size: 0.62rem;
     color: var(--muted);
   }
 
-  .venue-note {
-    margin: 0 0.75rem 0.4rem;
+  .liq-bar.warn span { color: var(--amber); }
+  .liq-bar.danger span { color: var(--down); }
+
+  .liq-none {
+    flex: 1;
+    font-size: 0.62rem;
+    color: var(--faint);
+  }
+
+  .pos-total {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.68rem;
+    color: var(--muted);
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  /* ── Chart overlay position badge ────────────────────────────────── */
+  .pos-badge {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.66rem;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Chart footer line toggles ───────────────────────────────────── */
+  .line-toggle-group {
+    display: inline-flex;
+    gap: 0.15rem;
+    margin-left: 0.6rem;
+    padding-left: 0.6rem;
+    border-left: 1px solid var(--line-soft);
+  }
+
+  .chart-footer .line-toggle {
+    font-size: 0.6rem;
+    letter-spacing: 0.04em;
+    min-height: 1.6rem;
+    padding-inline: 0.35rem;
   }
 
   .funds-qr {
@@ -9014,10 +9382,6 @@
 
     .venue-row {
       grid-template-columns: auto minmax(0, 1fr) auto auto;
-    }
-
-    .venue-row small {
-      display: none;
     }
 
     .chart-panel {
