@@ -523,6 +523,16 @@
   $: fundingPercent =
     marketStats?.funding != null ? marketStats.funding * 100 : null;
   $: priceLoading = chartPrice === null;
+  $: docTitle = (() => {
+    if (tradeMode === "spot" && spotAsset) {
+      return spotAsset.price !== null
+        ? `${formatPrice(spotAsset.price)} ${spotAsset.symbol} · Trader Ralph`
+        : `${spotAsset.symbol} · Trader Ralph`;
+    }
+    return latestPrice !== null
+      ? `${formatPrice(latestPrice)} ${selectedSymbol}-PERP · Trader Ralph`
+      : "Trader Ralph";
+  })();
   $: statsLoading = marketStats === null;
   $: bookLoading = asks.length === 0 || bids.length === 0;
   $: updatedLoading = lastMarketUpdate === null;
@@ -3958,7 +3968,7 @@
 </script>
 
 <svelte:head>
-  <title>Trader Ralph</title>
+  <title>{docTitle}</title>
   <meta
     name="description"
     content="Frontend-only Trader Ralph SvelteKit terminal."
