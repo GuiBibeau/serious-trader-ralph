@@ -15,6 +15,8 @@ for live wallet actions.
 ## What This Repo Contains
 
 - `apps/portal`: SvelteKit dashboard UI.
+- `packages/ui`: `@trader-ralph/ui` — shared design system (tokens, formatters,
+  Svelte 5 components) consumed source-direct by the portal.
 - `apps/portal/src/lib/phoenix-market-data.ts`: Phoenix perpetuals REST and
   WebSocket market data adapter.
 - `apps/portal/src/lib/phoenix-trade.ts`: Phoenix referral activation,
