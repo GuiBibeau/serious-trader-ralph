@@ -400,13 +400,28 @@
     border: 1px solid var(--line);
     color: var(--ink);
     transition: border-color 140ms ease, background 140ms ease;
+    box-shadow: var(--shadow-hard-sm);
+  }
+  .rail-btn:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.55);
+  }
+  .rail-btn:active {
+    transform: translate(2px, 2px);
+    box-shadow: none;
   }
   .rail-btn small { font-weight: 500; font-size: 0.68rem; color: var(--muted); }
   .rail-btn.spot { background: var(--accent); border-color: transparent; color: var(--accent-contrast); }
   .rail-btn.spot small { color: rgba(20, 6, 12, 0.65); }
-  .rail-btn.spot:hover { filter: brightness(1.07); }
+  .rail-btn.spot:hover { filter: brightness(1.08); }
   .rail-btn.long:hover { border-color: var(--up); }
   .rail-btn.short:hover { border-color: var(--down); }
+  @media (prefers-reduced-motion: reduce) {
+    .rail-btn:hover,
+    .rail-btn:active {
+      transform: none;
+    }
+  }
   /* Stats */
   .stats {
     display: grid;

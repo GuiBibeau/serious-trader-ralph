@@ -37,6 +37,8 @@
     background: transparent;
     color: var(--muted);
     padding: 0.35rem 0.7rem;
+    /* Self-contained: don't rely on the app's global button font reset. */
+    font: inherit;
     font-size: 0.82rem;
     font-weight: 600;
     cursor: pointer;

@@ -100,6 +100,9 @@
     padding: 0.12rem 0.55rem;
     text-decoration: none;
   }
+  .tag:hover {
+    color: var(--ink);
+  }
   .empty { color: var(--faint); }
 
   .side { align-self: start; position: sticky; top: 4.6rem; /* clears the sticky nav */ }
