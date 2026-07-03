@@ -73,6 +73,9 @@ export type PhoenixOpenOrder = {
 
 export type PhoenixTraderState = {
   registered: boolean;
+  /** True when collateralUsd came from a this-session trader-PDA read —
+   * the only source allowed to trigger the "Deposit first" gate. */
+  chainVerified?: boolean;
   /** Indexer snapshot slot — compared against the chain tip for sync lag. */
   apiSlot: number | null;
   /** Free cross collateral in the parent subaccount — gates new orders. */
