@@ -446,7 +446,53 @@
     void screenWallet(normalizedWalletAddress);
   }
   $: phoenixAuthority = $privyAuth.authenticated ? normalizedWalletAddress : "";
-  $: if (phoenixAuthority && phoenixTrader === null) void refreshPhoenixTrader();
+  // Cold-start honesty: hydrate the last-known trader snapshot for this
+  // wallet instantly (localStorage), then let the live refresh correct it.
+  // Without this, page load reads null state as "collateral 0" and flashes
+  // "Deposit first" at funded users for seconds.
+  const TRADER_CACHE_PREFIX = "trader-ralph-phoenix-state:";
+  const TRADER_CACHE_TTL_MS = 24 * 3_600_000;
+  let hydratedAuthority: string | null = null;
+
+  function loadTraderCache(authority: string): PhoenixTraderState | null {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(TRADER_CACHE_PREFIX + authority);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as {
+        at: number;
+        state: PhoenixTraderState;
+      };
+      if (!parsed || typeof parsed.at !== "number" || !parsed.state) {
+        return null;
+      }
+      if (Date.now() - parsed.at > TRADER_CACHE_TTL_MS) return null;
+      return parsed.state;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveTraderCache(authority: string, state: PhoenixTraderState): void {
+    try {
+      window.localStorage.setItem(
+        TRADER_CACHE_PREFIX + authority,
+        JSON.stringify({ at: Date.now(), state }),
+      );
+    } catch {
+      // storage unavailable — non-fatal, next load just fetches
+    }
+  }
+
+  $: if (phoenixAuthority && hydratedAuthority !== phoenixAuthority) {
+    hydratedAuthority = phoenixAuthority;
+    phoenixTrader = loadTraderCache(phoenixAuthority);
+    void refreshPhoenixTrader();
+  } else if (!phoenixAuthority && hydratedAuthority !== null) {
+    // Logout / wallet teardown: never show one wallet's state for another.
+    hydratedAuthority = null;
+    phoenixTrader = null;
+  }
   $: if (phoenixAuthority) void ensurePhoenixOnboarding(phoenixAuthority);
   $: if (phoenixAuthority) void refreshTokenBalances(phoenixAuthority);
   $: spotFiltered = spotSearch.trim()
@@ -525,8 +571,10 @@
   // account, so it must hold enough collateral before placing a trade.
   $: requiredMarginUsd = tradePreview ? tradePreview.notionalUsd / tradeLeverage : 0;
   $: phoenixCollateral = phoenixTrader?.collateralUsd ?? 0;
+  $: phoenixStateKnown = phoenixTrader !== null;
   $: needsPhoenixFunding =
     Boolean(phoenixAuthority) &&
+    phoenixStateKnown &&
     requiredMarginUsd > 0 &&
     phoenixCollateral + 0.01 < requiredMarginUsd;
 
@@ -2227,21 +2275,25 @@
 
   // ── Phoenix venue actions ─────────────────────────────────────────
   async function refreshPhoenixTrader(): Promise<void> {
-    if (!phoenixAuthority) return;
+    const authority = phoenixAuthority;
+    if (!authority) return;
     try {
       // API supplies positions/orders; the chain supplies collateral. The
       // trader PDA reflects a deposit the moment it confirms, while the
       // Phoenix indexer lags — without the overlay, "Deposit first" kept
       // showing after a successful deposit.
       const [state, chainCollateralUsd] = await Promise.all([
-        fetchPhoenixTraderState(phoenixAuthority),
-        fetchOnChainCollateralUsd(solanaRpcUrl(), phoenixAuthority),
+        fetchPhoenixTraderState(authority),
+        fetchOnChainCollateralUsd(solanaRpcUrl(), authority),
       ]);
       if (chainCollateralUsd !== null) {
         state.registered = true;
         state.collateralUsd = chainCollateralUsd;
       }
+      // Wallet may have switched while we fetched — never cross-pollinate.
+      if (authority !== phoenixAuthority) return;
       phoenixTrader = state;
+      saveTraderCache(authority, state);
     } catch {
       // transient API hiccup — keep last state
     }
@@ -5798,6 +5850,13 @@
       {#if !phoenixAuthority}
         <button class="primary wide" type="button" onclick={openAuthModal}>
           Connect account to trade
+        </button>
+      {:else if !phoenixStateKnown}
+        <!-- Account state still loading: show the real action, disabled —
+             never the "Deposit first" claim before we actually know. -->
+        <button class="primary wide" type="button" disabled>
+          <span class="spinner" aria-hidden="true"></span>
+          {tradeSide === "buy" ? "Long" : "Short"} {selectedSymbol}-PERP · {tradeLeverage}x
         </button>
       {:else if needsPhoenixFunding}
         <button class="primary wide" type="button" onclick={openPhoenixFunding}>
