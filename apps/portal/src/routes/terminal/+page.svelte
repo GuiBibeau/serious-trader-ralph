@@ -14,6 +14,11 @@
     type AiRead,
   } from "$lib/ai";
   import {
+    freshSnapshot,
+    recordSnapshot,
+    traderSnapshots,
+  } from "$lib/phoenix-cache";
+  import {
     fetchNews,
     fetchOilPanel,
     fetchRatesPanel,
@@ -257,7 +262,12 @@
   let onboardedAddress = "";
 
   // Phoenix venue (live trading) state.
-  let phoenixTrader: PhoenixTraderState | null = null;
+  // Derived from the persisted per-wallet store: instant on load (device
+  // snapshot), corrected by the live refresh, synced across tabs. Loading
+  // is null — the ticket never claims "Deposit first" for it.
+  $: phoenixTrader = phoenixAuthority
+    ? freshSnapshot($traderSnapshots, phoenixAuthority)
+    : null;
   let phoenixBusy = false;
   let phoenixActionError = "";
   let lastTradeSignature = "";
@@ -446,52 +456,14 @@
     void screenWallet(normalizedWalletAddress);
   }
   $: phoenixAuthority = $privyAuth.authenticated ? normalizedWalletAddress : "";
-  // Cold-start honesty: hydrate the last-known trader snapshot for this
-  // wallet instantly (localStorage), then let the live refresh correct it.
-  // Without this, page load reads null state as "collateral 0" and flashes
-  // "Deposit first" at funded users for seconds.
-  const TRADER_CACHE_PREFIX = "trader-ralph-phoenix-state:";
-  const TRADER_CACHE_TTL_MS = 24 * 3_600_000;
-  let hydratedAuthority: string | null = null;
-
-  function loadTraderCache(authority: string): PhoenixTraderState | null {
-    if (typeof window === "undefined") return null;
-    try {
-      const raw = window.localStorage.getItem(TRADER_CACHE_PREFIX + authority);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as {
-        at: number;
-        state: PhoenixTraderState;
-      };
-      if (!parsed || typeof parsed.at !== "number" || !parsed.state) {
-        return null;
-      }
-      if (Date.now() - parsed.at > TRADER_CACHE_TTL_MS) return null;
-      return parsed.state;
-    } catch {
-      return null;
-    }
-  }
-
-  function saveTraderCache(authority: string, state: PhoenixTraderState): void {
-    try {
-      window.localStorage.setItem(
-        TRADER_CACHE_PREFIX + authority,
-        JSON.stringify({ at: Date.now(), state }),
-      );
-    } catch {
-      // storage unavailable — non-fatal, next load just fetches
-    }
-  }
-
-  $: if (phoenixAuthority && hydratedAuthority !== phoenixAuthority) {
-    hydratedAuthority = phoenixAuthority;
-    phoenixTrader = loadTraderCache(phoenixAuthority);
+  // Wallet appears (login, restore, or switch): refresh from the network;
+  // the derived view above already shows the device snapshot meanwhile.
+  let refreshedAuthority: string | null = null;
+  $: if (phoenixAuthority && refreshedAuthority !== phoenixAuthority) {
+    refreshedAuthority = phoenixAuthority;
     void refreshPhoenixTrader();
-  } else if (!phoenixAuthority && hydratedAuthority !== null) {
-    // Logout / wallet teardown: never show one wallet's state for another.
-    hydratedAuthority = null;
-    phoenixTrader = null;
+  } else if (!phoenixAuthority) {
+    refreshedAuthority = null;
   }
   $: if (phoenixAuthority) void ensurePhoenixOnboarding(phoenixAuthority);
   $: if (phoenixAuthority) void refreshTokenBalances(phoenixAuthority);
@@ -2290,10 +2262,9 @@
         state.registered = true;
         state.collateralUsd = chainCollateralUsd;
       }
-      // Wallet may have switched while we fetched — never cross-pollinate.
-      if (authority !== phoenixAuthority) return;
-      phoenixTrader = state;
-      saveTraderCache(authority, state);
+      // Store is keyed per wallet, so a mid-flight switch cannot
+      // cross-pollinate — record under the authority we fetched for.
+      recordSnapshot(authority, state);
     } catch {
       // transient API hiccup — keep last state
     }
