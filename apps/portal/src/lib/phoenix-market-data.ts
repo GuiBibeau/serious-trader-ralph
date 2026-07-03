@@ -94,6 +94,8 @@ export type PhoenixMarketConfig = {
   takerFee: number | null;
   maxLeverage: number | null;
   commodity: boolean;
+  /** Next session open/close (ISO), from the market calendar; null = 24/7. */
+  nextTransitionUtc: string | null;
 };
 
 export type MarketPoint = {
@@ -309,6 +311,65 @@ export function phoenixSource(symbol: string): PhoenixSource {
   };
 }
 
+// ── Daily stats sweep ─────────────────────────────────────────────────
+// Per-market 24h change/volume derived from the last two daily candles.
+// The stream only carries stats for the subscribed market; this fills the
+// palette and monitor for every market at REST cost (~1 call/market/min).
+export type PhoenixDailyStat = {
+  lastPrice: number | null;
+  change24hPct: number | null;
+  volume24hUsd: number | null;
+};
+
+let dailyStatsCache: {
+  at: number;
+  stats: Record<string, PhoenixDailyStat>;
+} | null = null;
+const DAILY_STATS_TTL_MS = 60_000;
+
+export async function fetchPhoenixDailyStats(
+  symbols: string[],
+): Promise<Record<string, PhoenixDailyStat>> {
+  if (dailyStatsCache && Date.now() - dailyStatsCache.at < DAILY_STATS_TTL_MS) {
+    return dailyStatsCache.stats;
+  }
+  // Gentle sweep: batches of 8 so ~50 markets never trip rate limits, and
+  // partial results merge over the previous sweep instead of erasing it.
+  const stats: Record<string, PhoenixDailyStat> = {
+    ...(dailyStatsCache?.stats ?? {}),
+  };
+  const queue = [...symbols];
+  while (queue.length > 0) {
+    const batch = queue.splice(0, 8);
+    const entries = await Promise.allSettled(
+      batch.map(async (symbol) => {
+        const rows = await fetchPhoenixJson<Record<string, unknown>[]>(
+          `/v1/candles/${encodeURIComponent(symbol)}?timeframe=1d&limit=3`,
+        );
+        const candles = (Array.isArray(rows) ? rows : []).slice(-2);
+        const last = candles[candles.length - 1];
+        const prev = candles.length > 1 ? candles[0] : null;
+        const close = parseFiniteNumber(last?.close);
+        const prevClose = parseFiniteNumber(prev?.close);
+        const stat: PhoenixDailyStat = {
+          lastPrice: close,
+          change24hPct:
+            close !== null && prevClose !== null && prevClose !== 0
+              ? ((close - prevClose) / prevClose) * 100
+              : null,
+          volume24hUsd: parseFiniteNumber(last?.volumeQuote),
+        };
+        return [symbol, stat] as const;
+      }),
+    );
+    for (const entry of entries) {
+      if (entry.status === "fulfilled") stats[entry.value[0]] = entry.value[1];
+    }
+  }
+  dailyStatsCache = { at: Date.now(), stats };
+  return stats;
+}
+
 async function fetchPhoenixJson<T>(path: string): Promise<T> {
   const response = await fetch(`${PHOENIX_API_BASE}${path}`, {
     headers: { Accept: "application/json" },
@@ -333,6 +394,9 @@ function parseMarketConfig(
       .map((tier) => parseFiniteNumber(tier.maxLeverage))
       .filter((value): value is number => value !== null),
   );
+  const metadata = isRecord(raw.metadata) ? raw.metadata : null;
+  const calendar =
+    metadata && isRecord(metadata.calendar) ? metadata.calendar : null;
   return {
     symbol,
     marketStatus: String(raw.marketStatus ?? "unknown"),
@@ -341,6 +405,9 @@ function parseMarketConfig(
     takerFee: parseFiniteNumber(raw.takerFee),
     maxLeverage: maxLeverage > 0 ? maxLeverage : null,
     commodity: isRecord(raw.commodityMetadata),
+    nextTransitionUtc: calendar
+      ? String(calendar.nextMarketTransitionUtc ?? "") || null
+      : null,
   };
 }
 

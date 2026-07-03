@@ -58,6 +58,8 @@ export type PhoenixPosition = {
   /** Which subaccount holds it (needed to close). */
   traderPdaIndex: number;
   subaccountIndex: number;
+  /** Collateral of the isolated subaccount holding it — drives liq est. */
+  marginUsd: number | null;
 };
 
 export type PhoenixOpenOrder = {
@@ -71,6 +73,8 @@ export type PhoenixOpenOrder = {
 
 export type PhoenixTraderState = {
   registered: boolean;
+  /** Indexer snapshot slot — compared against the chain tip for sync lag. */
+  apiSlot: number | null;
   /** Free cross collateral in the parent subaccount — gates new orders. */
   collateralUsd: number | null;
   /** Parent + every isolated subaccount's margin — "money in Phoenix". */
@@ -155,6 +159,7 @@ export async function fetchPhoenixTraderState(
 ): Promise<PhoenixTraderState> {
   const empty: PhoenixTraderState = {
     registered: false,
+    apiSlot: null,
     collateralUsd: null,
     totalCollateralUsd: null,
     effectiveCollateralUsd: null,
@@ -187,6 +192,7 @@ export async function fetchPhoenixTraderState(
     markets.find((market) => market.symbol === symbol)?.baseLotsDecimals ?? 0;
 
   const state: PhoenixTraderState = { ...empty, registered: true };
+  state.apiSlot = Number.isFinite(Number(data.slot)) ? Number(data.slot) : null;
   let totalUsd = 0;
   for (const sub of subaccounts) {
     const subIndex = Number(sub.subaccountIndex ?? 0);
@@ -218,6 +224,7 @@ export async function fetchPhoenixTraderState(
         stopLossPrice: triggerPriceUsd(position.stopLossTriggers),
         traderPdaIndex: pdaIndex,
         subaccountIndex: subIndex,
+        marginUsd: collateral,
       });
     }
   }

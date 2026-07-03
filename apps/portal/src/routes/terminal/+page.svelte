@@ -35,6 +35,7 @@
     DEFAULT_PHOENIX_SYMBOL,
     fetchPhoenixCandles,
     fetchPhoenixInitialMarketData,
+    fetchPhoenixDailyStats,
     fetchPhoenixMarkets,
     getCachedCandles,
     phoenixSource,
@@ -43,6 +44,7 @@
     upsertLiveCandle,
     type DepthLevel,
     type MarketPoint,
+    type PhoenixDailyStat,
     type PhoenixMarketConfig,
     type PhoenixMarketStats,
     type PhoenixTimeframe,
@@ -184,6 +186,42 @@
   let bids: DepthLevel[] = [];
   let asks: DepthLevel[] = [];
   let trades: TradeTick[] = [];
+  // 24h change/volume for EVERY perp market (palette + monitor); the ws
+  // stream only carries stats for the subscribed market.
+  let dailyStats: Record<string, PhoenixDailyStat> = {};
+
+  async function refreshDailyStats(): Promise<void> {
+    if (markets.length === 0) return;
+    try {
+      dailyStats = await fetchPhoenixDailyStats(
+        markets.map((market) => market.symbol),
+      );
+    } catch {
+      // sweep is best-effort; keep last values
+    }
+  }
+
+  let monitorSort: "volume" | "change" | "symbol" = "volume";
+  $: monitorRows = markets
+    .map((config) => ({
+      symbol: config.symbol,
+      lev: config.maxLeverage,
+      mid: marketMids[config.symbol] ?? dailyStats[config.symbol]?.lastPrice ?? null,
+      change: dailyStats[config.symbol]?.change24hPct ?? null,
+      volume: dailyStats[config.symbol]?.volume24hUsd ?? null,
+    }))
+    .sort((a, b) =>
+      monitorSort === "symbol"
+        ? a.symbol.localeCompare(b.symbol)
+        : monitorSort === "change"
+          ? (b.change ?? -1e9) - (a.change ?? -1e9)
+          : (b.volume ?? -1) - (a.volume ?? -1),
+    );
+
+  function chooseMonitorRow(symbol: string): void {
+    if (tradeMode !== "perps") setTradeMode("perps", false);
+    if (symbol !== selectedSymbol) void switchPhoenixMarket(symbol);
+  }
   let bookVersion = 0;
   let marketSourceLabel = "loading";
   let marketVolume24h: number | null = null;
@@ -339,6 +377,7 @@
   // Draggable dashboard: reorderable info panels (chart + book stay anchored).
   const DEFAULT_PANEL_ORDER = [
     "watch",
+    "markets",
     "perp",
     "spot",
     "screener",
@@ -491,6 +530,56 @@
     requiredMarginUsd > 0 &&
     phoenixCollateral + 0.01 < requiredMarginUsd;
 
+  // ── Ambient risk (Bloomberg posture) ───────────────────────────────
+  // The trader API stopped shipping uPnL/liq per position; reconstruct
+  // client-side: uPnL from live mids, liq from the isolated subaccount's
+  // margin with an estimated maintenance ratio (half the initial margin at
+  // max leverage). Labeled "est." wherever rendered.
+  $: enrichedPositions = (phoenixTrader?.positions ?? []).map((position) => {
+    const mark =
+      marketMids[position.symbol] ??
+      (position.symbol === selectedSymbol ? latestPrice : null);
+    const entry = position.entryPrice;
+    const upnl =
+      mark !== null && entry !== null
+        ? (mark - entry) * position.size
+        : position.unrealizedPnl;
+    const config = markets.find((m) => m.symbol === position.symbol);
+    const mmr = config?.maxLeverage ? 0.5 / config.maxLeverage : 0.005;
+    const margin = position.marginUsd;
+    let liq: number | null = position.liquidationPrice;
+    if (entry !== null && margin !== null && position.size !== 0) {
+      const denom = position.size - mmr * Math.abs(position.size);
+      if (denom !== 0) {
+        const estimate = (entry * position.size - margin) / denom;
+        liq = Number.isFinite(estimate) && estimate > 0 ? estimate : null;
+      }
+    }
+    return { ...position, unrealizedPnl: upnl, liquidationPrice: liq };
+  });
+  $: accountUpnlUsd = enrichedPositions.reduce(
+    (sum, position) => sum + (position.unrealizedPnl ?? 0),
+    0,
+  );
+  $: accountEquityUsd = phoenixTotalCollateral + accountUpnlUsd;
+  $: marginInUseUsd = enrichedPositions.reduce(
+    (sum, position) => sum + (position.marginUsd ?? 0),
+    0,
+  );
+  $: marginUsedPct =
+    phoenixTotalCollateral > 0
+      ? (marginInUseUsd / phoenixTotalCollateral) * 100
+      : 0;
+  $: selectedPosition =
+    enrichedPositions.find((position) => position.symbol === selectedSymbol) ??
+    null;
+  $: selectedLiqDistancePct =
+    selectedPosition?.liquidationPrice != null && latestPrice
+      ? (Math.abs(latestPrice - selectedPosition.liquidationPrice) /
+          latestPrice) *
+        100
+      : null;
+
   // ── TP/SL selection ────────────────────────────────────────────────
   // Chips quick-set trigger prices relative to the same reference price the
   // submit validation uses; the inputs stay the source of truth so precise
@@ -642,7 +731,7 @@
   }
 
   // Liq lines re-render when positions, market, or chart mode change.
-  $: refreshLiqLines(phoenixTrader?.positions ?? [], selectedSymbol, tradeMode);
+  $: refreshLiqLines(enrichedPositions, selectedSymbol, tradeMode);
 
   // Spot limit orders follow the connected wallet.
   $: if ($privyAuth.walletAddress !== triggerWallet) {
@@ -711,6 +800,12 @@
       window.setInterval(() => {
         if (phoenixAuthority) void refreshPhoenixTrader();
       }, 12_000),
+      window.setInterval(() => {
+        void refreshDailyStats();
+      }, 60_000),
+      window.setInterval(() => {
+        void probeRpc();
+      }, 15_000),
     ];
     const onVisible = () => {
       if (document.visibilityState === "visible") {
@@ -759,6 +854,8 @@
     streamHealth = "connecting";
     try {
       markets = await fetchPhoenixMarkets();
+      void refreshDailyStats();
+      void probeRpc();
       const defaultMarket =
         markets.find((market) => market.symbol === selectedSymbol) ??
         markets.find((market) => market.symbol === DEFAULT_PHOENIX_SYMBOL) ??
@@ -982,7 +1079,7 @@
     }));
     eventRead = { phase: "loading", text: eventRead.text };
     try {
-      eventRead = { phase: "ready", text: await aiEventRead(headlines) };
+      eventRead = { phase: "ready", asOf: Date.now(), text: await aiEventRead(headlines) };
     } catch (error) {
       eventRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -1003,7 +1100,7 @@
     };
     ideasRead = { phase: "loading", text: ideasRead.text };
     try {
-      ideasRead = { phase: "ready", text: await aiTradeIdeas(snapshot) };
+      ideasRead = { phase: "ready", asOf: Date.now(), text: await aiTradeIdeas(snapshot) };
     } catch (error) {
       ideasRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -1080,6 +1177,26 @@
     saveAlerts();
   }
 
+  // News coded to the tape: filter the headline panel to the active
+  // market (toggleable), and track last-hour headline velocity for it.
+  let newsLinked = true;
+  $: activeNewsSymbol =
+    tradeMode === "spot" ? (spotAsset?.symbol ?? null) : selectedSymbol;
+  function headlineMatches(title: string, symbol: string): boolean {
+    return title.toUpperCase().includes(symbol.toUpperCase());
+  }
+  $: linkedNews =
+    newsLinked && activeNewsSymbol
+      ? news.filter((item) => headlineMatches(item.title, activeNewsSymbol))
+      : news;
+  $: headlineVelocity = activeNewsSymbol
+    ? news.filter(
+        (item) =>
+          headlineMatches(item.title, activeNewsSymbol) &&
+          nowMs - item.seenMs < 3_600_000,
+      ).length
+    : 0;
+
   function checkAlerts(price: number | null): void {
     if (price === null || alerts.length === 0) return;
     let changed = false;
@@ -1102,7 +1219,44 @@
     }
   }
 
+  // Fired alerts become a persistent, timestamped log plus toasts —
+  // Bloomberg's message-pane pattern in miniature.
+  type FiredAlert = { ts: number; title: string; body: string };
+  const ALERT_LOG_KEY = "trader-ralph-alert-log";
+  let alertLog: FiredAlert[] = [];
+  let toasts: (FiredAlert & { toastId: number })[] = [];
+  let toastSeq = 0;
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(ALERT_LOG_KEY);
+      const parsed = raw ? (JSON.parse(raw) as FiredAlert[]) : [];
+      if (Array.isArray(parsed)) alertLog = parsed.slice(0, 50);
+    } catch {
+      // storage unavailable — start empty
+    }
+  }
+
+  function pushToast(entry: FiredAlert): void {
+    const toastId = ++toastSeq;
+    toasts = [...toasts, { ...entry, toastId }];
+    window.setTimeout(() => {
+      toasts = toasts.filter((toast) => toast.toastId !== toastId);
+    }, 6_000);
+  }
+
+  function recordFiredAlert(title: string, body: string): void {
+    const entry: FiredAlert = { ts: Date.now(), title, body };
+    alertLog = [entry, ...alertLog].slice(0, 50);
+    try {
+      window.localStorage.setItem(ALERT_LOG_KEY, JSON.stringify(alertLog));
+    } catch {
+      // non-fatal
+    }
+    pushToast(entry);
+  }
+
   async function fireAlert(title: string, body: string): Promise<void> {
+    recordFiredAlert(title, body);
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
       try {
         new Notification(title, { body });
@@ -1323,7 +1477,7 @@
     };
     macroRead = { phase: "loading", text: macroRead.text };
     try {
-      macroRead = { phase: "ready", text: await aiMacroRead(snapshot) };
+      macroRead = { phase: "ready", asOf: Date.now(), text: await aiMacroRead(snapshot) };
     } catch (error) {
       macroRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -1342,7 +1496,7 @@
     };
     fundingRead = { phase: "loading", text: fundingRead.text };
     try {
-      fundingRead = { phase: "ready", text: await aiFundingRead(snapshot) };
+      fundingRead = { phase: "ready", asOf: Date.now(), text: await aiFundingRead(snapshot) };
     } catch (error) {
       fundingRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -1360,7 +1514,7 @@
     };
     scannerRead = { phase: "loading", text: scannerRead.text };
     try {
-      scannerRead = { phase: "ready", text: await aiScannerSetups(snapshot) };
+      scannerRead = { phase: "ready", asOf: Date.now(), text: await aiScannerSetups(snapshot) };
     } catch (error) {
       scannerRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -1539,6 +1693,47 @@
     window.clearInterval(fundsPollTimer);
     fundsPollTimer = null;
   }
+
+  // Provenance: RPC round-trip + chain tip, compared with the Phoenix
+  // indexer's snapshot slot — divergence is shown, not hidden.
+  let rpcLatencyMs: number | null = null;
+  let chainSlot: number | null = null;
+  $: apiSlotLag =
+    chainSlot !== null && phoenixTrader?.apiSlot != null
+      ? Math.max(0, chainSlot - phoenixTrader.apiSlot)
+      : null;
+
+  async function probeRpc(): Promise<void> {
+    const started = performance.now();
+    try {
+      const response = await fetch(solanaRpcUrl(), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "slot", method: "getSlot" }),
+      });
+      const payload = (await response.json()) as { result?: number };
+      rpcLatencyMs = Math.round(performance.now() - started);
+      if (typeof payload.result === "number") chainSlot = payload.result;
+    } catch {
+      rpcLatencyMs = null;
+    }
+  }
+
+  // Session state for the selected market from its exchange calendar.
+  $: sessionNote = (() => {
+    if (tradeMode === "spot") return "24/7 · Jupiter";
+    const next = selectedMarket?.nextTransitionUtc;
+    if (!next) return "24/7";
+    const ms = Date.parse(next) - nowMs;
+    if (!Number.isFinite(ms)) return "24/7";
+    const hours = Math.floor(Math.abs(ms) / 3_600_000);
+    const minutes = Math.floor((Math.abs(ms) % 3_600_000) / 60_000);
+    const span = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+    if (ms <= 0) return "session transition due";
+    return selectedMarket?.marketStatus === "active"
+      ? `closes ${span}`
+      : `opens ${span}`;
+  })();
 
   function humanizeBalanceError(raw: string): string {
     if (/-40[13]$/.test(raw) || /forbidden/i.test(raw)) {
@@ -2524,6 +2719,32 @@
       container.style.cursor = "grab";
       pressPoint = null;
     });
+    // Alt+click sets a price alert at the cursor — drag infra's cousin.
+    container.addEventListener("click", (event) => {
+      if (!event.altKey || !candleSeries || tradeMode !== "perps") return;
+      const rect = container.getBoundingClientRect();
+      const raw = candleSeries.coordinateToPrice(event.clientY - rect.top);
+      const price = Number(raw);
+      if (!Number.isFinite(price) || price <= 0) return;
+      const op = latestPrice !== null && price < latestPrice ? "below" : "above";
+      alerts = [
+        ...alerts,
+        {
+          id: `${selectedSymbol}-${op}-${price}-${alerts.length}`,
+          symbol: selectedSymbol,
+          op,
+          price,
+          tier: "ROUTINE",
+          triggered: false,
+        },
+      ];
+      saveAlerts();
+      pushToast({
+        ts: Date.now(),
+        title: `Alert set · ${selectedSymbol}-PERP`,
+        body: `${op} ${formatPrice(price)}`,
+      });
+    });
     lwChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
       const points = tradeMode === "spot" ? spotChartPoints : chartPoints;
@@ -2533,7 +2754,7 @@
     setChartData();
     // Series was just (re)created — re-draw liq lines for open positions.
     liqLines = [];
-    refreshLiqLines(phoenixTrader?.positions ?? [], selectedSymbol, tradeMode);
+    refreshLiqLines(enrichedPositions, selectedSymbol, tradeMode);
   }
 
   function renderChartSeries(points: MarketPoint[]): void {
@@ -3093,7 +3314,7 @@
     };
     briefRead = { phase: "loading", text: briefRead.text };
     try {
-      briefRead = { phase: "ready", text: await aiPositionBrief(snapshot) };
+      briefRead = { phase: "ready", asOf: Date.now(), text: await aiPositionBrief(snapshot) };
     } catch (error) {
       briefRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -3113,7 +3334,7 @@
     };
     recapRead = { phase: "loading", text: recapRead.text };
     try {
-      recapRead = { phase: "ready", text: await aiSessionRecap(snapshot) };
+      recapRead = { phase: "ready", asOf: Date.now(), text: await aiSessionRecap(snapshot) };
     } catch (error) {
       recapRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -3382,6 +3603,7 @@
     perpMarkets: PhoenixMarketConfig[],
     assets: SpotAsset[],
     mids: Record<string, number>,
+    stats: Record<string, PhoenixDailyStat>,
     query: string,
     tab: PaletteTab,
   ): PaletteRow[] {
@@ -3392,9 +3614,9 @@
       name: `${market.symbol}-PERP`,
       imageUrl: null,
       lev: market.maxLeverage,
-      price: mids[market.symbol] ?? null,
-      change24hPct: null,
-      volumeUsd: null,
+      price: mids[market.symbol] ?? stats[market.symbol]?.lastPrice ?? null,
+      change24hPct: stats[market.symbol]?.change24hPct ?? null,
+      volumeUsd: stats[market.symbol]?.volume24hUsd ?? null,
       hub: "perps",
     }));
     const spots: PaletteRow[] = assets.map((asset) => ({
@@ -3433,6 +3655,7 @@
     markets,
     spotAssets,
     marketMids,
+    dailyStats,
     paletteQuery,
     paletteTab,
   );
@@ -3484,6 +3707,33 @@
     }
   }
 
+  let cheatOpen = false;
+
+  function cycleWatchlist(direction: number): void {
+    if (watchlist.length === 0) return;
+    const current =
+      tradeMode === "spot" ? (spotAsset?.symbol ?? "") : selectedSymbol;
+    const index = watchlist.indexOf(current.toUpperCase());
+    const next =
+      watchlist[
+        (index + direction + watchlist.length) % watchlist.length
+      ];
+    if (!next || next === current.toUpperCase()) return;
+    const perp = markets.find((market) => market.symbol === next);
+    if (perp) {
+      if (tradeMode !== "perps") setTradeMode("perps", false);
+      void switchPhoenixMarket(next);
+      return;
+    }
+    const asset = spotAssets.find(
+      (candidate) => candidate.symbol.toUpperCase() === next,
+    );
+    if (asset) {
+      if (tradeMode !== "spot") setTradeMode("spot", false);
+      selectSpotAsset(asset);
+    }
+  }
+
   function onGlobalKeydown(event: KeyboardEvent): void {
     closeAccountMenuOnKey(event);
     if (event.key === "Escape") {
@@ -3492,6 +3742,7 @@
       if (alertsOpen) alertsOpen = false;
       if (fundsOpen) fundsOpen = false;
       if (paletteOpen) paletteOpen = false;
+      if (cheatOpen) cheatOpen = false;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target;
@@ -3508,6 +3759,11 @@
     if (event.key === "/") {
       event.preventDefault();
       openPalette();
+      return;
+    }
+    if (event.key === "?") {
+      event.preventDefault();
+      cheatOpen = true;
       return;
     }
     const tfIndex = PHOENIX_TIMEFRAMES.indexOf(selectedTimeframe);
@@ -3533,6 +3789,12 @@
         break;
       case "f":
         resetChartView();
+        break;
+      case ",":
+        cycleWatchlist(-1);
+        break;
+      case ".":
+        cycleWatchlist(1);
         break;
       case "[":
         if (tfIndex > 0) onTimeframeChange(PHOENIX_TIMEFRAMES[tfIndex - 1]);
@@ -4129,6 +4391,20 @@
             <div class="empty">No live order book levels loaded.</div>
           {/each}
         </div>
+
+        <!-- Time & sales: the prints are the heartbeat. -->
+        <div class="tape" aria-label="Time and sales">
+          <div class="tape-header"><span>Time</span><span>Price</span><span>Size</span></div>
+          {#each trades.slice(0, 18) as tick (tick.seq)}
+            <div class="tape-row" class:bid={tick.side === "buy"} class:ask={tick.side === "sell"}>
+              <span>{new Date(tick.ts).toISOString().slice(11, 19)}</span>
+              <span>{formatBookPrice(tick.price)}</span>
+              <span>{formatNumber(tick.size * tick.price, 0)}</span>
+            </div>
+          {:else}
+            <div class="empty">No prints yet.</div>
+          {/each}
+        </div>
       {:else}
         <div class="panel-ticket">
           {#if tradeMode === "spot"}
@@ -4138,6 +4414,60 @@
           {/if}
         </div>
       {/if}
+    </section>
+
+    <section
+      class="panel monitor-panel"
+      role="group"
+      data-panel="markets"
+      style={panelStyle("markets", panelOrder)}
+      class:dragging={draggedPanel === "markets"}
+      class:drag-over={dragOverPanel === "markets"}
+      ondragover={(event) => onPanelDragOver(event, "markets")}
+      ondragleave={() => {
+        if (dragOverPanel === "markets") dragOverPanel = null;
+      }}
+      ondrop={(event) => onPanelDrop(event, "markets")}
+    >
+      <div class="panel-head">
+        {@render DragHead("markets", "MARKETS", `${markets.length} perp markets`)}
+        <div class="monitor-sorts" role="group" aria-label="Sort monitor">
+          {#each ["volume", "change", "symbol"] as key (key)}
+            <button
+              type="button"
+              class:active={monitorSort === key}
+              onclick={() => (monitorSort = key as typeof monitorSort)}
+            >{key}</button>
+          {/each}
+        </div>
+      </div>
+      <div class="monitor-list">
+        <div class="monitor-row monitor-head" aria-hidden="true">
+          <span>Market</span><span class="r">Mark</span><span class="r">24h</span><span class="r">Volume</span>
+        </div>
+        {#each monitorRows as row (row.symbol)}
+          <button
+            type="button"
+            class="monitor-row"
+            class:active={row.symbol === selectedSymbol && tradeMode === "perps"}
+            onclick={() => chooseMonitorRow(row.symbol)}
+          >
+            <span class="monitor-sym">
+              {row.symbol}
+              {#if row.lev}<i>{row.lev}x</i>{/if}
+            </span>
+            <span class="r mono">{formatPrice(row.mid)}</span>
+            <span
+              class="r mono"
+              class:positive={(row.change ?? 0) > 0}
+              class:negative={(row.change ?? 0) < 0}
+            >{row.change === null ? "--" : formatPercent(row.change)}</span>
+            <span class="r mono">{row.volume === null ? "--" : `$${formatNumber(row.volume, 0)}`}</span>
+          </button>
+        {:else}
+          <div class="empty">Markets loading…</div>
+        {/each}
+      </div>
     </section>
 
     <section
@@ -4192,9 +4522,9 @@
           <p class="auth-note error venue-note">{phoenixActionError}</p>
         {/if}
 
-        {#if phoenixTrader.positions.length > 0}
+        {#if enrichedPositions.length > 0}
           <div class="venue-section">Positions</div>
-          {#each phoenixTrader.positions as position}
+          {#each enrichedPositions as position}
             <div class="venue-row">
               <span class={position.size > 0 ? "positive" : "negative"}>
                 {position.size > 0 ? "LONG" : "SHORT"} {position.symbol}
@@ -4204,7 +4534,7 @@
                 class:positive={(position.unrealizedPnl ?? 0) >= 0}
                 class:negative={(position.unrealizedPnl ?? 0) < 0}
               >{position.unrealizedPnl !== null ? `$${formatNumber(position.unrealizedPnl, 2)}` : "--"}</em>
-              <small>liq {formatPrice(position.liquidationPrice)}</small>
+              <small>liq est {formatPrice(position.liquidationPrice)}</small>
               {#if position.unrealizedPnl !== null}
                 <button
                   class="row-action"
@@ -4292,16 +4622,30 @@
     >
       <div class="panel-head">
         {@render DragHead("events", "EVENT_RADAR", "Live headlines")}
+        <button
+          class="link-chip"
+          class:on={newsLinked}
+          type="button"
+          title="Filter headlines to the active market"
+          onclick={() => (newsLinked = !newsLinked)}
+        >{newsLinked && activeNewsSymbol ? activeNewsSymbol : "ALL"}</button>
+        {#if newsLinked && headlineVelocity > 3}
+          <span class="velocity-chip">{headlineVelocity}/h</span>
+        {/if}
       </div>
       {@render AiReadLine(eventRead)}
       <div class="news-list">
-        {#each news.slice(0, 6) as item}
+        {#each linkedNews.slice(0, 6) as item (item.url)}
           <a class="news-row" href={item.url} target="_blank" rel="noopener noreferrer">
             <span class="news-row-title">{item.title}</span>
             <em>{item.domain} · {formatAge(item.seenMs)}</em>
           </a>
         {:else}
-          <div class="empty">No headlines loaded.</div>
+          <div class="empty">
+            {newsLinked && activeNewsSymbol
+              ? `No ${activeNewsSymbol} headlines in feed.`
+              : "No headlines loaded."}
+          </div>
         {/each}
       </div>
     </section>
@@ -4543,7 +4887,7 @@
               class:negative={entry.action === "sell" || entry.action === "short" || entry.action === "limit-sell"}
             >{entry.action.toUpperCase()}</span>
             <span class="journal-sym">{entry.symbol}</span>
-            <b>{entry.notionalUsd !== null ? `$${formatNumber(entry.notionalUsd, 0)}` : "—"}{entry.leverage ? ` · ${entry.leverage}x` : ""}</b>
+            <b>{entry.notionalUsd !== null ? `$${formatNumber(entry.notionalUsd, 0)}` : "--"}{entry.leverage ? ` · ${entry.leverage}x` : ""}</b>
             {#if entry.signature}
               <a
                 class="journal-tx"
@@ -4560,7 +4904,71 @@
     </section>
 
   </section>
+  <footer class="status-line" aria-label="Terminal status">
+    <span class="mono">{new Date(nowMs).toISOString().slice(11, 19)} UTC</span>
+    <span class="sl-sep" aria-hidden="true"></span>
+    <span>{tradeMode === "perps" ? selectedSymbol : (spotAsset?.symbol ?? "--")} · {sessionNote}</span>
+    <span class="sl-sep" aria-hidden="true"></span>
+    <span class:positive={streamHealth === "live"} class:warn-txt={streamHealth !== "live"}>WS {streamHealth}</span>
+    <span>RPC {rpcLatencyMs !== null ? `${rpcLatencyMs}ms` : "--"}</span>
+    {#if apiSlotLag !== null}
+      <span class:warn-txt={apiSlotLag > 150} title="Phoenix indexer slots behind the chain tip">
+        SYNC −{apiSlotLag}
+      </span>
+    {/if}
+    <span class="sl-grow" aria-hidden="true"></span>
+    {#if $privyAuth.walletAddress}
+      <span class="mono">{shortAddress($privyAuth.walletAddress)}</span>
+      <span class="sl-sep" aria-hidden="true"></span>
+    {/if}
+    <button type="button" class="sl-help" onclick={() => (cheatOpen = true)}>? shortcuts</button>
+  </footer>
 </main>
+
+{#if toasts.length > 0}
+  <div class="toast-stack" role="status" aria-live="polite">
+    {#each toasts as toast (toast.toastId)}
+      <div class="toast">
+        <b>{toast.title}</b>
+        <span>{toast.body}</span>
+      </div>
+    {/each}
+  </div>
+{/if}
+
+{#if cheatOpen}
+  <div class="modal-backdrop" role="presentation" onclick={() => (cheatOpen = false)}>
+    <div
+      class="modal cheat"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard shortcuts"
+      tabindex="-1"
+      onclick={(event) => event.stopPropagation()}
+      onkeydown={(event) => event.stopPropagation()}
+    >
+      <div class="panel-head">
+        <div><p>KEYBOARD</p><h2>Shortcuts</h2></div>
+        <button class="modal-close" type="button" aria-label="Close" onclick={() => (cheatOpen = false)}>×</button>
+      </div>
+      <div class="modal-body cheat-body">
+        {#each [
+          ["/", "Market palette"],
+          ["B / S", "Long / Short ticket"],
+          ["[ ]", "Previous / next timeframe"],
+          [", .", "Cycle watchlist"],
+          ["F", "Fit chart + re-arm autoscale"],
+          ["Alt+Click", "Set price alert at cursor"],
+          ["Drag axis", "Scale price/time · double-click resets"],
+          ["?", "This sheet"],
+          ["Esc", "Close any overlay"],
+        ] as [keys, what] (keys)}
+          <div class="cheat-row"><kbd>{keys}</kbd><span>{what}</span></div>
+        {/each}
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if authOpen}
   <div class="modal-backdrop" role="presentation" onclick={() => (authOpen = false)}>
@@ -4733,6 +5141,18 @@
             <div class="empty">No alerts armed. Add a price trigger above.</div>
           {/each}
         </div>
+        {#if alertLog.length > 0}
+          <div class="venue-section">Fired</div>
+          <div class="alert-list">
+            {#each alertLog.slice(0, 10) as fired (fired.ts)}
+              <div class="alert-row done">
+                <span class="mono alert-when">{new Date(fired.ts).toISOString().slice(5, 16).replace("T", " ")}Z</span>
+                <b>{fired.title}</b>
+                <em>{fired.body}</em>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     </section>
   </div>
@@ -4888,7 +5308,7 @@
             </div>
             <div class="preview-row">
               <span>Price impact</span>
-              <b>{swapQuote ? `${(swapQuote.priceImpactPct * 100).toFixed(2)}%` : "—"}</b>
+              <b>{swapQuote ? `${(swapQuote.priceImpactPct * 100).toFixed(2)}%` : "--"}</b>
             </div>
             <div class="preview-row"><span>Wallet SOL</span><b>{walletBalanceText}</b></div>
           </div>
@@ -5080,7 +5500,7 @@
       <div class="preview-row">
         <span>Price impact</span>
         <b class:negative={spotQuote ? spotQuote.priceImpactPct * 100 > 1 : false}>
-          {spotQuote ? `${(spotQuote.priceImpactPct * 100).toFixed(2)}%` : "—"}
+          {spotQuote ? `${(spotQuote.priceImpactPct * 100).toFixed(2)}%` : "--"}
         </b>
       </div>
       <div class="preview-row">
@@ -5146,7 +5566,7 @@
               LIMIT {view.side.toUpperCase()} {view.symbol}
             </span>
             <b>
-              {view.notionalUsd !== null ? `$${formatNumber(view.notionalUsd, 2)}` : "—"}
+              {view.notionalUsd !== null ? `$${formatNumber(view.notionalUsd, 2)}` : "--"}
               @ {formatPrice(view.limitPrice)}
             </b>
             <button
@@ -5276,7 +5696,7 @@
       <div class="preview-row"><span>Est. entry</span><b>{formatPrice(tradePreview?.entry)}</b></div>
       <div class="preview-row">
         <span>Slippage</span>
-        <b>{tradePreview?.slippageBps != null ? `${formatNumber(tradePreview.slippageBps, 1)} bps` : "—"}</b>
+        <b>{tradePreview?.slippageBps != null ? `${formatNumber(tradePreview.slippageBps, 1)} bps` : "--"}</b>
       </div>
       <div class="preview-row"><span>Spread</span><b>{formatNumber(spreadBps, 1)} bps</b></div>
       <div class="preview-row">
@@ -5319,7 +5739,50 @@
       </div>
     </div>
 
+    <!-- Always-on ladder: book and ticket are simultaneous, not tabs. -->
+    <div class="mini-book" aria-label="Order book preview">
+      {#each asks.slice(0, 5).reverse() as level (level.price)}
+        <button type="button" class="mini-row ask" onclick={() => prefillFromBook(level.price, "ask")}>
+          <span>{formatBookPrice(level.price)}</span>
+          <span>{formatNumber(bookLevelNotional(level), 0)}</span>
+        </button>
+      {/each}
+      <div class="mini-spread">
+        <span>{formatBookPrice(spread)}</span>
+        <em>spread</em>
+        <span>{formatNumber(spreadPercent, 3)}%</span>
+      </div>
+      {#each bids.slice(0, 5) as level (level.price)}
+        <button type="button" class="mini-row bid" onclick={() => prefillFromBook(level.price, "bid")}>
+          <span>{formatBookPrice(level.price)}</span>
+          <span>{formatNumber(bookLevelNotional(level), 0)}</span>
+        </button>
+      {:else}
+        <div class="mini-empty">book warming up</div>
+      {/each}
+    </div>
+
     <div class="ticket-actions">
+      {#if phoenixAuthority && phoenixTotalCollateral > 0}
+        <div
+          class="risk-strip"
+          class:warn={marginUsedPct > 60}
+          class:danger={marginUsedPct > 85 ||
+            (selectedLiqDistancePct !== null && selectedLiqDistancePct < 5)}
+        >
+          <span>EQ ${formatNumber(accountEquityUsd, 2)}</span>
+          <span>USED {formatNumber(marginUsedPct, 0)}%</span>
+          <span>
+            {selectedLiqDistancePct !== null
+              ? `LIQ Δ ${formatNumber(selectedLiqDistancePct, 1)}%`
+              : "LIQ --"}
+          </span>
+          <span
+            class:positive={accountUpnlUsd >= 0}
+            class:negative={accountUpnlUsd < 0}
+          >uPNL ${formatNumber(accountUpnlUsd, 2)}</span>
+        </div>
+      {/if}
       <!-- Single reserved status line: error, tx link, or quiet hint. -->
       <p class="ticket-status" class:error={Boolean(phoenixActionError)}>
         {#if phoenixActionError}
@@ -5395,6 +5858,9 @@
       <span class="desk-text desk-dim">{read.error}</span>
     {:else if read.phase === "ready" || read.text}
       <span class="desk-text" class:desk-soft-pulse={read.phase === "loading"}>{read.text}</span>
+      {#if read.asOf}
+        <em class="desk-asof">as of {new Date(read.asOf).toISOString().slice(11, 19)}Z</em>
+      {/if}
     {:else}
       <span class="desk-skeleton" aria-hidden="true">
         <i></i>
@@ -6145,7 +6611,7 @@
        strip + dashboard padding ≈ 11.5rem); secondary panels start cleanly
        below the fold. Floor keeps laptops usable, ceiling keeps ultra-tall
        monitors from stretching candles into noodles. */
-    --market-panel-height: clamp(30rem, calc(100dvh - 11.5rem), 72rem);
+    --market-panel-height: clamp(30rem, calc(100dvh - 13.4rem), 72rem);
     grid-column: span 9;
     display: flex;
     flex-direction: column;
@@ -6159,7 +6625,7 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
-    height: var(--market-panel-height, clamp(30rem, calc(100dvh - 11.5rem), 72rem));
+    height: var(--market-panel-height, clamp(30rem, calc(100dvh - 13.4rem), 72rem));
   }
 
   .perp-panel {
@@ -6169,6 +6635,13 @@
   .macro-panel,
   .watchlist-panel {
     grid-column: span 4;
+  }
+
+  .monitor-panel {
+    grid-column: span 4;
+    display: flex;
+    flex-direction: column;
+    max-height: 26rem;
   }
 
   select,
@@ -6187,6 +6660,20 @@
     gap: 0.35rem;
     color: var(--muted);
     font-size: 0.72rem;
+  }
+
+  /* Panel-header dialect on ticket labels; inputs keep body sizing. */
+  .panel-ticket label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.62rem;
+  }
+
+  .panel-ticket label input,
+  .panel-ticket label select {
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 0.85rem;
   }
 
   .positive,
@@ -7809,6 +8296,274 @@
     width: 62%;
     animation-delay: 180ms;
   }
+
+
+  /* ── Ambient risk strip ──────────────────────────────────────────── */
+  .risk-strip {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.25rem 0.45rem;
+    border: 1px solid var(--line-soft);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.64rem;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .risk-strip.warn {
+    border-color: rgba(255, 180, 84, 0.5);
+    color: var(--amber);
+  }
+
+  .risk-strip.danger {
+    border-color: rgba(255, 90, 106, 0.6);
+    color: var(--down);
+  }
+
+  /* ── Mini book inside the ticket ─────────────────────────────────── */
+  .mini-book {
+    border: 1px solid var(--line-soft);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+  }
+
+  .mini-row {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 0.14rem 0.5rem;
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .mini-row.ask { color: var(--down); }
+  .mini-row.bid { color: var(--up); }
+  .mini-row:hover { background: rgba(255, 255, 255, 0.04); }
+  .mini-row span:last-child { color: var(--muted); }
+
+  .mini-spread {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.14rem 0.5rem;
+    border-block: 1px solid var(--line-soft);
+    color: var(--muted);
+  }
+
+  .mini-spread em { font-style: normal; color: var(--faint); }
+  .mini-empty { padding: 0.4rem 0.5rem; color: var(--faint); }
+
+  /* ── Time & sales ────────────────────────────────────────────────── */
+  .tape {
+    border-top: 1px solid var(--line-soft);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.68rem;
+    overflow-y: auto;
+    max-height: 12rem;
+  }
+
+  .tape-header,
+  .tape-row {
+    display: grid;
+    grid-template-columns: 4.6rem 1fr 4.5rem;
+    gap: 0.6rem;
+    padding: 0.12rem 0.9rem;
+  }
+
+  .tape-header {
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.6rem;
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+  }
+
+  .tape-row span:first-child { color: var(--faint); }
+  .tape-row.bid span:nth-child(2) { color: var(--up); }
+  .tape-row.ask span:nth-child(2) { color: var(--down); }
+  .tape-row span:last-child { text-align: right; color: var(--muted); }
+
+  /* ── Markets monitor panel ───────────────────────────────────────── */
+  .monitor-sorts {
+    display: flex;
+    gap: 0.2rem;
+  }
+
+  .monitor-sorts button {
+    border: 0;
+    background: transparent;
+    color: var(--faint);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.2rem 0.35rem;
+    cursor: pointer;
+  }
+
+  .monitor-sorts button.active { color: var(--accent); }
+
+  .monitor-list {
+    overflow-y: auto;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .monitor-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 5.5rem 4.5rem 6rem;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.3rem 0.9rem;
+    border: 0;
+    border-bottom: 1px solid var(--line-soft);
+    background: transparent;
+    color: var(--ink);
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .monitor-row:hover { background: rgba(255, 77, 151, 0.04); }
+  .monitor-row.active { box-shadow: inset 2px 0 0 var(--accent); background: var(--surface-2); }
+
+  .monitor-head {
+    color: var(--faint);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-family: ui-monospace, monospace;
+    cursor: default;
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+  }
+
+  .monitor-sym { font-weight: 700; display: flex; gap: 0.35rem; align-items: baseline; }
+  .monitor-sym i {
+    font-style: normal;
+    font-family: ui-monospace, monospace;
+    font-size: 0.6rem;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    padding: 0 0.25rem;
+  }
+
+  /* ── Status line ─────────────────────────────────────────────────── */
+  .status-line {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    height: 1.9rem;
+    padding: 0 1rem;
+    border-top: 1px solid var(--line);
+    background: rgba(8, 10, 13, 0.92);
+    backdrop-filter: blur(10px);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.66rem;
+    color: var(--muted);
+  }
+
+  .sl-sep { width: 1px; height: 0.9rem; background: var(--line-soft); }
+  .sl-grow { flex: 1; }
+  .warn-txt { color: var(--amber); }
+
+  .sl-help {
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    padding: 0.06rem 0.4rem;
+    cursor: pointer;
+  }
+
+  .sl-help:hover { color: var(--ink); }
+
+  .dashboard { padding-bottom: 2.6rem; }
+
+  /* ── Toasts ──────────────────────────────────────────────────────── */
+  .toast-stack {
+    position: fixed;
+    top: 4rem;
+    right: 1rem;
+    z-index: 90;
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .toast {
+    display: grid;
+    gap: 0.1rem;
+    min-width: 16rem;
+    max-width: 22rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--accent);
+    background: var(--surface);
+    font-size: 0.74rem;
+  }
+
+  .toast b { color: var(--accent); font-size: 0.68rem; letter-spacing: 0.04em; }
+
+  /* ── Cheat sheet ─────────────────────────────────────────────────── */
+  .cheat-body { display: grid; gap: 0.3rem; }
+
+  .cheat-row {
+    display: grid;
+    grid-template-columns: 7rem 1fr;
+    gap: 0.8rem;
+    align-items: baseline;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .cheat-row kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 0.7rem;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line);
+    padding: 0.08rem 0.4rem;
+    text-align: center;
+  }
+
+  /* ── News linking chips ──────────────────────────────────────────── */
+  .link-chip {
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--faint);
+    font-family: ui-monospace, monospace;
+    font-size: 0.62rem;
+    padding: 0.1rem 0.4rem;
+    cursor: pointer;
+  }
+
+  .link-chip.on { color: var(--accent); border-color: rgba(255, 77, 151, 0.6); }
+
+  .velocity-chip {
+    font-family: ui-monospace, monospace;
+    font-size: 0.62rem;
+    color: var(--amber);
+    border: 1px solid rgba(255, 180, 84, 0.5);
+    padding: 0.1rem 0.35rem;
+  }
+
+  /* ── Desk read provenance ────────────────────────────────────────── */
+  .desk-asof {
+    display: block;
+    font-style: normal;
+    font-family: ui-monospace, monospace;
+    font-size: 0.58rem;
+    color: var(--faint);
+    margin-top: 0.15rem;
+  }
+
+  .alert-when { color: var(--faint); font-size: 0.62rem; }
 
   /* ── Trade ticket ─────────────────────────────────────────────────── */
   .field {
