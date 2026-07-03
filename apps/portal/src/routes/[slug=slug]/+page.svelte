@@ -1,6 +1,6 @@
 <script lang="ts">
-  import SiteNav from "$lib/site/SiteNav.svelte";
-  import SiteFooter from "$lib/site/SiteFooter.svelte";
+  import { SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { fmtPct, fmtUsd } from "@trader-ralph/ui/format";
 
   let { data } = $props();
 
@@ -12,24 +12,6 @@
   const asset = $derived(data.asset);
   const price = $derived(livePrice ?? asset.price);
   const change = $derived(liveChange ?? asset.change24hPct);
-
-  const fmtUsd = (value: number | null, compact = false) => {
-    if (value === null) return "—";
-    if (compact) {
-      if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
-      if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
-      if (value >= 1e3) return `$${(value / 1e3).toFixed(0)}K`;
-    }
-    return `$${
-      value >= 1000
-        ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
-        : value >= 1
-          ? value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          : value.toLocaleString(undefined, { maximumFractionDigits: 5 })
-    }`;
-  };
-  const fmtPct = (value: number | null) =>
-    value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
   // SSR sparkline path from 7d of closes.
   const sparkPath = $derived.by(() => {

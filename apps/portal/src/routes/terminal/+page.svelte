@@ -68,7 +68,7 @@
     getJupiterSwapTransaction,
     type JupiterQuote,
   } from "$lib/funding";
-  import BrandMark from "$lib/site/BrandMark.svelte";
+  import { BrandMark } from "@trader-ralph/ui";
   import {
     clearJournal,
     entriesToday,

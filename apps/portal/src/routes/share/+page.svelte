@@ -1,6 +1,5 @@
 <script lang="ts">
-  import SiteNav from "$lib/site/SiteNav.svelte";
-  import SiteFooter from "$lib/site/SiteFooter.svelte";
+  import { SiteFooter, SiteNav } from "@trader-ralph/ui";
 
   let { data } = $props();
 

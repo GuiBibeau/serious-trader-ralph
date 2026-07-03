@@ -1,28 +1,10 @@
 <script lang="ts">
-  import SiteNav from "$lib/site/SiteNav.svelte";
-  import SiteFooter from "$lib/site/SiteFooter.svelte";
+  import { SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { fmtCompact, fmtPct, fmtPrice } from "@trader-ralph/ui/format";
 
   let { data } = $props();
 
   let sortKey = $state<"volume" | "change" | "cap">("volume");
-
-  const fmtPrice = (value: number | null) =>
-    value === null
-      ? "—"
-      : value >= 1000
-        ? value.toLocaleString(undefined, { maximumFractionDigits: 0 })
-        : value >= 1
-          ? value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          : value.toLocaleString(undefined, { maximumFractionDigits: 5 });
-  const fmtPct = (value: number | null) =>
-    value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
-  const fmtCompact = (value: number | null) => {
-    if (value === null) return "—";
-    if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
-    if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
-    if (value >= 1e3) return `$${(value / 1e3).toFixed(0)}K`;
-    return `$${value.toFixed(0)}`;
-  };
 
   const sorted = $derived(
     [...data.assets].sort((a, b) => {

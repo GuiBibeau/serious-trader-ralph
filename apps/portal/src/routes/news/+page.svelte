@@ -1,17 +1,8 @@
 <script lang="ts">
-  import SiteNav from "$lib/site/SiteNav.svelte";
-  import SiteFooter from "$lib/site/SiteFooter.svelte";
+  import { SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { fmtPct, fmtPrice } from "@trader-ralph/ui/format";
 
   let { data } = $props();
-
-  const fmtPct = (value: number | null) =>
-    value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
-  const fmtPrice = (value: number | null) =>
-    value === null
-      ? "—"
-      : value >= 1
-        ? value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-        : value.toLocaleString(undefined, { maximumFractionDigits: 5 });
 
   const ago = (publishedAt: number | null, now: number) => {
     if (!publishedAt) return "";
