@@ -139,6 +139,18 @@ export async function fetchExchangeConfig(): Promise<ExchangeConfig> {
 
 // ── Trader state ──────────────────────────────────────────────────────
 
+function tokenAmount(value: unknown): number | null {
+  if (!isRecord(value)) return null;
+  const ui = Number(value.ui ?? NaN);
+  if (Number.isFinite(ui)) return ui;
+  const raw = Number(value.value ?? NaN);
+  const decimals = Number(value.decimals ?? NaN);
+  if (Number.isFinite(raw) && Number.isFinite(decimals)) {
+    return raw / 10 ** decimals;
+  }
+  return null;
+}
+
 function lotsToUsd(value: unknown): number | null {
   const lots = Number(value);
   return Number.isFinite(lots) ? lots / 10 ** USDC_DECIMALS : null;
@@ -232,8 +244,54 @@ export async function fetchPhoenixTraderState(
     }
   }
   state.totalCollateralUsd = totalUsd;
-  // Open limit orders are not present in this schema snapshot; the orders
-  // panel stays empty until the endpoint exposes them again.
+
+  // The raw REST snapshot no longer carries open orders, but the SDK
+  // client's TraderView still does — merge orders (plus risk tier and any
+  // trigger prices the raw schema omitted) from it, fail-soft.
+  try {
+    const client = createPhoenixClient();
+    let view: unknown;
+    try {
+      view = await client.api.traders().getTrader(authority);
+    } finally {
+      client.dispose();
+    }
+    if (isRecord(view)) {
+      if (typeof view.riskTier === "string") state.riskTier = view.riskTier;
+      const orderMap = isRecord(view.limitOrders) ? view.limitOrders : {};
+      for (const [symbol, list] of Object.entries(orderMap)) {
+        if (!Array.isArray(list)) continue;
+        for (const order of list.filter(isRecord)) {
+          state.orders.push({
+            symbol,
+            side:
+              Number(order.side) === 1 || order.side === "ask" ? "ask" : "bid",
+            price: tokenAmount(order.price),
+            remaining: tokenAmount(order.tradeSizeRemaining),
+            orderSequenceNumber: String(order.orderSequenceNumber ?? ""),
+            isStopLoss: order.isStopLoss === true,
+          });
+        }
+      }
+      // Trigger prices for open positions when the raw snapshot had none.
+      const viewPositions = Array.isArray(view.positions)
+        ? view.positions.filter(isRecord)
+        : [];
+      for (const viewPosition of viewPositions) {
+        const symbol = String(viewPosition.symbol ?? "");
+        const target = state.positions.find(
+          (position) => position.symbol === symbol,
+        );
+        if (!target) continue;
+        target.takeProfitPrice ??= tokenAmount(viewPosition.takeProfitPrice);
+        target.stopLossPrice ??= tokenAmount(viewPosition.stopLossPrice);
+        target.unrealizedPnl ??= tokenAmount(viewPosition.unrealizedPnl);
+        target.liquidationPrice ??= tokenAmount(viewPosition.liquidationPrice);
+      }
+    }
+  } catch {
+    // view unavailable — positions/collateral above still stand
+  }
   return state;
 }
 

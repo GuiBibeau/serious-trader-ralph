@@ -42,3 +42,16 @@ export function recordSnapshot(
     return next;
   });
 }
+
+/** Chart overlay-line visibility, persisted per device. */
+export type ChartLinePrefs = {
+  pos: boolean;
+  tpsl: boolean;
+  orders: boolean;
+  alerts: boolean;
+};
+
+export const chartLinePrefs = persisted<ChartLinePrefs>(
+  "trader-ralph-chart-lines",
+  { pos: true, tpsl: true, orders: true, alerts: true },
+);
