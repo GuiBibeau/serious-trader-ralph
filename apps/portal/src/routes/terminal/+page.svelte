@@ -2353,7 +2353,7 @@
       autoSize: true,
       layout: {
         background: { type: ColorType.Solid, color: colors.chartBg },
-        textColor: "#8c95a4",
+        textColor: colors.muted,
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: 11,
         attributionLogo: false,
@@ -2364,15 +2364,15 @@
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(255, 77, 151, 0.5)", labelBackgroundColor: "#272b34" },
-        horzLine: { color: "rgba(255, 77, 151, 0.5)", labelBackgroundColor: "#272b34" },
+        vertLine: { color: "rgba(255, 77, 151, 0.5)", labelBackgroundColor: colors.line },
+        horzLine: { color: "rgba(255, 77, 151, 0.5)", labelBackgroundColor: colors.line },
       },
       rightPriceScale: {
-        borderColor: "#272b34",
+        borderColor: colors.line,
         scaleMargins: { top: 0.08, bottom: 0.26 },
       },
       timeScale: {
-        borderColor: "#272b34",
+        borderColor: colors.line,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 4,
@@ -2917,7 +2917,7 @@
       liqLines.push(
         candleSeries.createPriceLine({
           price: position.liquidationPrice,
-          color: "#ff5a6a",
+          color: colors.down,
           lineWidth: 1,
           lineStyle: 2, // dashed
           axisLabelVisible: true,
