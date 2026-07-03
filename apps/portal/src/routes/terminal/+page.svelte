@@ -5680,12 +5680,18 @@
           {/each}
         </div>
       </div>
-      <div class="field" class:field-error={slWrongSide}>
+      <div
+        class="field"
+        class:field-error={slWrongSide}
+        class:field-wanted={sizingMode === "risk" && !slSet}
+      >
         <label>
           <span class="label-row">
             Stop loss
             {#if slWrongSide}
               <em class="field-note">{tradeSide === "buy" ? "below" : "above"} entry</em>
+            {:else if sizingMode === "risk" && !slSet}
+              <em class="field-note field-note-amber">sets your size</em>
             {/if}
           </span>
           <input
@@ -5843,7 +5849,11 @@
           {#if phoenixBusy}<span class="spinner" aria-hidden="true"></span>{/if}
           {phoenixBusy
             ? "Signing…"
-            : `${tradeSide === "buy" ? "Long" : "Short"} ${selectedSymbol}-PERP · ${tradeLeverage}x`}
+            : sizingMode === "risk" && !slSet
+              ? "Set a stop loss to size"
+              : !tradePreview
+                ? "Enter a size"
+                : `${tradeSide === "buy" ? "Long" : "Short"} ${selectedSymbol}-PERP · ${tradeLeverage}x`}
         </button>
       {/if}
     </div>
@@ -8633,6 +8643,14 @@
     border-color: var(--down);
   }
 
+  .field-wanted input {
+    border-color: rgba(255, 180, 84, 0.55);
+  }
+
+  .field-note-amber {
+    color: var(--amber);
+  }
+
   .field-note {
     color: var(--down);
     font-size: 0.62rem;
@@ -9115,9 +9133,11 @@
     justify-content: space-between;
     gap: 0.4rem;
     /* Mode/side flips change these strings — never let them wrap, so the
-       fields below sit at identical positions in every mode. */
+       fields below sit at identical positions in every mode. Clip inside
+       the cell rather than bleeding into the neighboring label. */
     white-space: nowrap;
     min-width: 0;
+    overflow: hidden;
     gap: 0.5rem;
   }
   .mode-flip {
