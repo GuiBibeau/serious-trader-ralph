@@ -544,11 +544,27 @@
   $: requiredMarginUsd = tradePreview ? tradePreview.notionalUsd / tradeLeverage : 0;
   $: phoenixCollateral = phoenixTrader?.collateralUsd ?? 0;
   $: phoenixStateKnown = phoenixTrader !== null;
-  $: needsPhoenixFunding =
+  // "Deposit first" is a strong claim: it may only come from a
+  // this-session on-chain read of free collateral (never the lagging
+  // indexer, never a device snapshot), and the shortfall must hold for a
+  // beat — transitional refreshes while funds move between subaccounts
+  // can never flash it.
+  $: fundingShortfallRaw =
     Boolean(phoenixAuthority) &&
     phoenixStateKnown &&
+    phoenixTrader?.chainVerified === true &&
     requiredMarginUsd > 0 &&
     phoenixCollateral + 0.01 < requiredMarginUsd;
+  let fundingShortfallSince: number | null = null;
+  $: if (!fundingShortfallRaw) {
+    fundingShortfallSince = null;
+  } else if (fundingShortfallSince === null) {
+    fundingShortfallSince = Date.now();
+  }
+  $: needsPhoenixFunding =
+    fundingShortfallRaw &&
+    fundingShortfallSince !== null &&
+    nowMs - fundingShortfallSince >= 1_200;
 
   // ── Ambient risk (Bloomberg posture) ───────────────────────────────
   // The trader API stopped shipping uPnL/liq per position; reconstruct
@@ -2261,6 +2277,9 @@
       if (chainCollateralUsd !== null) {
         state.registered = true;
         state.collateralUsd = chainCollateralUsd;
+        state.chainVerified = true;
+      } else {
+        state.chainVerified = false;
       }
       // Store is keyed per wallet, so a mid-flight switch cannot
       // cross-pollinate — record under the authority we fetched for.
