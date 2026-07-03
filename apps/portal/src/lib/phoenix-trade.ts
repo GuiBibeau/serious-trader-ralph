@@ -27,6 +27,7 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
+// biome-ignore lint/style/useNodejsImportProtocol: this imports the browser Buffer polyfill.
 import { Buffer } from "buffer";
 import { USDC_MINT } from "./funding";
 import { isRecord } from "./utils";

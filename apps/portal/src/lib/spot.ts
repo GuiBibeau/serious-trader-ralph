@@ -265,7 +265,9 @@ export async function createTriggerOrder(params: {
   return { transaction: data.transaction, orderKey: data.order };
 }
 
-export async function fetchTriggerOrders(user: string): Promise<TriggerOrder[]> {
+export async function fetchTriggerOrders(
+  user: string,
+): Promise<TriggerOrder[]> {
   const response = await fetch(
     `/jupiter/trigger/v1/getTriggerOrders?user=${encodeURIComponent(user)}&orderStatus=active`,
   );

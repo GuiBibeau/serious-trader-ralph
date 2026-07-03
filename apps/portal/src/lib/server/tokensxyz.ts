@@ -101,11 +101,25 @@ function slugify(symbol: string): string {
 
 // Pre-IPO names aren't on public markets — used for the hub taxonomy.
 const PRE_IPO_IDS = new Set([
-  "spacex", "anthropic", "openai", "stripe", "epic-games", "kalshi",
-  "anduril", "xai", "databricks", "ramp", "figure-ai", "perplexity",
+  "spacex",
+  "anthropic",
+  "openai",
+  "stripe",
+  "epic-games",
+  "kalshi",
+  "anduril",
+  "xai",
+  "databricks",
+  "ramp",
+  "figure-ai",
+  "perplexity",
 ]);
 
-function hubFor(assetId: string, category: string, name: string): CatalogAsset["hub"] {
+function hubFor(
+  assetId: string,
+  category: string,
+  name: string,
+): CatalogAsset["hub"] {
   // tokens.xyz labels private-company tokens "<Name> PreStocks".
   if (PRE_IPO_IDS.has(assetId) || /prestocks?/i.test(name)) return "pre-ipo";
   if (category === "crypto" || category === "stablecoin") return "crypto";
@@ -143,7 +157,9 @@ export async function getCatalog(): Promise<CatalogAsset[]> {
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
     for (const { item } of ordered) {
-      const variant = isRecord(item.primaryVariant) ? item.primaryVariant : null;
+      const variant = isRecord(item.primaryVariant)
+        ? item.primaryVariant
+        : null;
       const stats = isRecord(item.stats) ? item.stats : {};
       const market = variant && isRecord(variant.market) ? variant.market : {};
       const mint = variant ? String(variant.mint ?? "") : "";
@@ -154,7 +170,8 @@ export async function getCatalog(): Promise<CatalogAsset[]> {
 
       let slug = slugify(symbol);
       if (!slug || taken.has(slug)) slug = slugify(assetId);
-      if (!slug || taken.has(slug)) slug = slugify(`${symbol}-${assetId.slice(0, 6)}`);
+      if (!slug || taken.has(slug))
+        slug = slugify(`${symbol}-${assetId.slice(0, 6)}`);
       // Every published slug must satisfy the [slug=slug] matcher, or the
       // links we emit (sitemap, llms.txt, hubs) would 404 at the router.
       if (!slug || taken.has(slug) || !isAssetSlug(slug)) continue;
@@ -214,9 +231,9 @@ export async function getSpotlightBundle(
 
   const to = Math.floor(now / 1000);
   const [profileRes, descriptionRes, ohlcvRes, feed] = await Promise.all([
-    fetch(`${API}/assets/${asset.assetId}/profile`, { headers: apiHeaders() }).catch(
-      () => null,
-    ),
+    fetch(`${API}/assets/${asset.assetId}/profile`, {
+      headers: apiHeaders(),
+    }).catch(() => null),
     fetch(`${API}/assets/${asset.assetId}/description`, {
       headers: apiHeaders(),
     }).catch(() => null),
@@ -230,7 +247,9 @@ export async function getSpotlightBundle(
   ]);
 
   const json = async (response: Response | null) =>
-    response?.ok ? ((await response.json().catch(() => null)) as unknown) : null;
+    response?.ok
+      ? ((await response.json().catch(() => null)) as unknown)
+      : null;
 
   const profileRaw = await json(profileRes);
   const descriptionRaw = await json(descriptionRes);
@@ -359,7 +378,8 @@ export function computePulse(bundle: SpotlightBundle): string[] {
     );
   }
   if (asset.price !== null && profile?.allTimeHigh) {
-    const drawdown = ((profile.allTimeHigh - asset.price) / profile.allTimeHigh) * 100;
+    const drawdown =
+      ((profile.allTimeHigh - asset.price) / profile.allTimeHigh) * 100;
     pulse.push(
       drawdown <= 1
         ? `Trading at its all-time high of $${profile.allTimeHigh.toLocaleString()}`
@@ -371,14 +391,17 @@ export function computePulse(bundle: SpotlightBundle): string[] {
     const prior = candles.slice(0, -96);
     const recentVol = recent.reduce((sum, candle) => sum + candle.volume, 0);
     const priorAvg =
-      (prior.reduce((sum, candle) => sum + candle.volume, 0) / prior.length) * 96;
+      (prior.reduce((sum, candle) => sum + candle.volume, 0) / prior.length) *
+      96;
     if (priorAvg > 0) {
       const ratio = recentVol / priorAvg;
       pulse.push(`Volume running ${ratio.toFixed(1)}x the 7-day average`);
     }
   }
   if (news.length > 0) {
-    pulse.push(`${news.length} fresh headline${news.length === 1 ? "" : "s"} in the feed`);
+    pulse.push(
+      `${news.length} fresh headline${news.length === 1 ? "" : "s"} in the feed`,
+    );
   }
   return pulse;
 }
