@@ -1,6 +1,5 @@
 <script lang="ts">
-  import SiteNav from "$lib/site/SiteNav.svelte";
-  import SiteFooter from "$lib/site/SiteFooter.svelte";
+  import { Button, SiteFooter, SiteNav } from "@trader-ralph/ui";
 
   let { data } = $props();
 
@@ -27,9 +26,9 @@
   <main class="page">
     <img class="card" src={`/og/position.png?${data.query}`} alt={`${share.side} ${share.symbol} ${pnlText}`} />
     <div class="actions">
-      <a class="cta" href={`/terminal?asset=${share.symbol}&venue=perp&side=${share.side}`}>
+      <Button href={`/terminal?asset=${share.symbol}&venue=perp&side=${share.side}`}>
         Trade {share.symbol} yourself
-      </a>
+      </Button>
       <p>Email login · wallet created for you · no seed phrase</p>
     </div>
   </main>
@@ -46,15 +45,5 @@
     box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.4);
   }
   .actions { margin-top: 1.6rem; }
-  .cta {
-    display: inline-block;
-    background: var(--accent);
-    color: #14060c;
-    font-weight: 700;
-    padding: 0.7rem 1.5rem;
-    border-radius: var(--radius);
-    text-decoration: none;
-  }
-  .cta:hover { filter: brightness(1.08); }
   .actions p { color: var(--faint); font-size: 0.76rem; margin-top: 0.7rem; }
 </style>

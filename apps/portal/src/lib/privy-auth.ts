@@ -151,8 +151,8 @@ export async function getPrivyAccessToken(): Promise<string | null> {
   return token;
 }
 
-// Sign + send a Solana transaction with the embedded wallet (used for the
-// Jupiter swap). Signing happens inside Privy's secure iframe.
+// Sign + send a Solana transaction with the embedded wallet. Signing happens
+// inside Privy's secure iframe.
 export async function signAndSendSolanaTransaction(
   transaction: VersionedTransaction,
   connection: Connection,
@@ -175,9 +175,12 @@ export async function signAndSendSolanaTransaction(
   return result.signature;
 }
 
-// Sign an off-chain message with the embedded Solana wallet (used for the
-// Phoenix wallet-login challenge).
-export async function signSolanaMessage(message: string): Promise<string> {
+// Sign a Solana transaction without broadcasting it. Phoenix referral
+// activation submits the signed transaction to Phoenix so its onboarder can
+// countersign and send.
+export async function signSolanaTransaction(
+  transaction: VersionedTransaction,
+): Promise<VersionedTransaction> {
   const privy = await requirePrivyClient();
   const account = currentSolanaAccount();
   if (!account) throw new Error("solana-wallet-not-found");
@@ -190,10 +193,10 @@ export async function signSolanaMessage(message: string): Promise<string> {
     "solana-address-verifier",
   );
   const result = await provider.request({
-    method: "signMessage",
-    params: { message },
+    method: "signTransaction",
+    params: { transaction },
   });
-  return result.signature;
+  return result.signedTransaction;
 }
 
 function currentSolanaAccount(): Record<string, unknown> | null {

@@ -8,7 +8,7 @@ import satori from "satori";
 import { read } from "$app/server";
 import interBold from "$lib/server/fonts/Inter-Bold.ttf";
 import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
-import { brandMark } from "$lib/server/og";
+import { brandMark, C } from "$lib/server/og";
 import { parsePositionParams } from "$lib/server/share";
 import type { RequestHandler } from "./$types";
 
@@ -41,7 +41,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
   const fonts = await loadFonts();
 
   const up = params.pnl >= 0;
-  const accent = up ? "#2ce97f" : "#ff5a6a";
+  const accent = up ? C.up : C.down;
   const pnlText = `${up ? "+" : "-"}$${Math.abs(params.pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const tree = {
@@ -52,10 +52,10 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
         height: `${H}px`,
         display: "flex",
         flexDirection: "column",
-        backgroundColor: "#0a0b0e",
+        backgroundColor: C.paper,
         padding: "64px 80px",
         fontFamily: "Inter",
-        color: "#eef1f6",
+        color: C.ink,
       },
       children: [
         {
@@ -89,7 +89,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
                     {
                       type: "span",
                       props: {
-                        style: { color: "#ff4d97" },
+                        style: { color: C.accent },
                         children: "·TERMINAL",
                       },
                     },
@@ -102,7 +102,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
                   style: {
                     display: "flex",
                     fontSize: "22px",
-                    color: "#8c95a4",
+                    color: C.muted,
                   },
                   children: "traderralph.com",
                 },
@@ -118,7 +118,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
               fontSize: "34px",
               fontWeight: 700,
               marginTop: "84px",
-              color: up ? "#2ce97f" : "#ff5a6a",
+              color: up ? C.up : C.down,
             },
             children: `${params.side.toUpperCase()} ${params.symbol}`,
           },
@@ -143,7 +143,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
                 style: {
                   display: "flex",
                   fontSize: "30px",
-                  color: "#8c95a4",
+                  color: C.muted,
                   marginTop: "18px",
                 },
                 children: `entry $${fmtPrice(params.prices.entry)}  →  mark $${fmtPrice(params.prices.mark)}`,
@@ -160,7 +160,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
               display: "flex",
               marginTop: "auto",
               fontSize: "24px",
-              color: "#8c95a4",
+              color: C.muted,
             },
             children: "Perps on Phoenix · spot by Jupiter · settled in USDC",
           },

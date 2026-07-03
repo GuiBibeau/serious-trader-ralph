@@ -59,7 +59,7 @@
     readPrivyConfig,
     sendPrivyEmailCode,
     signAndSendSolanaTransaction,
-    signSolanaMessage,
+    signSolanaTransaction,
     type PrivyAuthState,
   } from "$lib/privy-auth";
   import {
@@ -68,7 +68,8 @@
     getJupiterSwapTransaction,
     type JupiterQuote,
   } from "$lib/funding";
-  import BrandMark from "$lib/site/BrandMark.svelte";
+  import { BrandMark } from "@trader-ralph/ui";
+  import { colors } from "@trader-ralph/ui/tokens";
   import {
     clearJournal,
     entriesToday,
@@ -95,7 +96,6 @@
     type TriggerOrder,
   } from "$lib/spot";
   import {
-    activatePhoenixInvite,
     activatePhoenixReferral,
     buildCancelAllIxs,
     buildDepositIxs,
@@ -151,8 +151,8 @@
   const DEFAULT_VISIBLE_CANDLES = 150;
   const MAX_VISIBLE_CANDLES = 180;
   const BOOK_LADDER_LEVELS = 10;
-  const UP_COLOR = "#2ce97f";
-  const DOWN_COLOR = "#ff5a5f";
+  const UP_COLOR = colors.up;
+  const DOWN_COLOR = colors.down; // was #ff5a5f — unified to the token red
   const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
 
   let selectedSymbol = DEFAULT_PHOENIX_SYMBOL;
@@ -1530,6 +1530,71 @@
     return configured || SOLANA_MAINNET_RPC;
   }
 
+  type TransactionSummary = {
+    title: string;
+    details: string[];
+    feePayer?: string;
+    programs?: string[];
+  };
+
+  async function simulateConfirmAndSend(
+    transaction: VersionedTransaction,
+    connection: Connection,
+    summary: TransactionSummary,
+    latestBlockhash?: {
+      blockhash: string;
+      lastValidBlockHeight: number;
+    },
+  ): Promise<string> {
+    statusMessage = "simulating-transaction";
+    const simulation = await connection.simulateTransaction(transaction, {
+      sigVerify: false,
+    });
+    if (simulation.value.err) {
+      throw new Error(
+        `simulation-failed-${JSON.stringify(simulation.value.err)}`,
+      );
+    }
+
+    const feePayer =
+      summary.feePayer ??
+      transaction.message.staticAccountKeys[0]?.toBase58() ??
+      "unknown";
+    const programs = summary.programs?.length
+      ? summary.programs.join(", ")
+      : "transaction-built route";
+    const ok = window.confirm(
+      [
+        summary.title,
+        "",
+        ...summary.details,
+        `Fee payer: ${feePayer}`,
+        `Cluster: Solana mainnet`,
+        `Programs: ${programs}`,
+        `Simulation: passed${simulation.value.unitsConsumed ? ` (${simulation.value.unitsConsumed} CU)` : ""}`,
+        "",
+        "Continue to wallet signature?",
+      ].join("\n"),
+    );
+    if (!ok) throw new Error("signature-cancelled");
+
+    statusMessage = "awaiting-wallet-signature";
+    const signature = await signAndSendSolanaTransaction(
+      transaction,
+      connection,
+    );
+    statusMessage = "confirming-transaction";
+    if (latestBlockhash) {
+      await connection.confirmTransaction(
+        { signature, ...latestBlockhash },
+        "confirmed",
+      );
+    } else {
+      await connection.confirmTransaction(signature, "confirmed");
+    }
+    return signature;
+  }
+
   // ── Add funds (receive + Jupiter swap) ────────────────────────────
   function openFunds(): void {
     fundsOpen = true;
@@ -1591,6 +1656,7 @@
   async function executeSwap(): Promise<void> {
     const address = $privyAuth.walletAddress;
     if (!swapQuote || !address || swapStatus === "swapping") return;
+    const amount = swapQuote.inSol;
     swapStatus = "swapping";
     swapError = "";
     try {
@@ -1600,7 +1666,15 @@
       for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
       const transaction = VersionedTransaction.deserialize(bytes);
       const connection = new Connection(solanaRpcUrl(), "confirmed");
-      swapSignature = await signAndSendSolanaTransaction(transaction, connection);
+      swapSignature = await simulateConfirmAndSend(transaction, connection, {
+        title: "Swap SOL to USDC",
+        details: [
+          `Spend: ${formatNumber(amount, 4)} SOL`,
+          `Receive est.: ${formatNumber(swapQuote.outUsdc, 2)} USDC`,
+          `Price impact: ${(swapQuote.priceImpactPct * 100).toFixed(2)}%`,
+        ],
+        feePayer: address,
+      });
       swapStatus = "done";
       statusMessage = "swap-submitted";
       void refreshWalletBalance(address);
@@ -1792,7 +1866,8 @@
 
   async function executeSpotSwap(): Promise<void> {
     const address = $privyAuth.walletAddress;
-    if (!spotQuote || !address || spotBusy || walletScreen.flagged) return;
+    const asset = spotAsset;
+    if (!asset || !spotQuote || !address || spotBusy || walletScreen.flagged) return;
     // Freshness gate: never execute a quote older than 30s — re-quote instead.
     if (Date.now() - spotQuotedAt > 30_000) {
       scheduleSpotQuote();
@@ -1807,16 +1882,25 @@
       for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
       const transaction = VersionedTransaction.deserialize(bytes);
       const connection = new Connection(solanaRpcUrl(), "confirmed");
-      spotSignature = await signAndSendSolanaTransaction(transaction, connection);
+      spotSignature = await simulateConfirmAndSend(transaction, connection, {
+        title: `${spotSide === "buy" ? "Buy" : "Sell"} ${asset.symbol}`,
+        details: [
+          `Venue: Jupiter spot route`,
+          `Amount: ${formatNumber(Number(spotAmount), 4)}`,
+          `Receive est.: ${formatNumber(spotQuote.outUi, spotSide === "buy" ? 4 : 2)} ${spotSide === "buy" ? asset.symbol : "USDC"}`,
+          `Price impact: ${(spotQuote.priceImpactPct * 100).toFixed(2)}%`,
+        ],
+        feePayer: address,
+      });
       statusMessage = "spot-swap-submitted";
       noteTrade({
         ts: Date.now(),
         venue: "spot",
-        symbol: spotAsset?.symbol ?? "?",
+        symbol: asset.symbol,
         action: spotSide,
         notionalUsd:
           spotSide === "buy" ? Number(spotAmount) || null : (spotQuote?.outUi ?? null),
-        price: spotAsset?.price ?? null,
+        price: asset.price,
         leverage: null,
         signature: spotSignature,
       });
@@ -1842,7 +1926,7 @@
   }
 
   // ── Phoenix onboarding ────────────────────────────────────────────
-  const ONBOARD_KEY = "trader-ralph-terminal/phx-referral/v1";
+  const ONBOARD_KEY = "trader-ralph-terminal/phx-referral/v2";
 
   async function ensurePhoenixOnboarding(authority: string): Promise<void> {
     if (!authority || onboardedAddress === authority) return;
@@ -1850,28 +1934,20 @@
     try {
       const access = await checkPhoenixAccess(authority);
       phoenixWhitelisted = access.whitelisted;
-      // No manual invite step: our referral code doubles as the invite —
-      // activate it automatically for first-time wallets.
-      if (!access.whitelisted) {
-        const activated = await activatePhoenixInvite(
-          authority,
-          PHOENIX_REFERRAL_CODE,
-        );
-        if (activated.ok) {
-          phoenixWhitelisted = true;
-          statusMessage = "phoenix-access-activated";
-        }
-      }
     } catch {
       phoenixWhitelisted = null;
     }
-    // Referral attribution: once per wallet, best-effort, never blocks UX.
+    // Referral onboarding: once per wallet, best-effort, never blocks market reads.
     try {
       const done = JSON.parse(
         window.localStorage.getItem(ONBOARD_KEY) ?? "[]",
       ) as string[];
       if (done.includes(authority)) return;
-      const result = await activatePhoenixReferral(authority, signSolanaMessage);
+      const result = await activatePhoenixReferral(
+        authority,
+        solanaRpcUrl(),
+        signSolanaTransaction,
+      );
       if (
         result.ok ||
         /already|exist|self/i.test(result.message)
@@ -1880,7 +1956,12 @@
           ONBOARD_KEY,
           JSON.stringify([...done, authority]),
         );
-        if (result.ok) statusMessage = "phoenix-referral-attributed";
+        if (result.ok) {
+          phoenixWhitelisted = true;
+          statusMessage = result.signature
+            ? "phoenix-referral-activated"
+            : "phoenix-referral-active";
+        }
       }
     } catch {
       // wallet declined the signature or transient failure — retry next visit
@@ -1900,13 +1981,28 @@
 
   async function signAndSendPhoenixIxs(
     instructions: import("@solana/web3.js").TransactionInstruction[],
+    summary: TransactionSummary,
   ): Promise<string> {
-    const { transaction, connection } = await buildSignableTransaction(
-      solanaRpcUrl(),
-      phoenixAuthority,
-      instructions,
+    const { transaction, connection, latestBlockhash } =
+      await buildSignableTransaction(
+        solanaRpcUrl(),
+        phoenixAuthority,
+        instructions,
+      );
+    return simulateConfirmAndSend(
+      transaction,
+      connection,
+      {
+        ...summary,
+        feePayer: phoenixAuthority,
+        programs: [
+          ...new Set(
+            instructions.map((instruction) => instruction.programId.toBase58()),
+          ),
+        ],
+      },
+      latestBlockhash,
     );
-    return signAndSendSolanaTransaction(transaction, connection);
   }
 
   async function submitPhoenixOrder(): Promise<void> {
@@ -1954,10 +2050,22 @@
         takeProfitPrice,
         stopLossPrice,
       });
-      lastTradeSignature = await signAndSendPhoenixIxs([
-        ...registerIxs,
-        ...plan.instructions,
-      ]);
+      lastTradeSignature = await signAndSendPhoenixIxs(
+        [...registerIxs, ...plan.instructions],
+        {
+          title: `${tradeSide === "buy" ? "Long" : "Short"} ${selectedSymbol}-PERP`,
+          details: [
+            `Venue: Phoenix Perps`,
+            `Order: ${tradeType}`,
+            `Notional: $${formatNumber(tradePreview.notionalUsd, 2)}`,
+            `Margin: $${formatNumber(tradePreview.notionalUsd / tradeLeverage, 2)}`,
+            `Entry ref.: ${formatPrice(refPrice)}`,
+            `Leverage: ${tradeLeverage}x`,
+            ...(takeProfitPrice ? [`Take profit: ${formatPrice(takeProfitPrice)}`] : []),
+            ...(stopLossPrice ? [`Stop loss: ${formatPrice(stopLossPrice)}`] : []),
+          ],
+        },
+      );
       statusMessage = "phoenix-order-submitted";
       noteTrade({
         ts: Date.now(),
@@ -1992,7 +2100,14 @@
         quantity: Math.abs(size),
         reduceOnly: true,
       });
-      lastTradeSignature = await signAndSendPhoenixIxs(plan.instructions);
+      lastTradeSignature = await signAndSendPhoenixIxs(plan.instructions, {
+        title: `Close ${symbol}-PERP`,
+        details: [
+          `Venue: Phoenix Perps`,
+          `Reduce-only market order`,
+          `Size: ${formatNumber(Math.abs(size), 6)} ${symbol}`,
+        ],
+      });
       statusMessage = "phoenix-position-close-submitted";
       noteTrade({
         ts: Date.now(),
@@ -2039,7 +2154,13 @@
     phoenixActionError = "";
     try {
       const instructions = await buildCancelAllIxs(phoenixAuthority, symbol, side);
-      lastTradeSignature = await signAndSendPhoenixIxs(instructions);
+      lastTradeSignature = await signAndSendPhoenixIxs(instructions, {
+        title: `Cancel ${symbol}-PERP orders`,
+        details: [
+          `Venue: Phoenix Perps`,
+          `Side: ${side === "bid" ? "bids" : "asks"}`,
+        ],
+      });
       statusMessage = "phoenix-cancel-submitted";
       void refreshPhoenixTrader();
     } catch (error) {
@@ -2066,10 +2187,19 @@
         direction === "deposit"
           ? await buildDepositIxs(phoenixAuthority, amount)
           : await buildWithdrawIxs(phoenixAuthority, amount);
-      collateralSignature = await signAndSendPhoenixIxs([
-        ...(direction === "deposit" ? registerIxs : []),
-        ...instructions,
-      ]);
+      collateralSignature = await signAndSendPhoenixIxs(
+        [...(direction === "deposit" ? registerIxs : []), ...instructions],
+        {
+          title: `${direction === "deposit" ? "Deposit to" : "Withdraw from"} Phoenix`,
+          details: [
+            `Venue: Phoenix Perps`,
+            `Amount: ${formatNumber(amount, 2)} USDC`,
+            direction === "withdraw"
+              ? "Withdrawals settle through the Phoenix withdraw queue"
+              : "Funds move from wallet USDC into Phoenix margin",
+          ],
+        },
+      );
       statusMessage = `phoenix-${direction}-submitted`;
       depositAmount = "";
       withdrawAmount = "";
@@ -2213,7 +2343,7 @@
     return {
       time: Math.floor(point.ts / 1000) as UTCTimestamp,
       value: point.volumeQuote ?? point.volume ?? 0,
-      color: up ? "rgba(44, 233, 127, 0.45)" : "rgba(255, 90, 95, 0.45)",
+      color: up ? "rgba(44, 233, 127, 0.45)" : "rgba(255, 90, 106, 0.45)",
     };
   }
 
@@ -2222,8 +2352,8 @@
     lwChart = createChart(chartContainer, {
       autoSize: true,
       layout: {
-        background: { type: ColorType.Solid, color: "#0f1116" },
-        textColor: "#8c95a4",
+        background: { type: ColorType.Solid, color: colors.chartBg },
+        textColor: colors.muted,
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: 11,
         attributionLogo: false,
@@ -2234,15 +2364,15 @@
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(255, 77, 151, 0.5)", labelBackgroundColor: "#272b34" },
-        horzLine: { color: "rgba(255, 77, 151, 0.5)", labelBackgroundColor: "#272b34" },
+        vertLine: { color: "rgba(255, 77, 151, 0.5)", labelBackgroundColor: colors.line },
+        horzLine: { color: "rgba(255, 77, 151, 0.5)", labelBackgroundColor: colors.line },
       },
       rightPriceScale: {
-        borderColor: "#272b34",
+        borderColor: colors.line,
         scaleMargins: { top: 0.08, bottom: 0.26 },
       },
       timeScale: {
-        borderColor: "#272b34",
+        borderColor: colors.line,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 4,
@@ -2787,7 +2917,7 @@
       liqLines.push(
         candleSeries.createPriceLine({
           price: position.liquidationPrice,
-          color: "#ff5a6a",
+          color: colors.down,
           lineWidth: 1,
           lineStyle: 2, // dashed
           axisLabelVisible: true,
@@ -2934,9 +3064,18 @@
             };
       const { transaction } = await createTriggerOrder({ maker: address, ...params });
       const connection = new Connection(solanaRpcUrl(), "confirmed");
-      spotSignature = await signAndSendSolanaTransaction(
+      spotSignature = await simulateConfirmAndSend(
         deserializeBase64Tx(transaction),
         connection,
+        {
+          title: `Place limit ${spotSide} ${spotAsset.symbol}`,
+          details: [
+            `Venue: Jupiter Trigger`,
+            `Limit price: ${formatPrice(limit)}`,
+            `Notional: $${formatNumber(spotSide === "buy" ? amount : amount * limit, 2)}`,
+          ],
+          feePayer: address,
+        },
       );
       statusMessage = "spot-limit-placed";
       noteTrade({
@@ -2965,7 +3104,15 @@
     try {
       const transaction = await cancelTriggerOrder(address, orderKey);
       const connection = new Connection(solanaRpcUrl(), "confirmed");
-      await signAndSendSolanaTransaction(deserializeBase64Tx(transaction), connection);
+      await simulateConfirmAndSend(
+        deserializeBase64Tx(transaction),
+        connection,
+        {
+          title: "Cancel spot limit order",
+          details: [`Venue: Jupiter Trigger`, `Order: ${shortAddress(orderKey)}`],
+          feePayer: address,
+        },
+      );
       triggerOrders = triggerOrders.filter((order) => order.orderKey !== orderKey);
       void refreshTriggerOrders();
     } catch (error) {
@@ -5009,7 +5156,7 @@
   .chart-footer button,
   .book-row {
     border: 1px solid var(--line);
-    border-radius: 0.38rem;
+    border-radius: 0;
     background: var(--surface-2);
     color: var(--ink);
     min-height: 2rem;
@@ -5074,7 +5221,7 @@
   /* Loading skeletons */
   .skeleton {
     display: inline-block;
-    border-radius: 0.3rem;
+    border-radius: 0;
     background: linear-gradient(
       90deg,
       rgba(255, 255, 255, 0.04) 25%,
@@ -5130,7 +5277,7 @@
     align-items: center;
     gap: 0.5rem;
     border: 1px solid var(--line);
-    border-radius: 0.5rem;
+    border-radius: 0;
     background: var(--surface-2);
     color: var(--ink);
     min-height: 2.2rem;
@@ -5189,7 +5336,7 @@
     gap: 0.5rem;
     padding: 0.7rem;
     border: 1px solid var(--line);
-    border-radius: 0.6rem;
+    border-radius: 0;
     background: var(--surface);
     box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.5);
   }
@@ -5225,7 +5372,7 @@
 
   .wallet-badge {
     flex: 0 0 auto;
-    border-radius: 999px;
+    border-radius: 0;
     padding: 0.18rem 0.5rem;
     font-size: 0.62rem;
     font-weight: 700;
@@ -5265,7 +5412,7 @@
     gap: 0.5rem;
     width: 100%;
     border: 1px solid var(--line-soft);
-    border-radius: 0.45rem;
+    border-radius: 0;
     background: rgba(255, 255, 255, 0.02);
     padding: 0.45rem 0.55rem;
     text-align: left;
@@ -5313,7 +5460,7 @@
 
   .row-action {
     border: 1px solid var(--line);
-    border-radius: 0.35rem;
+    border-radius: 0;
     background: var(--surface-2);
     color: var(--muted);
     font-size: 0.66rem;
@@ -5338,7 +5485,7 @@
 
   .account-action {
     border: 1px solid var(--line);
-    border-radius: 0.45rem;
+    border-radius: 0;
     background: var(--surface-2);
     color: var(--ink);
     min-height: 2.1rem;
@@ -5379,7 +5526,7 @@
     display: grid;
     gap: 0.6rem;
     border: 1px dashed var(--line);
-    border-radius: 0.5rem;
+    border-radius: 0;
     padding: 0.75rem;
   }
 
@@ -5396,7 +5543,7 @@
     margin: 0 0.65rem 0.4rem;
     padding: 0.5rem 0.6rem;
     border: 1px solid var(--line-soft);
-    border-radius: 0.5rem;
+    border-radius: 0;
     background: rgba(255, 255, 255, 0.02);
   }
 
@@ -5466,7 +5613,7 @@
     justify-content: center;
     padding: 0.85rem;
     border: 1px solid var(--line-soft);
-    border-radius: 0.6rem;
+    border-radius: 0;
     background: rgba(255, 255, 255, 0.02);
   }
 
@@ -5509,7 +5656,7 @@
     position: relative;
     min-height: 12rem;
     border: 1px solid var(--line);
-    border-radius: 0.6rem;
+    border-radius: 0;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
       var(--surface);
     overflow: hidden;
@@ -5610,7 +5757,7 @@
     color: var(--ink);
     background: var(--paper);
     border: 1px solid var(--line);
-    border-radius: 0.35rem;
+    border-radius: 0;
     min-height: 2rem;
     padding: 0.3rem 0.45rem;
   }
@@ -5673,7 +5820,7 @@
   .price-mode-toggle {
     gap: 0;
     border: 1px solid var(--line);
-    border-radius: 0.45rem;
+    border-radius: 0;
     padding: 0.15rem;
     background: var(--paper);
   }
@@ -5707,7 +5854,7 @@
   .chart-canvas-shell {
     position: relative;
     min-height: 0;
-    background: #0f1116;
+    background: var(--chart-bg);
     overflow: hidden;
   }
 
@@ -5722,7 +5869,7 @@
     max-width: calc(100% - 6rem);
     padding: 0.4rem 0.6rem;
     border: 1px solid var(--line-soft);
-    border-radius: 0.5rem;
+    border-radius: 0;
     background: rgba(10, 13, 17, 0.66);
     backdrop-filter: blur(7px);
     color: var(--muted);
@@ -5902,7 +6049,7 @@
     bottom: -1px;
     left: 22%;
     height: 2px;
-    border-radius: 2px;
+    border-radius: 0;
     background: var(--accent);
     content: "";
   }
@@ -6073,7 +6220,7 @@
     left: 0.15rem;
     width: 0.64rem;
     height: 2px;
-    border-radius: 1rem;
+    border-radius: 0;
     background: currentColor;
   }
 
@@ -6096,7 +6243,7 @@
     position: absolute;
     right: 0.1rem;
     height: 2px;
-    border-radius: 1rem;
+    border-radius: 0;
     background: currentColor;
   }
 
@@ -6170,7 +6317,7 @@
     min-height: 1.08rem;
     overflow: hidden;
     border: 0;
-    border-radius: 0.18rem;
+    border-radius: 0;
     background: transparent;
     color: var(--ink);
     padding: 0 0.3rem;
@@ -6194,11 +6341,11 @@
   }
 
   .book-ladder .book-row.ask .book-price {
-    color: #ff5a5f;
+    color: var(--down);
   }
 
   .book-ladder .book-row.bid .book-price {
-    color: #2ce97f;
+    color: var(--up);
   }
 
   .depth-bar {
@@ -6207,12 +6354,12 @@
     bottom: 2px;
     left: 0;
     z-index: 0;
-    border-radius: 0.2rem;
+    border-radius: 0;
     pointer-events: none;
   }
 
   .book-ladder .book-row.ask .depth-bar {
-    background: rgba(255, 90, 95, 0.24);
+    background: rgba(255, 90, 106, 0.24);
   }
 
   .book-ladder .book-row.bid .depth-bar {
@@ -6275,7 +6422,7 @@
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--line);
-    border-radius: 0.7rem;
+    border-radius: 0;
     background: var(--surface);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.04),
@@ -6356,7 +6503,7 @@
     width: 1.9rem;
     height: 1.9rem;
     border: 1px solid var(--line);
-    border-radius: 0.4rem;
+    border-radius: 0;
     background: var(--surface-2);
     color: var(--muted);
     font-size: 1.2rem;
@@ -6479,7 +6626,7 @@
 
   .auth-note {
     margin: 0;
-    border-radius: 0.45rem;
+    border-radius: 0;
     padding: 0.55rem 0.7rem;
     background: var(--surface-2);
     color: var(--muted);
@@ -6496,7 +6643,7 @@
   .auth-callout {
     display: grid;
     gap: 0.35rem;
-    border-radius: 0.5rem;
+    border-radius: 0;
     padding: 0.85rem;
     background: var(--surface-2);
     border: 1px solid var(--line);
@@ -6703,7 +6850,7 @@
   .section-nav button {
     flex: 0 0 auto;
     border: 1px solid var(--line);
-    border-radius: 999px;
+    border-radius: 0;
     background: var(--surface-2);
     color: var(--muted);
     font-size: 0.74rem;
@@ -6721,7 +6868,7 @@
   :where(button, a, select, input):focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
-    border-radius: 0.3rem;
+    border-radius: 0;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -6737,7 +6884,7 @@
   /* ── Macro panels: verdict badge, signal rows, sparklines ─────────── */
   .verdict-badge {
     flex: 0 0 auto;
-    border-radius: 999px;
+    border-radius: 0;
     padding: 0.2rem 0.55rem;
     font-size: 0.62rem;
     font-weight: 800;
@@ -6815,7 +6962,7 @@
 
   .macro-chip {
     justify-self: end;
-    border-radius: 999px;
+    border-radius: 0;
     padding: 0.1rem 0.5rem;
     font-size: 0.6rem;
     font-weight: 700;
@@ -6829,7 +6976,7 @@
   .up,
   .spark.up polyline {
     color: #8decc3;
-    stroke: #2ce97f;
+    stroke: var(--up);
   }
 
   .down,
@@ -6883,7 +7030,7 @@
     padding: 0.45rem 0.6rem;
     border-left: 2px solid rgba(255, 77, 151, 0.55);
     background: rgba(255, 255, 255, 0.015);
-    border-radius: 0 0.35rem 0.35rem 0;
+    border-radius: 0;
     font-size: 0.76rem;
     line-height: 1.45;
   }
@@ -6937,7 +7084,7 @@
   .desk-skeleton i {
     display: block;
     height: 0.5rem;
-    border-radius: 999px;
+    border-radius: 0;
     background: linear-gradient(
       90deg,
       rgba(255, 255, 255, 0.035) 25%,
@@ -6970,7 +7117,7 @@
        height-constrained modal grid can never collapse this row. */
     min-height: 2.45rem;
     border: 1px solid var(--line);
-    border-radius: 0.45rem;
+    border-radius: 0;
     overflow: hidden;
   }
 
@@ -7002,7 +7149,7 @@
     display: grid;
     gap: 0.05rem;
     border: 1px solid var(--line-soft);
-    border-radius: 0.45rem;
+    border-radius: 0;
     padding: 0.4rem 0.65rem;
     background: rgba(255, 255, 255, 0.02);
   }
@@ -7063,7 +7210,7 @@
     display: block;
     width: clamp(8rem, 18vw, 16rem);
     height: 0.45rem;
-    border-radius: 999px;
+    border-radius: 0;
     background: linear-gradient(
       90deg,
       rgba(255, 255, 255, 0.03) 25%,
@@ -7168,7 +7315,7 @@
     min-width: 1.05rem;
     height: 1.05rem;
     padding: 0 0.25rem;
-    border-radius: 999px;
+    border-radius: 0;
     background: var(--accent);
     color: #04130d;
     font-size: 0.6rem;
@@ -7194,7 +7341,7 @@
     gap: 0.5rem;
     padding: 0.4rem 0.5rem;
     border: 1px solid var(--line-soft);
-    border-radius: 0.4rem;
+    border-radius: 0;
     background: rgba(255, 255, 255, 0.02);
     font-size: 0.78rem;
   }
@@ -7209,7 +7356,7 @@
   }
 
   .alert-tier {
-    border-radius: 999px;
+    border-radius: 0;
     padding: 0.1rem 0.45rem;
     font-size: 0.58rem;
     font-weight: 800;

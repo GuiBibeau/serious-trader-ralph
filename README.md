@@ -2,24 +2,25 @@
 
 Trader Ralph is a frontend-only SvelteKit trading terminal UI. The app opens
 directly to `/terminal`. Market chart, order book, trade tape, and market-list
-panels use read-only public Phoenix perpetuals data. The dashboard also calls
-the configured Trader Ralph edge API for macro, orders, private position, and
-prediction-market panels. When Privy is configured, authenticated account-gated
-edge routes receive the user's bearer token; if the edge route is unavailable
-or still requires auth, the UI shows that real response instead of generating
-placeholder rows.
+panels use public Phoenix perpetuals data. When Privy is configured, the
+terminal can provision a browser-side Solana wallet, activate the Ralph Phoenix
+referral, fund with USDC/SOL, deposit to Phoenix margin, and submit Phoenix
+perp transactions signed by the user.
 
 No Cloudflare Worker, database, x402 service, Solana execution backend, React,
 Next.js, Tailwind, icon library, dashboard-grid library, or motion library is
-required to run the local UI. Privy is optional for local UI boot and only needed
-for authenticated account-gated edge reads. Live execution workflows still
-require the external edge/auth/payment stack.
+required to run the local UI. Privy is optional for local UI boot and required
+for live wallet actions.
 
 ## What This Repo Contains
 
 - `apps/portal`: SvelteKit dashboard UI.
-- `apps/portal/src/lib/phoenix-market-data.ts`: read-only Phoenix perpetuals
-  REST and WebSocket market data adapter.
+- `packages/ui`: `@trader-ralph/ui` — shared design system (tokens, formatters,
+  Svelte 5 components) consumed source-direct by the portal.
+- `apps/portal/src/lib/phoenix-market-data.ts`: Phoenix perpetuals REST and
+  WebSocket market data adapter.
+- `apps/portal/src/lib/phoenix-trade.ts`: Phoenix referral activation,
+  account-state, collateral, order, cancel, and transaction-builder helpers.
 - `apps/portal/src/lib/edge-data.ts`: Trader Ralph edge API reader for plain
   read routes plus auth-bound order, perp, and prediction panels.
 - `apps/portal/src/routes/terminal/+page.svelte`: the terminal workstation.
@@ -50,8 +51,12 @@ bun run test
 - Dashboard modules: chart, depth, order entry, open orders, positions, account
   risk, status bar, macro widgets, Phoenix markets, event hooks, perps, and
   prediction markets.
-- Real read-only Phoenix perpetuals data: market list, live candles, L2
+- Real Phoenix perpetuals data: market list, live candles, L2
   orderbook, market stats, funding, all-mids, and recent fills.
+- Live Phoenix trading path: Privy embedded Solana wallet, current
+  `/v1/referral/activate-tx` onboarding, USDC collateral deposit/withdraw,
+  perp order placement, cancel/close, preflight simulation, user confirmation,
+  wallet signature, RPC confirmation, and account-state refresh.
 - Real edge API status for plain read routes and gated account, order, perp,
   and prediction endpoints.
 - Optional Privy email authentication for passing bearer tokens to account-gated
@@ -72,9 +77,14 @@ client ID, set `NEXT_PUBLIC_PRIVY_CLIENT_ID`, `PUBLIC_PRIVY_CLIENT_ID`, or
 `VITE_PRIVY_CLIENT_ID` as well. Private API keys, wallet keys, and manually
 issued bearer tokens must stay out of the browser.
 
+Live wallet actions use Solana mainnet. Set `NEXT_PUBLIC_SOLANA_RPC_URL`,
+`PUBLIC_SOLANA_RPC_URL`, or `VITE_SOLANA_RPC_URL` to a browser-accessible
+mainnet RPC with enough rate limit for simulation, submission, confirmation,
+and balance reads.
+
 ## Important
 
-This repo does not submit live trades. Browser-visible data is either fetched
-from public read-only market APIs, fetched from the configured edge API, or
-shown as unavailable/auth-required. It should not invent live account or
-execution state.
+This repo can submit live Solana transactions when Privy is configured and the
+user signs. It does not include a geo gate yet. Do not expose live trading
+publicly until the operator adds the required jurisdiction controls for the
+target launch.

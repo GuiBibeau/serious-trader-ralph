@@ -12,6 +12,7 @@ import {
   buildDepositIxsResolved,
   buildRegisterTraderIx,
   buildWithdrawIxsResolved,
+  createPhoenixClient,
   getEmberStateAddress,
   getEmberVaultAddress,
   getTraderAddresses,
@@ -21,6 +22,7 @@ import {
   toMaxPositions,
 } from "@ellipsis-labs/rise";
 import {
+  type BlockhashWithExpiryBlockHeight,
   Connection,
   PublicKey,
   TransactionInstruction,
@@ -254,15 +256,23 @@ export async function buildSignableTransaction(
   rpcUrl: string,
   feePayer: string,
   instructions: TransactionInstruction[],
-): Promise<{ transaction: VersionedTransaction; connection: Connection }> {
+): Promise<{
+  transaction: VersionedTransaction;
+  connection: Connection;
+  latestBlockhash: BlockhashWithExpiryBlockHeight;
+}> {
   const connection = new Connection(rpcUrl, "confirmed");
-  const { blockhash } = await connection.getLatestBlockhash("confirmed");
+  const latestBlockhash = await connection.getLatestBlockhash("confirmed");
   const message = new TransactionMessage({
     payerKey: new PublicKey(feePayer),
-    recentBlockhash: blockhash,
+    recentBlockhash: latestBlockhash.blockhash,
     instructions,
   }).compileToV0Message();
-  return { transaction: new VersionedTransaction(message), connection };
+  return {
+    transaction: new VersionedTransaction(message),
+    connection,
+    latestBlockhash,
+  };
 }
 
 async function postIx(
@@ -309,87 +319,61 @@ export async function checkPhoenixAccess(
   };
 }
 
-export async function activatePhoenixInvite(
-  authority: string,
-  code: string,
-): Promise<{ ok: boolean; message: string }> {
-  const response = await fetch(`${PHOENIX_API}/v1/invite/activate`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ authority, code: code.trim().toUpperCase() }),
-  });
-  const payload = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) {
-    const message =
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : `invite-activate-${response.status}`;
-    return { ok: false, message };
-  }
-  return { ok: true, message: "Phoenix access activated" };
-}
-
-// Mint a Phoenix session by signing the wallet-login challenge, then
-// attribute the signup to our referral code. Both steps are best-effort —
-// "already referred" and similar responses are treated as benign.
+// Activate the Ralph referral via Phoenix's current delegated onboarding flow.
+// The wallet signs locally; Phoenix validates, adds the onboarder signature,
+// and submits. No deprecated invite/referral endpoint or wallet-login JWT.
 export async function activatePhoenixReferral(
   authority: string,
-  signMessage: (message: string) => Promise<string>,
-): Promise<{ ok: boolean; message: string }> {
-  const nonceResponse = await fetch(
-    `${PHOENIX_API}/v1/auth/nonce?wallet_pubkey=${encodeURIComponent(authority)}`,
-  );
-  if (!nonceResponse.ok) {
-    return { ok: false, message: `phoenix-nonce-${nonceResponse.status}` };
-  }
-  const nonce = (await nonceResponse.json()) as {
-    nonce_id: string;
-    message: string;
-  };
-  const signature = await signMessage(nonce.message);
-  const loginResponse = await fetch(`${PHOENIX_API}/v1/auth/login/wallet`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      wallet_pubkey: authority,
-      signature,
-      nonce_id: nonce.nonce_id,
-    }),
+  rpcUrl: string,
+  signTransaction: (
+    transaction: VersionedTransaction,
+  ) => Promise<VersionedTransaction>,
+): Promise<{ ok: boolean; message: string; signature: string | null }> {
+  const client = createPhoenixClient({
+    apiUrl: PHOENIX_API,
+    rpcUrl,
+    ws: false,
+    exchangeMetadata: { stream: false },
   });
-  const login = (await loginResponse.json().catch(() => null)) as unknown;
-  if (
-    !loginResponse.ok ||
-    !isRecord(login) ||
-    typeof login.access_token !== "string"
-  ) {
-    const message =
-      isRecord(login) && typeof login.error === "string"
-        ? login.error
-        : `phoenix-login-${loginResponse.status}`;
-    return { ok: false, message };
+  try {
+    const connection = new Connection(rpcUrl, "confirmed");
+    const latestBlockhash = await connection.getLatestBlockhash("confirmed");
+    const built = await client.api.invite().buildActivateReferralTxRequest({
+      referralCode: PHOENIX_REFERRAL_CODE,
+      traderAuthority: authority,
+      traderPdaIndex: 0,
+      traderSubaccountIndex: 0,
+      recentBlockhash: latestBlockhash.blockhash,
+      lastValidBlockHeight: BigInt(latestBlockhash.lastValidBlockHeight),
+      registerTraderMaxPositions: 128n,
+      rpcUrl,
+      signTransaction: async (_transaction, context) => {
+        const transaction = VersionedTransaction.deserialize(
+          context.unsignedTransactionBytes,
+        );
+        return signTransaction(transaction);
+      },
+    });
+    const response = await client.api
+      .invite()
+      .activateReferralTx(built.request);
+    return {
+      ok: true,
+      message:
+        response.status === "already_activated"
+          ? "Phoenix referral already active"
+          : "Phoenix referral activated",
+      signature: response.signature ?? null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "referral-activate-tx",
+      signature: null,
+    };
+  } finally {
+    client.dispose();
   }
-  const activateResponse = await fetch(`${PHOENIX_API}/v1/referral/activate`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${login.access_token}`,
-    },
-    body: JSON.stringify({
-      authority,
-      referral_code: PHOENIX_REFERRAL_CODE,
-    }),
-  });
-  const activated = (await activateResponse
-    .json()
-    .catch(() => null)) as unknown;
-  if (!activateResponse.ok) {
-    const message =
-      isRecord(activated) && typeof activated.error === "string"
-        ? activated.error
-        : `referral-activate-${activateResponse.status}`;
-    return { ok: false, message };
-  }
-  return { ok: true, message: "Referral attributed" };
 }
 
 // ── Trader registration ──────────────────────────────────────────────
@@ -413,7 +397,7 @@ export async function ensureTraderRegisteredIxs(
     payer: authority as Reg["payer"],
     trader: authority as Reg["trader"],
     traderAccount: addresses.traderAccount,
-    maxPositions: toMaxPositions(MarginType.Cross),
+    maxPositions: BigInt(toMaxPositions(MarginType.Cross)),
     traderPdaIndex: 0,
     traderSubaccountIndex: 0,
   });

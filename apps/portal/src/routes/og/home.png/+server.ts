@@ -6,7 +6,7 @@ import satori from "satori";
 import { read } from "$app/server";
 import interBold from "$lib/server/fonts/Inter-Bold.ttf";
 import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
-import { brandMark } from "$lib/server/og";
+import { brandMark, C } from "$lib/server/og";
 import type { RequestHandler } from "./$types";
 
 const W = 1200;
@@ -36,10 +36,10 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
         height: `${H}px`,
         display: "flex",
         flexDirection: "column",
-        backgroundColor: "#0a0b0e",
+        backgroundColor: C.paper,
         padding: "64px 80px",
         fontFamily: "Inter",
-        color: "#eef1f6",
+        color: C.ink,
       },
       children: [
         {
@@ -60,7 +60,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
               },
               {
                 type: "span",
-                props: { style: { color: "#ff4d97" }, children: "·TERMINAL" },
+                props: { style: { color: C.accent }, children: "·TERMINAL" },
               },
             ],
           },
@@ -88,7 +88,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
               {
                 type: "div",
                 props: {
-                  style: { display: "flex", color: "#ff4d97" },
+                  style: { display: "flex", color: C.accent },
                   children: "One account.",
                 },
               },
@@ -101,7 +101,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
             style: {
               display: "flex",
               fontSize: "30px",
-              color: "#8c95a4",
+              color: C.muted,
               marginTop: "40px",
             },
             children: "Spot and perps on 300+ Solana markets, settled in USDC",
@@ -114,7 +114,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
               display: "flex",
               marginTop: "auto",
               fontSize: "24px",
-              color: "#8c95a4",
+              color: C.muted,
             },
             children:
               "Spot by Jupiter · perps on Phoenix · email login, no seed phrase",

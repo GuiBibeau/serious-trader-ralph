@@ -71,7 +71,7 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
         marginTop: "28px",
         width: "100%",
         border: `1px solid ${C.line}`,
-        borderRadius: "6px",
+        borderRadius: "0",
         backgroundColor: C.surface,
       },
       rows.map((asset, index) =>

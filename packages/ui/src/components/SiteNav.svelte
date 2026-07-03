@@ -1,5 +1,6 @@
 <script lang="ts">
   import BrandMark from "./BrandMark.svelte";
+  import Button from "./Button.svelte";
 
   let { cta = "Open terminal", ctaHref = "/terminal" } = $props();
 </script>
@@ -16,7 +17,7 @@
       <a href="/pre-ipo">Pre-IPO</a>
       <a href="/crypto">Crypto</a>
     </nav>
-    <a class="cta" href={ctaHref}>{cta}</a>
+    <Button href={ctaHref}>{cta}</Button>
   </div>
 </header>
 
@@ -54,17 +55,6 @@
   nav { display: flex; gap: 1.4rem; flex: 1; }
   nav a { color: var(--muted); font-size: 0.86rem; text-decoration: none; }
   nav a:hover { color: var(--ink); }
-  .cta {
-    background: var(--accent);
-    color: #14060c;
-    font-weight: 700;
-    padding: 0.55rem 1.1rem;
-    border-radius: var(--radius);
-    font-size: 0.88rem;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-  .cta:hover { filter: brightness(1.08); }
   @media (max-width: 880px) {
     nav { display: none; }
   }

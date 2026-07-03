@@ -1,17 +1,8 @@
 <script lang="ts">
-  import SiteNav from "$lib/site/SiteNav.svelte";
-  import SiteFooter from "$lib/site/SiteFooter.svelte";
+  import { Button, SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { fmtPct, fmtPrice } from "@trader-ralph/ui/format";
 
   let { data } = $props();
-
-  const fmtPct = (value: number | null) =>
-    value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
-  const fmtPrice = (value: number | null) =>
-    value === null
-      ? "—"
-      : value >= 1
-        ? value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-        : value.toLocaleString(undefined, { maximumFractionDigits: 5 });
 
   const ago = (publishedAt: number | null, now: number) => {
     if (!publishedAt) return "";
@@ -78,7 +69,7 @@
             </span>
           </a>
         {/each}
-        <a class="cta" href="/terminal">Open terminal</a>
+        <div class="side-cta"><Button block href="/terminal">Open terminal</Button></div>
       </aside>
     </div>
   </main>
@@ -109,6 +100,9 @@
     padding: 0.12rem 0.55rem;
     text-decoration: none;
   }
+  .tag:hover {
+    color: var(--ink);
+  }
   .empty { color: var(--faint); }
 
   .side { align-self: start; position: sticky; top: 4.6rem; /* clears the sticky nav */ }
@@ -129,18 +123,7 @@
   .mover:hover .sym { color: var(--accent); }
   .up { color: var(--up); }
   .down { color: var(--down); }
-  .cta {
-    display: block;
-    margin-top: 1rem;
-    text-align: center;
-    background: var(--accent);
-    color: #14060c;
-    font-weight: 700;
-    font-size: 0.85rem;
-    padding: 0.55rem;
-    border-radius: var(--radius);
-    text-decoration: none;
-  }
+  .side-cta { margin-top: 1rem; }
 
   @media (max-width: 880px) {
     .layout { grid-template-columns: 1fr; }

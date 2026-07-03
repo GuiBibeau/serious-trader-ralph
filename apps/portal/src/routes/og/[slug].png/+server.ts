@@ -140,7 +140,7 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
               ? "rgba(44,233,127,0.12)"
               : "rgba(255,90,106,0.12)",
             border: `2px solid ${sparkColor}`,
-            borderRadius: "6px",
+            borderRadius: "0",
             padding: "14px 26px",
             flexDirection: "column",
             alignItems: "flex-end",

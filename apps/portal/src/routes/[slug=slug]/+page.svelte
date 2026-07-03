@@ -1,6 +1,6 @@
 <script lang="ts">
-  import SiteNav from "$lib/site/SiteNav.svelte";
-  import SiteFooter from "$lib/site/SiteFooter.svelte";
+  import { NewsItem, SiteFooter, SiteNav, StatCard } from "@trader-ralph/ui";
+  import { fmtPct, fmtUsd } from "@trader-ralph/ui/format";
 
   let { data } = $props();
 
@@ -12,24 +12,6 @@
   const asset = $derived(data.asset);
   const price = $derived(livePrice ?? asset.price);
   const change = $derived(liveChange ?? asset.change24hPct);
-
-  const fmtUsd = (value: number | null, compact = false) => {
-    if (value === null) return "—";
-    if (compact) {
-      if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
-      if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
-      if (value >= 1e3) return `$${(value / 1e3).toFixed(0)}K`;
-    }
-    return `$${
-      value >= 1000
-        ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
-        : value >= 1
-          ? value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          : value.toLocaleString(undefined, { maximumFractionDigits: 5 })
-    }`;
-  };
-  const fmtPct = (value: number | null) =>
-    value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
   // SSR sparkline path from 7d of closes.
   const sparkPath = $derived.by(() => {
@@ -224,22 +206,10 @@
 
     <!-- Stats -->
     <section class="stats">
-      <div class="stat">
-        <b>{fmtUsd(asset.marketCap, true)}</b>
-        <span>Market cap <em>what the market says it's all worth</em></span>
-      </div>
-      <div class="stat">
-        <b>{fmtUsd(asset.volume24hUsd, true)}</b>
-        <span>24h volume <em>how much changed hands today</em></span>
-      </div>
-      <div class="stat">
-        <b>{fmtUsd(asset.liquidityUsd, true)}</b>
-        <span>Liquidity <em>how easily you can get in and out</em></span>
-      </div>
-      <div class="stat">
-        <b>{fmtUsd(data.profile?.allTimeHigh ?? null)}</b>
-        <span>All-time high <em>the highest it has ever traded</em></span>
-      </div>
+      <StatCard value={fmtUsd(asset.marketCap, true)} label="Market cap" hint="what the market says it's all worth" />
+      <StatCard value={fmtUsd(asset.volume24hUsd, true)} label="24h volume" hint="how much changed hands today" />
+      <StatCard value={fmtUsd(asset.liquidityUsd, true)} label="Liquidity" hint="how easily you can get in and out" />
+      <StatCard value={fmtUsd(data.profile?.allTimeHigh ?? null)} label="All-time high" hint="the highest it has ever traded" />
     </section>
 
     <div class="columns">
@@ -276,10 +246,7 @@
             <h2>{data.newsIsAssetScoped ? `${asset.symbol} in the news` : "Market headlines"}</h2>
             <div class="news-list">
               {#each data.news as item (item.url)}
-                <a class="news-item" href={item.url} target="_blank" rel="noopener noreferrer">
-                  <span class="src">{item.source}</span>
-                  <span class="ttl">{item.title}</span>
-                </a>
+                <NewsItem source={item.source} title={item.title} href={item.url} />
               {/each}
             </div>
           </section>
@@ -433,13 +400,28 @@
     border: 1px solid var(--line);
     color: var(--ink);
     transition: border-color 140ms ease, background 140ms ease;
+    box-shadow: var(--shadow-hard-sm);
+  }
+  .rail-btn:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.55);
+  }
+  .rail-btn:active {
+    transform: translate(2px, 2px);
+    box-shadow: none;
   }
   .rail-btn small { font-weight: 500; font-size: 0.68rem; color: var(--muted); }
-  .rail-btn.spot { background: var(--accent); border-color: transparent; color: #14060c; }
+  .rail-btn.spot { background: var(--accent); border-color: transparent; color: var(--accent-contrast); }
   .rail-btn.spot small { color: rgba(20, 6, 12, 0.65); }
-  .rail-btn.spot:hover { filter: brightness(1.07); }
+  .rail-btn.spot:hover { filter: brightness(1.08); }
   .rail-btn.long:hover { border-color: var(--up); }
   .rail-btn.short:hover { border-color: var(--down); }
+  @media (prefers-reduced-motion: reduce) {
+    .rail-btn:hover,
+    .rail-btn:active {
+      transform: none;
+    }
+  }
   /* Stats */
   .stats {
     display: grid;
@@ -447,17 +429,6 @@
     gap: 0.7rem;
     margin: 0.9rem 0 2rem;
   }
-  .stat {
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: var(--surface);
-    padding: 0.8rem 0.9rem;
-    display: grid;
-    gap: 0.2rem;
-  }
-  .stat b { font-family: ui-monospace, monospace; font-size: 1.2rem; font-variant-numeric: tabular-nums; }
-  .stat span { font-size: 0.74rem; color: var(--muted); }
-  .stat em { display: block; font-style: normal; color: var(--faint); font-size: 0.68rem; margin-top: 0.1rem; }
 
   /* Columns */
   .columns { display: grid; grid-template-columns: minmax(0, 1fr) 17rem; gap: 2rem; }
@@ -485,16 +456,6 @@
   .pulse li::before { content: "·"; position: absolute; left: 0.2rem; color: var(--accent); font-weight: 800; }
 
   .news-list { display: grid; }
-  .news-item {
-    display: grid;
-    grid-template-columns: 8rem minmax(0, 1fr);
-    gap: 1rem;
-    padding: 0.6rem 0;
-    border-bottom: 1px solid var(--line-soft);
-  }
-  .news-item .src { color: var(--accent); font-size: 0.66rem; text-transform: uppercase; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .news-item .ttl { color: var(--ink); font-size: 0.9rem; }
-  .news-item:hover .ttl { color: var(--accent); }
 
   .about p { color: var(--muted); font-size: 0.9rem; line-height: 1.65; }
 

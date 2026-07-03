@@ -4,6 +4,7 @@
 // network fonts, no client involvement.
 
 import { Resvg } from "@resvg/resvg-js";
+import { colors } from "@trader-ralph/ui/tokens";
 import satori from "satori";
 import { read } from "$app/server";
 import interBold from "$lib/server/fonts/Inter-Bold.ttf";
@@ -13,17 +14,19 @@ export const OG_W = 1200;
 export const OG_H = 630;
 
 // Terminal palette — keep cards visually identical to the product.
+// Values come from the design-system package; C keeps the shape the OG
+// endpoints already consume.
 export const C = {
-  paper: "#0a0b0e",
-  surface: "#121419",
-  line: "#272b34",
-  ink: "#eef1f6",
-  muted: "#8c95a4",
-  faint: "#5a6472",
-  accent: "#ff4d97",
-  up: "#2ce97f",
-  down: "#ff5a6a",
-};
+  paper: colors.paper,
+  surface: colors.surface,
+  line: colors.line,
+  ink: colors.ink,
+  muted: colors.muted,
+  faint: colors.faint,
+  accent: colors.accent,
+  up: colors.up,
+  down: colors.down,
+} as const;
 
 let fontsPromise: Promise<{ regular: ArrayBuffer; bold: ArrayBuffer }> | null =
   null;
@@ -128,7 +131,7 @@ export function chip(
     "div",
     {
       border: `1px solid ${C.line}`,
-      borderRadius: "4px",
+      borderRadius: "0",
       padding: "10px 18px",
       fontSize: "22px",
       fontWeight: 700,
