@@ -283,9 +283,7 @@ export async function fetchPhoenixTraderState(
         target.takeProfitPrice ??= tokenAmount(viewPosition.takeProfitPrice);
         target.stopLossPrice ??= tokenAmount(viewPosition.stopLossPrice);
         target.unrealizedPnl ??= tokenAmount(viewPosition.unrealizedPnl);
-        target.liquidationPrice ??= tokenAmount(
-          viewPosition.liquidationPrice,
-        );
+        target.liquidationPrice ??= tokenAmount(viewPosition.liquidationPrice);
       }
     }
   } catch {
