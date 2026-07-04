@@ -1,0 +1,162 @@
+// Pure money math for the perp ticket and position cards. Everything here
+// is called per tick from the terminal page's `$:` statements — keep flat
+// positional args and zero component state.
+import type { DepthLevel, PhoenixMarketConfig } from "$lib/phoenix-market-data";
+import type { PhoenixPosition } from "$lib/phoenix-trade";
+
+export type TradePreview = {
+  notionalUsd: number;
+  entry: number | null;
+  slippageBps: number | null;
+  liqPrice: number | null;
+  fundingPer8hUsd: number | null;
+  fillable: boolean;
+};
+
+export const TP_CHIP_PCTS = [2, 5, 10];
+export const SL_CHIP_PCTS = [1, 2, 5];
+
+export function buildTradePreview(
+  side: "buy" | "sell",
+  amountStr: string,
+  leverage: number,
+  type: "market" | "limit",
+  limitStr: string,
+  askLevels: DepthLevel[],
+  bidLevels: DepthLevel[],
+  refPrice: number | null,
+  fundingPct: number | null,
+): TradePreview | null {
+  const notionalUsd = Number(amountStr);
+  if (!Number.isFinite(notionalUsd) || notionalUsd <= 0) return null;
+  const levels = side === "buy" ? askLevels : bidLevels;
+  const best = levels[0]?.price ?? refPrice ?? null;
+
+  let entry = best;
+  let slippageBps: number | null = null;
+  let fillable = true;
+
+  if (type === "limit") {
+    const limit = Number(limitStr);
+    if (Number.isFinite(limit) && limit > 0) entry = limit;
+  } else if (levels.length > 0 && best) {
+    let remaining = notionalUsd;
+    let cost = 0;
+    let qty = 0;
+    for (const level of levels) {
+      const levelNotional = level.price * level.size;
+      const take = Math.min(remaining, levelNotional);
+      qty += take / level.price;
+      cost += take;
+      remaining -= take;
+      if (remaining <= 0) break;
+    }
+    fillable = remaining <= 0;
+    const avg = qty > 0 ? cost / qty : best;
+    entry = avg;
+    slippageBps = best > 0 ? Math.abs((avg - best) / best) * 10_000 : null;
+  }
+
+  const liqPrice =
+    entry && leverage > 0
+      ? side === "buy"
+        ? entry * (1 - 1 / leverage)
+        : entry * (1 + 1 / leverage)
+      : null;
+  const fundingPer8hUsd =
+    fundingPct != null ? (fundingPct / 100) * notionalUsd : null;
+
+  return {
+    notionalUsd,
+    entry,
+    slippageBps,
+    liqPrice,
+    fundingPer8hUsd,
+    fillable,
+  };
+}
+
+export function clampLeverage(value: number): number {
+  return Math.max(1, Math.min(20, Math.round(value)));
+}
+
+// Plain Number()-parseable price string, precision scaled to magnitude.
+export function fmtTriggerPrice(value: number): string {
+  if (value >= 1000) return value.toFixed(1);
+  if (value >= 10) return value.toFixed(2);
+  if (value >= 1) return value.toFixed(3);
+  return value.toFixed(5);
+}
+
+// The trader API stopped shipping uPnL/liq per position; reconstruct
+// client-side: uPnL from live mids, liq from the isolated subaccount's
+// margin with an estimated maintenance ratio (half the initial margin at
+// max leverage). Labeled "est." wherever rendered.
+export function enrichPosition(
+  position: PhoenixPosition,
+  mark: number | null,
+  marketConfig: PhoenixMarketConfig | undefined,
+): PhoenixPosition {
+  const entry = position.entryPrice;
+  const upnl =
+    mark !== null && entry !== null
+      ? (mark - entry) * position.size
+      : position.unrealizedPnl;
+  const mmr = marketConfig?.maxLeverage
+    ? 0.5 / marketConfig.maxLeverage
+    : 0.005;
+  const margin = position.marginUsd;
+  let liq: number | null = position.liquidationPrice;
+  if (entry !== null && margin !== null && position.size !== 0) {
+    const denom = position.size - mmr * Math.abs(position.size);
+    if (denom !== 0) {
+      const estimate = (entry * position.size - margin) / denom;
+      liq = Number.isFinite(estimate) && estimate > 0 ? estimate : null;
+    }
+  }
+  return { ...position, unrealizedPnl: upnl, liquidationPrice: liq };
+}
+
+// Risk-based sizing: notional from stop distance, guarded by a 5 bps
+// minimum stop distance so a stop at the entry can't size to infinity.
+export function riskNotional(
+  riskUsd: number,
+  entry: number,
+  stop: number,
+): number | null {
+  return riskUsd > 0 &&
+    stop > 0 &&
+    entry > 0 &&
+    Math.abs(entry - stop) > entry * 0.0005
+    ? (riskUsd * entry) / Math.abs(entry - stop)
+    : null;
+}
+
+export function liqDistancePct(
+  position: PhoenixPosition,
+  mark: number | null,
+): number | null {
+  if (mark === null || position.liquidationPrice === null || mark === 0) {
+    return null;
+  }
+  return (Math.abs(mark - position.liquidationPrice) / mark) * 100;
+}
+
+// Factor core of the TP/SL quick-set chips: TP moves with the trade side,
+// SL against it.
+export function triggerPriceForPct(
+  ref: number,
+  side: "buy" | "sell",
+  pct: number,
+  kind: "tp" | "sl",
+): number {
+  const factor =
+    kind === "tp"
+      ? side === "buy"
+        ? 1 + pct / 100
+        : 1 - pct / 100
+      : side === "buy"
+        ? 1 - pct / 100
+        : 1 + pct / 100;
+  return ref * factor;
+}

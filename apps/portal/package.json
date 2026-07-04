@@ -8,7 +8,8 @@
     "build": "vite build",
     "start": "vite preview --host localhost --port 3000",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "test": "bun test"
   },
   "dependencies": {
     "@ellipsis-labs/rise": "^0.4.60",
@@ -28,6 +29,7 @@
     "@sveltejs/adapter-vercel": "^6.3.3",
     "@sveltejs/kit": "^2.48.0",
     "@types/qrcode": "^1.5.6",
+    "bun-types": "^1.3.14",
     "svelte": "^5.43.0",
     "svelte-check": "^4.3.0",
     "typescript": "^5.9.3",

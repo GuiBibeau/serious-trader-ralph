@@ -366,4 +366,34 @@ export async function fetchAllTokenBalances(
   return balances;
 }
 
+/**
+ * Human view of a resting trigger (limit) order: side/symbol from the mint
+ * orientation (USDC in = buy), notional from the USDC atoms, implied limit
+ * price from the atoms ratio. Null when the token isn't in the catalog.
+ */
+export function triggerOrderView(
+  order: TriggerOrder,
+  assets: SpotAsset[],
+): {
+  side: "buy" | "sell";
+  symbol: string;
+  notionalUsd: number | null;
+  limitPrice: number | null;
+} | null {
+  const isBuy = order.inputMint === USDC_MINT;
+  const tokenMint = isBuy ? order.outputMint : order.inputMint;
+  const asset = assets.find((candidate) => candidate.mint === tokenMint);
+  if (!asset) return null;
+  const usdAtoms = isBuy ? order.makingAmountAtoms : order.takingAmountAtoms;
+  const tokenAtoms = isBuy ? order.takingAmountAtoms : order.makingAmountAtoms;
+  const usd = usdAtoms / 1e6;
+  const qty = tokenAtoms / 10 ** asset.decimals;
+  return {
+    side: isBuy ? "buy" : "sell",
+    symbol: asset.symbol,
+    notionalUsd: Number.isFinite(usd) && usd > 0 ? usd : null,
+    limitPrice: qty > 0 && usd > 0 ? usd / qty : null,
+  };
+}
+
 export { SOL_MINT, USDC_MINT };

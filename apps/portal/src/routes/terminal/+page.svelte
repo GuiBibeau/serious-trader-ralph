@@ -15,6 +15,59 @@
   } from "$lib/ai";
   import { track } from "$lib/telemetry";
   import {
+    type Alert,
+    headlineMatches,
+    matchAlerts,
+  } from "$lib/terminal/alerts";
+  import { buildChartLineSpecs } from "$lib/terminal/chart-lines";
+  import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
+  import {
+    aiErr,
+    humanizeBalanceError,
+    humanizePrivyError,
+    shortAddress,
+    shortEmail,
+    walletFundsLabel,
+    walletStatusText,
+  } from "$lib/terminal/account-format";
+  import {
+    BOOK_LADDER_LEVELS,
+    BOOK_LADDER_LEVELS_STACKED,
+    bookLevelNotional,
+    bookLevelTotalNotional,
+    depthWidth,
+    formatBookPrice,
+    maxBookNotional,
+  } from "$lib/terminal/book";
+  import {
+    ALERT_LOG_KEY,
+    ALERTS_STORAGE_KEY,
+    CACHE_MARKETS,
+    CACHE_MAX_AGE,
+    CACHE_NEWS,
+    CACHE_PANELS,
+    CACHE_READS,
+    DEFAULT_PANEL_ORDER,
+    LAYOUT_STORAGE_KEY,
+    MARKETS_MAX_AGE,
+    mergeLayout,
+    ONBOARD_KEY,
+    parsePrefs,
+    persistPrefs,
+    PREFS_STORAGE_KEY,
+    SECTION_LINKS,
+  } from "$lib/terminal/prefs";
+  import {
+    buildMonitorRows,
+    buildScreenRows,
+    buildWatchRows,
+    disconnectedPanel,
+    disconnectedRows,
+    emptyMarketStats,
+    selectedMarketTableRows,
+    summarizeEdgeStatus,
+  } from "$lib/terminal/panels";
+  import {
     chartLinePrefs,
     equityBaselines,
     equityHistory,
@@ -31,6 +84,7 @@
     screenSolanaAddress,
     type NewsItem,
   } from "$lib/intel";
+  import { fetchSolanaLamports, solanaRpcUrl } from "$lib/solana-rpc";
   import { swrRead, swrWrite } from "$lib/swr";
   import {
     edgeApiBase,
@@ -101,6 +155,7 @@
     getSpotSwapTransaction,
     spotIntervalFor,
     tokenToAtoms,
+    triggerOrderView,
     usdcToAtoms,
     USDC_MINT as SPOT_USDC_MINT,
     type SpotAsset,
@@ -138,6 +193,33 @@
     isRecord,
   } from "$lib/utils";
   import {
+    buildTradePreview,
+    clampLeverage,
+    enrichPosition,
+    fmtTriggerPrice,
+    liqDistancePct,
+    riskNotional,
+    SL_CHIP_PCTS,
+    TP_CHIP_PCTS,
+    triggerPriceForPct,
+  } from "$lib/terminal/trade-math";
+  import {
+    computeMarketChange,
+    DEFAULT_VISIBLE_CANDLES,
+    formatCandleCountdown,
+    formatChartRange,
+    MAX_VISIBLE_CANDLES,
+    sessionNote as sessionNoteOf,
+    toCandle,
+    toVolume,
+  } from "$lib/terminal/chart-format";
+  import {
+    buildPaletteRows,
+    PALETTE_TABS,
+    type PaletteRow,
+    type PaletteTab,
+  } from "$lib/terminal/palette";
+  import {
     CandlestickSeries,
     ColorType,
     createChart,
@@ -156,24 +238,9 @@
   type SignalRow = DataRow;
   type ChartScale = "price" | "percent";
   type ChartAxisMode = "linear" | "log";
-  type TradePreview = {
-    notionalUsd: number;
-    entry: number | null;
-    slippageBps: number | null;
-    liqPrice: number | null;
-    fundingPer8hUsd: number | null;
-    fillable: boolean;
-  };
 
-  const DEFAULT_VISIBLE_CANDLES = 150;
-  const MAX_VISIBLE_CANDLES = 180;
-  const BOOK_LADDER_LEVELS = 10;
-  // Stacked desktop shares the panel with the ticket — cap the ladder so
-  // both stay readable; the narrow-viewport tabs keep the full depth.
-  const BOOK_LADDER_LEVELS_STACKED = 8;
   const UP_COLOR = colors.up;
   const DOWN_COLOR = colors.down; // was #ff5a5f — unified to the token red
-  const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
 
   let selectedSymbol = DEFAULT_PHOENIX_SYMBOL;
   let selectedTimeframe: PhoenixTimeframe = PHOENIX_TIMEFRAME;
@@ -219,21 +286,7 @@
   }
 
   let monitorSort: "volume" | "change" | "symbol" = "volume";
-  $: monitorRows = markets
-    .map((config) => ({
-      symbol: config.symbol,
-      lev: config.maxLeverage,
-      mid: marketMids[config.symbol] ?? dailyStats[config.symbol]?.lastPrice ?? null,
-      change: dailyStats[config.symbol]?.change24hPct ?? null,
-      volume: dailyStats[config.symbol]?.volume24hUsd ?? null,
-    }))
-    .sort((a, b) =>
-      monitorSort === "symbol"
-        ? a.symbol.localeCompare(b.symbol)
-        : monitorSort === "change"
-          ? (b.change ?? -1e9) - (a.change ?? -1e9)
-          : (b.volume ?? -1) - (a.volume ?? -1),
-    );
+  $: monitorRows = buildMonitorRows(markets, marketMids, dailyStats, monitorSort);
 
   function chooseMonitorRow(symbol: string): void {
     if (tradeMode !== "perps") setTradeMode("perps", false);
@@ -410,14 +463,6 @@
   let screenedAddress = "";
 
   // Alert engine.
-  type Alert = {
-    id: string;
-    symbol: string;
-    op: "above" | "below";
-    price: number;
-    tier: "FLASH" | "PRIORITY" | "ROUTINE";
-    triggered: boolean;
-  };
   let alerts: Alert[] = [];
   let alertsOpen = false;
   let alertOp: "above" | "below" = "above";
@@ -425,39 +470,12 @@
   let alertTier: Alert["tier"] = "PRIORITY";
   let notifyReady = false;
 
-  // Draggable dashboard: reorderable info panels (chart + book stay anchored).
-  const DEFAULT_PANEL_ORDER = [
-    "watch",
-    "markets",
-    "perp",
-    "spot",
-    "screener",
-    "macro",
-    "fred",
-    "etf",
-    "stablecoins",
-    "oil",
-    "events",
-    "ideas",
-    "markets",
-    "journal",
-  ];
   let panelOrder: string[] = [...DEFAULT_PANEL_ORDER];
   let draggedPanel: string | null = null;
   let dragOverPanel: string | null = null;
 
-  const PREFS_STORAGE_KEY = "trader-ralph-terminal/prefs/v1";
-  const ALERTS_STORAGE_KEY = "trader-ralph-terminal/alerts/v1";
-  const LAYOUT_STORAGE_KEY = "trader-ralph-terminal/layout/v1";
   const OPEN_BETA_BANNER_STORAGE_KEY =
     "trader-ralph-terminal/open-beta-banner/v1";
-  // Stale-while-revalidate widget caches (instant paint on reload).
-  const CACHE_PANELS = "trader-ralph-terminal/cache/panels/v1";
-  const CACHE_NEWS = "trader-ralph-terminal/cache/news/v1";
-  const CACHE_MARKETS = "trader-ralph-terminal/cache/markets/v1";
-  const CACHE_READS = "trader-ralph-terminal/cache/reads/v1";
-  const CACHE_MAX_AGE = 30 * 60_000;
-  const MARKETS_MAX_AGE = 24 * 60 * 60_000;
   let showOpenBetaBanner = false;
 
   $: selectedMarket = markets.find((market) => market.symbol === selectedSymbol) ?? null;
@@ -530,11 +548,7 @@
     : BOOK_LADDER_LEVELS;
   $: visibleAskLevels = asks.slice(0, ladderLevelCap).reverse();
   $: visibleBidLevels = bids.slice(0, ladderLevelCap);
-  $: bookMaxNotional = Math.max(
-    1,
-    ...visibleAskLevels.map(bookLevelTotalNotional),
-    ...visibleBidLevels.map(bookLevelTotalNotional),
-  );
+  $: bookMaxNotional = maxBookNotional(visibleAskLevels, visibleBidLevels);
   $: chartPrice =
     priceMode === "mark" ? marketStats?.markPx ?? latestPrice : latestPrice;
   // The chart surface is owned by exactly one mode; all derived UI follows it.
@@ -635,28 +649,14 @@
   // client-side: uPnL from live mids, liq from the isolated subaccount's
   // margin with an estimated maintenance ratio (half the initial margin at
   // max leverage). Labeled "est." wherever rendered.
-  $: enrichedPositions = (phoenixTrader?.positions ?? []).map((position) => {
-    const mark =
+  $: enrichedPositions = (phoenixTrader?.positions ?? []).map((position) =>
+    enrichPosition(
+      position,
       marketMids[position.symbol] ??
-      (position.symbol === selectedSymbol ? latestPrice : null);
-    const entry = position.entryPrice;
-    const upnl =
-      mark !== null && entry !== null
-        ? (mark - entry) * position.size
-        : position.unrealizedPnl;
-    const config = markets.find((m) => m.symbol === position.symbol);
-    const mmr = config?.maxLeverage ? 0.5 / config.maxLeverage : 0.005;
-    const margin = position.marginUsd;
-    let liq: number | null = position.liquidationPrice;
-    if (entry !== null && margin !== null && position.size !== 0) {
-      const denom = position.size - mmr * Math.abs(position.size);
-      if (denom !== 0) {
-        const estimate = (entry * position.size - margin) / denom;
-        liq = Number.isFinite(estimate) && estimate > 0 ? estimate : null;
-      }
-    }
-    return { ...position, unrealizedPnl: upnl, liquidationPrice: liq };
-  });
+        (position.symbol === selectedSymbol ? latestPrice : null),
+      markets.find((m) => m.symbol === position.symbol),
+    ),
+  );
   $: accountUpnlUsd = enrichedPositions.reduce(
     (sum, position) => sum + (position.unrealizedPnl ?? 0),
     0,
@@ -704,13 +704,11 @@
   }
 
   function liqDistancePctOf(position: PhoenixPosition): number | null {
-    const mark =
+    return liqDistancePct(
+      position,
       marketMids[position.symbol] ??
-      (position.symbol === selectedSymbol ? latestPrice : null);
-    if (mark === null || position.liquidationPrice === null || mark === 0) {
-      return null;
-    }
-    return (Math.abs(mark - position.liquidationPrice) / mark) * 100;
+        (position.symbol === selectedSymbol ? latestPrice : null),
+    );
   }
 
   $: selectedPosition =
@@ -731,8 +729,6 @@
   // submit validation uses; the inputs stay the source of truth so precise
   // hand-entry still works. Wrong-side values are flagged as you type
   // instead of failing at submit.
-  const TP_CHIP_PCTS = [2, 5, 10];
-  const SL_CHIP_PCTS = [1, 2, 5];
   $: triggerRefPrice =
     tradeType === "limit" && Number(tradeLimitPrice) > 0
       ? Number(tradeLimitPrice)
@@ -774,24 +770,18 @@
   $: orderBusy = phoenixBusyKeys.has(orderBusyKey);
   $: orderStageEntry = txStages[orderBusyKey] ?? null;
 
-  // Plain Number()-parseable price string, precision scaled to magnitude.
-  function fmtTriggerPrice(value: number): string {
-    if (value >= 1000) return value.toFixed(1);
-    if (value >= 10) return value.toFixed(2);
-    if (value >= 1) return value.toFixed(3);
-    return value.toFixed(5);
-  }
-
   function setTakeProfitPct(pct: number): void {
     if (!triggerRefPrice) return;
-    const factor = tradeSide === "buy" ? 1 + pct / 100 : 1 - pct / 100;
-    tradeTakeProfit = fmtTriggerPrice(triggerRefPrice * factor);
+    tradeTakeProfit = fmtTriggerPrice(
+      triggerPriceForPct(triggerRefPrice, tradeSide, pct, "tp"),
+    );
   }
 
   function setStopLossPct(pct: number): void {
     if (!triggerRefPrice) return;
-    const factor = tradeSide === "buy" ? 1 - pct / 100 : 1 + pct / 100;
-    tradeStopLoss = fmtTriggerPrice(triggerRefPrice * factor);
+    tradeStopLoss = fmtTriggerPrice(
+      triggerPriceForPct(triggerRefPrice, tradeSide, pct, "sl"),
+    );
   }
 
   // ── Size presets ───────────────────────────────────────────────────
@@ -969,19 +959,7 @@
       : null;
 
   // ── Watchlist rows: price from spot, fall back to perp mid; basis when both ──
-  $: watchRows = watchlist.map((sym) => {
-    const spot = spotAssets.find((asset) => asset.symbol.toUpperCase() === sym) ?? null;
-    const mid = marketMids[sym] ?? null;
-    const hasPerp = mid !== null || markets.some((market) => market.symbol === sym);
-    return {
-      sym,
-      spot,
-      hasPerp,
-      price: spot?.price ?? mid,
-      change: spot?.change24hPct ?? null,
-      basisBps: spot?.price && mid ? ((mid - spot.price) / spot.price) * 10_000 : null,
-    };
-  });
+  $: watchRows = buildWatchRows(watchlist, spotAssets, marketMids, markets);
 
   // ── Account exposure / leverage (margin meter, deterministic) ──
   $: accountExposureUsd = (phoenixTrader?.positions ?? []).reduce(
@@ -1000,12 +978,8 @@
       : (latestPrice ?? 0);
   $: riskStopPrice = Number(tradeStopLoss);
   $: riskNotionalUsd =
-    sizingMode === "risk" &&
-    Number(tradeRiskUsd) > 0 &&
-    riskStopPrice > 0 &&
-    riskEntryPrice > 0 &&
-    Math.abs(riskEntryPrice - riskStopPrice) > riskEntryPrice * 0.0005
-      ? (Number(tradeRiskUsd) * riskEntryPrice) / Math.abs(riskEntryPrice - riskStopPrice)
+    sizingMode === "risk"
+      ? riskNotional(Number(tradeRiskUsd), riskEntryPrice, riskStopPrice)
       : null;
   $: effectiveTradeAmount =
     sizingMode === "risk"
@@ -1015,16 +989,7 @@
       : tradeAmount;
 
   // ── Screener rows over the catalog ──
-  $: screenRows = [...spotAssets]
-    .filter((asset) => screenHub === "all" || asset.hub === screenHub)
-    .sort((a, b) =>
-      screenSort === "movers"
-        ? Math.abs(b.change24hPct ?? 0) - Math.abs(a.change24hPct ?? 0)
-        : screenSort === "cap"
-          ? (b.marketCap ?? 0) - (a.marketCap ?? 0)
-          : (b.volume24hUsd ?? 0) - (a.volume24hUsd ?? 0),
-    )
-    .slice(0, 20);
+  $: screenRows = buildScreenRows(spotAssets, screenHub, screenSort);
 
   // ── Journal-derived views + AI notes (facts computed, AI narrates) ──
   $: journalToday = entriesToday(journalEntries, Date.now());
@@ -1527,9 +1492,6 @@
   let newsLinked = true;
   $: activeNewsSymbol =
     tradeMode === "spot" ? (spotAsset?.symbol ?? null) : selectedSymbol;
-  function headlineMatches(title: string, symbol: string): boolean {
-    return title.toUpperCase().includes(symbol.toUpperCase());
-  }
   $: linkedNews =
     newsLinked && activeNewsSymbol
       ? news.filter((item) => headlineMatches(item.title, activeNewsSymbol))
@@ -1543,31 +1505,23 @@
     : 0;
 
   function checkAlerts(price: number | null): void {
-    if (price === null || alerts.length === 0) return;
-    let changed = false;
-    for (const alert of alerts) {
-      if (alert.triggered || alert.symbol !== selectedSymbol) continue;
-      const hit =
-        alert.op === "above" ? price >= alert.price : price <= alert.price;
-      if (hit) {
-        alert.triggered = true;
-        changed = true;
-        void fireAlert(
-          `${alert.tier} · ${alert.symbol}-PERP`,
-          `${alert.symbol} ${alert.op} ${alert.price} — now ${formatPrice(price)}`,
-        );
-      }
+    if (price === null) return;
+    const hits = matchAlerts(alerts, price, selectedSymbol);
+    if (!hits) return;
+    for (const alert of hits) {
+      alert.triggered = true;
+      void fireAlert(
+        `${alert.tier} · ${alert.symbol}-PERP`,
+        `${alert.symbol} ${alert.op} ${alert.price} — now ${formatPrice(price)}`,
+      );
     }
-    if (changed) {
-      alerts = [...alerts];
-      saveAlerts();
-    }
+    alerts = [...alerts];
+    saveAlerts();
   }
 
   // Fired alerts become a persistent, timestamped log plus toasts —
   // Bloomberg's message-pane pattern in miniature.
   type FiredAlert = { ts: number; title: string; body: string };
-  const ALERT_LOG_KEY = "trader-ralph-alert-log";
   let alertLog: FiredAlert[] = [];
   let toasts: (FiredAlert & { toastId: number })[] = [];
   let toastSeq = 0;
@@ -1632,13 +1586,7 @@
     try {
       const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw);
-      if (!Array.isArray(saved)) return;
-      const known = saved.filter(
-        (id): id is string => typeof id === "string" && DEFAULT_PANEL_ORDER.includes(id),
-      );
-      const missing = DEFAULT_PANEL_ORDER.filter((id) => !known.includes(id));
-      panelOrder = [...known, ...missing];
+      panelOrder = mergeLayout(JSON.parse(raw), DEFAULT_PANEL_ORDER);
     } catch {
       // ignore malformed layout
     }
@@ -1801,12 +1749,6 @@
   $: layoutCustomized =
     panelOrder.join(",") !== DEFAULT_PANEL_ORDER.join(",");
 
-  function aiErr(error: unknown): string {
-    const message = error instanceof Error ? error.message : "ai-error";
-    if (message === "ai-proxy-unavailable") return "AI offline (dev proxy only)";
-    return message;
-  }
-
   async function runMacroRead(): Promise<void> {
     const meaningful = macroPanel.rows.filter(
       (row) => row.value && row.value !== "--" && row.value !== "Not connected",
@@ -1865,59 +1807,6 @@
     }
   }
 
-  function buildTradePreview(
-    side: "buy" | "sell",
-    amountStr: string,
-    leverage: number,
-    type: "market" | "limit",
-    limitStr: string,
-    askLevels: DepthLevel[],
-    bidLevels: DepthLevel[],
-    refPrice: number | null,
-    fundingPct: number | null,
-  ): TradePreview | null {
-    const notionalUsd = Number(amountStr);
-    if (!Number.isFinite(notionalUsd) || notionalUsd <= 0) return null;
-    const levels = side === "buy" ? askLevels : bidLevels;
-    const best = levels[0]?.price ?? refPrice ?? null;
-
-    let entry = best;
-    let slippageBps: number | null = null;
-    let fillable = true;
-
-    if (type === "limit") {
-      const limit = Number(limitStr);
-      if (Number.isFinite(limit) && limit > 0) entry = limit;
-    } else if (levels.length > 0 && best) {
-      let remaining = notionalUsd;
-      let cost = 0;
-      let qty = 0;
-      for (const level of levels) {
-        const levelNotional = level.price * level.size;
-        const take = Math.min(remaining, levelNotional);
-        qty += take / level.price;
-        cost += take;
-        remaining -= take;
-        if (remaining <= 0) break;
-      }
-      fillable = remaining <= 0;
-      const avg = qty > 0 ? cost / qty : best;
-      entry = avg;
-      slippageBps = best > 0 ? Math.abs((avg - best) / best) * 10_000 : null;
-    }
-
-    const liqPrice =
-      entry && leverage > 0
-        ? side === "buy"
-          ? entry * (1 - 1 / leverage)
-          : entry * (1 + 1 / leverage)
-        : null;
-    const fundingPer8hUsd =
-      fundingPct != null ? (fundingPct / 100) * notionalUsd : null;
-
-    return { notionalUsd, entry, slippageBps, liqPrice, fundingPer8hUsd, fillable };
-  }
-
   // Headless command parse — the visible "Parse" field is gone, but the
   // ?cmd= deep link (distribution surface contract) still lands orders by
   // filling the ticket. Failures fall back to the default ticket silently.
@@ -1954,10 +1843,6 @@
     }
   }
 
-  function clampLeverage(value: number): number {
-    return Math.max(1, Math.min(20, Math.round(value)));
-  }
-
   async function activePrivyAccessToken(): Promise<string | null> {
     if (!$privyAuth.authenticated) return $privyAuth.accessToken;
     try {
@@ -1965,24 +1850,6 @@
     } catch {
       return $privyAuth.accessToken;
     }
-  }
-
-  function walletFundsLabel(
-    auth: PrivyAuthState,
-    balanceStatus: "idle" | "loading" | "ready" | "error",
-    fundsText: string,
-  ): string {
-    if (!auth.authenticated) {
-      if (!auth.configured) return "Auth unconfigured";
-      if (!auth.ready) return "Privy loading";
-      return "Account not connected";
-    }
-    if (auth.walletStatus === "creating") return "Creating wallet";
-    if (auth.walletStatus === "error") return "Wallet unavailable";
-    if (!auth.walletAddress) return "Wallet pending";
-    if (balanceStatus === "loading") return "Loading funds";
-    if (balanceStatus === "error") return "Balance unavailable";
-    return fundsText;
   }
 
   async function refreshWalletBalance(
@@ -2065,72 +1932,7 @@
   }
 
   // Session state for the selected market from its exchange calendar.
-  $: sessionNote = (() => {
-    if (tradeMode === "spot") return "24/7 · Jupiter";
-    const next = selectedMarket?.nextTransitionUtc;
-    if (!next) return "24/7";
-    const ms = Date.parse(next) - nowMs;
-    if (!Number.isFinite(ms)) return "24/7";
-    const hours = Math.floor(Math.abs(ms) / 3_600_000);
-    const minutes = Math.floor((Math.abs(ms) % 3_600_000) / 60_000);
-    const span = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-    if (ms <= 0) return "session transition due";
-    return selectedMarket?.marketStatus === "active"
-      ? `closes ${span}`
-      : `opens ${span}`;
-  })();
-
-  function humanizeBalanceError(raw: string): string {
-    if (/-40[13]$/.test(raw) || /forbidden/i.test(raw)) {
-      return "RPC blocked the request. Set PUBLIC_SOLANA_RPC_URL to a browser-accessible endpoint.";
-    }
-    if (/-429$/.test(raw)) return "RPC rate-limited. Set a dedicated PUBLIC_SOLANA_RPC_URL.";
-    if (/^solana-rpc-http-/.test(raw)) return "RPC request failed. Check PUBLIC_SOLANA_RPC_URL.";
-    return raw;
-  }
-
-  async function fetchSolanaLamports(address: string): Promise<string> {
-    const response = await fetch(solanaRpcUrl(), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: "trader-ralph-wallet-balance",
-        method: "getBalance",
-        // "processed" over the default "finalized": received SOL shows in
-        // about a slot instead of ~12s. Display-only, so the tiny rollback
-        // window is acceptable.
-        params: [address, { commitment: "processed" }],
-      }),
-    });
-    const payload = (await response.json().catch(() => null)) as unknown;
-    if (!response.ok) throw new Error(`solana-rpc-http-${response.status}`);
-    if (!isRecord(payload)) throw new Error("solana-rpc-invalid-response");
-    if (isRecord(payload.error)) {
-      throw new Error(String(payload.error.message ?? "solana-rpc-error"));
-    }
-    const result = isRecord(payload.result) ? payload.result : null;
-    const value = result?.value;
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return Math.max(0, Math.trunc(value)).toString();
-    }
-    if (typeof value === "string" && /^\d+$/.test(value)) return value;
-    throw new Error("solana-balance-missing");
-  }
-
-  function solanaRpcUrl(): string {
-    const env = import.meta.env as Record<string, string | undefined>;
-    const configured = String(
-      env.PUBLIC_SOLANA_RPC_URL ??
-        env.VITE_SOLANA_RPC_URL ??
-        env.NEXT_PUBLIC_SOLANA_RPC_URL ??
-        "",
-    )
-      .trim()
-      .replace(/^"+|"+$/g, "")
-      .replace(/\\n$/, "");
-    return configured || SOLANA_MAINNET_RPC;
-  }
+  $: sessionNote = sessionNoteOf(tradeMode, selectedMarket, nowMs);
 
   type TransactionSummary = {
     title: string;
@@ -2627,7 +2429,6 @@
   }
 
   // ── Phoenix onboarding ────────────────────────────────────────────
-  const ONBOARD_KEY = "trader-ralph-terminal/phx-referral/v2";
 
   async function ensurePhoenixOnboarding(authority: string): Promise<void> {
     if (!authority || onboardedAddress === authority) return;
@@ -3546,58 +3347,6 @@
     }
   }
 
-  function shortAddress(value: string | null): string {
-    const trimmed = String(value ?? "").trim();
-    if (!trimmed) return "--";
-    if (trimmed.length <= 14) return trimmed;
-    return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
-  }
-
-  function shortEmail(value: string): string {
-    const trimmed = value.trim();
-    if (trimmed.length <= 22) return trimmed;
-    const [name, domain] = trimmed.split("@");
-    if (!domain) return `${trimmed.slice(0, 19)}…`;
-    const head = name.length > 10 ? `${name.slice(0, 9)}…` : name;
-    return `${head}@${domain}`;
-  }
-
-  function walletStatusText(
-    status: "missing" | "creating" | "ready" | "error",
-  ): string {
-    switch (status) {
-      case "ready":
-        return "Wallet ready";
-      case "creating":
-        return "Creating wallet…";
-      case "error":
-        return "Wallet error";
-      default:
-        return "No wallet";
-    }
-  }
-
-  function humanizePrivyError(value: string | null | undefined): string {
-    const raw = String(value ?? "").trim();
-    if (!raw) return "";
-    const known: Record<string, string> = {
-      "email-required": "Enter a valid email address.",
-      "code-required": "Enter the 6-digit code we emailed you.",
-      "privy-app-id-missing": "Auth is not configured for this environment.",
-      "privy-not-configured": "Auth is not configured for this environment.",
-      "privy-code-send-failed": "Couldn't send the code. Check the email and try again.",
-      "privy-login-failed": "That code didn't work. Request a new one and retry.",
-      "privy-logout-failed": "Couldn't log out cleanly. Try again.",
-      "Code sent.": "Code sent — check your inbox.",
-    };
-    if (known[raw]) return known[raw];
-    // Surface Privy SDK messages verbatim; tidy our internal kebab-case codes.
-    if (/^[a-z0-9-]+$/.test(raw)) {
-      return raw.replace(/-/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-    }
-    return raw;
-  }
-
   function toggleAccountMenu(event: MouseEvent): void {
     event.stopPropagation();
     accountMenuOpen = !accountMenuOpen;
@@ -3633,57 +3382,11 @@
     }
   }
 
-  function disconnectedRows(reason: string): SignalRow[] {
-    return [
-      {
-        label: "Status",
-        value: "Not connected",
-        status: reason,
-      },
-    ];
-  }
-
-  function disconnectedPanel(reason: string): DataPanel {
-    return {
-      rows: disconnectedRows(reason),
-      status: "not connected",
-      source: "",
-    };
-  }
-
-  function summarizeEdgeStatus(panels: DataPanel[]): string {
-    if (panels.some((panel) => panel.status === "ready")) return "ready";
-    const first = panels.find((panel) => panel.status !== "ready");
-    return first?.status ?? "not connected";
-  }
-
   function setPriceMode(mode: "last" | "mark"): void {
     if (priceMode === mode) return;
     priceMode = mode;
     // Re-render the candle series in the selected price basis.
     setChartData();
-  }
-
-  function toCandle(point: MarketPoint): CandlestickData<UTCTimestamp> {
-    // Mark mode renders the mark-price OHLC series (the smoother series that
-    // drives funding/liquidations); falls back to last-trade when absent.
-    const useMark = priceMode === "mark";
-    return {
-      time: Math.floor(point.ts / 1000) as UTCTimestamp,
-      open: useMark ? point.markOpen ?? point.open : point.open,
-      high: useMark ? point.markHigh ?? point.high : point.high,
-      low: useMark ? point.markLow ?? point.low : point.low,
-      close: useMark ? point.markClose ?? point.close : point.close,
-    };
-  }
-
-  function toVolume(point: MarketPoint) {
-    const up = point.close >= point.open;
-    return {
-      time: Math.floor(point.ts / 1000) as UTCTimestamp,
-      value: point.volumeQuote ?? point.volume ?? 0,
-      color: up ? "rgba(44, 233, 127, 0.45)" : "rgba(255, 90, 106, 0.45)",
-    };
   }
 
   function createChartInstance(): void {
@@ -3835,7 +3538,7 @@
 
   function renderChartSeries(points: MarketPoint[]): void {
     if (!candleSeries || !volumeSeries) return;
-    candleSeries.setData(points.map(toCandle));
+    candleSeries.setData(points.map((point) => toCandle(point, priceMode)));
     volumeSeries.setData(points.map(toVolume));
   }
 
@@ -3850,7 +3553,7 @@
     // Spot mode owns the chart surface — perp ticks must not repaint it.
     if (tradeMode === "spot") return;
     if (!candleSeries || !volumeSeries) return;
-    candleSeries.update(toCandle(point));
+    candleSeries.update(toCandle(point, priceMode));
     volumeSeries.update(toVolume(point));
   }
 
@@ -3938,109 +3641,6 @@
     timeScale.applyOptions({ barSpacing: Math.max(2, Math.min(48, next)) });
   }
 
-  function formatChartRange(points: MarketPoint[]): string {
-    const first = points.at(0);
-    const last = points.at(-1);
-    if (!first || !last) return "--";
-    const formatter = new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      month: "short",
-      day: "numeric",
-    });
-    return `${formatter.format(first.ts)} - ${formatter.format(last.ts)}`;
-  }
-
-  function computeMarketChange(
-    price: number | null,
-    stats: PhoenixMarketStats | null,
-    points: MarketPoint[],
-  ): number | null {
-    if (price && stats?.prevDayPx && stats.prevDayPx > 0) {
-      return ((price - stats.prevDayPx) / stats.prevDayPx) * 100;
-    }
-    const latest = points.at(-1);
-    const anchor = points.at(-80) ?? points.at(0);
-    if (!latest || !anchor || anchor.price <= 0) return null;
-    return ((latest.price - anchor.price) / anchor.price) * 100;
-  }
-
-  function formatCandleCountdown(
-    point: MarketPoint | null,
-    timeframe: PhoenixTimeframe,
-    currentTime: number,
-  ): string {
-    if (!point) return "--";
-    const duration = timeframeMs(timeframe);
-    const remaining = Math.max(0, point.ts + duration - currentTime);
-    const minutes = Math.floor(remaining / 60_000);
-    const seconds = Math.floor((remaining % 60_000) / 1_000);
-    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-
-  function timeframeMs(timeframe: PhoenixTimeframe): number {
-    if (timeframe.endsWith("m")) return Number(timeframe.slice(0, -1)) * 60_000;
-    if (timeframe.endsWith("h")) {
-      return Number(timeframe.slice(0, -1)) * 60 * 60_000;
-    }
-    return 60_000;
-  }
-
-  function selectedMarketTableRows(
-    market: PhoenixMarketConfig | null,
-    stats: PhoenixMarketStats | null,
-    price: number | null,
-  ): SignalRow[] {
-    if (!market) {
-      return disconnectedRows("Phoenix market metadata loading");
-    }
-    return [
-      {
-        label: "Market",
-        value: `${market.symbol}-PERP`,
-        status: market.marketStatus,
-      },
-      {
-        label: "Mark",
-        value: formatPrice(stats?.markPx ?? price),
-        status: `oracle ${formatPrice(stats?.oraclePx)}`,
-      },
-      {
-        label: "Open interest",
-        value: formatNumber(stats?.openInterest, 2),
-        status: "base",
-      },
-      {
-        label: "Funding",
-        value: formatPercent((stats?.funding ?? 0) * 100),
-        status: "rate",
-      },
-      {
-        label: "Fees",
-        value: `${formatPercent((market.makerFee ?? 0) * 100)} / ${formatPercent((market.takerFee ?? 0) * 100)}`,
-        status: "maker/taker",
-      },
-      {
-        label: "Margin",
-        value: market.isolatedOnly ? "isolated only" : "cross + isolated",
-        status: market.maxLeverage ? `${formatNumber(market.maxLeverage, 0)}x max` : "--",
-      },
-    ];
-  }
-
-  function emptyMarketStats(symbol: string): PhoenixMarketStats {
-    return {
-      symbol,
-      dayNtlVlm: null,
-      prevDayPx: null,
-      markPx: null,
-      midPx: null,
-      funding: null,
-      openInterest: null,
-      oraclePx: null,
-    };
-  }
-
   function openPhoenixFunding(): void {
     // Swap modals (never stack): close the ticket, open funds on Phoenix tab
     // with the shortfall prefilled.
@@ -4101,32 +3701,6 @@
     // narrow-viewport fallback where the rail lives below the fold.
     if (!railTicketUsable()) tradeOpen = true;
     focusTicketSize();
-  }
-
-  function bookLevelNotional(level: DepthLevel | null | undefined): number | null {
-    if (!level) return null;
-    return level.price * level.size;
-  }
-
-  function bookLevelTotalNotional(level: DepthLevel | null | undefined): number {
-    if (!level) return 0;
-    return level.price * level.cum;
-  }
-
-  function depthWidth(level: DepthLevel): number {
-    return Math.min(100, Math.max(2, (bookLevelTotalNotional(level) / bookMaxNotional) * 100));
-  }
-
-  function formatBookPrice(value: number | null | undefined): string {
-    if (value === null || value === undefined || !Number.isFinite(value)) {
-      return "--";
-    }
-    const abs = Math.abs(value);
-    const digits = abs >= 1_000 ? 0 : abs >= 1 ? 2 : 4;
-    return value.toLocaleString(undefined, {
-      minimumFractionDigits: digits,
-      maximumFractionDigits: digits,
-    });
   }
 
   function openAuthModal(): void {
@@ -4224,111 +3798,52 @@
   // overlay (funds > ticket > alerts) opens per link — modals never stack.
   function applyDeepLink(): void {
     if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const KNOWN = [
-      "asset", "venue", "side", "size", "leverage", "type", "price", "tp",
-      "sl", "ticket", "tf", "mode", "fund", "tab", "alerts", "cmd", "watch",
-    ];
-    if (!KNOWN.some((key) => params.has(key))) return;
+    const intent = parseTerminalDeepLink(window.location.search);
+    if (!intent) return;
 
-    const str = (key: string) => params.get(key)?.trim() || null;
-    const lower = (key: string) => str(key)?.toLowerCase() ?? null;
-    // Positive finite number within sane bounds, else null.
-    const numParam = (key: string, max: number): number | null => {
-      const value = Number(str(key));
-      return Number.isFinite(value) && value > 0 && value <= max ? value : null;
-    };
-    const flag = (key: string) => {
-      const value = lower(key);
-      return value !== null && value !== "0" && value !== "false";
-    };
-
-    const asset = str("asset");
-    const venue = lower("venue");
-    const side = lower("side");
-    const isPerp = venue === "perp" || venue === "perps";
-    const wantsSell = side === "sell" || side === "short";
-    const size = numParam("size", 10_000_000);
-    const tab = lower("tab");
-
-    if (isPerp) {
+    if (intent.venue === "perp") {
       pendingTradeMode = null;
-      if (asset) selectedSymbol = asset.toUpperCase().replace(/-PERP$/, "");
-      if (side) tradeSide = wantsSell ? "sell" : "buy";
-      if (size !== null) tradeAmount = String(size);
-
-      const leverage = numParam("leverage", 100);
-      if (leverage !== null) {
-        // Snap to the select's options so the binding displays correctly.
-        const allowed = [1, 2, 5, 10, 20];
-        tradeLeverage = allowed.reduce((best, option) =>
-          Math.abs(option - leverage) < Math.abs(best - leverage) ? option : best,
-        );
-      }
-
-      const limitPrice = numParam("price", 100_000_000);
-      const type = lower("type");
-      if (limitPrice !== null) {
+      if (intent.symbol) selectedSymbol = intent.symbol;
+      if (intent.side) tradeSide = intent.side;
+      if (intent.sizeUsd !== null) tradeAmount = String(intent.sizeUsd);
+      if (intent.leverage !== null) tradeLeverage = intent.leverage;
+      if (intent.limitPrice !== null) {
         tradeType = "limit";
-        tradeLimitPrice = String(limitPrice);
-      } else if (type === "limit" || type === "market") {
-        tradeType = type;
+        tradeLimitPrice = String(intent.limitPrice);
+      } else if (intent.orderType) {
+        tradeType = intent.orderType;
       }
-      const takeProfit = numParam("tp", 100_000_000);
-      const stopLoss = numParam("sl", 100_000_000);
-      if (takeProfit !== null) tradeTakeProfit = String(takeProfit);
-      if (stopLoss !== null) tradeStopLoss = String(stopLoss);
-
-      bookTab = tab === "book" ? "book" : "trade";
-    } else if (asset || venue || side || size !== null) {
-      // Default venue is spot — the broader universe.
+      if (intent.takeProfit !== null) tradeTakeProfit = String(intent.takeProfit);
+      if (intent.stopLoss !== null) tradeStopLoss = String(intent.stopLoss);
+    } else if (intent.venue === "spot") {
       pendingTradeMode = "spot";
-      if (asset) pendingSpotAssetId = asset.toLowerCase();
-      if (side) spotSide = wantsSell ? "sell" : "buy";
-      if (size !== null) spotAmount = String(size);
-      const spotLimit = numParam("price", 100_000_000);
-      if (spotLimit !== null) {
+      if (intent.spotAssetId) pendingSpotAssetId = intent.spotAssetId;
+      if (intent.side) spotSide = intent.side;
+      if (intent.sizeUsd !== null) spotAmount = String(intent.sizeUsd);
+      if (intent.limitPrice !== null) {
         spotOrderType = "limit";
-        spotLimitPrice = String(spotLimit);
+        spotLimitPrice = String(intent.limitPrice);
       }
-      if (asset || side || size !== null) bookTab = tab === "book" ? "book" : "trade";
     }
-    if (tab === "book" || tab === "trade") bookTab = tab;
-
-    const tf = lower("tf");
-    if (PHOENIX_TIMEFRAMES.includes(tf as PhoenixTimeframe)) {
-      selectedTimeframe = tf as PhoenixTimeframe;
+    if (intent.bookTab) bookTab = intent.bookTab;
+    if (intent.timeframe) selectedTimeframe = intent.timeframe;
+    if (intent.priceMode) priceMode = intent.priceMode;
+    if (intent.watchSymbols.length > 0) {
+      watchlist = [...new Set([...watchlist, ...intent.watchSymbols])].slice(0, 24);
     }
-    const mode = lower("mode");
-    if (mode === "last" || mode === "mark") priceMode = mode;
-
-    const watch = str("watch");
-    if (watch) {
-      const symbols = watch
-        .split(",")
-        .map((sym) => sym.trim().toUpperCase())
-        .filter((sym) => /^[A-Z0-9]{1,12}$/.test(sym));
-      watchlist = [...new Set([...watchlist, ...symbols])].slice(0, 24);
-    }
-
-    const cmd = str("cmd");
-    if (cmd) {
-      bookTab = "trade";
-      void runCommand(cmd.slice(0, 200)); // parses straight into the ticket
-    }
+    if (intent.cmd) void runCommand(intent.cmd.slice(0, 200)); // parses straight into the ticket
 
     // Overlays — at most one (funds > ticket > alerts), modals never stack.
-    const fund = lower("fund");
-    if (fund) {
+    if (intent.overlay?.kind === "funds") {
       openFunds();
-      if (fund === "convert" || fund === "phoenix") fundsTab = fund;
-    } else if (flag("ticket") && isPerp) {
+      if (intent.overlay.tab) fundsTab = intent.overlay.tab;
+    } else if (intent.overlay?.kind === "ticket") {
       phoenixActionError = "";
       phoenixActionErrorDetail = "";
       phoenixActionRetry = null;
       lastTradeSignature = "";
       tradeOpen = true;
-    } else if (flag("alerts")) {
+    } else if (intent.overlay?.kind === "alerts") {
       alertsOpen = true;
     }
 
@@ -4375,86 +3890,15 @@
     if (!series) return;
     for (const line of liqLines) series.removePriceLine(line);
     liqLines = [];
-    if (mode !== "perps") return;
-    const add = (options: Parameters<typeof series.createPriceLine>[0]) =>
-      liqLines.push(series.createPriceLine(options));
-
-    for (const position of positions) {
-      if (position.symbol !== symbol) continue;
-      const side = position.size > 0 ? "LONG" : "SHORT";
-      const sideColor = position.size > 0 ? colors.up : colors.down;
-      if (prefs.pos && position.entryPrice !== null) {
-        const upnl =
-          position.unrealizedPnl !== null
-            ? ` · ${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
-            : "";
-        add({
-          price: position.entryPrice,
-          color: sideColor,
-          lineWidth: 2,
-          lineStyle: 0, // solid
-          axisLabelVisible: true,
-          title: `${side} ${formatNumber(Math.abs(position.size), 4)} @ ${formatPrice(position.entryPrice)}${upnl}`,
-        });
-      }
-      if (prefs.pos && position.liquidationPrice !== null) {
-        add({
-          price: position.liquidationPrice,
-          color: colors.down,
-          lineWidth: 1,
-          lineStyle: 2, // dashed
-          axisLabelVisible: true,
-          title: "LIQ est",
-        });
-      }
-      if (prefs.tpsl && position.takeProfitPrice !== null && position.entryPrice !== null) {
-        const gain = Math.abs(position.takeProfitPrice - position.entryPrice) * Math.abs(position.size);
-        add({
-          price: position.takeProfitPrice,
-          color: colors.up,
-          lineWidth: 1,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `TP · +$${formatNumber(gain, 2)}`,
-        });
-      }
-      if (prefs.tpsl && position.stopLossPrice !== null && position.entryPrice !== null) {
-        const loss = Math.abs(position.stopLossPrice - position.entryPrice) * Math.abs(position.size);
-        add({
-          price: position.stopLossPrice,
-          color: colors.down,
-          lineWidth: 1,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `SL · -$${formatNumber(loss, 2)}`,
-        });
-      }
-    }
-    if (prefs.orders) {
-      for (const order of orders) {
-        if (order.symbol !== symbol || order.price === null) continue;
-        add({
-          price: order.price,
-          color: colors.amber,
-          lineWidth: 1,
-          lineStyle: 1, // dotted
-          axisLabelVisible: true,
-          title: `${order.side === "bid" ? "BID" : "ASK"} ${order.remaining !== null ? formatNumber(order.remaining, 4) : ""}`.trim(),
-        });
-      }
-    }
-    if (prefs.alerts) {
-      for (const alert of armed) {
-        if (alert.symbol !== symbol || alert.triggered) continue;
-        add({
-          price: alert.price,
-          color: colors.accent,
-          lineWidth: 1,
-          lineStyle: 1,
-          axisLabelVisible: true,
-          title: `ALERT ${alert.op === "above" ? "↑" : "↓"}`,
-        });
-      }
+    for (const spec of buildChartLineSpecs(
+      positions,
+      orders,
+      armed,
+      prefs,
+      symbol,
+      mode,
+    )) {
+      liqLines.push(series.createPriceLine(spec));
     }
   }
 
@@ -4545,28 +3989,6 @@
     }
   }
 
-  function triggerOrderView(order: TriggerOrder): {
-    side: "buy" | "sell";
-    symbol: string;
-    notionalUsd: number | null;
-    limitPrice: number | null;
-  } | null {
-    const isBuy = order.inputMint === SPOT_USDC_MINT;
-    const tokenMint = isBuy ? order.outputMint : order.inputMint;
-    const asset = spotAssets.find((candidate) => candidate.mint === tokenMint);
-    if (!asset) return null;
-    const usdAtoms = isBuy ? order.makingAmountAtoms : order.takingAmountAtoms;
-    const tokenAtoms = isBuy ? order.takingAmountAtoms : order.makingAmountAtoms;
-    const usd = usdAtoms / 1e6;
-    const qty = tokenAtoms / 10 ** asset.decimals;
-    return {
-      side: isBuy ? "buy" : "sell",
-      symbol: asset.symbol,
-      notionalUsd: Number.isFinite(usd) && usd > 0 ? usd : null,
-      limitPrice: qty > 0 && usd > 0 ? usd / qty : null,
-    };
-  }
-
   async function submitSpotLimitOrder(): Promise<void> {
     const address = $privyAuth.walletAddress;
     if (!spotAsset || !address || spotBusy || walletScreen.flagged) return;
@@ -4654,57 +4076,30 @@
 
   function loadPrefs(): void {
     if (typeof window === "undefined") return;
+    let raw: string | null = null;
     try {
-      const raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw) as Record<string, unknown>;
-      if (typeof data.symbol === "string") selectedSymbol = data.symbol;
-      if (PHOENIX_TIMEFRAMES.includes(data.timeframe as PhoenixTimeframe)) {
-        selectedTimeframe = data.timeframe as PhoenixTimeframe;
-      }
-      if (data.priceMode === "last" || data.priceMode === "mark") {
-        priceMode = data.priceMode;
-      }
-      if (data.chartScale === "price" || data.chartScale === "percent") {
-        chartScale = data.chartScale;
-      }
-      if (data.chartAxisMode === "linear" || data.chartAxisMode === "log") {
-        chartAxisMode = data.chartAxisMode;
-      }
-      if (typeof data.visibleCandleCount === "number" && Number.isFinite(data.visibleCandleCount)) {
-        visibleCandleCount = data.visibleCandleCount;
-      }
-      if (data.tradeMode === "spot") pendingTradeMode = "spot";
-      if (typeof data.spotAssetId === "string") pendingSpotAssetId = data.spotAssetId;
-      if (Array.isArray(data.watchlist)) {
-        watchlist = data.watchlist
-          .filter((sym): sym is string => typeof sym === "string")
-          .map((sym) => sym.toUpperCase())
-          .slice(0, 24);
-      }
-      if (data.screenSort === "movers" || data.screenSort === "volume" || data.screenSort === "cap") {
-        screenSort = data.screenSort;
-      }
-      if (
-        data.screenHub === "all" || data.screenHub === "crypto" ||
-        data.screenHub === "equities" || data.screenHub === "pre-ipo"
-      ) {
-        screenHub = data.screenHub;
-      }
-      if (data.sizingMode === "usd" || data.sizingMode === "risk") {
-        sizingMode = data.sizingMode;
-      }
-      if (typeof data.tradeAmount === "string") tradeAmount = data.tradeAmount;
-      if (typeof data.tradeRiskUsd === "string") tradeRiskUsd = data.tradeRiskUsd;
-      if (
-        typeof data.tradeLeverage === "number" &&
-        [1, 2, 5, 10, 20].includes(data.tradeLeverage)
-      ) {
-        tradeLeverage = data.tradeLeverage;
-      }
+      raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
     } catch {
-      // ignore malformed persisted preferences
+      return; // storage unavailable — keep defaults
     }
+    const prefs = parsePrefs(raw);
+    if (prefs.symbol !== undefined) selectedSymbol = prefs.symbol;
+    if (prefs.timeframe !== undefined) selectedTimeframe = prefs.timeframe;
+    if (prefs.priceMode !== undefined) priceMode = prefs.priceMode;
+    if (prefs.chartScale !== undefined) chartScale = prefs.chartScale;
+    if (prefs.chartAxisMode !== undefined) chartAxisMode = prefs.chartAxisMode;
+    if (prefs.visibleCandleCount !== undefined) {
+      visibleCandleCount = prefs.visibleCandleCount;
+    }
+    if (prefs.tradeMode === "spot") pendingTradeMode = "spot";
+    if (prefs.spotAssetId !== undefined) pendingSpotAssetId = prefs.spotAssetId;
+    if (prefs.watchlist !== undefined) watchlist = prefs.watchlist;
+    if (prefs.screenSort !== undefined) screenSort = prefs.screenSort;
+    if (prefs.screenHub !== undefined) screenHub = prefs.screenHub;
+    if (prefs.sizingMode !== undefined) sizingMode = prefs.sizingMode;
+    if (prefs.tradeAmount !== undefined) tradeAmount = prefs.tradeAmount;
+    if (prefs.tradeRiskUsd !== undefined) tradeRiskUsd = prefs.tradeRiskUsd;
+    if (prefs.tradeLeverage !== undefined) tradeLeverage = prefs.tradeLeverage;
   }
 
   function loadOpenBetaBanner(): void {
@@ -4731,58 +4126,6 @@
     }
   }
 
-  function persistPrefs(
-    _symbol: string,
-    _timeframe: PhoenixTimeframe,
-    _priceMode: "last" | "mark",
-    _scale: ChartScale,
-    _axis: ChartAxisMode,
-    _visible: number,
-    _tradeMode: "perps" | "spot",
-    _spotAssetId: string | null,
-    _watchlist: string[],
-    _screenSort: string,
-    _screenHub: string,
-    _sizingMode: string,
-    _tradeAmount: string,
-    _tradeRiskUsd: string,
-    _tradeLeverage: number,
-  ): void {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(
-        PREFS_STORAGE_KEY,
-        JSON.stringify({
-          symbol: _symbol,
-          timeframe: _timeframe,
-          priceMode: _priceMode,
-          chartScale: _scale,
-          chartAxisMode: _axis,
-          visibleCandleCount: _visible,
-          tradeMode: _tradeMode,
-          spotAssetId: _spotAssetId,
-          watchlist: _watchlist,
-          screenSort: _screenSort,
-          screenHub: _screenHub,
-          sizingMode: _sizingMode,
-          tradeAmount: _tradeAmount,
-          tradeRiskUsd: _tradeRiskUsd,
-          tradeLeverage: _tradeLeverage,
-        }),
-      );
-    } catch {
-      // storage may be unavailable (private mode, quota) — non-fatal
-    }
-  }
-
-  const SECTION_LINKS: { id: string; label: string }[] = [
-    { id: "section-chart", label: "Chart" },
-    { id: "section-book", label: "Book" },
-    { id: "section-perp", label: "Perp" },
-    { id: "section-markets", label: "Markets" },
-    { id: "section-macro", label: "Macro" },
-  ];
-
   function scrollToSection(id: string): void {
     activeSection = id;
     const target = document.getElementById(id);
@@ -4793,141 +4136,12 @@
   // One primitive for both venues: perp markets (live mids) and the spot
   // catalog (full 24h stats). Selecting a row switches venue if needed.
   // Action rows (close/cancel/flatten on live state) lead when applicable.
-  type PaletteRow = {
-    kind: "perp" | "spot" | "action";
-    key: string;
-    symbol: string;
-    name: string;
-    imageUrl: string | null;
-    lev: number | null;
-    price: number | null;
-    change24hPct: number | null;
-    volumeUsd: number | null;
-    hub: "perps" | "crypto" | "equities" | "pre-ipo";
-    asset?: SpotAsset;
-    action?: () => void;
-  };
-  type PaletteTab = "all" | "perps" | "crypto" | "equities" | "pre-ipo";
-  const PALETTE_TABS: { key: PaletteTab; label: string }[] = [
-    { key: "all", label: "All" },
-    { key: "perps", label: "Perps" },
-    { key: "crypto", label: "Crypto" },
-    { key: "equities", label: "Equities" },
-    { key: "pre-ipo", label: "Pre-IPO" },
-  ];
   let paletteOpen = false;
   let paletteQuery = "";
   let paletteTab: PaletteTab = "all";
   let paletteIndex = 0;
   let paletteInput: HTMLInputElement | null = null;
   let paletteList: HTMLDivElement | null = null;
-
-  function buildPaletteRows(
-    perpMarkets: PhoenixMarketConfig[],
-    assets: SpotAsset[],
-    mids: Record<string, number>,
-    stats: Record<string, PhoenixDailyStat>,
-    query: string,
-    tab: PaletteTab,
-    positions: PhoenixPosition[],
-    orders: PhoenixOpenOrder[],
-  ): PaletteRow[] {
-    // Live-state actions: one Close per position, one Cancel per symbol with
-    // book orders, Flatten once there is more than one position to close.
-    const blank = {
-      imageUrl: null,
-      lev: null,
-      price: null,
-      change24hPct: null,
-      volumeUsd: null,
-      hub: "perps" as const,
-    };
-    const actions: PaletteRow[] = positions.map((position) => ({
-      kind: "action",
-      key: `action:close:${position.symbol}:${position.subaccountIndex}`,
-      symbol: position.symbol,
-      name: `Close ${position.symbol}-PERP${
-        position.unrealizedPnl !== null
-          ? ` · ${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
-          : ""
-      }`,
-      ...blank,
-      action: () =>
-        void closePhoenixPosition(
-          position.symbol,
-          position.size,
-          position.subaccountIndex,
-        ),
-    }));
-    const bookCounts = new Map<string, number>();
-    for (const order of orders) {
-      if (order.isStopLoss) continue;
-      bookCounts.set(order.symbol, (bookCounts.get(order.symbol) ?? 0) + 1);
-    }
-    for (const [symbol, count] of bookCounts) {
-      actions.push({
-        kind: "action",
-        key: `action:cancel:${symbol}`,
-        symbol,
-        name: `Cancel ${count} ${symbol}-PERP order${count === 1 ? "" : "s"}`,
-        ...blank,
-        action: () => void cancelSymbolBookOrders(symbol),
-      });
-    }
-    if (positions.length > 1) {
-      actions.push({
-        kind: "action",
-        key: "action:flatten",
-        symbol: "FLATTEN",
-        name: "Flatten all positions",
-        ...blank,
-        action: () => void closeAllPhoenixPositions(),
-      });
-    }
-    const perps: PaletteRow[] = perpMarkets.map((market) => ({
-      kind: "perp",
-      key: `perp:${market.symbol}`,
-      symbol: market.symbol,
-      name: `${market.symbol}-PERP`,
-      imageUrl: null,
-      lev: market.maxLeverage,
-      price: mids[market.symbol] ?? stats[market.symbol]?.lastPrice ?? null,
-      change24hPct: stats[market.symbol]?.change24hPct ?? null,
-      volumeUsd: stats[market.symbol]?.volume24hUsd ?? null,
-      hub: "perps",
-    }));
-    const spots: PaletteRow[] = assets.map((asset) => ({
-      kind: "spot",
-      key: `spot:${asset.assetId}`,
-      symbol: asset.symbol,
-      name: asset.name,
-      imageUrl: asset.imageUrl || null,
-      lev: null,
-      price: asset.price,
-      change24hPct: asset.change24hPct,
-      volumeUsd: asset.volume24hUsd,
-      hub: asset.hub,
-    }));
-    for (const [index, asset] of assets.entries()) spots[index].asset = asset;
-    spots.sort((a, b) => (b.volumeUsd ?? -1) - (a.volumeUsd ?? -1));
-    // Actions lead, then perps — this is a perp terminal first; spot
-    // follows by volume.
-    let rows =
-      tab === "perps"
-        ? [...actions, ...perps]
-        : tab === "all"
-          ? [...actions, ...perps, ...spots]
-          : spots.filter((row) => row.hub === tab);
-    const q = query.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter(
-        (row) =>
-          row.symbol.toLowerCase().includes(q) ||
-          row.name.toLowerCase().includes(q),
-      );
-    }
-    return rows.slice(0, 80);
-  }
 
   $: paletteRows = buildPaletteRows(
     markets,
@@ -4938,6 +4152,14 @@
     paletteTab,
     enrichedPositions,
     perpOpenOrders,
+    (position) =>
+      void closePhoenixPosition(
+        position.symbol,
+        position.size,
+        position.subaccountIndex,
+      ),
+    (symbol) => void cancelSymbolBookOrders(symbol),
+    () => void closeAllPhoenixPositions(),
   );
   $: if (paletteIndex >= paletteRows.length) {
     paletteIndex = Math.max(0, paletteRows.length - 1);
@@ -7236,7 +6458,7 @@
     {#if triggerOrders.length > 0}
       <div class="venue-section">Open limit orders</div>
       {#each triggerOrders as order (order.orderKey)}
-        {@const view = triggerOrderView(order)}
+        {@const view = triggerOrderView(order, spotAssets)}
         {#if view}
           <div class="venue-row">
             <span class={view.side === "buy" ? "positive" : "negative"}>
@@ -7615,7 +6837,7 @@
 
     {#each visibleAskLevels as ask}
       <button type="button" class="book-row ask" onclick={() => prefillFromBook(ask.price, "ask")}>
-        <span class="depth-bar" style={`width: ${depthWidth(ask)}%;`}></span>
+        <span class="depth-bar" style={`width: ${depthWidth(ask, bookMaxNotional)}%;`}></span>
         <span class="book-price">{formatBookPrice(ask.price)}</span>
         <span>{formatNumber(bookLevelNotional(ask), 0)}</span>
         <span>{formatNumber(bookLevelTotalNotional(ask), 0)}</span>
@@ -7630,7 +6852,7 @@
 
     {#each visibleBidLevels as bid}
       <button type="button" class="book-row bid" onclick={() => prefillFromBook(bid.price, "bid")}>
-        <span class="depth-bar" style={`width: ${depthWidth(bid)}%;`}></span>
+        <span class="depth-bar" style={`width: ${depthWidth(bid, bookMaxNotional)}%;`}></span>
         <span class="book-price">{formatBookPrice(bid.price)}</span>
         <span>{formatNumber(bookLevelNotional(bid), 0)}</span>
         <span>{formatNumber(bookLevelTotalNotional(bid), 0)}</span>
