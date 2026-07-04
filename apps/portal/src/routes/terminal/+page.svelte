@@ -76,7 +76,7 @@
     getJupiterSwapTransaction,
     type JupiterQuote,
   } from "$lib/funding";
-  import { BrandMark } from "@trader-ralph/ui";
+  import { BrandMark, OpenBetaBanner } from "@trader-ralph/ui";
   import { colors } from "@trader-ralph/ui/tokens";
   import {
     clearJournal,
@@ -411,6 +411,8 @@
   const PREFS_STORAGE_KEY = "trader-ralph-terminal/prefs/v1";
   const ALERTS_STORAGE_KEY = "trader-ralph-terminal/alerts/v1";
   const LAYOUT_STORAGE_KEY = "trader-ralph-terminal/layout/v1";
+  const OPEN_BETA_BANNER_STORAGE_KEY =
+    "trader-ralph-terminal/open-beta-banner/v1";
   // Stale-while-revalidate widget caches (instant paint on reload).
   const CACHE_PANELS = "trader-ralph-terminal/cache/panels/v1";
   const CACHE_NEWS = "trader-ralph-terminal/cache/news/v1";
@@ -418,6 +420,7 @@
   const CACHE_READS = "trader-ralph-terminal/cache/reads/v1";
   const CACHE_MAX_AGE = 30 * 60_000;
   const MARKETS_MAX_AGE = 24 * 60 * 60_000;
+  let showOpenBetaBanner = false;
 
   $: selectedMarket = markets.find((market) => market.symbol === selectedSymbol) ?? null;
   // Funds = everything the user considers theirs: wallet USDC + ALL Phoenix
@@ -847,6 +850,7 @@
     );
 
   onMount(() => {
+    loadOpenBetaBanner();
     loadPrefs();
     applyDeepLink(); // ?asset=&venue=&side=… — overrides restored prefs
     loadAlerts();
@@ -3751,6 +3755,30 @@
     }
   }
 
+  function loadOpenBetaBanner(): void {
+    if (typeof window === "undefined") return;
+    try {
+      showOpenBetaBanner =
+        window.localStorage.getItem(OPEN_BETA_BANNER_STORAGE_KEY) !==
+        "dismissed";
+    } catch {
+      showOpenBetaBanner = true;
+    }
+  }
+
+  function dismissOpenBetaBanner(): void {
+    showOpenBetaBanner = false;
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        OPEN_BETA_BANNER_STORAGE_KEY,
+        "dismissed",
+      );
+    } catch {
+      // storage unavailable — banner is still hidden for this session
+    }
+  }
+
   function persistPrefs(
     _symbol: string,
     _timeframe: PhoenixTimeframe,
@@ -4217,6 +4245,12 @@
       {/if}
     </div>
   </header>
+
+  {#if showOpenBetaBanner}
+    <div class="terminal-notice">
+      <OpenBetaBanner ondismiss={dismissOpenBetaBanner} />
+    </div>
+  {/if}
 
   <div class="market-rail">
   <div class="ticker" role="status" aria-live="polite">
@@ -6451,6 +6485,12 @@
     min-height: 1.7rem;
     padding: 0.25rem 0.45rem;
     font-size: 0.75rem;
+  }
+
+  .terminal-notice {
+    padding: 0.6rem clamp(0.75rem, 2vw, 1.25rem);
+    border-bottom: 1px solid var(--line-soft);
+    background: rgba(8, 10, 13, 0.86);
   }
 
   /* ── Privy auth: topbar + account menu ───────────────────────────── */
