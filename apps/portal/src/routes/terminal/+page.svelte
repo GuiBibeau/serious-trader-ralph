@@ -4055,9 +4055,23 @@
 
     <section id="section-book" class="panel orderbook-panel">
       {#if stackedBook}
-        <!-- Desktop: ladder + ticket stack — reading the book and typing
-             the order are simultaneous, never tabs. The tape shares the
-             ladder slot (all three don't fit); its tabs only swap the feed. -->
+        <!-- Desktop: ticket + ladder stack (Hyperliquid order) — the ticket
+             owns the top of the rail so entry controls are always visible;
+             the book/tape reads below it. The tape shares the ladder slot
+             (all three don't fit); its tabs only swap the feed. -->
+        <!-- Enter from any ticket input submits, gated exactly like the button. -->
+        <div
+          class="panel-ticket"
+          class:stacked={tradeMode === "perps"}
+          role="presentation"
+          onkeydown={tradeMode === "spot" ? onSpotTicketKeydown : onTicketKeydown}
+        >
+          {#if tradeMode === "spot"}
+            {@render spotTicketForm()}
+          {:else}
+            {@render perpTicketForm()}
+          {/if}
+        </div>
         {#if tradeMode === "perps"}
           <div class="book-stack">
             <div class="book-tabs" role="tablist" aria-label="Order book and tape">
@@ -4094,19 +4108,6 @@
             {/if}
           </div>
         {/if}
-        <!-- Enter from any ticket input submits, gated exactly like the button. -->
-        <div
-          class="panel-ticket"
-          class:stacked={tradeMode === "perps"}
-          role="presentation"
-          onkeydown={tradeMode === "spot" ? onSpotTicketKeydown : onTicketKeydown}
-        >
-          {#if tradeMode === "spot"}
-            {@render spotTicketForm()}
-          {:else}
-            {@render perpTicketForm()}
-          {/if}
-        </div>
       {:else}
         <div class="book-tabs" role="tablist" aria-label="Trade and order book">
           <button
@@ -4610,9 +4611,12 @@
     grid-column: span 3;
     display: flex;
     flex-direction: column;
-    min-height: 0;
     overflow: hidden;
-    height: var(--market-panel-height, clamp(30rem, calc(100dvh - 13.4rem), 72rem));
+    /* min-height (not height): the ticket renders at full natural height,
+       and when that outgrows the viewport clamp the PAGE scrolls — the
+       ticket itself must never require scrolling to be seen in full. */
+    height: auto;
+    min-height: var(--market-panel-height, clamp(30rem, calc(100dvh - 13.4rem), 72rem));
   }
 
   .macro-panel {
@@ -4910,16 +4914,16 @@
     overflow-y: auto;
   }
 
-  /* Desktop stack: ladder on top, ticket pinned below — both always live.
-     The TICKET is the priority element: it keeps a floor tall enough that
-     side/size/TP-SL never hide behind the ladder; the ladder takes what's
-     left and scrolls its own depth on cramped heights. Floors sum < 90%,
-     so the pair never overflows the panel. */
+  /* Desktop stack: TICKET on top, ladder below — both always live. The
+     ticket owns the top of the rail (entry controls always visible); the
+     ladder takes what's left and scrolls its own depth on cramped
+     heights. Floors sum < 90%, so the pair never overflows the panel. */
   .book-stack {
     display: flex;
     flex: 1 1 0;
     flex-direction: column;
-    min-height: min(12rem, 30%);
+    min-height: 12rem;
+    border-top: 1px solid var(--line-soft);
   }
 
   /* Stacked book slot: `.book-stack` is page markup while `.tape` is
@@ -4933,9 +4937,8 @@
   }
 
   .orderbook-panel .panel-ticket.stacked {
-    flex: 0 1 auto;
-    min-height: min(26rem, 56%);
-    border-top: 1px solid var(--line-soft);
+    /* Never shrinks: the full ticket is always visible without scrolling. */
+    flex: 0 0 auto;
   }
 
   /* .ticket-actions (sticky status + submit footer) lives in
