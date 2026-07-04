@@ -54,7 +54,7 @@
             {/if}
           </article>
         {:else}
-          <p class="empty">The wire is quiet — check back shortly.</p>
+          <p class="wire-empty">The wire is quiet — check back shortly.</p>
         {/each}
       </div>
 
@@ -103,7 +103,9 @@
   .tag:hover {
     color: var(--ink);
   }
-  .empty { color: var(--faint); }
+  /* Not ".empty": the terminal route's global stylesheet has an .empty rule
+     (padding/font-size) that would leak here after any /terminal visit. */
+  .wire-empty { color: var(--faint); }
 
   .side { align-self: start; position: sticky; top: 4.6rem; /* clears the sticky nav */ }
   .side h3 { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.6rem; }

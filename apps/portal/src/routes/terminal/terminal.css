@@ -1,0 +1,546 @@
+/* Cross-cutting terminal classes, shared by +page.svelte and the
+   components extracted from it. Imported once by the terminal page;
+   plain-CSS imports skip Svelte's unused-selector gate, so keep this
+   file to genuinely shared classes only. Rules moved verbatim from
+   the page <style> block. */
+
+/* Base form-control chrome for the whole terminal route. Element selectors
+   must live here (not page-scoped): scoped copies stop matching the same
+   elements once they render inside extracted components (AuthModal,
+   FundsModal, AlertsModal…). */
+select,
+input {
+  width: 100%;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  min-height: 2rem;
+  padding: 0.3rem 0.45rem;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+:where(button, a, select, input):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 0;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.secondary,
+.primary,
+.ghost {
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--ink);
+  min-height: 2rem;
+  padding: 0.35rem 0.65rem;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.primary {
+  background: var(--accent);
+  color: #04130d;
+  border-color: var(--accent);
+}
+
+.primary:hover,
+.secondary:hover,
+.ghost:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 77, 151, 0.55);
+}
+
+.secondary,
+.ghost {
+  color: var(--muted);
+}
+
+.ghost {
+  min-height: 1.7rem;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.75rem;
+}
+
+/* Loading skeletons */
+.skeleton {
+  display: inline-block;
+  border-radius: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.1) 37%,
+    rgba(255, 255, 255, 0.04) 63%
+  );
+  background-size: 300% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -150% 0;
+  }
+}
+
+.spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid rgba(4, 19, 13, 0.35);
+  border-top-color: #04130d;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.row-action {
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  min-height: 1.6rem;
+  padding: 0.15rem 0.45rem;
+}
+
+.row-action:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: rgba(255, 77, 151, 0.45);
+}
+
+/* In-flight indication on the acting row button (the big spinner is
+   tuned for the light primary button). */
+.row-action .spinner {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-color: var(--line);
+  border-top-color: var(--muted);
+  margin-right: 0.2rem;
+  vertical-align: -0.05rem;
+}
+
+.venue-section {
+  margin: 0.35rem 0.75rem 0.1rem;
+  color: var(--accent);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Section header variant with side-wide sweep actions on the right. */
+.venue-section-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.venue-section-row span {
+  margin-right: auto;
+}
+
+.venue-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0 0.65rem;
+  padding: 0.4rem 0.1rem;
+  border-bottom: 1px solid var(--line-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+}
+
+.venue-row span {
+  font-weight: 800;
+}
+
+.venue-row b {
+  color: var(--ink);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.venue-row em {
+  font-style: normal;
+}
+
+/* FIFO id suffix — identifying, not load-bearing; keep it quiet. */
+.venue-row .order-seq {
+  color: var(--faint);
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+
+.panel-head p {
+  margin: 0;
+  color: var(--accent);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+}
+
+.panel-head h2 {
+  margin: 0;
+}
+
+.panel {
+  position: relative;
+  min-height: 12rem;
+  /* Jump-to-section lands below the sticky chrome (topbar + rail). */
+  scroll-margin-top: var(--anchor-top, 0px);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
+    var(--surface);
+  overflow: hidden;
+  transition:
+    outline-color 120ms ease,
+    opacity 120ms ease,
+    border-color 160ms ease;
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  /* Hairline top highlight — gives panels a machined edge. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.panel:hover {
+  border-color: #323845;
+}
+
+.panel.dragging {
+  opacity: 0.4;
+}
+
+.panel.drag-over {
+  outline-color: var(--accent);
+}
+
+/* Reveal the drag grip (DragHead.svelte) when hovering anywhere on a panel —
+   spans the panel/DragHead component boundary, so it lives here unscoped. */
+.panel:hover .drag-grip {
+  opacity: 1;
+}
+
+.panel-head {
+  justify-content: space-between;
+  min-height: 3.15rem;
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.panel-head h2 {
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.positive {
+  color: #8decc3;
+}
+
+.empty {
+  color: var(--muted);
+  padding: 0.65rem;
+  font-size: 0.8rem;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(2px);
+  /* Top-anchored: content growth extends downward only (no recentering). */
+  place-items: start center;
+  padding: clamp(1rem, 6vh, 4rem) 1rem 1rem;
+}
+
+.modal {
+  width: min(30rem, 100%);
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 1.5rem 5rem rgba(0, 0, 0, 0.5);
+  animation: modal-in 160ms cubic-bezier(0.2, 0.85, 0.3, 1);
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.4rem) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Full-width action buttons: AuthModal, funds modal, perp/spot panels. */
+.wide {
+  width: 100%;
+}
+
+/* Long dynamic CTAs (e.g. "Deposit $12.50 USDC to Phoenix first") must
+   wrap inside the button, never clip out of it. */
+.primary.wide {
+  height: auto;
+  white-space: normal;
+  line-height: 1.25;
+  padding-block: 0.55rem;
+}
+
+/* Armed limit-deviation confirm: same red cue as the flatten button. */
+.primary.wide.armed {
+  background: var(--down);
+  border-color: var(--down);
+}
+
+.modal .panel-head {
+  flex: 0 0 auto;
+}
+
+.modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: var(--ink);
+  border-color: rgba(240, 107, 99, 0.5);
+}
+
+.modal-body {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.modal-body label {
+  gap: 0.4rem;
+  font-size: 0.74rem;
+}
+
+.auth-note {
+  margin: 0;
+  border-radius: 0;
+  padding: 0.55rem 0.7rem;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.auth-note.error {
+  color: var(--red);
+  background: rgba(240, 107, 99, 0.1);
+  border: 1px solid rgba(240, 107, 99, 0.3);
+}
+
+/* Shared by the AuthModal steps and the funds-modal guides. */
+.auth-lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.auth-lead b {
+  color: var(--ink);
+}
+
+/* Wallet provisioning state: topbar account menu + AuthModal success. */
+.wallet-badge {
+  flex: 0 0 auto;
+  border-radius: 0;
+  padding: 0.18rem 0.5rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+}
+
+.wallet-badge.ready {
+  color: var(--up);
+  background: var(--up-soft);
+  border-color: rgba(44, 233, 127, 0.4);
+}
+
+.wallet-badge.creating {
+  color: var(--amber);
+  background: rgba(228, 173, 79, 0.12);
+  border-color: rgba(228, 173, 79, 0.4);
+}
+
+.wallet-badge.error {
+  color: var(--red);
+  background: rgba(240, 107, 99, 0.12);
+  border-color: rgba(240, 107, 99, 0.4);
+}
+
+.wallet-badge.missing {
+  color: var(--muted);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.negative {
+  color: var(--red);
+}
+
+/* Shared by the NewsMarquee headlines and the page's modal tx links. */
+.news-domain {
+  color: var(--accent);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chip-row {
+  display: flex;
+  gap: 0.3rem;
+}
+
+/* Funds-modal tab accents. Cascade-order-sensitive: these must precede the
+   .side-toggle first/last active rules below so that, at the specificity tie
+   (0,3,1), the later first/last rules keep winning for the outer tabs and
+   only the middle (Convert) tab gets the accent — exactly the page's
+   original cascade before the extraction. */
+.side-toggle.funds-tabs button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.side-toggle.funds-tabs-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.side-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  /* overflow:hidden zeroes the grid auto-minimum — pin the height so a
+     height-constrained modal grid can never collapse this row. */
+  min-height: 2.45rem;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.side-toggle button {
+  border: 0;
+  background: var(--surface-2);
+  color: var(--muted);
+  min-height: 2.3rem;
+  font-weight: 800;
+}
+
+.side-toggle button.active:first-child {
+  background: var(--up-soft);
+  color: var(--up);
+}
+
+.side-toggle button.active:last-child {
+  background: var(--down-soft);
+  color: var(--down);
+}
+
+.ticket-preview {
+  display: grid;
+  gap: 0.05rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0;
+  padding: 0.3rem 0.65rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.preview-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.12rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.76rem;
+}
+
+.preview-row span {
+  flex: 0 1 auto;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.preview-row b {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.preview-row b {
+  color: var(--ink);
+}
+
+/* Shared responsive overrides — mirrors the page's 720px breakpoint. */
+@media (max-width: 720px) {
+  .modal-backdrop {
+    padding: 0.75rem;
+  }
+
+  .modal {
+    max-height: calc(100dvh - 1.5rem);
+  }
+
+  .venue-row {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+  }
+}

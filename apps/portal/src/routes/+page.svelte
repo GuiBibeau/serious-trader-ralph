@@ -140,7 +140,7 @@
       <p class="hero-foot">Jupiter routes spot. Phoenix runs perps.</p>
     </div>
     <div class="hero-panel" aria-label="Live desk snapshot">
-      <div class="panel-head">
+      <div class="desk-head">
         <span>THE DESK</span>
         {#if regime}<span class="chip {regime.tone}">{regime.label}</span>{/if}
       </div>
@@ -355,7 +355,10 @@
     overflow: hidden;
     margin-top: 2.5rem;
   }
-  .panel-head {
+  /* Not ".panel-head": the terminal route loads a global stylesheet with a
+     .panel-head rule (min-height/gap) that would leak here for the rest of
+     the SPA session — keep this class name route-private. */
+  .desk-head {
     display: flex;
     justify-content: space-between;
     align-items: center;

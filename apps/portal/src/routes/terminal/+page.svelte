@@ -1,5 +1,17 @@
 <script lang="ts">
+  import "./terminal.css";
+
   import { onMount, tick } from "svelte";
+  import AiReadLine from "./components/AiReadLine.svelte";
+  import AlertsModal from "./components/AlertsModal.svelte";
+  import AuthModal from "./components/AuthModal.svelte";
+  import CheatSheetModal from "./components/CheatSheetModal.svelte";
+  import CommandPalette from "./components/CommandPalette.svelte";
+  import DragHead from "./components/DragHead.svelte";
+  import MacroPanel from "./components/MacroPanel.svelte";
+  import NewsMarquee from "./components/NewsMarquee.svelte";
+  import Spark from "./components/Spark.svelte";
+  import ToastStack from "./components/ToastStack.svelte";
   import {
     aiDisabled,
     aiEventRead,
@@ -16,15 +28,20 @@
   import { track } from "$lib/telemetry";
   import {
     type Alert,
+    alertsStore,
     headlineMatches,
-    matchAlerts,
   } from "$lib/terminal/alerts";
   import { buildChartLineSpecs } from "$lib/terminal/chart-lines";
   import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
   import {
+    createPanelLayout,
+    migrateLayout,
+    panelStyle,
+    providePanelLayout,
+  } from "$lib/terminal/layout";
+  import {
     aiErr,
     humanizeBalanceError,
-    humanizePrivyError,
     shortAddress,
     shortEmail,
     walletFundsLabel,
@@ -40,8 +57,6 @@
     maxBookNotional,
   } from "$lib/terminal/book";
   import {
-    ALERT_LOG_KEY,
-    ALERTS_STORAGE_KEY,
     CACHE_MARKETS,
     CACHE_MAX_AGE,
     CACHE_NEWS,
@@ -119,11 +134,8 @@
   import {
     getPrivyAccessToken,
     initializePrivyAuth,
-    loginPrivyWithCode,
     logoutPrivy,
     privyAuth,
-    readPrivyConfig,
-    sendPrivyEmailCode,
     signAndSendSolanaTransaction,
     signSolanaTransaction,
     type PrivyAuthState,
@@ -213,12 +225,7 @@
     toCandle,
     toVolume,
   } from "$lib/terminal/chart-format";
-  import {
-    buildPaletteRows,
-    PALETTE_TABS,
-    type PaletteRow,
-    type PaletteTab,
-  } from "$lib/terminal/palette";
+  import type { PaletteRow } from "$lib/terminal/palette";
   import {
     CandlestickSeries,
     ColorType,
@@ -306,11 +313,7 @@
   );
   let oilPanel: DataPanel = disconnectedPanel("Edge energy source required");
   let authOpen = false;
-  let authEmail = "";
-  let authCode = "";
-  let authBusy = false;
-  let authStep: "email" | "code" = "email";
-  let authMessage = "";
+  let logoutBusy = false;
   let accountMenuOpen = false;
   let walletBalanceAddress = "";
   let walletBalanceText = "-- SOL";
@@ -462,17 +465,26 @@
   };
   let screenedAddress = "";
 
-  // Alert engine.
-  let alerts: Alert[] = [];
+  // Alert engine — armed alerts, fired log, and toasts live in the shared
+  // store ($lib/terminal/alerts); the page keeps only the open flag and
+  // the hot-path check() call.
+  const { alerts } = alertsStore;
   let alertsOpen = false;
-  let alertOp: "above" | "below" = "above";
-  let alertPrice = "";
-  let alertTier: Alert["tier"] = "PRIORITY";
-  let notifyReady = false;
 
-  let panelOrder: string[] = [...DEFAULT_PANEL_ORDER];
-  let draggedPanel: string | null = null;
-  let dragOverPanel: string | null = null;
+  // Draggable dashboard layout — store bundle shared with panel
+  // components via context; persistence stays here (loadLayout/saveLayout).
+  const layout = providePanelLayout(
+    createPanelLayout(DEFAULT_PANEL_ORDER, (order) => saveLayout(order)),
+  );
+  const {
+    panelOrder,
+    draggedPanel,
+    dragOverPanel,
+    reset: resetLayout,
+    onPanelDragOver,
+    onPanelDragLeave,
+    onPanelDrop,
+  } = layout;
 
   const OPEN_BETA_BANNER_STORAGE_KEY =
     "trader-ralph-terminal/open-beta-banner/v1";
@@ -505,10 +517,6 @@
           ? "Auth unavailable"
           : "Connect account";
   $: walletStatusLabel = walletStatusText($privyAuth.walletStatus);
-  $: authNote = humanizePrivyError(authMessage || $privyAuth.error);
-  $: authNoteIsError =
-    Boolean($privyAuth.error) ||
-    (Boolean(authMessage) && authMessage !== "Code sent.");
   $: normalizedWalletAddress = $privyAuth.walletAddress ?? "";
   $: if (normalizedWalletAddress !== walletBalanceAddress) {
     walletBalanceAddress = normalizedWalletAddress;
@@ -539,7 +547,7 @@
       })
     : spotAssets;
   $: spotHolding = spotAsset ? tokenBalances[spotAsset.mint] ?? 0 : 0;
-  $: checkAlerts(latestPrice);
+  $: alertsStore.check(latestPrice, selectedSymbol);
   $: spread = asks[0] && bids[0] ? asks[0].price - bids[0].price : 0;
   $: spreadBps = latestPrice && latestPrice > 0 ? (spread / latestPrice) * 10_000 : 0;
   $: spreadPercent = latestPrice && latestPrice > 0 ? (spread / latestPrice) * 100 : 0;
@@ -578,7 +586,6 @@
     marketStats,
     latestPrice,
   );
-  $: privyConfig = readPrivyConfig();
   $: fundingPercent =
     marketStats?.funding != null ? marketStats.funding * 100 : null;
   $: priceLoading = chartPrice === null;
@@ -1011,7 +1018,7 @@
   $: refreshChartLines(
     enrichedPositions,
     perpOpenOrders,
-    alerts,
+    $alerts,
     $chartLinePrefs,
     selectedSymbol,
     tradeMode,
@@ -1053,12 +1060,10 @@
     loadOpenBetaBanner();
     loadPrefs();
     applyDeepLink(); // ?asset=&venue=&side=… — overrides restored prefs
-    loadAlerts();
+    alertsStore.load({ trackContext: marketContext });
     journalEntries = loadJournal();
     loadLayout();
     hydrateWidgetCache();
-    notifyReady =
-      typeof Notification !== "undefined" && Notification.permission === "granted";
     prefsReady = true;
     createChartInstance();
     void bootPhoenixMarketData();
@@ -1435,58 +1440,6 @@
     walletScreen = await screenSolanaAddress(address);
   }
 
-  // ── Alert engine ──────────────────────────────────────────────────
-  function loadAlerts(): void {
-    if (typeof window === "undefined") return;
-    try {
-      const raw = window.localStorage.getItem(ALERTS_STORAGE_KEY);
-      if (raw) alerts = JSON.parse(raw) as Alert[];
-    } catch {
-      // ignore malformed alerts
-    }
-  }
-
-  function saveAlerts(): void {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
-    } catch {
-      // storage unavailable — non-fatal
-    }
-  }
-
-  async function addAlert(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
-    const price = Number(alertPrice);
-    if (!Number.isFinite(price) || price <= 0) return;
-    if (typeof Notification !== "undefined" && Notification.permission === "default") {
-      try {
-        notifyReady = (await Notification.requestPermission()) === "granted";
-      } catch {
-        notifyReady = false;
-      }
-    }
-    alerts = [
-      ...alerts,
-      {
-        id: `${selectedSymbol}-${alertOp}-${price}-${alerts.length}`,
-        symbol: selectedSymbol,
-        op: alertOp,
-        price,
-        tier: alertTier,
-        triggered: false,
-      },
-    ];
-    alertPrice = "";
-    saveAlerts();
-    checkAlerts(latestPrice);
-  }
-
-  function removeAlert(id: string): void {
-    alerts = alerts.filter((alert) => alert.id !== id);
-    saveAlerts();
-  }
-
   // News coded to the tape: filter the headline panel to the active
   // market (toggleable), and track last-hour headline velocity for it.
   let newsLinked = true;
@@ -1504,182 +1457,27 @@
       ).length
     : 0;
 
-  function checkAlerts(price: number | null): void {
-    if (price === null) return;
-    const hits = matchAlerts(alerts, price, selectedSymbol);
-    if (!hits) return;
-    for (const alert of hits) {
-      alert.triggered = true;
-      void fireAlert(
-        `${alert.tier} · ${alert.symbol}-PERP`,
-        `${alert.symbol} ${alert.op} ${alert.price} — now ${formatPrice(price)}`,
-      );
-    }
-    alerts = [...alerts];
-    saveAlerts();
-  }
-
-  // Fired alerts become a persistent, timestamped log plus toasts —
-  // Bloomberg's message-pane pattern in miniature.
-  type FiredAlert = { ts: number; title: string; body: string };
-  let alertLog: FiredAlert[] = [];
-  let toasts: (FiredAlert & { toastId: number })[] = [];
-  let toastSeq = 0;
-  if (typeof window !== "undefined") {
-    try {
-      const raw = window.localStorage.getItem(ALERT_LOG_KEY);
-      const parsed = raw ? (JSON.parse(raw) as FiredAlert[]) : [];
-      if (Array.isArray(parsed)) alertLog = parsed.slice(0, 50);
-    } catch {
-      // storage unavailable — start empty
-    }
-  }
-
-  function pushToast(entry: FiredAlert): void {
-    const toastId = ++toastSeq;
-    toasts = [...toasts, { ...entry, toastId }];
-    window.setTimeout(() => {
-      toasts = toasts.filter((toast) => toast.toastId !== toastId);
-    }, 6_000);
-  }
-
-  function recordFiredAlert(title: string, body: string): void {
-    track("alert_fired", { ...marketContext(), title, body });
-    const entry: FiredAlert = { ts: Date.now(), title, body };
-    alertLog = [entry, ...alertLog].slice(0, 50);
-    try {
-      window.localStorage.setItem(ALERT_LOG_KEY, JSON.stringify(alertLog));
-    } catch {
-      // non-fatal
-    }
-    pushToast(entry);
-  }
-
-  async function fireAlert(title: string, body: string): Promise<void> {
-    recordFiredAlert(title, body);
-    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      try {
-        new Notification(title, { body });
-      } catch {
-        // notification construction can throw on some platforms
-      }
-    }
-    try {
-      await fetch("/notify-discord", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: `🔔 ${title} — ${body}` }),
-      });
-    } catch {
-      // Discord webhook optional / not configured
-    }
-  }
-
-  // ── Draggable dashboard layout ────────────────────────────────────
-  function panelStyle(id: string, order: string[]): string {
-    const index = order.indexOf(id);
-    return `order: ${index < 0 ? 50 : index + 2};`;
-  }
-
+  // ── Draggable dashboard layout (store lives in $lib/terminal/layout) ──
   function loadLayout(): void {
     if (typeof window === "undefined") return;
     try {
       const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
       if (!raw) return;
-      panelOrder = mergeLayout(JSON.parse(raw), DEFAULT_PANEL_ORDER);
+      layout.setOrder(
+        mergeLayout(migrateLayout(JSON.parse(raw)), DEFAULT_PANEL_ORDER),
+      );
     } catch {
       // ignore malformed layout
     }
   }
 
-  function saveLayout(): void {
+  function saveLayout(order: string[]): void {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(panelOrder));
+      window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(order));
     } catch {
       // storage unavailable — non-fatal
     }
-  }
-
-  // FLIP: animate panels sliding from their old to new positions on reorder.
-  async function flipReorder(mutate: () => void): Promise<void> {
-    if (typeof document === "undefined") {
-      mutate();
-      return;
-    }
-    const before = new Map<string, DOMRect>();
-    for (const el of document.querySelectorAll<HTMLElement>("[data-panel]")) {
-      const key = el.dataset.panel;
-      if (key) before.set(key, el.getBoundingClientRect());
-    }
-    mutate();
-    await tick();
-    for (const el of document.querySelectorAll<HTMLElement>("[data-panel]")) {
-      const key = el.dataset.panel;
-      const first = key ? before.get(key) : undefined;
-      if (!first) continue;
-      const last = el.getBoundingClientRect();
-      const dx = first.left - last.left;
-      const dy = first.top - last.top;
-      if (!dx && !dy) continue;
-      el.style.transition = "none";
-      el.style.transform = `translate(${dx}px, ${dy}px)`;
-      void el.offsetWidth; // force reflow so the inverted start applies
-      requestAnimationFrame(() => {
-        el.style.transition = "transform 240ms cubic-bezier(0.2, 0.85, 0.3, 1)";
-        el.style.transform = "";
-      });
-    }
-  }
-
-  function onPanelDragStart(event: DragEvent, id: string): void {
-    draggedPanel = id;
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", id);
-    }
-  }
-
-  function onPanelDragOver(event: DragEvent, id: string): void {
-    if (!draggedPanel) return;
-    // Must preventDefault on every dragover for the drop to be accepted.
-    event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    dragOverPanel = draggedPanel === id ? null : id;
-  }
-
-  function onPanelDrop(event: DragEvent, id: string): void {
-    event.preventDefault();
-    const dragged = draggedPanel;
-    draggedPanel = null;
-    dragOverPanel = null;
-    if (!dragged || dragged === id) return;
-    // Reorder + FLIP-animate the panels sliding to their new positions.
-    void flipReorder(() => {
-      const fromIndex = panelOrder.indexOf(dragged);
-      const toIndex = panelOrder.indexOf(id);
-      const order = panelOrder.filter((panel) => panel !== dragged);
-      let targetIndex = order.indexOf(id);
-      if (targetIndex < 0) {
-        targetIndex = order.length;
-      } else if (fromIndex < toIndex) {
-        // Dragging forward → drop AFTER the target, not before it.
-        targetIndex += 1;
-      }
-      order.splice(targetIndex, 0, dragged);
-      panelOrder = order;
-      saveLayout();
-    });
-  }
-
-  function onPanelDragEnd(): void {
-    draggedPanel = null;
-    dragOverPanel = null;
-  }
-
-  function resetLayout(): void {
-    panelOrder = [...DEFAULT_PANEL_ORDER];
-    saveLayout();
   }
 
   // ── Stale-while-revalidate widget cache ───────────────────────────
@@ -1747,7 +1545,7 @@
   }
 
   $: layoutCustomized =
-    panelOrder.join(",") !== DEFAULT_PANEL_ORDER.join(",");
+    $panelOrder.join(",") !== DEFAULT_PANEL_ORDER.join(",");
 
   async function runMacroRead(): Promise<void> {
     const meaningful = macroPanel.rows.filter(
@@ -2836,7 +2634,7 @@
       if (partial) {
         // TP/SL are position-level triggers — a partial close leaves them
         // armed on the remainder; say so instead of letting traders wonder.
-        pushToast({
+        alertsStore.pushToast({
           ts: Date.now(),
           title: `Reduced ${symbol}-PERP by ${Math.round(fraction * 100)}%`,
           body: "TP/SL remain attached to the rest of the position.",
@@ -3499,19 +3297,8 @@
       const price = Number(raw);
       if (!Number.isFinite(price) || price <= 0) return;
       const op = latestPrice !== null && price < latestPrice ? "below" : "above";
-      alerts = [
-        ...alerts,
-        {
-          id: `${selectedSymbol}-${op}-${price}-${alerts.length}`,
-          symbol: selectedSymbol,
-          op,
-          price,
-          tier: "ROUTINE",
-          triggered: false,
-        },
-      ];
-      saveAlerts();
-      pushToast({
+      alertsStore.arm({ symbol: selectedSymbol, op, price, tier: "ROUTINE" });
+      alertsStore.pushToast({
         ts: Date.now(),
         title: `Alert set · ${selectedSymbol}-PERP`,
         body: `${op} ${formatPrice(price)}`,
@@ -3529,7 +3316,7 @@
     refreshChartLines(
       enrichedPositions,
       perpOpenOrders,
-      alerts,
+      $alerts,
       $chartLinePrefs,
       selectedSymbol,
       tradeMode,
@@ -3704,65 +3491,12 @@
   }
 
   function openAuthModal(): void {
+    // Step/email/message seeding happens inside AuthModal on mount.
     authOpen = true;
-    authMessage = $privyAuth.error ?? "";
-    authStep = $privyAuth.otpSentTo ? "code" : "email";
-    if ($privyAuth.email && !authEmail) authEmail = $privyAuth.email;
-  }
-
-  async function submitAuthEmail(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
-    authBusy = true;
-    authMessage = "";
-    try {
-      await sendPrivyEmailCode(authEmail);
-      authStep = "code";
-      authMessage = "Code sent.";
-    } catch (error) {
-      authMessage = error instanceof Error ? error.message : "privy-code-send-failed";
-    } finally {
-      authBusy = false;
-    }
-  }
-
-  async function resendAuthCode(): Promise<void> {
-    if (authBusy || !authEmail) return;
-    authBusy = true;
-    authMessage = "";
-    try {
-      await sendPrivyEmailCode(authEmail);
-      authMessage = "Code sent.";
-    } catch (error) {
-      authMessage = error instanceof Error ? error.message : "privy-code-send-failed";
-    } finally {
-      authBusy = false;
-    }
-  }
-
-  function backToEmailStep(): void {
-    authStep = "email";
-    authCode = "";
-    authMessage = "";
-  }
-
-  async function submitAuthCode(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
-    authBusy = true;
-    authMessage = "";
-    try {
-      await loginPrivyWithCode(authEmail, authCode);
-      authOpen = false;
-      authCode = "";
-      await refreshEdgeModules();
-    } catch (error) {
-      authMessage = error instanceof Error ? error.message : "privy-login-failed";
-    } finally {
-      authBusy = false;
-    }
   }
 
   async function disconnectPrivy(): Promise<void> {
-    authBusy = true;
+    logoutBusy = true;
     try {
       await logoutPrivy();
       accountMenuOpen = false;
@@ -3770,7 +3504,7 @@
     } catch {
       // logout failure is non-fatal — the session clears on next boot
     } finally {
-      authBusy = false;
+      logoutBusy = false;
     }
   }
 
@@ -4133,44 +3867,13 @@
   }
 
   // ── Market palette — the "/" picker for every tradable market ──────
-  // One primitive for both venues: perp markets (live mids) and the spot
-  // catalog (full 24h stats). Selecting a row switches venue if needed.
-  // Action rows (close/cancel/flatten on live state) lead when applicable.
+  // The picker itself lives in CommandPalette.svelte, mounted only while
+  // open — its row derivation no longer runs on every mids tick when
+  // closed. The page keeps the flag plus venue routing (choosePalette).
   let paletteOpen = false;
-  let paletteQuery = "";
-  let paletteTab: PaletteTab = "all";
-  let paletteIndex = 0;
-  let paletteInput: HTMLInputElement | null = null;
-  let paletteList: HTMLDivElement | null = null;
-
-  $: paletteRows = buildPaletteRows(
-    markets,
-    spotAssets,
-    marketMids,
-    dailyStats,
-    paletteQuery,
-    paletteTab,
-    enrichedPositions,
-    perpOpenOrders,
-    (position) =>
-      void closePhoenixPosition(
-        position.symbol,
-        position.size,
-        position.subaccountIndex,
-      ),
-    (symbol) => void cancelSymbolBookOrders(symbol),
-    () => void closeAllPhoenixPositions(),
-  );
-  $: if (paletteIndex >= paletteRows.length) {
-    paletteIndex = Math.max(0, paletteRows.length - 1);
-  }
 
   function openPalette(): void {
     paletteOpen = true;
-    paletteQuery = "";
-    paletteTab = "all";
-    paletteIndex = 0;
-    void tick().then(() => paletteInput?.focus());
   }
 
   function choosePalette(row: PaletteRow): void {
@@ -4187,31 +3890,6 @@
       selectSpotAsset(row.asset);
     }
     paletteOpen = false;
-  }
-
-  function scrollPaletteRowIntoView(): void {
-    void tick().then(() =>
-      paletteList?.children[paletteIndex]?.scrollIntoView({ block: "nearest" }),
-    );
-  }
-
-  function onPaletteKeydown(event: KeyboardEvent): void {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      paletteIndex = Math.min(paletteIndex + 1, paletteRows.length - 1);
-      scrollPaletteRowIntoView();
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      paletteIndex = Math.max(paletteIndex - 1, 0);
-      scrollPaletteRowIntoView();
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      const row = paletteRows[paletteIndex];
-      if (row) choosePalette(row);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      paletteOpen = false;
-    }
   }
 
   let cheatOpen = false;
@@ -4398,8 +4076,8 @@
         <button class="ghost" type="button" onclick={resetLayout}>Reset layout</button>
       {/if}
       <button class="secondary alerts-btn" type="button" onclick={() => (alertsOpen = true)}>
-        Alerts{#if alerts.filter((a) => !a.triggered).length}
-          <span class="alerts-count">{alerts.filter((a) => !a.triggered).length}</span>
+        Alerts{#if $alerts.filter((a) => !a.triggered).length}
+          <span class="alerts-count">{$alerts.filter((a) => !a.triggered).length}</span>
         {/if}
       </button>
       {#if $privyAuth.authenticated}
@@ -4510,8 +4188,8 @@
                 {walletScreen.flagged ? "Funding blocked (flagged)" : "Add funds"}
               </button>
 
-              <button class="account-action danger" type="button" disabled={authBusy} onclick={disconnectPrivy}>
-                {authBusy ? "Logging out…" : "Log out"}
+              <button class="account-action danger" type="button" disabled={logoutBusy} onclick={disconnectPrivy}>
+                {logoutBusy ? "Logging out…" : "Log out"}
               </button>
             </div>
           {/if}
@@ -4672,22 +4350,7 @@
     {/each}
   </nav>
 
-  <div class="news-ticker" aria-label="Market headlines">
-    {#if news.length}
-      <div class="news-track">
-        {#each [...news.slice(0, 14), ...news.slice(0, 14)] as item}
-          <a class="news-item" href={item.url} target="_blank" rel="noopener noreferrer">
-            <span class="news-domain">{item.domain}</span>
-            {item.title}
-          </a>
-        {/each}
-      </div>
-    {:else}
-      <div class="news-placeholder" aria-hidden="true">
-        <i></i><i></i><i></i><i></i>
-      </div>
-    {/if}
-  </div>
+  <NewsMarquee {news} />
   </div>
 
   <!-- Sticky chrome (topbar on desktop + market rail) covers the top of the
@@ -5040,18 +4703,16 @@
     <section
       class="panel monitor-panel"
       role="group"
-      data-panel="markets"
-      style={panelStyle("markets", panelOrder)}
-      class:dragging={draggedPanel === "markets"}
-      class:drag-over={dragOverPanel === "markets"}
-      ondragover={(event) => onPanelDragOver(event, "markets")}
-      ondragleave={() => {
-        if (dragOverPanel === "markets") dragOverPanel = null;
-      }}
-      ondrop={(event) => onPanelDrop(event, "markets")}
+      data-panel="monitor"
+      style={panelStyle("monitor", $panelOrder)}
+      class:dragging={$draggedPanel === "monitor"}
+      class:drag-over={$dragOverPanel === "monitor"}
+      ondragover={(event) => onPanelDragOver(event, "monitor")}
+      ondragleave={() => onPanelDragLeave("monitor")}
+      ondrop={(event) => onPanelDrop(event, "monitor")}
     >
       <div class="panel-head">
-        {@render DragHead("markets", "MARKETS", `${markets.length} perp markets`)}
+        <DragHead panelId="monitor" kicker="MARKETS" title={`${markets.length} perp markets`} />
         <div class="monitor-sorts" role="group" aria-label="Sort monitor">
           {#each ["volume", "change", "symbol"] as key (key)}
             <button
@@ -5096,17 +4757,15 @@
       class="panel perp-panel"
       role="group"
       data-panel="perp"
-      style={panelStyle("perp", panelOrder)}
-      class:dragging={draggedPanel === "perp"}
-      class:drag-over={dragOverPanel === "perp"}
+      style={panelStyle("perp", $panelOrder)}
+      class:dragging={$draggedPanel === "perp"}
+      class:drag-over={$dragOverPanel === "perp"}
       ondragover={(event) => onPanelDragOver(event, "perp")}
-      ondragleave={() => {
-        if (dragOverPanel === "perp") dragOverPanel = null;
-      }}
+      ondragleave={() => onPanelDragLeave("perp")}
       ondrop={(event) => onPanelDrop(event, "perp")}
     >
       <div class="panel-head">
-        {@render DragHead("perp", "PERP_DESK", "Phoenix account")}
+        <DragHead panelId="perp" kicker="PERP_DESK" title="Phoenix account" />
         {#if enrichedPositions.length > 0}
           <!-- Two-stage armed; fixed width so the relabel never shifts layout. -->
           <button
@@ -5122,7 +4781,7 @@
         {/if}
         <button class="primary" type="button" onclick={() => openTrade("buy")}>Trade</button>
       </div>
-      {@render AiReadLine(fundingRead)}
+      <AiReadLine read={fundingRead} />
 
       {#if phoenixAuthority && phoenixTrader}
         <div class="venue-strip">
@@ -5153,7 +4812,7 @@
               <b class:positive={sessionPnlUsd >= 0} class:negative={sessionPnlUsd < 0}>
                 {sessionPnlUsd >= 0 ? "+" : "-"}${formatNumber(Math.abs(sessionPnlUsd), 2)}
                 {#if sessionPnlPct !== null}({formatPercent(sessionPnlPct)}){/if}
-                {@render Spark(equityValues, sessionPnlUsd >= 0 ? "up" : "down")}
+                <Spark values={equityValues} tone={sessionPnlUsd >= 0 ? "up" : "down"} />
               </b>
             </div>
           {/if}
@@ -5161,7 +4820,7 @@
         </div>
 
         {#if phoenixTrader.positions.length > 0}
-          {@render AiReadLine(briefRead)}
+          <AiReadLine read={briefRead} />
         {/if}
 
         {#if phoenixActionError}
@@ -5422,27 +5081,37 @@
       </div>
     </section>
 
-    {@render MacroPanel("MACRO_RADAR", "Signal blend", macroPanel, "macro", "section-macro", macroRead)}
-    {@render MacroPanel("FRED_NOWCAST", "Rates + liquidity", fredPanel, "fred")}
-    {@render MacroPanel("ETF_FLOWS", "Spot flow tape", etfPanel, "etf")}
-    {@render MacroPanel("STABLECOINS", "Dollar rail watch", stablecoinPanel, "stablecoins")}
-    {@render MacroPanel("OIL_MACRO", "Energy regime", oilPanel, "oil")}
+    <MacroPanel
+      title="MACRO_RADAR"
+      subtitle="Signal blend"
+      panel={macroPanel}
+      panelId="macro"
+      id="section-macro"
+      read={macroRead}
+    />
+    <MacroPanel title="FRED_NOWCAST" subtitle="Rates + liquidity" panel={fredPanel} panelId="fred" />
+    <MacroPanel title="ETF_FLOWS" subtitle="Spot flow tape" panel={etfPanel} panelId="etf" />
+    <MacroPanel
+      title="STABLECOINS"
+      subtitle="Dollar rail watch"
+      panel={stablecoinPanel}
+      panelId="stablecoins"
+    />
+    <MacroPanel title="OIL_MACRO" subtitle="Energy regime" panel={oilPanel} panelId="oil" />
 
     <section
       class="panel macro-panel"
       role="group"
       data-panel="events"
-      style={panelStyle("events", panelOrder)}
-      class:dragging={draggedPanel === "events"}
-      class:drag-over={dragOverPanel === "events"}
+      style={panelStyle("events", $panelOrder)}
+      class:dragging={$draggedPanel === "events"}
+      class:drag-over={$dragOverPanel === "events"}
       ondragover={(event) => onPanelDragOver(event, "events")}
-      ondragleave={() => {
-        if (dragOverPanel === "events") dragOverPanel = null;
-      }}
+      ondragleave={() => onPanelDragLeave("events")}
       ondrop={(event) => onPanelDrop(event, "events")}
     >
       <div class="panel-head">
-        {@render DragHead("events", "EVENT_RADAR", "Live headlines")}
+        <DragHead panelId="events" kicker="EVENT_RADAR" title="Live headlines" />
         <button
           class="link-chip"
           class:on={newsLinked}
@@ -5454,7 +5123,7 @@
           <span class="velocity-chip">{headlineVelocity}/h</span>
         {/if}
       </div>
-      {@render AiReadLine(eventRead)}
+      <AiReadLine read={eventRead} />
       <div class="news-list">
         {#each linkedNews.slice(0, 6) as item (item.url)}
           <a class="news-row" href={item.url} target="_blank" rel="noopener noreferrer">
@@ -5475,36 +5144,32 @@
       class="panel macro-panel"
       role="group"
       data-panel="ideas"
-      style={panelStyle("ideas", panelOrder)}
-      class:dragging={draggedPanel === "ideas"}
-      class:drag-over={dragOverPanel === "ideas"}
+      style={panelStyle("ideas", $panelOrder)}
+      class:dragging={$draggedPanel === "ideas"}
+      class:drag-over={$dragOverPanel === "ideas"}
       ondragover={(event) => onPanelDragOver(event, "ideas")}
-      ondragleave={() => {
-        if (dragOverPanel === "ideas") dragOverPanel = null;
-      }}
+      ondragleave={() => onPanelDragLeave("ideas")}
       ondrop={(event) => onPanelDrop(event, "ideas")}
     >
       <div class="panel-head">
-        {@render DragHead("ideas", "DESK_IDEAS", "Cross-signal synthesis")}
+        <DragHead panelId="ideas" kicker="DESK_IDEAS" title="Cross-signal synthesis" />
       </div>
-      {@render AiReadLine(ideasRead)}
+      <AiReadLine read={ideasRead} />
     </section>
 
     <section
       class="panel watchlist-panel"
       role="group"
       data-panel="watch"
-      style={panelStyle("watch", panelOrder)}
-      class:dragging={draggedPanel === "watch"}
-      class:drag-over={dragOverPanel === "watch"}
+      style={panelStyle("watch", $panelOrder)}
+      class:dragging={$draggedPanel === "watch"}
+      class:drag-over={$dragOverPanel === "watch"}
       ondragover={(event) => onPanelDragOver(event, "watch")}
-      ondragleave={() => {
-        if (dragOverPanel === "watch") dragOverPanel = null;
-      }}
+      ondragleave={() => onPanelDragLeave("watch")}
       ondrop={(event) => onPanelDrop(event, "watch")}
     >
       <div class="panel-head">
-        {@render DragHead("watch", "WATCHLIST", `${watchlist.length} starred`)}
+        <DragHead panelId="watch" kicker="WATCHLIST" title={`${watchlist.length} starred`} />
       </div>
       <div class="markets-list">
         {#each watchRows as row (row.sym)}
@@ -5535,17 +5200,15 @@
       class="panel watchlist-panel"
       role="group"
       data-panel="screener"
-      style={panelStyle("screener", panelOrder)}
-      class:dragging={draggedPanel === "screener"}
-      class:drag-over={dragOverPanel === "screener"}
+      style={panelStyle("screener", $panelOrder)}
+      class:dragging={$draggedPanel === "screener"}
+      class:drag-over={$dragOverPanel === "screener"}
       ondragover={(event) => onPanelDragOver(event, "screener")}
-      ondragleave={() => {
-        if (dragOverPanel === "screener") dragOverPanel = null;
-      }}
+      ondragleave={() => onPanelDragLeave("screener")}
       ondrop={(event) => onPanelDrop(event, "screener")}
     >
       <div class="panel-head">
-        {@render DragHead("screener", "SCREENER", `${screenRows.length} of ${spotAssets.length}`)}
+        <DragHead panelId="screener" kicker="SCREENER" title={`${screenRows.length} of ${spotAssets.length}`} />
       </div>
       <div class="screen-controls">
         {#each [["movers", "Movers"], ["volume", "Volume"], ["cap", "Mkt cap"]] as [key, label] (key)}
@@ -5590,17 +5253,15 @@
       class="panel watchlist-panel"
       role="group"
       data-panel="spot"
-      style={panelStyle("spot", panelOrder)}
-      class:dragging={draggedPanel === "spot"}
-      class:drag-over={dragOverPanel === "spot"}
+      style={panelStyle("spot", $panelOrder)}
+      class:dragging={$draggedPanel === "spot"}
+      class:drag-over={$dragOverPanel === "spot"}
       ondragover={(event) => onPanelDragOver(event, "spot")}
-      ondragleave={() => {
-        if (dragOverPanel === "spot") dragOverPanel = null;
-      }}
+      ondragleave={() => onPanelDragLeave("spot")}
       ondrop={(event) => onPanelDrop(event, "spot")}
     >
       <div class="panel-head">
-        {@render DragHead("spot", "SPOT_MARKETS", `${spotAssets.length} tokens.xyz assets`)}
+        <DragHead panelId="spot" kicker="SPOT_MARKETS" title={`${spotAssets.length} tokens.xyz assets`} />
         <span class="verdict-badge flat">Jupiter</span>
       </div>
       <div class="spot-search">
@@ -5645,19 +5306,17 @@
       class="panel watchlist-panel"
       role="group"
       data-panel="markets"
-      style={panelStyle("markets", panelOrder)}
-      class:dragging={draggedPanel === "markets"}
-      class:drag-over={dragOverPanel === "markets"}
+      style={panelStyle("markets", $panelOrder)}
+      class:dragging={$draggedPanel === "markets"}
+      class:drag-over={$dragOverPanel === "markets"}
       ondragover={(event) => onPanelDragOver(event, "markets")}
-      ondragleave={() => {
-        if (dragOverPanel === "markets") dragOverPanel = null;
-      }}
+      ondragleave={() => onPanelDragLeave("markets")}
       ondrop={(event) => onPanelDrop(event, "markets")}
     >
       <div class="panel-head">
-        {@render DragHead("markets", "PHOENIX_MARKETS", `${markets.length} perp markets`)}
+        <DragHead panelId="markets" kicker="PHOENIX_MARKETS" title={`${markets.length} perp markets`} />
       </div>
-      {@render AiReadLine(scannerRead)}
+      <AiReadLine read={scannerRead} />
       <div class="markets-list">
         {#each markets as market}
           <button
@@ -5679,24 +5338,22 @@
       class="panel watchlist-panel"
       role="group"
       data-panel="journal"
-      style={panelStyle("journal", panelOrder)}
-      class:dragging={draggedPanel === "journal"}
-      class:drag-over={dragOverPanel === "journal"}
+      style={panelStyle("journal", $panelOrder)}
+      class:dragging={$draggedPanel === "journal"}
+      class:drag-over={$dragOverPanel === "journal"}
       ondragover={(event) => onPanelDragOver(event, "journal")}
-      ondragleave={() => {
-        if (dragOverPanel === "journal") dragOverPanel = null;
-      }}
+      ondragleave={() => onPanelDragLeave("journal")}
       ondrop={(event) => onPanelDrop(event, "journal")}
     >
       <div class="panel-head">
-        {@render DragHead("journal", "JOURNAL", `${journalToday.length} today · ${journalEntries.length} total`)}
+        <DragHead panelId="journal" kicker="JOURNAL" title={`${journalToday.length} today · ${journalEntries.length} total`} />
         {#if journalEntries.length > 0}
           <button class="row-action" type="button" onclick={exportJournalCsv}>CSV</button>
           <button class="row-action" type="button" onclick={wipeJournal}>Clear</button>
         {/if}
       </div>
       {#if journalToday.length >= 2}
-        {@render AiReadLine(recapRead)}
+        <AiReadLine read={recapRead} />
       {/if}
       <div class="journal-list">
         {#each [...journalEntries].reverse().slice(0, 12) as entry (entry.ts)}
@@ -5779,153 +5436,14 @@
   </footer>
 </main>
 
-{#if toasts.length > 0}
-  <div class="toast-stack" role="status" aria-live="polite">
-    {#each toasts as toast (toast.toastId)}
-      <div class="toast">
-        <b>{toast.title}</b>
-        <span>{toast.body}</span>
-      </div>
-    {/each}
-  </div>
-{/if}
+<ToastStack />
 
 {#if cheatOpen}
-  <div class="modal-backdrop" role="presentation" onclick={() => (cheatOpen = false)}>
-    <div
-      class="modal cheat"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Keyboard shortcuts"
-      tabindex="-1"
-      onclick={(event) => event.stopPropagation()}
-      onkeydown={swallowKeysExceptEscape}
-    >
-      <div class="panel-head">
-        <div><p>KEYBOARD</p><h2>Shortcuts</h2></div>
-        <button class="modal-close" type="button" aria-label="Close" onclick={() => (cheatOpen = false)}>×</button>
-      </div>
-      <div class="modal-body cheat-body">
-        {#each [
-          ["/", "Market palette"],
-          ["B / S", "Long / Short — flips a live ticket in place"],
-          ["M / L", "Ticket order type market / limit"],
-          ["C C", "Market-close the selected position (press twice)"],
-          ["X X", "Cancel the selected market's orders (press twice)"],
-          ["[ ]", "Previous / next timeframe"],
-          [", .", "Cycle watchlist"],
-          ["F", "Fit chart + re-arm autoscale"],
-          ["Alt+Click", "Set price alert at cursor"],
-          ["Drag axis", "Scale price/time · double-click resets"],
-          ["?", "This sheet"],
-          ["Esc", "Close any overlay"],
-        ] as [keys, what] (keys)}
-          <div class="cheat-row"><kbd>{keys}</kbd><span>{what}</span></div>
-        {/each}
-      </div>
-    </div>
-  </div>
+  <CheatSheetModal onclose={() => (cheatOpen = false)} />
 {/if}
 
 {#if authOpen}
-  <div class="modal-backdrop" role="presentation" onclick={() => (authOpen = false)}>
-    <section
-      class="modal auth-modal"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(event) => event.stopPropagation()}
-      onkeydown={swallowKeysExceptEscape}
-    >
-      <div class="panel-head">
-        <div>
-          <p>PRIVY_AUTH</p>
-          <h2>Connect account</h2>
-        </div>
-        <button class="modal-close" type="button" aria-label="Close" onclick={() => (authOpen = false)}>×</button>
-      </div>
-
-      <div class="modal-body">
-        {#if !privyConfig.appId}
-          <div class="auth-callout error">
-            <strong>Auth is not configured</strong>
-            <span>Set <code>PUBLIC_PRIVY_APP_ID</code> (or <code>VITE_PRIVY_APP_ID</code> / <code>NEXT_PUBLIC_PRIVY_APP_ID</code>) for this frontend, then reload.</span>
-          </div>
-        {:else if $privyAuth.authenticated}
-          <div class="auth-success">
-            <span class="auth-check" aria-hidden="true">✓</span>
-            <strong>You're connected</strong>
-            <span>{$privyAuth.email ?? shortAddress($privyAuth.walletAddress)}</span>
-            <span class="wallet-badge {$privyAuth.walletStatus}">{walletStatusLabel}</span>
-            <button class="primary wide" type="button" onclick={() => (authOpen = false)}>Done</button>
-          </div>
-        {:else}
-          <ol class="auth-steps" aria-hidden="true">
-            <li class:active={authStep === "email"} class:done={authStep === "code"}>
-              <span class="step-dot">1</span> Email
-            </li>
-            <li class="step-divider"></li>
-            <li class:active={authStep === "code"}>
-              <span class="step-dot">2</span> Verify
-            </li>
-          </ol>
-
-          {#if authStep === "email"}
-            <p class="auth-lead">Sign in with your email — we'll send a one-time code. A Solana wallet is provisioned automatically.</p>
-            <form class="auth-form" onsubmit={submitAuthEmail}>
-              <label>
-                Email address
-                <input
-                  bind:value={authEmail}
-                  autocomplete="email"
-                  inputmode="email"
-                  placeholder="you@example.com"
-                  required
-                  type="email"
-                />
-              </label>
-              <button class="primary wide" type="submit" disabled={authBusy || !$privyAuth.ready}>
-                {#if authBusy}<span class="spinner" aria-hidden="true"></span>{/if}
-                {authBusy ? "Sending code…" : !$privyAuth.ready ? "Preparing…" : "Send code"}
-              </button>
-            </form>
-          {:else}
-            <p class="auth-lead">Enter the 6-digit code sent to <b>{authEmail || "your email"}</b>.</p>
-            <form class="auth-form" onsubmit={submitAuthCode}>
-              <label>
-                Verification code
-                <input
-                  class="code-input"
-                  bind:value={authCode}
-                  autocomplete="one-time-code"
-                  inputmode="numeric"
-                  maxlength="6"
-                  placeholder="123456"
-                  required
-                />
-              </label>
-              <button class="primary wide" type="submit" disabled={authBusy || !authCode.trim()}>
-                {#if authBusy}<span class="spinner" aria-hidden="true"></span>{/if}
-                {authBusy ? "Verifying…" : "Verify & connect"}
-              </button>
-              <div class="auth-secondary">
-                <button class="linklike" type="button" disabled={authBusy} onclick={backToEmailStep}>
-                  Use another email
-                </button>
-                <button class="linklike" type="button" disabled={authBusy} onclick={resendAuthCode}>
-                  Resend code
-                </button>
-              </div>
-            </form>
-          {/if}
-        {/if}
-
-        {#if authNote && !$privyAuth.authenticated}
-          <p class="auth-note" class:error={authNoteIsError}>{authNote}</p>
-        {/if}
-      </div>
-    </section>
-  </div>
+  <AuthModal onclose={() => (authOpen = false)} onauthenticated={refreshEdgeModules} />
 {/if}
 
 {#if tradeOpen}
@@ -5954,167 +5472,34 @@
   </div>
 {/if}
 
-{#if alertsOpen}
-  <div class="modal-backdrop" role="presentation" onclick={() => (alertsOpen = false)}>
-    <section
-      class="modal"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(event) => event.stopPropagation()}
-      onkeydown={swallowKeysExceptEscape}
-    >
-      <div class="panel-head">
-        <div>
-          <p>ALERTS</p>
-          <h2>{selectedSymbol}-PERP · {formatPrice(latestPrice)}</h2>
-        </div>
-        <button class="modal-close" type="button" aria-label="Close" onclick={() => (alertsOpen = false)}>×</button>
-      </div>
-      <div class="modal-body">
-        <form class="alert-form" onsubmit={addAlert}>
-          <select bind:value={alertOp} aria-label="Condition">
-            <option value="above">above</option>
-            <option value="below">below</option>
-          </select>
-          <input bind:value={alertPrice} inputmode="decimal" placeholder={formatPrice(latestPrice)} aria-label="Price" />
-          <select bind:value={alertTier} aria-label="Tier">
-            <option value="FLASH">FLASH</option>
-            <option value="PRIORITY">PRIORITY</option>
-            <option value="ROUTINE">ROUTINE</option>
-          </select>
-          <button class="primary" type="submit">Arm</button>
-        </form>
-        {#if !notifyReady}
-          <p class="auth-note">Arming an alert will ask for browser-notification permission so you get pinged off-screen.</p>
-        {/if}
-        <div class="alert-list">
-          {#each alerts as alert (alert.id)}
-            <div class="alert-row" class:done={alert.triggered}>
-              <span class="alert-tier {alert.tier.toLowerCase()}">{alert.tier}</span>
-              <b>{alert.symbol} {alert.op} {formatPrice(alert.price)}</b>
-              <em>{alert.triggered ? "triggered" : "armed"}</em>
-              <button class="row-action" type="button" onclick={() => removeAlert(alert.id)}>Remove</button>
-            </div>
-          {:else}
-            <div class="empty">No alerts armed. Add a price trigger above.</div>
-          {/each}
-        </div>
-        {#if alertLog.length > 0}
-          <div class="venue-section">Fired</div>
-          <div class="alert-list">
-            {#each alertLog.slice(0, 10) as fired (fired.ts)}
-              <div class="alert-row done">
-                <span class="mono alert-when">{new Date(fired.ts).toISOString().slice(5, 16).replace("T", " ")}Z</span>
-                <b>{fired.title}</b>
-                <em>{fired.body}</em>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    </section>
-  </div>
-{/if}
+<AlertsModal
+  open={alertsOpen}
+  symbol={selectedSymbol}
+  {latestPrice}
+  onclose={() => (alertsOpen = false)}
+/>
 
 {#if paletteOpen}
-  <div class="modal-backdrop" role="presentation" onclick={() => (paletteOpen = false)}>
-    <div
-      class="modal palette"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Select market"
-      tabindex="-1"
-      onclick={(event) => event.stopPropagation()}
-      onkeydown={onPaletteKeydown}
-    >
-      <div class="palette-search">
-        <span class="palette-glass" aria-hidden="true">⌕</span>
-        <input
-          bind:this={paletteInput}
-          bind:value={paletteQuery}
-          placeholder="Search markets"
-          aria-label="Search markets"
-          oninput={() => (paletteIndex = 0)}
-        />
-      </div>
-      <div class="palette-tabs" role="tablist" aria-label="Market category">
-        {#each PALETTE_TABS as tab (tab.key)}
-          <button
-            role="tab"
-            aria-selected={paletteTab === tab.key}
-            class:active={paletteTab === tab.key}
-            type="button"
-            onclick={() => {
-              paletteTab = tab.key;
-              paletteIndex = 0;
-            }}
-          >
-            {tab.label}
-          </button>
-        {/each}
-      </div>
-      <div class="palette-row palette-head" aria-hidden="true">
-        <span></span>
-        <span>Market</span>
-        <span class="r">Price</span>
-        <span class="r">24h</span>
-        <span class="r pal-wide">Volume</span>
-      </div>
-      <div class="palette-list" bind:this={paletteList}>
-        {#each paletteRows as row, index (row.key)}
-          <button
-            type="button"
-            class="palette-row"
-            class:active={index === paletteIndex}
-            onclick={() => choosePalette(row)}
-            onmousemove={() => (paletteIndex = index)}
-          >
-            {#if row.kind === "action"}
-              <span class="pal-star" aria-hidden="true">▸</span>
-              <span class="pal-id">
-                <b>{row.name}</b>
-                <small>ACTION</small>
-              </span>
-            {:else}
-              <span
-                class="pal-star"
-                class:starred={watchlist.includes(row.symbol.toUpperCase())}
-                role="presentation"
-                onclick={(event) => {
-                  event.stopPropagation();
-                  toggleWatch(row.symbol);
-                }}
-              >{watchlist.includes(row.symbol.toUpperCase()) ? "★" : "☆"}</span>
-              <span class="pal-id">
-                {#if row.imageUrl}<img src={row.imageUrl} alt="" loading="lazy" />{/if}
-                <b>{row.kind === "perp" ? `${row.symbol}` : row.symbol}</b>
-                {#if row.lev}<i class="pal-lev">{row.lev}x</i>{/if}
-                <small>{row.kind === "perp" ? "PERP · Phoenix" : row.name}</small>
-              </span>
-            {/if}
-            <span class="r mono">{formatPrice(row.price)}</span>
-            <span
-              class="r mono"
-              class:positive={(row.change24hPct ?? 0) > 0 && row.change24hPct !== null}
-              class:negative={(row.change24hPct ?? 0) < 0}
-            >{row.change24hPct === null ? "--" : formatPercent(row.change24hPct)}</span>
-            <span class="r mono pal-wide">
-              {row.volumeUsd === null ? "--" : `$${formatNumber(row.volumeUsd, 0)}`}
-            </span>
-          </button>
-        {:else}
-          <p class="palette-empty">No markets match “{paletteQuery}”.</p>
-        {/each}
-      </div>
-      <div class="palette-foot" aria-hidden="true">
-        <span><kbd>/</kbd> Open</span>
-        <span><kbd>↑↓</kbd> Navigate</span>
-        <span><kbd>Enter</kbd> Select</span>
-        <span><kbd>Esc</kbd> Close</span>
-      </div>
-    </div>
-  </div>
+  <CommandPalette
+    {markets}
+    {spotAssets}
+    {marketMids}
+    {dailyStats}
+    {watchlist}
+    positions={enrichedPositions}
+    openOrders={perpOpenOrders}
+    oncloseposition={(position) =>
+      void closePhoenixPosition(
+        position.symbol,
+        position.size,
+        position.subaccountIndex,
+      )}
+    oncancelorders={(symbol) => void cancelSymbolBookOrders(symbol)}
+    onflatten={() => void closeAllPhoenixPositions()}
+    onselect={choosePalette}
+    ontogglewatch={toggleWatch}
+    onclose={() => (paletteOpen = false)}
+  />
 {/if}
 
 {#if fundsOpen}
@@ -6896,113 +6281,6 @@
   </div>
 {/snippet}
 
-{#snippet Spark(values: number[], tone: string)}
-  {@const min = Math.min(...values)}
-  {@const max = Math.max(...values)}
-  {@const range = max - min || 1}
-  {@const last = values.length - 1 || 1}
-  <svg class="spark {tone}" viewBox="0 0 64 20" preserveAspectRatio="none" aria-hidden="true">
-    <polyline
-      points={values
-        .map((v, i) => `${(i / last) * 64},${19 - ((v - min) / range) * 18}`)
-        .join(" ")}
-    />
-  </svg>
-{/snippet}
-
-{#snippet AiReadLine(read: AiRead)}
-  <!-- Always rendered: the slot is reserved so notes never shift layout. -->
-  <div class="desk-note">
-    <span class="desk-kicker" class:desk-kicker-dim={read.phase === "idle" || (read.phase === "loading" && !read.text)}>Desk</span>
-    {#if read.phase === "error"}
-      <span class="desk-text desk-dim">{read.error}</span>
-    {:else if read.phase === "ready" || read.text}
-      <span class="desk-text" class:desk-soft-pulse={read.phase === "loading"}>{read.text}</span>
-      {#if read.asOf}
-        <em class="desk-asof">as of {new Date(read.asOf).toISOString().slice(11, 19)}Z</em>
-      {/if}
-    {:else}
-      <span class="desk-skeleton" aria-hidden="true">
-        <i></i>
-        <i></i>
-      </span>
-    {/if}
-  </div>
-{/snippet}
-
-{#snippet DragHead(panelId: string, kicker: string, title: string)}
-  <div
-    class="panel-head-main"
-    draggable="true"
-    role="button"
-    tabindex="0"
-    aria-label="Drag to reorder {kicker} panel"
-    ondragstart={(event) => onPanelDragStart(event, panelId)}
-    ondragend={onPanelDragEnd}
-  >
-    <span class="drag-grip" aria-hidden="true">⠿</span>
-    <div>
-      <p>{kicker}</p>
-      <h2>{title}</h2>
-    </div>
-  </div>
-{/snippet}
-
-{#snippet MacroPanel(
-  title: string,
-  subtitle: string,
-  panel: DataPanel,
-  panelId: string,
-  id?: string,
-  read?: AiRead,
-)}
-  <section
-    class="panel macro-panel"
-    {id}
-    role="group"
-    data-panel={panelId}
-    style={panelStyle(panelId, panelOrder)}
-    class:dragging={draggedPanel === panelId}
-    class:drag-over={dragOverPanel === panelId}
-    ondragover={(event) => onPanelDragOver(event, panelId)}
-    ondragleave={() => {
-      if (dragOverPanel === panelId) dragOverPanel = null;
-    }}
-    ondrop={(event) => onPanelDrop(event, panelId)}
-  >
-    <div class="panel-head">
-      {@render DragHead(panelId, title, subtitle)}
-      {#if panel.summary}
-        <span class="verdict-badge {panel.summary.tone ?? 'flat'}">
-          {panel.summary.label}
-        </span>
-      {/if}
-    </div>
-    {#if read}
-      {@render AiReadLine(read)}
-    {/if}
-    <div class="table macro-table">
-      {#each panel.rows.slice(0, 6) as row}
-        <div class="macro-row">
-          <span class="macro-label">{row.label}</span>
-          <span class="macro-spark">
-            {#if row.spark && row.spark.length > 1}
-              {@render Spark(row.spark, row.tone ?? "flat")}
-            {/if}
-          </span>
-          <span class="macro-value">
-            <b class={row.tone ?? "flat"}>{row.value}</b>
-            {#if row.change}
-              <em class="macro-delta {row.tone ?? 'flat'}">{row.change}</em>
-            {/if}
-          </span>
-          <span class="macro-chip {row.tone ?? 'flat'}">{row.status}</span>
-        </div>
-      {/each}
-    </div>
-  </section>
-{/snippet}
-
 <style>
   .terminal-shell {
     min-height: 100vh;
@@ -7063,7 +6341,6 @@
   }
 
   .topbar-actions,
-  .panel-head,
   .chart-toolbar,
   .timeframe-tabs,
   .chart-market-tools,
@@ -7082,9 +6359,6 @@
     flex-wrap: wrap;
   }
 
-  .secondary,
-  .primary,
-  .ghost,
   .chart-toolbar button,
   .chart-tools button,
   .chart-footer button,
@@ -7101,32 +6375,12 @@
       transform 160ms ease;
   }
 
-  .primary {
-    background: var(--accent);
-    color: #04130d;
-    border-color: var(--accent);
-  }
-
-  .primary:hover,
-  .secondary:hover,
-  .ghost:hover,
   .chart-toolbar button:hover,
   .chart-tools button:hover,
   .chart-footer button:hover,
   .book-row:hover {
     transform: translateY(-1px);
     border-color: rgba(255, 77, 151, 0.55);
-  }
-
-  .secondary,
-  .ghost {
-    color: var(--muted);
-  }
-
-  .ghost {
-    min-height: 1.7rem;
-    padding: 0.25rem 0.45rem;
-    font-size: 0.75rem;
   }
 
   .terminal-notice {
@@ -7158,29 +6412,6 @@
     font-weight: 700;
   }
 
-  /* Loading skeletons */
-  .skeleton {
-    display: inline-block;
-    border-radius: 0;
-    background: linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.04) 25%,
-      rgba(255, 255, 255, 0.1) 37%,
-      rgba(255, 255, 255, 0.04) 63%
-    );
-    background-size: 300% 100%;
-    animation: shimmer 1.5s ease-in-out infinite;
-  }
-
-  @keyframes shimmer {
-    0% {
-      background-position: 150% 0;
-    }
-    100% {
-      background-position: -150% 0;
-    }
-  }
-
   .skel-price {
     width: 8.5rem;
     height: 1rem;
@@ -7191,21 +6422,6 @@
     width: 2.6rem;
     height: 0.78rem;
     margin-top: 0.18rem;
-  }
-
-  .spinner {
-    width: 0.85rem;
-    height: 0.85rem;
-    border: 2px solid rgba(4, 19, 13, 0.35);
-    border-top-color: #04130d;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
   }
 
   .account-menu {
@@ -7310,40 +6526,8 @@
     white-space: nowrap;
   }
 
-  .wallet-badge {
-    flex: 0 0 auto;
-    border-radius: 0;
-    padding: 0.18rem 0.5rem;
-    font-size: 0.62rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    border: 1px solid transparent;
-  }
-
-  .wallet-badge.ready {
-    color: var(--up);
-    background: var(--up-soft);
-    border-color: rgba(44, 233, 127, 0.4);
-  }
-
-  .wallet-badge.creating {
-    color: var(--amber);
-    background: rgba(228, 173, 79, 0.12);
-    border-color: rgba(228, 173, 79, 0.4);
-  }
-
-  .wallet-badge.error {
-    color: var(--red);
-    background: rgba(240, 107, 99, 0.12);
-    border-color: rgba(240, 107, 99, 0.4);
-  }
-
-  .wallet-badge.missing {
-    color: var(--muted);
-    background: var(--surface-2);
-    border-color: var(--line);
-  }
+  /* .wallet-badge lives in terminal.css — the account menu here and the
+     AuthModal component both render it. */
 
   .account-row {
     display: grid;
@@ -7388,11 +6572,6 @@
     font-size: 0.64rem;
   }
 
-  .mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-variant-numeric: tabular-nums;
-  }
-
   .copy-hint {
     font-size: 0.62rem;
     font-weight: 700;
@@ -7403,34 +6582,6 @@
 
   .copy-hint.done {
     color: var(--accent);
-  }
-
-  .row-action {
-    border: 1px solid var(--line);
-    border-radius: 0;
-    background: var(--surface-2);
-    color: var(--muted);
-    font-size: 0.66rem;
-    font-weight: 700;
-    min-height: 1.6rem;
-    padding: 0.15rem 0.45rem;
-  }
-
-  .row-action:hover:not(:disabled) {
-    color: var(--ink);
-    border-color: rgba(255, 77, 151, 0.45);
-  }
-
-  /* In-flight indication on the acting row button (the big spinner is
-     tuned for the light primary button). */
-  .row-action .spinner {
-    display: inline-block;
-    width: 0.6rem;
-    height: 0.6rem;
-    border-color: var(--line);
-    border-top-color: var(--muted);
-    margin-right: 0.2rem;
-    vertical-align: -0.05rem;
   }
 
   /* Two-stage flatten in the PERP_DESK head: reserved width so the
@@ -7484,15 +6635,8 @@
   }
 
   /* ── Add-funds modal ──────────────────────────────────────────────── */
-  .side-toggle.funds-tabs button.active {
-    color: var(--accent);
-    background: var(--accent-soft);
-  }
-
-  .side-toggle.funds-tabs-3 {
-    grid-template-columns: 1fr 1fr 1fr;
-  }
-
+  /* .side-toggle.funds-tabs / .funds-tabs-3 live in terminal.css (cascade-
+     order-sensitive vs the .side-toggle first/last active rules there). */
   .funding-guide {
     display: grid;
     gap: 0.6rem;
@@ -7532,65 +6676,9 @@
     font-size: 0.8rem;
   }
 
-  /* Day P&L sparkline rides the stat value line. */
-  .venue-strip .spark {
+  /* Day P&L sparkline rides the stat value line (svg lives in Spark.svelte). */
+  .venue-strip :global(.spark) {
     vertical-align: -0.25rem;
-  }
-
-  .venue-section {
-    margin: 0.35rem 0.75rem 0.1rem;
-    color: var(--accent);
-    font-size: 0.62rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  /* Section header variant with side-wide sweep actions on the right. */
-  .venue-section-row {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .venue-section-row span {
-    margin-right: auto;
-  }
-
-  .venue-row {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-    align-items: center;
-    gap: 0.55rem;
-    margin: 0 0.65rem;
-    padding: 0.4rem 0.1rem;
-    border-bottom: 1px solid var(--line-soft);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: 0.72rem;
-  }
-
-  .venue-row span {
-    font-weight: 800;
-  }
-
-  .venue-row b {
-    color: var(--ink);
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .venue-row em {
-    font-style: normal;
-  }
-
-  /* FIFO id suffix — identifying, not load-bearing; keep it quiet. */
-  .venue-row .order-seq {
-    color: var(--faint);
-    font-size: 0.62rem;
-    font-weight: 500;
   }
 
   .venue-note {
@@ -7800,97 +6888,11 @@
     font-size: 0.72rem;
   }
 
-  .panel-head p {
-    margin: 0;
-    color: var(--accent);
-    font-size: 0.68rem;
-    letter-spacing: 0.08em;
-    font-weight: 800;
-  }
-
-  .panel-head h2 {
-    margin: 0;
-  }
-
   .dashboard {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: clamp(0.6rem, 1vw, 0.9rem);
     padding: clamp(0.75rem, 1.4vw, 1.15rem);
-  }
-
-  .panel {
-    position: relative;
-    min-height: 12rem;
-    /* Jump-to-section lands below the sticky chrome (topbar + rail). */
-    scroll-margin-top: var(--anchor-top, 0px);
-    border: 1px solid var(--line);
-    border-radius: 0;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
-      var(--surface);
-    overflow: hidden;
-    transition:
-      outline-color 120ms ease,
-      opacity 120ms ease,
-      border-color 160ms ease;
-    outline: 1px solid transparent;
-    outline-offset: -1px;
-    /* Hairline top highlight — gives panels a machined edge. */
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
-  }
-
-  .panel:hover {
-    border-color: #323845;
-  }
-
-  .panel.dragging {
-    opacity: 0.4;
-  }
-
-  .panel.drag-over {
-    outline-color: var(--accent);
-  }
-
-  /* Draggable panel header (grab the title to move the widget) */
-  .panel-head-main {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    min-width: 0;
-    cursor: grab;
-  }
-
-  .panel-head-main:active {
-    cursor: grabbing;
-  }
-
-  .drag-grip {
-    color: var(--faint);
-    font-size: 0.85rem;
-    line-height: 1;
-    letter-spacing: -0.1em;
-    opacity: 0;
-    transition: opacity 120ms ease, color 120ms ease;
-  }
-
-  .panel:hover .drag-grip {
-    opacity: 1;
-  }
-
-  .panel-head-main:hover .drag-grip {
-    color: var(--accent);
-  }
-
-  .panel-head {
-    justify-content: space-between;
-    min-height: 3.15rem;
-    padding: 0.75rem 0.9rem;
-    border-bottom: 1px solid var(--line-soft);
-  }
-
-  .panel-head h2 {
-    font-size: 0.86rem;
-    font-weight: 700;
   }
 
   .chart-panel {
@@ -7932,23 +6934,9 @@
     max-height: 26rem;
   }
 
-  select,
-  input {
-    width: 100%;
-    color: var(--ink);
-    background: var(--paper);
-    border: 1px solid var(--line);
-    border-radius: 0;
-    min-height: 2rem;
-    padding: 0.3rem 0.45rem;
-  }
-
-  label {
-    display: grid;
-    gap: 0.35rem;
-    color: var(--muted);
-    font-size: 0.72rem;
-  }
+  /* Base select/input/label element rules live in terminal.css — scoped
+     copies here would stop matching the same elements rendered inside
+     extracted components (AuthModal & co). */
 
   /* Panel-header dialect on ticket labels; inputs keep body sizing. */
   .panel-ticket label {
@@ -7964,7 +6952,6 @@
     font-size: 0.85rem;
   }
 
-  .positive,
   .bid {
     color: #8decc3;
   }
@@ -8423,8 +7410,9 @@
     white-space: nowrap;
   }
 
+  /* Padding comes from the shared .empty (terminal.css); the old local
+     padding was dead (lost the cascade) — only line-height is live. */
   .spot-book-note {
-    padding: 1rem 0.9rem;
     line-height: 1.5;
   }
 
@@ -8722,262 +7710,11 @@
     color: var(--ink);
   }
 
-
-  .empty {
-    color: var(--muted);
-    padding: 0.65rem;
-    font-size: 0.8rem;
-  }
-
   .warn {
     color: var(--amber);
   }
 
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: grid;
-    place-items: center;
-    background: rgba(0, 0, 0, 0.68);
-    backdrop-filter: blur(2px);
-    /* Top-anchored: content growth extends downward only (no recentering). */
-    place-items: start center;
-    padding: clamp(1rem, 6vh, 4rem) 1rem 1rem;
-  }
-
-  /* ── Market palette ──────────────────────────────────────────────── */
-  .modal.palette {
-    width: min(52rem, 100%);
-    max-height: min(40rem, calc(100dvh - 4rem));
-  }
-
-  .palette-search {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.85rem 1rem;
-    border-bottom: 1px solid var(--line-soft);
-  }
-
-  .palette-glass {
-    color: var(--faint);
-    font-size: 1.1rem;
-  }
-
-  .palette-search input {
-    flex: 1;
-    border: 0;
-    background: transparent;
-    font-size: 1rem;
-    color: var(--ink);
-  }
-
-  .palette-search input:focus {
-    outline: none;
-  }
-
-  .palette-tabs {
-    display: flex;
-    gap: 0.2rem;
-    padding: 0 0.6rem;
-    border-bottom: 1px solid var(--line-soft);
-  }
-
-  .palette-tabs button {
-    border: 0;
-    border-bottom: 3px solid transparent;
-    background: transparent;
-    color: var(--muted);
-    padding: 0.5rem 0.7rem;
-    font-size: 0.8rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .palette-tabs button:hover {
-    color: var(--ink);
-  }
-
-  .palette-tabs button.active {
-    color: var(--ink);
-    border-bottom-color: var(--accent);
-  }
-
-  .palette-row {
-    display: grid;
-    grid-template-columns: 2rem minmax(0, 1fr) 7rem 5.5rem 8rem;
-    gap: 0.6rem;
-    align-items: center;
-    width: 100%;
-    padding: 0.5rem 1rem;
-    border: 0;
-    border-bottom: 1px solid var(--line-soft);
-    background: transparent;
-    color: var(--ink);
-    text-align: left;
-    cursor: pointer;
-    font-size: 0.85rem;
-  }
-
-  .palette-head {
-    color: var(--faint);
-    font-size: 0.64rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    font-family: ui-monospace, monospace;
-    cursor: default;
-    padding-block: 0.4rem;
-  }
-
-  .palette-list {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
-  .palette-list .palette-row.active {
-    background: var(--surface-2);
-    box-shadow: inset 2px 0 0 var(--accent);
-  }
-
-  .pal-star {
-    color: var(--faint);
-    cursor: pointer;
-    text-align: center;
-  }
-
-  .pal-star:hover,
-  .pal-star.starred {
-    color: var(--amber);
-  }
-
-  .pal-id {
-    display: flex;
-    align-items: baseline;
-    gap: 0.45rem;
-    min-width: 0;
-  }
-
-  .pal-id img {
-    width: 1.15rem;
-    height: 1.15rem;
-    border-radius: 50%;
-    align-self: center;
-    flex: 0 0 auto;
-  }
-
-  .pal-id b {
-    font-size: 0.9rem;
-  }
-
-  .pal-id small {
-    color: var(--faint);
-    font-size: 0.7rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .pal-lev {
-    font-style: normal;
-    font-family: ui-monospace, monospace;
-    font-size: 0.64rem;
-    color: var(--muted);
-    border: 1px solid var(--line);
-    padding: 0.02rem 0.3rem;
-  }
-
-  .palette-empty {
-    padding: 1.2rem 1rem;
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-
-  .palette-foot {
-    display: flex;
-    gap: 1.2rem;
-    padding: 0.55rem 1rem;
-    border-top: 1px solid var(--line-soft);
-    color: var(--muted);
-    font-size: 0.72rem;
-  }
-
-  .palette-foot kbd {
-    font-family: ui-monospace, monospace;
-    font-size: 0.68rem;
-    color: var(--ink);
-    background: var(--paper);
-    border: 1px solid var(--line);
-    padding: 0.05rem 0.35rem;
-    margin-right: 0.3rem;
-  }
-
-  @media (max-width: 720px) {
-    .palette-row {
-      grid-template-columns: 2rem minmax(0, 1fr) 6rem 4.5rem;
-    }
-
-    .pal-wide {
-      display: none;
-    }
-  }
-
-  .modal {
-    width: min(30rem, 100%);
-    max-height: calc(100vh - 2rem);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    border: 1px solid var(--line);
-    border-radius: 0;
-    background: var(--surface);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.04),
-      0 1.5rem 5rem rgba(0, 0, 0, 0.5);
-    animation: modal-in 160ms cubic-bezier(0.2, 0.85, 0.3, 1);
-  }
-
-  @keyframes modal-in {
-    from {
-      opacity: 0;
-      transform: translateY(0.4rem) scale(0.985);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-
-  /* Desk note inside modals: stable footprint, text clamped to 3 lines. */
-  .modal .desk-note {
-    min-height: 3.1rem;
-    max-height: 4.9rem;
-    overflow: hidden;
-  }
-
-  .modal .desk-text {
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  /* Long dynamic CTAs (e.g. "Deposit $12.50 USDC to Phoenix first") must
-     wrap inside the button, never clip out of it. */
-  .primary.wide {
-    height: auto;
-    white-space: normal;
-    line-height: 1.25;
-    padding-block: 0.55rem;
-  }
-
-  /* Armed limit-deviation confirm: same red cue as the flatten button. */
-  .primary.wide.armed {
-    background: var(--down);
-    border-color: var(--down);
-  }
+  /* Market-palette styles live in components/CommandPalette.svelte. */
 
   /* Reserved single-line status (error / tx link / blank). */
   .ticket-status {
@@ -9006,220 +7743,8 @@
     transition: opacity 160ms ease;
   }
 
-  .modal .panel-head {
-    flex: 0 0 auto;
-  }
-
-  .modal-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.9rem;
-    height: 1.9rem;
-    border: 1px solid var(--line);
-    border-radius: 0;
-    background: var(--surface-2);
-    color: var(--muted);
-    font-size: 1.2rem;
-    line-height: 1;
-  }
-
-  .modal-close:hover {
-    color: var(--ink);
-    border-color: rgba(240, 107, 99, 0.5);
-  }
-
-  .modal-body {
-    display: grid;
-    gap: 0.75rem;
-    padding: 1rem;
-    overflow-y: auto;
-  }
-
-  .modal-body label {
-    gap: 0.4rem;
-    font-size: 0.74rem;
-  }
-
-  .auth-form {
-    display: grid;
-    gap: 0.7rem;
-  }
-
-  .wide {
-    width: 100%;
-  }
-
-  .auth-steps {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .auth-steps li {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    color: var(--faint);
-    font-size: 0.74rem;
-    font-weight: 600;
-  }
-
-  .auth-steps li.active {
-    color: var(--ink);
-  }
-
-  .auth-steps li.done {
-    color: var(--accent);
-  }
-
-  .auth-steps .step-dot {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.4rem;
-    height: 1.4rem;
-    border-radius: 50%;
-    border: 1px solid currentColor;
-    font-size: 0.72rem;
-  }
-
-  .auth-steps li.active .step-dot {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #04130d;
-  }
-
-  .step-divider {
-    flex: 1;
-    height: 1px;
-    background: var(--line);
-  }
-
-  .auth-lead {
-    margin: 0;
-    color: var(--muted);
-    font-size: 0.8rem;
-    line-height: 1.45;
-  }
-
-  .auth-lead b {
-    color: var(--ink);
-  }
-
-  .code-input {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 1.3rem;
-    letter-spacing: 0.5rem;
-    text-align: center;
-  }
-
-  .auth-secondary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-
-  .linklike {
-    border: 0;
-    background: transparent;
-    color: var(--muted);
-    font-size: 0.74rem;
-    padding: 0.2rem 0;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  .linklike:hover:not(:disabled) {
-    color: var(--ink);
-  }
-
-  .auth-note {
-    margin: 0;
-    border-radius: 0;
-    padding: 0.55rem 0.7rem;
-    background: var(--surface-2);
-    color: var(--muted);
-    font-size: 0.78rem;
-    line-height: 1.4;
-  }
-
-  .auth-note.error {
-    color: var(--red);
-    background: rgba(240, 107, 99, 0.1);
-    border: 1px solid rgba(240, 107, 99, 0.3);
-  }
-
-  .auth-callout {
-    display: grid;
-    gap: 0.35rem;
-    border-radius: 0;
-    padding: 0.85rem;
-    background: var(--surface-2);
-    border: 1px solid var(--line);
-    font-size: 0.8rem;
-    line-height: 1.45;
-  }
-
-  .auth-callout.error {
-    border-color: rgba(240, 107, 99, 0.35);
-  }
-
-  .auth-callout strong {
-    color: var(--ink);
-  }
-
-  .auth-callout span {
-    color: var(--muted);
-  }
-
-  .auth-callout code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.74rem;
-    color: var(--blue);
-  }
-
-  .auth-success {
-    display: grid;
-    justify-items: center;
-    gap: 0.5rem;
-    text-align: center;
-    padding: 0.5rem 0;
-  }
-
-  .auth-success strong {
-    font-size: 1rem;
-  }
-
-  .auth-success span {
-    color: var(--muted);
-    font-size: 0.82rem;
-  }
-
-  .auth-success .wide {
-    margin-top: 0.5rem;
-  }
-
-  .auth-check {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.6rem;
-    height: 2.6rem;
-    border-radius: 50%;
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-size: 1.3rem;
-    font-weight: 800;
-  }
-
-  .negative {
-    color: var(--red);
-  }
+  /* Auth-modal styles live in components/AuthModal.svelte; the shared
+     bits (.wide, .auth-lead, .wallet-badge) moved to terminal.css. */
 
   .market-rail {
     /* Sticky on every width: prices/funding stay in view while scrolling.
@@ -9385,11 +7910,8 @@
     border-color: var(--accent);
   }
 
-  :where(button, a, select, input):focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-    border-radius: 0;
-  }
+  /* The :focus-visible outline lives in terminal.css so it also reaches
+     controls rendered inside extracted components. */
 
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -9401,7 +7923,8 @@
     }
   }
 
-  /* ── Macro panels: verdict badge, signal rows, sparklines ─────────── */
+  /* ── Macro chips + tone palette (panel body lives in MacroPanel.svelte;
+     the badge/chip/tones stay: spot panel + account dropdown use them) ── */
   .verdict-badge {
     flex: 0 0 auto;
     border-radius: 0;
@@ -9412,72 +7935,6 @@
     letter-spacing: 0.04em;
     white-space: nowrap;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-
-  .macro-table {
-    gap: 0;
-  }
-
-  .macro-row {
-    display: grid;
-    grid-template-columns: minmax(3.5rem, 1fr) 3.4rem minmax(0, auto) auto;
-    align-items: center;
-    gap: 0.55rem;
-    min-height: 2.2rem;
-    padding: 0.5rem 0.25rem;
-    border-bottom: 1px solid var(--line-soft);
-    font-size: 0.75rem;
-  }
-
-  .macro-label {
-    color: var(--muted);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .macro-spark {
-    display: flex;
-    align-items: center;
-    height: 1.15rem;
-  }
-
-  .spark {
-    width: 3.4rem;
-    height: 1.15rem;
-  }
-
-  .spark polyline {
-    fill: none;
-    stroke: var(--muted);
-    stroke-width: 1.3;
-    stroke-linejoin: round;
-    stroke-linecap: round;
-    vector-effect: non-scaling-stroke;
-  }
-
-  .macro-value {
-    display: inline-flex;
-    align-items: baseline;
-    justify-content: flex-end;
-    gap: 0.35rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .macro-value b {
-    color: var(--ink);
-    font-weight: 700;
-  }
-
-  .macro-delta {
-    color: var(--muted);
-    font-size: 0.68rem;
-    font-style: normal;
-    font-weight: 600;
   }
 
   .macro-chip {
@@ -9492,40 +7949,34 @@
     border: 1px solid transparent;
   }
 
-  /* Tone palette shared by badge / value / delta / chip / spark */
-  .up,
-  .spark.up polyline {
+  /* Tone palette shared by badge / chip (sparkline strokes live in Spark.svelte) */
+  .up {
     color: #8decc3;
     stroke: var(--up);
   }
 
-  .down,
-  .spark.down polyline {
+  .down {
     color: var(--red);
     stroke: var(--red);
   }
 
-  .warn,
-  .spark.warn polyline {
+  .warn {
     color: var(--amber);
     stroke: var(--amber);
   }
 
-  .verdict-badge.up,
   .macro-chip.up {
     color: var(--up);
     background: var(--up-soft);
     border-color: rgba(44, 233, 127, 0.35);
   }
 
-  .verdict-badge.down,
   .macro-chip.down {
     color: var(--red);
     background: rgba(240, 107, 99, 0.12);
     border-color: rgba(240, 107, 99, 0.35);
   }
 
-  .verdict-badge.warn,
   .macro-chip.warn {
     color: var(--amber);
     background: rgba(228, 173, 79, 0.12);
@@ -9538,88 +7989,6 @@
     background: var(--surface-2);
     border-color: var(--line);
   }
-
-  /* ── Desk note: market commentary, styled like a wire line ────────── */
-  .desk-note {
-    display: flex;
-    gap: 0.5rem;
-    align-items: baseline;
-    /* Reserved two-line footprint so loading → text never shifts layout. */
-    min-height: 3.1rem;
-    margin: 0 0.65rem 0.45rem;
-    padding: 0.45rem 0.6rem;
-    border-left: 2px solid rgba(255, 77, 151, 0.55);
-    background: rgba(255, 255, 255, 0.015);
-    border-radius: 0;
-    font-size: 0.76rem;
-    line-height: 1.45;
-  }
-
-  .desk-kicker {
-    flex: 0 0 auto;
-    color: var(--accent);
-    font-size: 0.56rem;
-    font-weight: 800;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    transform: translateY(0.05rem);
-  }
-
-  .desk-text {
-    color: var(--ink);
-  }
-
-  .desk-dim {
-    color: var(--muted);
-  }
-
-  .desk-kicker-dim {
-    opacity: 0.45;
-    transition: opacity 400ms ease;
-  }
-
-  /* Refreshing an existing read: barely-there breathing, no text swap. */
-  .desk-soft-pulse {
-    animation: desk-breathe 2.6s ease-in-out infinite;
-  }
-
-  @keyframes desk-breathe {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.72;
-    }
-  }
-
-  /* Loading: two soft shimmer lines in place of text. */
-  .desk-skeleton {
-    flex: 1;
-    display: grid;
-    gap: 0.45rem;
-    align-self: center;
-  }
-
-  .desk-skeleton i {
-    display: block;
-    height: 0.5rem;
-    border-radius: 0;
-    background: linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.035) 25%,
-      rgba(255, 77, 151, 0.07) 50%,
-      rgba(255, 255, 255, 0.035) 75%
-    );
-    background-size: 280% 100%;
-    animation: shimmer 2.2s ease-in-out infinite;
-  }
-
-  .desk-skeleton i:last-child {
-    width: 62%;
-    animation-delay: 180ms;
-  }
-
 
   /* ── Ambient risk strip ──────────────────────────────────────────── */
   .risk-strip {
@@ -9826,51 +8195,6 @@
 
   .dashboard { padding-bottom: 2.6rem; }
 
-  /* ── Toasts ──────────────────────────────────────────────────────── */
-  .toast-stack {
-    position: fixed;
-    top: 4rem;
-    right: 1rem;
-    z-index: 90;
-    display: grid;
-    gap: 0.4rem;
-  }
-
-  .toast {
-    display: grid;
-    gap: 0.1rem;
-    min-width: 16rem;
-    max-width: 22rem;
-    padding: 0.5rem 0.7rem;
-    border: 1px solid var(--accent);
-    background: var(--surface);
-    font-size: 0.74rem;
-  }
-
-  .toast b { color: var(--accent); font-size: 0.68rem; letter-spacing: 0.04em; }
-
-  /* ── Cheat sheet ─────────────────────────────────────────────────── */
-  .cheat-body { display: grid; gap: 0.3rem; }
-
-  .cheat-row {
-    display: grid;
-    grid-template-columns: 7rem 1fr;
-    gap: 0.8rem;
-    align-items: baseline;
-    font-size: 0.8rem;
-    color: var(--muted);
-  }
-
-  .cheat-row kbd {
-    font-family: ui-monospace, monospace;
-    font-size: 0.7rem;
-    color: var(--ink);
-    background: var(--paper);
-    border: 1px solid var(--line);
-    padding: 0.08rem 0.4rem;
-    text-align: center;
-  }
-
   /* ── News linking chips ──────────────────────────────────────────── */
   .link-chip {
     border: 1px solid var(--line);
@@ -9892,28 +8216,11 @@
     padding: 0.1rem 0.35rem;
   }
 
-  /* ── Desk read provenance ────────────────────────────────────────── */
-  .desk-asof {
-    display: block;
-    font-style: normal;
-    font-family: ui-monospace, monospace;
-    font-size: 0.58rem;
-    color: var(--faint);
-    margin-top: 0.15rem;
-  }
-
-  .alert-when { color: var(--faint); font-size: 0.62rem; }
-
   /* ── Trade ticket ─────────────────────────────────────────────────── */
   .field {
     display: grid;
     gap: 0.3rem;
     align-content: start;
-  }
-
-  .chip-row {
-    display: flex;
-    gap: 0.3rem;
   }
 
   .pct-chip {
@@ -9974,74 +8281,10 @@
     font-weight: 600;
   }
 
-  .side-toggle {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    /* overflow:hidden zeroes the grid auto-minimum — pin the height so a
-       height-constrained modal grid can never collapse this row. */
-    min-height: 2.45rem;
-    border: 1px solid var(--line);
-    border-radius: 0;
-    overflow: hidden;
-  }
-
-  .side-toggle button {
-    border: 0;
-    background: var(--surface-2);
-    color: var(--muted);
-    min-height: 2.3rem;
-    font-weight: 800;
-  }
-
-  .side-toggle button.active:first-child {
-    background: var(--up-soft);
-    color: var(--up);
-  }
-
-  .side-toggle button.active:last-child {
-    background: var(--down-soft);
-    color: var(--down);
-  }
-
   .ticket-grid-2 {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.45rem 0.6rem;
-  }
-
-  .ticket-preview {
-    display: grid;
-    gap: 0.05rem;
-    border: 1px solid var(--line-soft);
-    border-radius: 0;
-    padding: 0.3rem 0.65rem;
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  .preview-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.6rem;
-    padding: 0.12rem 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: 0.76rem;
-  }
-
-  .preview-row span {
-    flex: 0 1 auto;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  .preview-row b {
-    text-align: right;
-    overflow-wrap: anywhere;
-  }
-
-  .preview-row b {
-    color: var(--ink);
   }
 
   .warn-row {
@@ -10050,95 +8293,8 @@
   }
 
   /* ── News ticker ──────────────────────────────────────────────────── */
-  .news-ticker {
-    /* Fixed footprint: present from first paint, headlines fade in. */
-    height: 2rem;
-    overflow: hidden;
-    border-top: 1px solid var(--line-soft);
-    background: rgba(8, 10, 13, 0.6);
-    white-space: nowrap;
-    /* Soft fade at both edges so items don't hard-clip. */
-    -webkit-mask-image: linear-gradient(90deg, transparent, #000 3rem, #000 calc(100% - 3rem), transparent);
-    mask-image: linear-gradient(90deg, transparent, #000 3rem, #000 calc(100% - 3rem), transparent);
-  }
-
-  .news-placeholder {
-    display: flex;
-    gap: 2.5rem;
-    align-items: center;
-    height: 100%;
-    padding-left: 3.5rem;
-  }
-
-  .news-placeholder i {
-    display: block;
-    width: clamp(8rem, 18vw, 16rem);
-    height: 0.45rem;
-    border-radius: 0;
-    background: linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.03) 25%,
-      rgba(255, 255, 255, 0.07) 50%,
-      rgba(255, 255, 255, 0.03) 75%
-    );
-    background-size: 280% 100%;
-    animation: shimmer 2.4s ease-in-out infinite;
-  }
-
-  .news-placeholder i:nth-child(2) { animation-delay: 150ms; }
-  .news-placeholder i:nth-child(3) { animation-delay: 300ms; }
-  .news-placeholder i:nth-child(4) { animation-delay: 450ms; }
-
-  .news-track {
-    display: inline-flex;
-    align-items: center;
-    gap: 2.5rem;
-    height: 100%;
-    animation: news-scroll 90s linear infinite, fade-in 600ms ease;
-  }
-
-  @keyframes fade-in {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
-  }
-
-  .news-ticker:hover .news-track {
-    animation-play-state: paused;
-  }
-
-  @keyframes news-scroll {
-    from {
-      transform: translateX(0);
-    }
-    to {
-      transform: translateX(-50%);
-    }
-  }
-
-  .news-item {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.45rem;
-    font-size: 0.74rem;
-    color: var(--muted);
-    text-decoration: none;
-  }
-
-  .news-item:hover {
-    color: var(--ink);
-  }
-
-  .news-domain {
-    color: var(--accent);
-    font-size: 0.6rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
+  /* Marquee styles live in components/NewsMarquee.svelte; .news-domain is
+     shared with modal tx links, so it lives in terminal.css. */
   .news-list {
     display: grid;
     gap: 0.1rem;
@@ -10184,62 +8340,6 @@
     color: #04130d;
     font-size: 0.6rem;
     font-weight: 800;
-  }
-
-  .alert-form {
-    display: grid;
-    grid-template-columns: auto 1fr auto auto;
-    gap: 0.4rem;
-    align-items: center;
-  }
-
-  .alert-list {
-    display: grid;
-    gap: 0.3rem;
-  }
-
-  .alert-row {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.4rem 0.5rem;
-    border: 1px solid var(--line-soft);
-    border-radius: 0;
-    background: rgba(255, 255, 255, 0.02);
-    font-size: 0.78rem;
-  }
-
-  .alert-row.done {
-    opacity: 0.55;
-  }
-
-  .alert-row em {
-    color: var(--muted);
-    font-size: 0.68rem;
-  }
-
-  .alert-tier {
-    border-radius: 0;
-    padding: 0.1rem 0.45rem;
-    font-size: 0.58rem;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-  }
-
-  .alert-tier.flash {
-    color: var(--red);
-    background: rgba(240, 107, 99, 0.14);
-  }
-
-  .alert-tier.priority {
-    color: var(--amber);
-    background: rgba(228, 173, 79, 0.14);
-  }
-
-  .alert-tier.routine {
-    color: var(--muted);
-    background: var(--surface-2);
   }
 
   @media (max-width: 1100px) {
@@ -10316,20 +8416,8 @@
       grid-template-columns: 1fr;
     }
 
-    .modal-backdrop {
-      padding: 0.75rem;
-    }
-
-    .modal {
-      max-height: calc(100dvh - 1.5rem);
-    }
-
     .venue-strip {
       grid-template-columns: 1fr 1fr;
-    }
-
-    .venue-row {
-      grid-template-columns: auto minmax(0, 1fr) auto auto;
     }
 
     .chart-panel {
@@ -10338,14 +8426,6 @@
 
     .orderbook-panel {
       max-height: 26rem;
-    }
-
-    .macro-row {
-      grid-template-columns: minmax(3rem, 1fr) auto auto;
-    }
-
-    .macro-spark {
-      display: none;
     }
 
     .ticker-symbol strong {

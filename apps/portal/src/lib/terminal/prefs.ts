@@ -21,11 +21,12 @@ export const ALERT_LOG_KEY = "trader-ralph-alert-log";
 export const ONBOARD_KEY = "trader-ralph-terminal/phx-referral/v2";
 
 // Draggable dashboard: reorderable info panels (chart + book stay anchored).
-// NOTE: "markets" appears twice — a latent duplicate-id bug preserved
-// verbatim here; the layout-store phase fixes it with a migration.
+// "monitor" is the markets-monitor panel; "markets" is the Phoenix markets
+// list. Old payloads persisted both as "markets" — migrateLayout in
+// $lib/terminal/layout maps the first occurrence to "monitor".
 export const DEFAULT_PANEL_ORDER = [
   "watch",
-  "markets",
+  "monitor",
   "perp",
   "spot",
   "screener",
