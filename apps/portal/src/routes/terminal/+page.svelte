@@ -33,6 +33,34 @@
     maxBookNotional,
   } from "$lib/terminal/book";
   import {
+    ALERT_LOG_KEY,
+    ALERTS_STORAGE_KEY,
+    CACHE_MARKETS,
+    CACHE_MAX_AGE,
+    CACHE_NEWS,
+    CACHE_PANELS,
+    CACHE_READS,
+    DEFAULT_PANEL_ORDER,
+    LAYOUT_STORAGE_KEY,
+    MARKETS_MAX_AGE,
+    mergeLayout,
+    ONBOARD_KEY,
+    parsePrefs,
+    persistPrefs,
+    PREFS_STORAGE_KEY,
+    SECTION_LINKS,
+  } from "$lib/terminal/prefs";
+  import {
+    buildMonitorRows,
+    buildScreenRows,
+    buildWatchRows,
+    disconnectedPanel,
+    disconnectedRows,
+    emptyMarketStats,
+    selectedMarketTableRows,
+    summarizeEdgeStatus,
+  } from "$lib/terminal/panels";
+  import {
     chartLinePrefs,
     equityBaselines,
     equityHistory,
@@ -250,21 +278,7 @@
   }
 
   let monitorSort: "volume" | "change" | "symbol" = "volume";
-  $: monitorRows = markets
-    .map((config) => ({
-      symbol: config.symbol,
-      lev: config.maxLeverage,
-      mid: marketMids[config.symbol] ?? dailyStats[config.symbol]?.lastPrice ?? null,
-      change: dailyStats[config.symbol]?.change24hPct ?? null,
-      volume: dailyStats[config.symbol]?.volume24hUsd ?? null,
-    }))
-    .sort((a, b) =>
-      monitorSort === "symbol"
-        ? a.symbol.localeCompare(b.symbol)
-        : monitorSort === "change"
-          ? (b.change ?? -1e9) - (a.change ?? -1e9)
-          : (b.volume ?? -1) - (a.volume ?? -1),
-    );
+  $: monitorRows = buildMonitorRows(markets, marketMids, dailyStats, monitorSort);
 
   function chooseMonitorRow(symbol: string): void {
     if (tradeMode !== "perps") setTradeMode("perps", false);
@@ -456,39 +470,12 @@
   let alertTier: Alert["tier"] = "PRIORITY";
   let notifyReady = false;
 
-  // Draggable dashboard: reorderable info panels (chart + book stay anchored).
-  const DEFAULT_PANEL_ORDER = [
-    "watch",
-    "markets",
-    "perp",
-    "spot",
-    "screener",
-    "macro",
-    "fred",
-    "etf",
-    "stablecoins",
-    "oil",
-    "events",
-    "ideas",
-    "markets",
-    "journal",
-  ];
   let panelOrder: string[] = [...DEFAULT_PANEL_ORDER];
   let draggedPanel: string | null = null;
   let dragOverPanel: string | null = null;
 
-  const PREFS_STORAGE_KEY = "trader-ralph-terminal/prefs/v1";
-  const ALERTS_STORAGE_KEY = "trader-ralph-terminal/alerts/v1";
-  const LAYOUT_STORAGE_KEY = "trader-ralph-terminal/layout/v1";
   const OPEN_BETA_BANNER_STORAGE_KEY =
     "trader-ralph-terminal/open-beta-banner/v1";
-  // Stale-while-revalidate widget caches (instant paint on reload).
-  const CACHE_PANELS = "trader-ralph-terminal/cache/panels/v1";
-  const CACHE_NEWS = "trader-ralph-terminal/cache/news/v1";
-  const CACHE_MARKETS = "trader-ralph-terminal/cache/markets/v1";
-  const CACHE_READS = "trader-ralph-terminal/cache/reads/v1";
-  const CACHE_MAX_AGE = 30 * 60_000;
-  const MARKETS_MAX_AGE = 24 * 60 * 60_000;
   let showOpenBetaBanner = false;
 
   $: selectedMarket = markets.find((market) => market.symbol === selectedSymbol) ?? null;
@@ -972,19 +959,7 @@
       : null;
 
   // ── Watchlist rows: price from spot, fall back to perp mid; basis when both ──
-  $: watchRows = watchlist.map((sym) => {
-    const spot = spotAssets.find((asset) => asset.symbol.toUpperCase() === sym) ?? null;
-    const mid = marketMids[sym] ?? null;
-    const hasPerp = mid !== null || markets.some((market) => market.symbol === sym);
-    return {
-      sym,
-      spot,
-      hasPerp,
-      price: spot?.price ?? mid,
-      change: spot?.change24hPct ?? null,
-      basisBps: spot?.price && mid ? ((mid - spot.price) / spot.price) * 10_000 : null,
-    };
-  });
+  $: watchRows = buildWatchRows(watchlist, spotAssets, marketMids, markets);
 
   // ── Account exposure / leverage (margin meter, deterministic) ──
   $: accountExposureUsd = (phoenixTrader?.positions ?? []).reduce(
@@ -1014,16 +989,7 @@
       : tradeAmount;
 
   // ── Screener rows over the catalog ──
-  $: screenRows = [...spotAssets]
-    .filter((asset) => screenHub === "all" || asset.hub === screenHub)
-    .sort((a, b) =>
-      screenSort === "movers"
-        ? Math.abs(b.change24hPct ?? 0) - Math.abs(a.change24hPct ?? 0)
-        : screenSort === "cap"
-          ? (b.marketCap ?? 0) - (a.marketCap ?? 0)
-          : (b.volume24hUsd ?? 0) - (a.volume24hUsd ?? 0),
-    )
-    .slice(0, 20);
+  $: screenRows = buildScreenRows(spotAssets, screenHub, screenSort);
 
   // ── Journal-derived views + AI notes (facts computed, AI narrates) ──
   $: journalToday = entriesToday(journalEntries, Date.now());
@@ -1566,7 +1532,6 @@
   // Fired alerts become a persistent, timestamped log plus toasts —
   // Bloomberg's message-pane pattern in miniature.
   type FiredAlert = { ts: number; title: string; body: string };
-  const ALERT_LOG_KEY = "trader-ralph-alert-log";
   let alertLog: FiredAlert[] = [];
   let toasts: (FiredAlert & { toastId: number })[] = [];
   let toastSeq = 0;
@@ -1631,13 +1596,7 @@
     try {
       const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw);
-      if (!Array.isArray(saved)) return;
-      const known = saved.filter(
-        (id): id is string => typeof id === "string" && DEFAULT_PANEL_ORDER.includes(id),
-      );
-      const missing = DEFAULT_PANEL_ORDER.filter((id) => !known.includes(id));
-      panelOrder = [...known, ...missing];
+      panelOrder = mergeLayout(JSON.parse(raw), DEFAULT_PANEL_ORDER);
     } catch {
       // ignore malformed layout
     }
@@ -2523,7 +2482,6 @@
   }
 
   // ── Phoenix onboarding ────────────────────────────────────────────
-  const ONBOARD_KEY = "trader-ralph-terminal/phx-referral/v2";
 
   async function ensurePhoenixOnboarding(authority: string): Promise<void> {
     if (!authority || onboardedAddress === authority) return;
@@ -3477,30 +3435,6 @@
     }
   }
 
-  function disconnectedRows(reason: string): SignalRow[] {
-    return [
-      {
-        label: "Status",
-        value: "Not connected",
-        status: reason,
-      },
-    ];
-  }
-
-  function disconnectedPanel(reason: string): DataPanel {
-    return {
-      rows: disconnectedRows(reason),
-      status: "not connected",
-      source: "",
-    };
-  }
-
-  function summarizeEdgeStatus(panels: DataPanel[]): string {
-    if (panels.some((panel) => panel.status === "ready")) return "ready";
-    const first = panels.find((panel) => panel.status !== "ready");
-    return first?.status ?? "not connected";
-  }
-
   function setPriceMode(mode: "last" | "mark"): void {
     if (priceMode === mode) return;
     priceMode = mode;
@@ -3758,61 +3692,6 @@
     const current = timeScale.options().barSpacing ?? 6;
     const next = direction === "in" ? current * 1.3 : current / 1.3;
     timeScale.applyOptions({ barSpacing: Math.max(2, Math.min(48, next)) });
-  }
-
-  function selectedMarketTableRows(
-    market: PhoenixMarketConfig | null,
-    stats: PhoenixMarketStats | null,
-    price: number | null,
-  ): SignalRow[] {
-    if (!market) {
-      return disconnectedRows("Phoenix market metadata loading");
-    }
-    return [
-      {
-        label: "Market",
-        value: `${market.symbol}-PERP`,
-        status: market.marketStatus,
-      },
-      {
-        label: "Mark",
-        value: formatPrice(stats?.markPx ?? price),
-        status: `oracle ${formatPrice(stats?.oraclePx)}`,
-      },
-      {
-        label: "Open interest",
-        value: formatNumber(stats?.openInterest, 2),
-        status: "base",
-      },
-      {
-        label: "Funding",
-        value: formatPercent((stats?.funding ?? 0) * 100),
-        status: "rate",
-      },
-      {
-        label: "Fees",
-        value: `${formatPercent((market.makerFee ?? 0) * 100)} / ${formatPercent((market.takerFee ?? 0) * 100)}`,
-        status: "maker/taker",
-      },
-      {
-        label: "Margin",
-        value: market.isolatedOnly ? "isolated only" : "cross + isolated",
-        status: market.maxLeverage ? `${formatNumber(market.maxLeverage, 0)}x max` : "--",
-      },
-    ];
-  }
-
-  function emptyMarketStats(symbol: string): PhoenixMarketStats {
-    return {
-      symbol,
-      dayNtlVlm: null,
-      prevDayPx: null,
-      markPx: null,
-      midPx: null,
-      funding: null,
-      openInterest: null,
-      oraclePx: null,
-    };
   }
 
   function openPhoenixFunding(): void {
@@ -4402,57 +4281,30 @@
 
   function loadPrefs(): void {
     if (typeof window === "undefined") return;
+    let raw: string | null = null;
     try {
-      const raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw) as Record<string, unknown>;
-      if (typeof data.symbol === "string") selectedSymbol = data.symbol;
-      if (PHOENIX_TIMEFRAMES.includes(data.timeframe as PhoenixTimeframe)) {
-        selectedTimeframe = data.timeframe as PhoenixTimeframe;
-      }
-      if (data.priceMode === "last" || data.priceMode === "mark") {
-        priceMode = data.priceMode;
-      }
-      if (data.chartScale === "price" || data.chartScale === "percent") {
-        chartScale = data.chartScale;
-      }
-      if (data.chartAxisMode === "linear" || data.chartAxisMode === "log") {
-        chartAxisMode = data.chartAxisMode;
-      }
-      if (typeof data.visibleCandleCount === "number" && Number.isFinite(data.visibleCandleCount)) {
-        visibleCandleCount = data.visibleCandleCount;
-      }
-      if (data.tradeMode === "spot") pendingTradeMode = "spot";
-      if (typeof data.spotAssetId === "string") pendingSpotAssetId = data.spotAssetId;
-      if (Array.isArray(data.watchlist)) {
-        watchlist = data.watchlist
-          .filter((sym): sym is string => typeof sym === "string")
-          .map((sym) => sym.toUpperCase())
-          .slice(0, 24);
-      }
-      if (data.screenSort === "movers" || data.screenSort === "volume" || data.screenSort === "cap") {
-        screenSort = data.screenSort;
-      }
-      if (
-        data.screenHub === "all" || data.screenHub === "crypto" ||
-        data.screenHub === "equities" || data.screenHub === "pre-ipo"
-      ) {
-        screenHub = data.screenHub;
-      }
-      if (data.sizingMode === "usd" || data.sizingMode === "risk") {
-        sizingMode = data.sizingMode;
-      }
-      if (typeof data.tradeAmount === "string") tradeAmount = data.tradeAmount;
-      if (typeof data.tradeRiskUsd === "string") tradeRiskUsd = data.tradeRiskUsd;
-      if (
-        typeof data.tradeLeverage === "number" &&
-        [1, 2, 5, 10, 20].includes(data.tradeLeverage)
-      ) {
-        tradeLeverage = data.tradeLeverage;
-      }
+      raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
     } catch {
-      // ignore malformed persisted preferences
+      return; // storage unavailable — keep defaults
     }
+    const prefs = parsePrefs(raw);
+    if (prefs.symbol !== undefined) selectedSymbol = prefs.symbol;
+    if (prefs.timeframe !== undefined) selectedTimeframe = prefs.timeframe;
+    if (prefs.priceMode !== undefined) priceMode = prefs.priceMode;
+    if (prefs.chartScale !== undefined) chartScale = prefs.chartScale;
+    if (prefs.chartAxisMode !== undefined) chartAxisMode = prefs.chartAxisMode;
+    if (prefs.visibleCandleCount !== undefined) {
+      visibleCandleCount = prefs.visibleCandleCount;
+    }
+    if (prefs.tradeMode === "spot") pendingTradeMode = "spot";
+    if (prefs.spotAssetId !== undefined) pendingSpotAssetId = prefs.spotAssetId;
+    if (prefs.watchlist !== undefined) watchlist = prefs.watchlist;
+    if (prefs.screenSort !== undefined) screenSort = prefs.screenSort;
+    if (prefs.screenHub !== undefined) screenHub = prefs.screenHub;
+    if (prefs.sizingMode !== undefined) sizingMode = prefs.sizingMode;
+    if (prefs.tradeAmount !== undefined) tradeAmount = prefs.tradeAmount;
+    if (prefs.tradeRiskUsd !== undefined) tradeRiskUsd = prefs.tradeRiskUsd;
+    if (prefs.tradeLeverage !== undefined) tradeLeverage = prefs.tradeLeverage;
   }
 
   function loadOpenBetaBanner(): void {
@@ -4478,58 +4330,6 @@
       // storage unavailable — banner is still hidden for this session
     }
   }
-
-  function persistPrefs(
-    _symbol: string,
-    _timeframe: PhoenixTimeframe,
-    _priceMode: "last" | "mark",
-    _scale: ChartScale,
-    _axis: ChartAxisMode,
-    _visible: number,
-    _tradeMode: "perps" | "spot",
-    _spotAssetId: string | null,
-    _watchlist: string[],
-    _screenSort: string,
-    _screenHub: string,
-    _sizingMode: string,
-    _tradeAmount: string,
-    _tradeRiskUsd: string,
-    _tradeLeverage: number,
-  ): void {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(
-        PREFS_STORAGE_KEY,
-        JSON.stringify({
-          symbol: _symbol,
-          timeframe: _timeframe,
-          priceMode: _priceMode,
-          chartScale: _scale,
-          chartAxisMode: _axis,
-          visibleCandleCount: _visible,
-          tradeMode: _tradeMode,
-          spotAssetId: _spotAssetId,
-          watchlist: _watchlist,
-          screenSort: _screenSort,
-          screenHub: _screenHub,
-          sizingMode: _sizingMode,
-          tradeAmount: _tradeAmount,
-          tradeRiskUsd: _tradeRiskUsd,
-          tradeLeverage: _tradeLeverage,
-        }),
-      );
-    } catch {
-      // storage may be unavailable (private mode, quota) — non-fatal
-    }
-  }
-
-  const SECTION_LINKS: { id: string; label: string }[] = [
-    { id: "section-chart", label: "Chart" },
-    { id: "section-book", label: "Book" },
-    { id: "section-perp", label: "Perp" },
-    { id: "section-markets", label: "Markets" },
-    { id: "section-macro", label: "Macro" },
-  ];
 
   function scrollToSection(id: string): void {
     activeSection = id;
