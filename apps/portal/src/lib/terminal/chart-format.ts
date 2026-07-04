@@ -73,17 +73,22 @@ export function computeMarketChange(
   return ((latest.price - anchor.price) / anchor.price) * 100;
 }
 
+// formatChartRange runs on every live candle message (chartRangeLabel
+// re-derives per chartPoints reassignment); the options never vary, so
+// construct the Intl.DateTimeFormat once, lazily.
+let chartRangeFormatter: Intl.DateTimeFormat | undefined;
+
 export function formatChartRange(points: MarketPoint[]): string {
   const first = points.at(0);
   const last = points.at(-1);
   if (!first || !last) return "--";
-  const formatter = new Intl.DateTimeFormat(undefined, {
+  chartRangeFormatter ??= new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     month: "short",
     day: "numeric",
   });
-  return `${formatter.format(first.ts)} - ${formatter.format(last.ts)}`;
+  return `${chartRangeFormatter.format(first.ts)} - ${chartRangeFormatter.format(last.ts)}`;
 }
 
 // Session state for the selected market from its exchange calendar.

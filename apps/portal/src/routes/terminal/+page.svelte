@@ -41,7 +41,10 @@
   } from "$lib/ai";
   import { track } from "$lib/telemetry";
   import { type Alert, alertsStore } from "$lib/terminal/alerts";
-  import { buildChartLineSpecs } from "$lib/terminal/chart-lines";
+  import {
+    buildChartLineSpecs,
+    type PriceLineSpec,
+  } from "$lib/terminal/chart-lines";
   import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
   import {
     createPanelLayout,
@@ -169,27 +172,13 @@
     type SpotAsset,
     type TriggerOrder,
   } from "$lib/spot";
-  import {
-    activatePhoenixReferral,
-    buildAddIsolatedMarginIxs,
-    buildCancelAllIxs,
-    buildCancelSingleOrderIxs,
-    buildDepositIxs,
-    buildPlaceOrderPlan,
-    buildSignableTransaction,
-    buildWithdrawIxs,
-    checkPhoenixAccess,
-    ensureTraderRegisteredIxs,
-    fetchExchangeConfig,
-    fetchOnChainCollateralUsd,
-    fetchPhoenixTraderState,
-    PHOENIX_REFERRAL_CODE,
-    type PhoenixOpenOrder,
-    type PhoenixPosition,
-    type PhoenixSide,
-    type PhoenixTraderState,
+  import type {
+    PhoenixOpenOrder,
+    PhoenixPosition,
+    PhoenixSide,
+    PhoenixTraderState,
   } from "$lib/phoenix-trade";
-  import { Connection, VersionedTransaction } from "@solana/web3.js";
+  import type { Connection, VersionedTransaction } from "@solana/web3.js";
   import {
     formatAge,
     formatNumber,
@@ -456,6 +445,12 @@
   let triggerWallet = "";
   // Liquidation price lines for open positions on the perp chart.
   let liqLines: IPriceLine[] = [];
+  // Signature memo for refreshChartLines — skip the remove/create cycle
+  // when the rendered lines would be unchanged. null = force next apply
+  // (reset whenever the candle series is recreated).
+  let chartLineFullSig: string | null = null;
+  let chartLineStructSig: string | null = null;
+  let chartLineTick = -1;
 
   // Intel feeds (Crucix-inspired): event radar, news ticker, sanctions, ideas.
   let news: NewsItem[] = [];
@@ -519,6 +514,16 @@
     void screenWallet(normalizedWalletAddress);
   }
   $: phoenixAuthority = $privyAuth.authenticated ? normalizedWalletAddress : "";
+  // Lazy web3 boundary (plan 8.1): $lib/phoenix-trade statically pulls
+  // @solana/web3.js + @ellipsis-labs/rise (~1.1 MB pre-minify) — the dynamic
+  // import keeps that graph out of the entry chunk. The module registry
+  // memoizes the load, so every call site shares one in-flight fetch.
+  const tradeModule = () => import("$lib/phoenix-trade");
+  // Mandatory auth-time prefetch: the moment auth lands — before any trade,
+  // deposit, swap or cancel is possible (all require the wallet, which only
+  // exists when authenticated) — warm the chunk so no user action ever
+  // awaits a cold import. Disconnected visitors never fetch it.
+  $: if ($privyAuth.authenticated) void tradeModule();
   // Wallet appears (login, restore, or switch): refresh from the network;
   // the derived view above already shows the device snapshot meanwhile.
   let refreshedAuthority: string | null = null;
@@ -887,7 +892,8 @@
     $chartLinePrefs,
     selectedSymbol,
     tradeMode,
-  ), lineLabelTick;
+    lineLabelTick,
+  );
 
   // Spot limit orders follow the connected wallet.
   $: if ($privyAuth.walletAddress !== triggerWallet) {
@@ -928,14 +934,23 @@
     alertsStore.load({ trackContext: marketContext });
     journalEntries = loadJournal();
     loadLayout();
-    hydrateWidgetCache();
+    const panelsWarm = hydrateWidgetCache();
     prefsReady = true;
     createChartInstance();
     void bootPhoenixMarketData();
-    void refreshEdgeModules();
-    void initializePrivyAuth().then(() => refreshEdgeModules());
+    // Boot dedupe: warm panels defer the edge fetch burst until the stream
+    // is live (or 3s), and the post-Privy rerun only fires when auth
+    // actually changed the token — cold unauthenticated boots used to fetch
+    // the whole panel set twice plus a third AI burst from a 4s timer.
+    if (panelsWarm) kickEdgeModulesWhenWarm();
+    else void refreshEdgeModules();
+    void initializePrivyAuth().then(async () => {
+      const token = (await activePrivyAccessToken()) ?? null;
+      if (lastEdgeRunToken === undefined || token !== lastEdgeRunToken) {
+        void refreshEdgeModules();
+      }
+    });
     void loadSpotAssets();
-    window.setTimeout(() => void refreshAiReads(), 4_000);
 
     const timers = [
       window.setInterval(() => {
@@ -1032,21 +1047,48 @@
 
   async function bootPhoenixMarketData(): Promise<void> {
     streamHealth = "connecting";
+    // Warm-cache fast path: hydrateWidgetCache already restored the market
+    // catalog (24h max age). When it knows the selected symbol, connect NOW —
+    // the WS handshake stops waiting behind two serial HTTPS round-trips —
+    // and refresh the catalog concurrently, reconciling only if the symbol
+    // vanished (rare: slug-stability invariant).
+    const hydrated = markets.find(
+      (market) =>
+        market.symbol === selectedSymbol && market.marketStatus === "active",
+    );
+    if (hydrated) {
+      void switchPhoenixMarket(selectedSymbol);
+      void refreshDailyStats();
+      void probeRpc();
+      try {
+        markets = await fetchPhoenixMarkets();
+        if (!markets.some((market) => market.symbol === selectedSymbol)) {
+          await selectDefaultMarket();
+        }
+      } catch {
+        // catalog refresh failed — the hydrated catalog stands, stream is up
+      }
+      return;
+    }
     try {
       markets = await fetchPhoenixMarkets();
       void refreshDailyStats();
       void probeRpc();
-      const defaultMarket =
-        markets.find((market) => market.symbol === selectedSymbol) ??
-        markets.find((market) => market.symbol === DEFAULT_PHOENIX_SYMBOL) ??
-        markets.find((market) => market.marketStatus === "active") ??
-        markets[0];
-      selectedSymbol = defaultMarket?.symbol ?? DEFAULT_PHOENIX_SYMBOL;
-      await switchPhoenixMarket(selectedSymbol);
+      await selectDefaultMarket();
     } catch {
       streamHealth = "offline";
       marketSourceLabel = "Phoenix Perps unavailable";
     }
+  }
+
+  async function selectDefaultMarket(): Promise<void> {
+    const defaultMarket =
+      markets.find((market) => market.symbol === selectedSymbol) ??
+      markets.find((market) => market.symbol === DEFAULT_PHOENIX_SYMBOL) ??
+      markets.find((market) => market.marketStatus === "active") ??
+      markets[0];
+    selectedSymbol = defaultMarket?.symbol ?? DEFAULT_PHOENIX_SYMBOL;
+    await switchPhoenixMarket(selectedSymbol);
   }
 
   async function switchPhoenixMarket(symbol: string): Promise<void> {
@@ -1082,21 +1124,38 @@
     }
     marketSourceLabel = `Phoenix Perps ${symbol}`;
 
+    // WS first: the handshake (first live quote) no longer waits behind the
+    // candle-history round-trip. Ticks that land while REST is in flight go
+    // through the upsert into the cached/empty series; the snapshot merge
+    // below keeps them instead of blind-replacing.
+    const streamStartedAt = Date.now();
+    startPhoenixStream(symbol);
+
     try {
       const snapshot = await fetchPhoenixInitialMarketData(
         symbol,
         selectedTimeframe,
       );
-      latestPrice = snapshot.latestPrice;
-      lastMarketUpdate = snapshot.lastMarketUpdate;
-      chartPoints = snapshot.chartPoints;
+      const historyEnd = snapshot.chartPoints.at(-1)?.ts ?? 0;
+      // Live candles beyond the history window survive the merge; the live
+      // price stamp wins only when a tick actually arrived after connect
+      // (cache paints carry historical stamps, always older).
+      const liveTail = chartPoints.filter((point) => point.ts > historyEnd);
+      const liveTicked =
+        lastMarketUpdate !== null && lastMarketUpdate >= streamStartedAt;
+      chartPoints = liveTail.length
+        ? [...snapshot.chartPoints, ...liveTail]
+        : snapshot.chartPoints;
+      if (!liveTicked) {
+        latestPrice = snapshot.latestPrice;
+        lastMarketUpdate = snapshot.lastMarketUpdate;
+      }
       setChartData();
       if (tradeMode === "perps" && (!cached || !cached.length)) {
         setVisibleCandleRange(visibleCandleCount);
       }
       marketSourceLabel = `${snapshot.source.provider} ${snapshot.source.symbol}`;
       streamHealth = "live";
-      startPhoenixStream(symbol);
     } catch {
       streamHealth = latestPrice ? "stale" : "offline";
     }
@@ -1215,10 +1274,26 @@
     }
   }
 
+  // undefined = never ran this session; null = ran unauthenticated.
+  let lastEdgeRunToken: string | null | undefined = undefined;
+
+  /** Deferred first edge run for warm boots: stream live or 3s, whichever first. */
+  function kickEdgeModulesWhenWarm(): void {
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      if (streamHealth === "live" || Date.now() - started >= 3_000) {
+        window.clearInterval(timer);
+        // The post-Privy path may have run meanwhile — never double-fetch.
+        if (lastEdgeRunToken === undefined) void refreshEdgeModules();
+      }
+    }, 250);
+  }
+
   async function refreshEdgeModules(): Promise<void> {
     edgeSource = edgeApiBase() || "not configured";
     edgeStatus = "loading";
     const accessToken = await activePrivyAccessToken();
+    lastEdgeRunToken = accessToken ?? null;
     const now = Date.now();
     const [macro, etf, stablecoin, rates, oil] = await Promise.all([
       fetchMacroSignalsRows(accessToken),
@@ -1336,7 +1411,9 @@
     ideas?: string;
   };
 
-  function hydrateWidgetCache(): void {
+  /** Restores cached widgets; returns true when fresh panels were painted. */
+  function hydrateWidgetCache(): boolean {
+    let panelsWarm = false;
     const panels = swrRead<{
       macro: DataPanel;
       fred: DataPanel;
@@ -1345,6 +1422,7 @@
       oil: DataPanel;
     }>(CACHE_PANELS, CACHE_MAX_AGE);
     if (panels) {
+      panelsWarm = true;
       macroPanel = panels.macro ?? macroPanel;
       fredPanel = panels.fred ?? fredPanel;
       etfPanel = panels.etf ?? etfPanel;
@@ -1369,6 +1447,7 @@
       if (reads.event) eventRead = { phase: "ready", text: reads.event };
       if (reads.ideas) ideasRead = { phase: "ready", text: reads.ideas };
     }
+    return panelsWarm;
   }
 
   function persistPanelCache(): void {
@@ -1709,11 +1788,9 @@
     if (!address) throw new Error("wallet-not-connected");
     const amount = quote.inSol;
     const base64 = await getJupiterSwapTransaction(quote.raw, address);
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-    const transaction = VersionedTransaction.deserialize(bytes);
-    const connection = new Connection(solanaRpcUrl(), "confirmed");
+    const trade = await tradeModule();
+    const transaction = trade.deserializeBase64Tx(base64);
+    const connection = trade.createSolanaConnection(solanaRpcUrl());
     const signature = await simulateConfirmAndSend(transaction, connection, {
       title: "Swap SOL to USDC",
       details: [
@@ -1903,11 +1980,9 @@
     $spotQuoteError = "";
     try {
       const base64 = await getSpotSwapTransaction($spotQuote.raw, address);
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-      const transaction = VersionedTransaction.deserialize(bytes);
-      const connection = new Connection(solanaRpcUrl(), "confirmed");
+      const trade = await tradeModule();
+      const transaction = trade.deserializeBase64Tx(base64);
+      const connection = trade.createSolanaConnection(solanaRpcUrl());
       spotSignature = await simulateConfirmAndSend(transaction, connection, {
         title: `${$spotSide === "buy" ? "Buy" : "Sell"} ${asset.symbol}`,
         details: [
@@ -1954,7 +2029,7 @@
     if (!authority || onboardedAddress === authority) return;
     onboardedAddress = authority;
     try {
-      const access = await checkPhoenixAccess(authority);
+      const access = await (await tradeModule()).checkPhoenixAccess(authority);
       phoenixWhitelisted = access.whitelisted;
     } catch {
       phoenixWhitelisted = null;
@@ -1965,7 +2040,7 @@
         window.localStorage.getItem(ONBOARD_KEY) ?? "[]",
       ) as string[];
       if (done.includes(authority)) return;
-      const result = await activatePhoenixReferral(
+      const result = await (await tradeModule()).activatePhoenixReferral(
         authority,
         solanaRpcUrl(),
         signSolanaTransaction,
@@ -1995,9 +2070,10 @@
       // trader PDA reflects a deposit the moment it confirms, while the
       // Phoenix indexer lags — without the overlay, "Deposit first" kept
       // showing after a successful deposit.
+      const trade = await tradeModule();
       const [state, chainCollateralUsd] = await Promise.all([
-        fetchPhoenixTraderState(authority),
-        fetchOnChainCollateralUsd(solanaRpcUrl(), authority),
+        trade.fetchPhoenixTraderState(authority),
+        trade.fetchOnChainCollateralUsd(solanaRpcUrl(), authority),
       ]);
       if (chainCollateralUsd !== null) {
         state.registered = true;
@@ -2027,7 +2103,7 @@
     stageKey?: string,
   ): Promise<string> {
     const { transaction, connection, latestBlockhash } =
-      await buildSignableTransaction(
+      await (await tradeModule()).buildSignableTransaction(
         solanaRpcUrl(),
         phoenixAuthority,
         instructions,
@@ -2193,7 +2269,8 @@
         const valid = side === "bid" ? stopLossPrice < refPrice : stopLossPrice > refPrice;
         if (!valid) throw new Error(`Stop loss must be ${side === "bid" ? "below" : "above"} entry`);
       }
-      const registerIxs = await ensureTraderRegisteredIxs(
+      const trade = await tradeModule();
+      const registerIxs = await trade.ensureTraderRegisteredIxs(
         solanaRpcUrl(),
         phoenixAuthority,
         phoenixTrader?.registered ?? false,
@@ -2212,7 +2289,7 @@
         slippageBps: preview.slippageBps,
         estLiqPrice: preview.liqPrice,
       });
-      const plan = await buildPlaceOrderPlan({
+      const plan = await trade.buildPlaceOrderPlan({
         authority: phoenixAuthority,
         symbol,
         side,
@@ -2302,7 +2379,7 @@
     phoenixActionRetry = null;
     const preFingerprint = snapshotFingerprint();
     try {
-      const plan = await buildPlaceOrderPlan({
+      const plan = await (await tradeModule()).buildPlaceOrderPlan({
         authority: phoenixAuthority,
         symbol,
         side: size > 0 ? "ask" : "bid",
@@ -2398,7 +2475,7 @@
     }
     let size = position.size * fraction;
     try {
-      const exchange = await fetchExchangeConfig();
+      const exchange = await (await tradeModule()).fetchExchangeConfig();
       const decimals =
         exchange.markets.find((market) => market.symbol === position.symbol)
           ?.baseLotsDecimals ?? 0;
@@ -2452,7 +2529,7 @@
     phoenixActionRetry = null;
     const preFingerprint = snapshotFingerprint();
     try {
-      const instructions = await buildCancelAllIxs(phoenixAuthority, symbol, side);
+      const instructions = await (await tradeModule()).buildCancelAllIxs(phoenixAuthority, symbol, side);
       lastTradeSignature = await signAndSendPhoenixIxs(
         instructions,
         {
@@ -2499,7 +2576,7 @@
             (position) => position.symbol === order.symbol,
           )
         : undefined;
-      const instructions = await buildCancelSingleOrderIxs(phoenixAuthority, {
+      const instructions = await (await tradeModule()).buildCancelSingleOrderIxs(phoenixAuthority, {
         symbol: order.symbol,
         side: order.side,
         price: order.price,
@@ -2642,7 +2719,7 @@
     const preFingerprint = snapshotFingerprint();
     const liqDistBefore = liqDistancePctOf(position);
     try {
-      const instructions = await buildAddIsolatedMarginIxs(
+      const instructions = await (await tradeModule()).buildAddIsolatedMarginIxs(
         phoenixAuthority,
         position,
         amount,
@@ -2756,9 +2833,10 @@
         positionCount: positions.length,
         symbols: positions.map((position) => position.symbol),
       });
+      const trade = await tradeModule();
       const plans = await Promise.all(
         positions.map((position) =>
-          buildPlaceOrderPlan({
+          trade.buildPlaceOrderPlan({
             authority: phoenixAuthority,
             symbol: position.symbol,
             side: position.size > 0 ? "ask" : "bid",
@@ -2842,15 +2920,16 @@
     collateralError = "";
     collateralSignature = "";
     try {
-      const registerIxs = await ensureTraderRegisteredIxs(
+      const trade = await tradeModule();
+      const registerIxs = await trade.ensureTraderRegisteredIxs(
         solanaRpcUrl(),
         phoenixAuthority,
         phoenixTrader?.registered ?? false,
       );
       const instructions =
         direction === "deposit"
-          ? await buildDepositIxs(phoenixAuthority, amount)
-          : await buildWithdrawIxs(phoenixAuthority, amount);
+          ? await trade.buildDepositIxs(phoenixAuthority, amount)
+          : await trade.buildWithdrawIxs(phoenixAuthority, amount);
       collateralSignature = await signAndSendPhoenixIxs(
         [...(direction === "deposit" ? registerIxs : []), ...instructions],
         {
@@ -3037,7 +3116,11 @@
     lwChart.subscribeCrosshairMove(onCrosshairMove);
     setChartData();
     // Series was just (re)created — re-draw liq lines for open positions.
+    // The old line handles died with the old series; reset the signature
+    // memo so the refresh below applies unconditionally.
     liqLines = [];
+    chartLineFullSig = null;
+    chartLineStructSig = null;
     refreshChartLines(
       enrichedPositions,
       perpOpenOrders,
@@ -3045,6 +3128,7 @@
       $chartLinePrefs,
       selectedSymbol,
       tradeMode,
+      lineLabelTick,
     );
   }
 
@@ -3329,8 +3413,16 @@
   // ── Chart overlay lines ────────────────────────────────────────────
   // Your live trading state drawn on the chart: position entry (with live
   // uPnL in the label), TP/SL triggers, liq estimate, open orders, armed
-  // alerts. Toggleable per group, persisted per device. Lines are cheap to
-  // rebuild wholesale; labels refresh on a 2s tick.
+  // alerts. Toggleable per group, persisted per device.
+  //
+  // Signature memo: enrichedPositions gets a fresh array identity on every
+  // WS event that touches price, so this runs at book-update rate — but
+  // tearing down and recreating every price line invalidates the pane per
+  // line. Only touch the series when the rendered output would change.
+  // Structural changes (position open/close, order place/cancel, alert
+  // arm/fire, prefs, symbol, mode, prices) apply immediately; a change to
+  // the uPnL entry-label alone waits for the 2 s lineLabelTick — the label
+  // cadence that tick dependency always intended.
   function refreshChartLines(
     positions: PhoenixPosition[],
     orders: PhoenixOpenOrder[],
@@ -3338,21 +3430,55 @@
     prefs: { pos: boolean; tpsl: boolean; orders: boolean; alerts: boolean },
     symbol: string,
     mode: "perps" | "spot",
+    labelTick: number,
   ): void {
     const series = candleSeries;
     if (!series) return;
-    for (const line of liqLines) series.removePriceLine(line);
-    liqLines = [];
-    for (const spec of buildChartLineSpecs(
+    const specs = buildChartLineSpecs(
       positions,
       orders,
       armed,
       prefs,
       symbol,
       mode,
-    )) {
-      liqLines.push(series.createPriceLine(spec));
+    );
+    const fullSig = chartLineSignature(specs);
+    if (fullSig === chartLineFullSig) return; // nothing rendered changed
+    // The only tick-varying rendered value is the uPnL suffix in the entry
+    // label (already rounded to label precision inside the spec title).
+    // Rebuild the specs with uPnL blanked to detect label-only drift
+    // without duplicating the builder's filtering rules.
+    const structSig = chartLineSignature(
+      buildChartLineSpecs(
+        positions.map((position) =>
+          position.unrealizedPnl === null
+            ? position
+            : { ...position, unrealizedPnl: null },
+        ),
+        orders,
+        armed,
+        prefs,
+        symbol,
+        mode,
+      ),
+    );
+    if (structSig === chartLineStructSig && labelTick === chartLineTick) {
+      return; // uPnL label drift only — hold until the next 2 s tick
     }
+    for (const line of liqLines) series.removePriceLine(line);
+    liqLines = [];
+    for (const spec of specs) liqLines.push(series.createPriceLine(spec));
+    chartLineFullSig = fullSig;
+    chartLineStructSig = structSig;
+    chartLineTick = labelTick;
+  }
+
+  function chartLineSignature(specs: PriceLineSpec[]): string {
+    let sig = "";
+    for (const spec of specs) {
+      sig += `${spec.price}|${spec.color}|${spec.lineWidth}|${spec.lineStyle}|${spec.axisLabelVisible}|${spec.title}\n`;
+    }
+    return sig;
   }
 
   // ── Journal ────────────────────────────────────────────────────────
@@ -3412,12 +3538,8 @@
   }
 
   // ── Spot limit orders (Jupiter Trigger) ───────────────────────────
-  function deserializeBase64Tx(base64: string): VersionedTransaction {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-    return VersionedTransaction.deserialize(bytes);
-  }
+  // (base64 tx deserialization lives in $lib/phoenix-trade behind the lazy
+  // web3 boundary — see tradeModule above.)
 
   async function refreshTriggerOrders(): Promise<void> {
     const address = $privyAuth.walletAddress;
@@ -3459,9 +3581,10 @@
               takingAmountAtoms: usdcToAtoms(amount * limit),
             };
       const { transaction } = await createTriggerOrder({ maker: address, ...params });
-      const connection = new Connection(solanaRpcUrl(), "confirmed");
+      const trade = await tradeModule();
+      const connection = trade.createSolanaConnection(solanaRpcUrl());
       spotSignature = await simulateConfirmAndSend(
-        deserializeBase64Tx(transaction),
+        trade.deserializeBase64Tx(transaction),
         connection,
         {
           title: `Place limit ${$spotSide} ${spotAsset.symbol}`,
@@ -3498,9 +3621,10 @@
     triggerBusy = true;
     try {
       const transaction = await cancelTriggerOrder(address, orderKey);
-      const connection = new Connection(solanaRpcUrl(), "confirmed");
+      const trade = await tradeModule();
+      const connection = trade.createSolanaConnection(solanaRpcUrl());
       await simulateConfirmAndSend(
-        deserializeBase64Tx(transaction),
+        trade.deserializeBase64Tx(transaction),
         connection,
         {
           title: "Cancel spot limit order",
@@ -4268,7 +4392,6 @@
       spotSymbol={spotAsset?.symbol ?? null}
       {tradeMode}
       {eventRead}
-      {nowMs}
     />
 
     <section

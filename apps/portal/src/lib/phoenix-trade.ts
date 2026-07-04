@@ -405,6 +405,21 @@ export async function buildSignableTransaction(
   };
 }
 
+// Connection construction lives here — NOT in solana-rpc.ts, which must stay
+// free of @solana/web3.js so the eager page graph never pulls it (the page
+// reaches this module only through its lazy import boundary).
+export function createSolanaConnection(rpcUrl: string): Connection {
+  return new Connection(rpcUrl, "confirmed");
+}
+
+// Decodes a base64-serialized transaction (Jupiter swap / Trigger flows).
+export function deserializeBase64Tx(base64: string): VersionedTransaction {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return VersionedTransaction.deserialize(bytes);
+}
+
 async function postIx(
   path: string,
   body: Record<string, unknown>,
