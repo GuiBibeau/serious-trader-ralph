@@ -8317,14 +8317,15 @@
   }
 
   /* Desktop stack: ladder on top, ticket pinned below — both always live.
-     The stack's floor holds ~8 levels a side (proportional on cramped
-     heights); the ticket takes what's left, scrolling internally under
-     its sticky actions footer. */
+     The TICKET is the priority element: it keeps a floor tall enough that
+     side/size/TP-SL never hide behind the ladder; the ladder takes what's
+     left and scrolls its own depth on cramped heights. Floors sum < 90%,
+     so the pair never overflows the panel. */
   .book-stack {
     display: flex;
     flex: 1 1 0;
     flex-direction: column;
-    min-height: min(24rem, 55%);
+    min-height: min(12rem, 30%);
   }
 
   .book-stack .tape {
@@ -8334,6 +8335,7 @@
 
   .orderbook-panel .panel-ticket.stacked {
     flex: 0 1 auto;
+    min-height: min(26rem, 56%);
     border-top: 1px solid var(--line-soft);
   }
 
