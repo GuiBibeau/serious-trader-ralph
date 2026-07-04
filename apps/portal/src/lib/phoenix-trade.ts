@@ -8,16 +8,21 @@
 // every action is authorized purely by the wallet signature.
 
 import {
+  buildCancelOrdersByIdIx,
+  buildCancelStopLossIx,
   buildCancelUpToIx,
   buildDepositIxsResolved,
   buildRegisterTraderIx,
+  buildTransferCollateralIx,
   buildWithdrawIxsResolved,
   createPhoenixClient,
   decodeTrader,
   getEmberStateAddress,
   getEmberVaultAddress,
+  getPhoenixStopLossAddress,
   getTraderAddresses,
   MarginType,
+  Direction as RiseDirection,
   Side as RiseSide,
   resolvePhoenixInstructionAddresses,
   toMaxPositions,
@@ -69,6 +74,10 @@ export type PhoenixOpenOrder = {
   remaining: number | null;
   orderSequenceNumber: string;
   isStopLoss: boolean;
+  /** Trigger direction bit for stop-loss rows (set = fires when price rises
+   * above the trigger, per the SDK's StopLosses decoder) — picks which
+   * StopLosses slot a single-order cancel targets. */
+  isStopLossDirection: boolean;
 };
 
 export type PhoenixTraderState = {
@@ -107,6 +116,10 @@ type ExchangeMarket = {
   symbol: string;
   marketPubkey: string;
   splinePubkey: string;
+  /** Numeric asset id — keys per-asset PDAs like the StopLosses account. */
+  assetId: number;
+  /** Quote lots per base lot per tick — converts UI prices back to ticks. */
+  tickSize: number;
   /** Base lots are 10^-decimals base units (COPPER: 1 → lot = 0.1). */
   baseLotsDecimals: number;
 };
@@ -131,6 +144,8 @@ export async function fetchExchangeConfig(): Promise<ExchangeConfig> {
       symbol: market.symbol,
       marketPubkey: market.marketPubkey,
       splinePubkey: market.splinePubkey,
+      assetId: Number(market.assetId ?? 0),
+      tickSize: Number(market.tickSize ?? 0),
       baseLotsDecimals: Number(market.baseLotsDecimals ?? 0),
     })),
   };
@@ -270,6 +285,7 @@ export async function fetchPhoenixTraderState(
             remaining: tokenAmount(order.tradeSizeRemaining),
             orderSequenceNumber: String(order.orderSequenceNumber ?? ""),
             isStopLoss: order.isStopLoss === true,
+            isStopLossDirection: order.isStopLossDirection === true,
           });
         }
       }
@@ -603,7 +619,10 @@ export async function buildPlaceOrderPlan(
     ...(input.orderType === "limit" && input.price
       ? { price: input.price }
       : {}),
-    ...(input.marginUsd && input.marginUsd > 0
+    // A reduce-only order can't open new exposure, so funding fresh isolated
+    // margin alongside it would just strand collateral in the child
+    // subaccount — drop the transfer even if a marginUsd slips through.
+    ...(input.marginUsd && input.marginUsd > 0 && !input.reduceOnly
       ? { transferAmount: Math.round(input.marginUsd * 10 ** USDC_DECIMALS) }
       : {}),
     ...(Object.keys(tpSl).length > 0 ? { tpSl } : {}),
@@ -652,6 +671,182 @@ export async function buildCancelAllIxs(
     tickLimit: null,
   } as unknown as Cancel);
   return [kitIxToWeb3(ix as unknown as KitInstruction)];
+}
+
+// A resting order's FIFO id embeds its price level in ticks and the program
+// walks that level looking for the sequence number. Orders always sit on the
+// tick grid, so round — flooring float noise from the API's UI price could
+// land one tick low and miss the order entirely.
+function priceToTicks(priceUsd: number, market: ExchangeMarket): bigint {
+  if (!market.tickSize) {
+    throw new Error(`phoenix-missing-tick-size-${market.symbol}`);
+  }
+  return BigInt(
+    Math.round(
+      (priceUsd * 10 ** USDC_DECIMALS) /
+        (market.tickSize * 10 ** market.baseLotsDecimals),
+    ),
+  );
+}
+
+/** PhoenixOpenOrder rows satisfy this directly; stop-loss rows should also
+ * carry the owning position's subaccount (triggers live on the child trader
+ * account, not the parent that regular book orders rest under). */
+export type CancelPhoenixOrderInput = {
+  symbol: string;
+  side: PhoenixSide;
+  /** Book price in UI units — needed to rebuild the FIFO order id. */
+  price: number | null;
+  orderSequenceNumber: string;
+  isStopLoss: boolean;
+  isStopLossDirection?: boolean;
+  traderPdaIndex?: number;
+  subaccountIndex?: number;
+};
+
+export async function buildCancelSingleOrderIxs(
+  authority: string,
+  order: CancelPhoenixOrderInput,
+): Promise<TransactionInstruction[]> {
+  const exchange = await fetchExchangeConfig();
+  const market = exchange.markets.find(
+    (entry) => entry.symbol === order.symbol,
+  );
+  if (!market) throw new Error(`phoenix-unknown-market-${order.symbol}`);
+  const addresses = await getTraderAddresses(
+    authority as never,
+    exchange.keys.canonicalMint as never,
+    order.traderPdaIndex ?? 0,
+    order.subaccountIndex ?? 0,
+  );
+  if (order.isStopLoss) {
+    // TP/SL triggers never rest on the book: they live in a per-asset
+    // StopLosses PDA holding one trigger per direction, so the cancel
+    // addresses a direction rather than an order id. The view's direction
+    // bit follows the SDK's StopLosses decoder: set = GreaterThan.
+    type CancelSl = Parameters<typeof buildCancelStopLossIx>[0];
+    const stopLossAccount = await getPhoenixStopLossAddress({
+      traderAccount: addresses.traderAccount,
+      assetId: BigInt(market.assetId),
+    });
+    const ix = buildCancelStopLossIx({
+      funder: authority,
+      traderWallet: authority,
+      traderAccount: addresses.traderAccount,
+      stopLossAccount,
+      executionDirection: order.isStopLossDirection
+        ? RiseDirection.GreaterThan
+        : RiseDirection.LessThan,
+    } as unknown as CancelSl);
+    return [kitIxToWeb3(ix as unknown as KitInstruction)];
+  }
+  // Both fields come from the trader view; refuse to guess rather than risk
+  // cancelling a neighbouring order at the wrong price level.
+  if (order.price === null || !/^\d+$/.test(order.orderSequenceNumber)) {
+    throw new Error(`phoenix-cancel-unidentifiable-${order.symbol}`);
+  }
+  type CancelById = Parameters<typeof buildCancelOrdersByIdIx>[0];
+  const ix = buildCancelOrdersByIdIx({
+    traderWallet: authority,
+    traderAccount: addresses.traderAccount,
+    perpAssetMap: exchange.keys.perpAssetMap,
+    globalTraderIndex: exchange.keys.globalTraderIndex,
+    activeTraderBuffer: exchange.keys.activeTraderBuffer,
+    orderbook: market.marketPubkey,
+    splineCollection: market.splinePubkey,
+    orderIds: [
+      {
+        // null pointer = let the program search the price level.
+        nodePointer: null,
+        orderId: {
+          priceInTicks: priceToTicks(order.price, market),
+          orderSequenceNumber: BigInt(order.orderSequenceNumber),
+        },
+      },
+    ],
+  } as unknown as CancelById);
+  return [kitIxToWeb3(ix as unknown as KitInstruction)];
+}
+
+// ── Position TP/SL ───────────────────────────────────────────────────
+
+export type PhoenixTpSlUpdate = {
+  /** USD trigger to set/replace; null removes it; undefined leaves it be. */
+  takeProfitPrice?: number | null;
+  stopLossPrice?: number | null;
+};
+
+// Edits a live position's TP/SL triggers. A trigger's StopLosses slot is
+// fully determined by position direction — a long's TP fires when price
+// rises (greater_than) and its SL when it falls (less_than); shorts are
+// mirrored — and the chain keeps one trigger per direction per asset. The
+// program has no in-place replace, so "set" clears the occupied slot then
+// places, with both halves riding the caller's single atomic transaction.
+export async function buildSetPositionTpSlIxs(
+  authority: string,
+  position: PhoenixPosition,
+  opts: PhoenixTpSlUpdate,
+): Promise<TransactionInstruction[]> {
+  const client = createPhoenixClient();
+  try {
+    const orders = client.api.orders();
+    const scope = {
+      authority,
+      traderPdaIndex: position.traderPdaIndex,
+      traderSubaccountIndex: position.subaccountIndex,
+      isIsolated:
+        position.traderPdaIndex !== 0 || position.subaccountIndex !== 0,
+      symbol: position.symbol,
+    };
+    const long = position.size > 0;
+    // Triggers close the position, so they trade opposite to it.
+    const side: PhoenixSide = long ? "ask" : "bid";
+    const updates = [
+      {
+        kind: "tp" as const,
+        next: opts.takeProfitPrice,
+        current: position.takeProfitPrice,
+      },
+      {
+        kind: "sl" as const,
+        next: opts.stopLossPrice,
+        current: position.stopLossPrice,
+      },
+    ];
+    const built: unknown[] = [];
+    for (const update of updates) {
+      if (update.next === undefined) continue;
+      const direction: "greater_than" | "less_than" =
+        (update.kind === "tp") === long ? "greater_than" : "less_than";
+      // Only clear slots we know are occupied — cancelling an empty slot
+      // would fail the whole transaction.
+      if (update.current !== null) {
+        built.push(
+          ...(await orders.cancelStopLossOrder({
+            ...scope,
+            executionDirection: direction,
+          })),
+        );
+      }
+      if (update.next !== null) {
+        // Trigger prices go up in USD like the order-time tpSl config; the
+        // API picks the venue defaults (TP executes as limit at the
+        // trigger, SL as IOC with capped slippage).
+        built.push(
+          ...(await orders.placeStopLossOrder({
+            ...scope,
+            side,
+            ...(update.kind === "tp"
+              ? { takeProfitTriggerPrice: update.next }
+              : { stopLossTriggerPrice: update.next }),
+          })),
+        );
+      }
+    }
+    return built.map((ix) => kitIxToWeb3(ix as KitInstruction));
+  } finally {
+    client.dispose();
+  }
 }
 
 // ── Collateral: deposit / withdraw ───────────────────────────────────
@@ -740,4 +935,40 @@ export async function buildWithdrawIxs(
   return result.instructions.map((ix) =>
     kitIxToWeb3(ix as unknown as KitInstruction),
   );
+}
+
+// Tops up an isolated position's margin: moves free cross collateral from
+// the parent subaccount (0/0) into the child holding the position. More
+// child collateral pushes the liquidation price further from mark.
+export async function buildAddIsolatedMarginIxs(
+  authority: string,
+  position: PhoenixPosition,
+  amountUsd: number,
+): Promise<TransactionInstruction[]> {
+  const exchange = await fetchExchangeConfig();
+  type Transfer = Parameters<typeof buildTransferCollateralIx>[0];
+  const [parent, child] = await Promise.all([
+    getTraderAddresses(
+      authority as never,
+      exchange.keys.canonicalMint as never,
+      0,
+      0,
+    ),
+    getTraderAddresses(
+      authority as never,
+      exchange.keys.canonicalMint as never,
+      position.traderPdaIndex,
+      position.subaccountIndex,
+    ),
+  ]);
+  const ix = buildTransferCollateralIx({
+    trader: authority,
+    srcTraderAccount: parent.traderAccount,
+    dstTraderAccount: child.traderAccount,
+    perpAssetMap: exchange.keys.perpAssetMap,
+    globalTraderIndex: exchange.keys.globalTraderIndex,
+    activeTraderBuffer: exchange.keys.activeTraderBuffer,
+    amount: BigInt(Math.round(amountUsd * 10 ** USDC_DECIMALS)),
+  } as unknown as Transfer);
+  return [kitIxToWeb3(ix as unknown as KitInstruction)];
 }

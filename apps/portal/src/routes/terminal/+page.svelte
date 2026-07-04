@@ -16,8 +16,12 @@
   import { track } from "$lib/telemetry";
   import {
     chartLinePrefs,
+    equityBaselines,
+    equityHistory,
     freshSnapshot,
+    recordEquitySample,
     recordSnapshot,
+    shiftEquityBaseline,
     traderSnapshots,
   } from "$lib/phoenix-cache";
   import {
@@ -105,13 +109,16 @@
   } from "$lib/spot";
   import {
     activatePhoenixReferral,
+    buildAddIsolatedMarginIxs,
     buildCancelAllIxs,
+    buildCancelSingleOrderIxs,
     buildDepositIxs,
     buildPlaceOrderPlan,
     buildSignableTransaction,
     buildWithdrawIxs,
     checkPhoenixAccess,
     ensureTraderRegisteredIxs,
+    fetchExchangeConfig,
     fetchOnChainCollateralUsd,
     fetchPhoenixTraderState,
     PHOENIX_REFERRAL_CODE,
@@ -161,6 +168,9 @@
   const DEFAULT_VISIBLE_CANDLES = 150;
   const MAX_VISIBLE_CANDLES = 180;
   const BOOK_LADDER_LEVELS = 10;
+  // Stacked desktop shares the panel with the ticket — cap the ladder so
+  // both stay readable; the narrow-viewport tabs keep the full depth.
+  const BOOK_LADDER_LEVELS_STACKED = 8;
   const UP_COLOR = colors.up;
   const DOWN_COLOR = colors.down; // was #ff5a5f — unified to the token red
   const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
@@ -184,7 +194,6 @@
   let marketStats: PhoenixMarketStats | null = null;
   let hoveredCandle: MarketPoint | null = null;
   let phoenixStream: PhoenixWsHandle | null = null;
-  let statusMessage = "loading-phoenix-perps-feed";
   let streamHealth: "connecting" | "live" | "stale" | "offline" =
     "connecting";
   let latestPrice: number | null = null;
@@ -271,8 +280,24 @@
   $: phoenixTrader = phoenixAuthority
     ? freshSnapshot($traderSnapshots, phoenixAuthority)
     : null;
-  let phoenixBusy = false;
+  // Per-action busy keys (`order:SYM`, `close:SYM:IDX`, `cancel:SYM:SIDE`) so
+  // a confirming open never locks Close/Cancel — confirmTransaction can take
+  // ~60s under congestion. Always REASSIGNED: mutating the Set in place is
+  // invisible to legacy reactivity.
+  let phoenixBusyKeys: Set<string> = new Set();
+  // Tx lifecycle per in-flight action (same keys), plus the latest transition
+  // for the footer status line.
+  type TxStage = "idle" | "simulating" | "signing" | "confirming" | "confirmed";
+  let txStages: Record<string, { stage: TxStage; sinceMs: number }> = {};
+  let lastTx: {
+    key: string;
+    label: string;
+    stage: TxStage | "failed";
+    sinceMs: number;
+  } | null = null;
   let phoenixActionError = "";
+  let phoenixActionErrorDetail = ""; // raw error, surfaced via title attribute
+  let phoenixActionRetry: (() => void) | null = null;
   let lastTradeSignature = "";
   let depositAmount = "";
   let withdrawAmount = "";
@@ -309,10 +334,23 @@
   let tradeLimitPrice = "";
   let tradeTakeProfit = "";
   let tradeStopLoss = "";
+  // Reduce-only: sell into an existing position instead of opening a second
+  // isolated one with fresh margin. Only offered while a position exists.
+  let tradeReduceOnly = false;
   // Right-rail tab: order book vs inline trade ticket.
   // Trade is the default right-rail mode — trading is the product; the
   // book is one tab away. Deep links (?tab=book) still override.
   let bookTab: "book" | "trade" = "trade";
+  // Desktop (>1100px) stacks ladder + ticket in the rail instead of tabs —
+  // reading the book never costs the ticket. Tracked from the same
+  // breakpoint where the grid collapses, so markup and CSS agree. The tape
+  // shares the ladder slot up top (all three don't fit vertically).
+  let stackedBook = false;
+  let bookFeed: "ladder" | "tape" = "ladder";
+  // Measured sticky-chrome heights: the market rail pins below the topbar
+  // and jump-to-section targets land below both.
+  let topbarHeight = 0;
+  let marketRailHeight = 0;
 
   // Spot venue (tokens.xyz catalog + Jupiter execution).
   let tradeMode: "perps" | "spot" = "perps";
@@ -484,8 +522,11 @@
   $: spread = asks[0] && bids[0] ? asks[0].price - bids[0].price : 0;
   $: spreadBps = latestPrice && latestPrice > 0 ? (spread / latestPrice) * 10_000 : 0;
   $: spreadPercent = latestPrice && latestPrice > 0 ? (spread / latestPrice) * 100 : 0;
-  $: visibleAskLevels = asks.slice(0, BOOK_LADDER_LEVELS).reverse();
-  $: visibleBidLevels = bids.slice(0, BOOK_LADDER_LEVELS);
+  $: ladderLevelCap = stackedBook
+    ? BOOK_LADDER_LEVELS_STACKED
+    : BOOK_LADDER_LEVELS;
+  $: visibleAskLevels = asks.slice(0, ladderLevelCap).reverse();
+  $: visibleBidLevels = bids.slice(0, ladderLevelCap);
   $: bookMaxNotional = Math.max(
     1,
     ...visibleAskLevels.map(bookLevelTotalNotional),
@@ -538,7 +579,10 @@
   $: bookLoading = asks.length === 0 || bids.length === 0;
   $: updatedLoading = lastMarketUpdate === null;
   // Perp ticket preview/AI reads run only when a perp ticket is showing.
-  $: ticketActive = tradeOpen || (bookTab === "trade" && tradeMode === "perps");
+  // Desktop stacks the ticket permanently; narrow viewports gate on the tab.
+  $: ticketActive =
+    tradeOpen ||
+    (tradeMode === "perps" && (stackedBook || bookTab === "trade"));
   $: tradePreview = ticketActive
     ? buildTradePreview(
         tradeSide,
@@ -554,7 +598,11 @@
     : null;
   // Funding gate: isolated orders draw margin from the parent Phoenix
   // account, so it must hold enough collateral before placing a trade.
-  $: requiredMarginUsd = tradePreview ? tradePreview.notionalUsd / tradeLeverage : 0;
+  // Reduce-only orders transfer no margin, so they never need funding.
+  $: requiredMarginUsd =
+    tradePreview && !tradeReduceOnly
+      ? tradePreview.notionalUsd / tradeLeverage
+      : 0;
   $: phoenixCollateral = phoenixTrader?.collateralUsd ?? 0;
   $: phoenixStateKnown = phoenixTrader !== null;
   // "Deposit first" is a strong claim: it may only come from a
@@ -619,6 +667,23 @@
     phoenixTotalCollateral > 0
       ? (marginInUseUsd / phoenixTotalCollateral) * 100
       : 0;
+  // ── Day P&L (device-local equity history) ──────────────────────────
+  // Sampled on the trader refresh; baseline = first sample of the UTC day,
+  // shifted by in-app deposits/withdrawals at their confirm sites.
+  $: equityPoints = phoenixAuthority
+    ? $equityHistory[phoenixAuthority] ?? []
+    : [];
+  $: equityValues = equityPoints.map((point) => point.equity);
+  $: equityBaseline = phoenixAuthority
+    ? $equityBaselines[phoenixAuthority] ?? null
+    : null;
+  $: sessionPnlUsd = equityBaseline
+    ? accountEquityUsd - equityBaseline.equity
+    : null;
+  $: sessionPnlPct =
+    equityBaseline && equityBaseline.equity > 0 && sessionPnlUsd !== null
+      ? (sessionPnlUsd / equityBaseline.equity) * 100
+      : null;
   // Market context attached to every money event — the model's "state".
   function marketContext(): Record<string, unknown> {
     return {
@@ -648,6 +713,9 @@
   $: selectedPosition =
     enrichedPositions.find((position) => position.symbol === selectedSymbol) ??
     null;
+  // The checkbox only means something against a live position — drop it the
+  // moment the position is gone (closed, or the ticket switched symbols).
+  $: if (!selectedPosition && tradeReduceOnly) tradeReduceOnly = false;
   $: selectedLiqDistancePct =
     selectedPosition?.liquidationPrice != null && latestPrice
       ? (Math.abs(latestPrice - selectedPosition.liquidationPrice) /
@@ -698,6 +766,10 @@
     slPct !== null && tradePreview
       ? tradePreview.notionalUsd * (slPct / 100) * (tradeSide === "buy" ? 1 : -1)
       : null;
+  // The ticket only blocks on ITS symbol's open — Close/Cancel stay live.
+  $: orderBusyKey = `order:${selectedSymbol}`;
+  $: orderBusy = phoenixBusyKeys.has(orderBusyKey);
+  $: orderStageEntry = txStages[orderBusyKey] ?? null;
 
   // Plain Number()-parseable price string, precision scaled to magnitude.
   function fmtTriggerPrice(value: number): string {
@@ -717,6 +789,166 @@
     if (!triggerRefPrice) return;
     const factor = tradeSide === "buy" ? 1 - pct / 100 : 1 + pct / 100;
     tradeStopLoss = fmtTriggerPrice(triggerRefPrice * factor);
+  }
+
+  // ── Size presets ───────────────────────────────────────────────────
+  // USD mode: % of free collateral × leverage; Max keeps the same $0.01
+  // margin buffer the funding gate tolerates so a Max ticket can't flash
+  // "Deposit first". Risk mode: % of account equity put at risk.
+  const SIZE_CHIP_PCTS = [10, 25, 50];
+  const RISK_CHIP_PCTS = [0.5, 1, 2];
+  // Chip-sized tickets re-follow leverage changes; hand-typed sizes never
+  // move underneath the trader.
+  let sizeSource: "chip" | "manual" = "manual";
+  let sizeChipPct: number | "max" | null = null;
+
+  function chipNotionalUsd(pct: number | "max"): number {
+    const margin =
+      pct === "max"
+        ? Math.max(0, phoenixCollateral - 0.01)
+        : (pct / 100) * phoenixCollateral;
+    return margin * tradeLeverage;
+  }
+
+  function setSizeChip(pct: number | "max"): void {
+    tradeAmount = chipNotionalUsd(pct).toFixed(2);
+    sizeSource = "chip";
+    sizeChipPct = pct;
+  }
+
+  function setRiskChip(pct: number): void {
+    tradeRiskUsd = ((pct / 100) * accountEquityUsd).toFixed(2);
+    sizeSource = "chip";
+    // Risk chips don't depend on leverage — nothing to re-derive later.
+    sizeChipPct = null;
+  }
+
+  $: recomputeChipSize(tradeLeverage);
+  function recomputeChipSize(_leverage: number): void {
+    if (sizeSource !== "chip" || sizeChipPct === null || sizingMode !== "usd") return;
+    tradeAmount = chipNotionalUsd(sizeChipPct).toFixed(2);
+  }
+
+  // ── Keyboard: Enter submits, arrows step ───────────────────────────
+  // Enter-to-submit shares the exact gate that enables each submit button.
+  $: canSubmitPerp =
+    Boolean(phoenixAuthority) &&
+    phoenixStateKnown &&
+    !needsPhoenixFunding &&
+    !orderBusy &&
+    Boolean(tradePreview) &&
+    !walletScreen.flagged;
+  $: canSubmitSpot =
+    Boolean(phoenixAuthority) &&
+    !spotBusy &&
+    !walletScreen.flagged &&
+    (spotOrderType === "limit"
+      ? Number(spotLimitPrice) > 0 && Number(spotAmount) > 0
+      : spotQuote !== null && spotQuoteStatus === "quoted");
+
+  // ── Limit deviation gate ───────────────────────────────────────────
+  // A dropped decimal (2450 instead of 245.0) would otherwise execute in
+  // one click. Crossing the touch is informational only (marketable limits
+  // are a real tactic); >5% from mark arms a two-stage confirm; >25%
+  // blocks outright. Same tiers on the spot limit ticket, against the
+  // catalog price (spot has no live book, so no crossing tier there).
+  $: limitPriceValue = tradeType === "limit" ? Number(tradeLimitPrice) : 0;
+  $: limitDeviationPct =
+    limitPriceValue > 0 && latestPrice
+      ? ((limitPriceValue - latestPrice) / latestPrice) * 100
+      : null;
+  $: limitCrossesBook =
+    limitPriceValue > 0 &&
+    (tradeSide === "buy"
+      ? asks.length > 0 && limitPriceValue >= asks[0].price
+      : bids.length > 0 && limitPriceValue <= bids[0].price);
+  $: limitNeedsConfirm =
+    limitDeviationPct !== null && Math.abs(limitDeviationPct) > 5;
+  $: limitBlocked =
+    limitDeviationPct !== null && Math.abs(limitDeviationPct) > 25;
+  let limitArmedUntil = 0;
+  $: limitArmed = limitNeedsConfirm && nowMs < limitArmedUntil;
+
+  function onPerpSubmitClick(): void {
+    if (!canSubmitPerp || limitBlocked) return;
+    if (limitNeedsConfirm && Date.now() >= limitArmedUntil) {
+      limitArmedUntil = Date.now() + 3_000;
+      return;
+    }
+    limitArmedUntil = 0;
+    void submitPhoenixOrder();
+  }
+
+  $: spotLimitPriceValue = spotOrderType === "limit" ? Number(spotLimitPrice) : 0;
+  $: spotLimitDeviationPct =
+    spotLimitPriceValue > 0 && spotAsset?.price
+      ? ((spotLimitPriceValue - spotAsset.price) / spotAsset.price) * 100
+      : null;
+  $: spotLimitNeedsConfirm =
+    spotLimitDeviationPct !== null && Math.abs(spotLimitDeviationPct) > 5;
+  $: spotLimitBlocked =
+    spotLimitDeviationPct !== null && Math.abs(spotLimitDeviationPct) > 25;
+  let spotLimitArmedUntil = 0;
+  $: spotLimitArmed = spotLimitNeedsConfirm && nowMs < spotLimitArmedUntil;
+
+  function onSpotLimitSubmitClick(): void {
+    if (!canSubmitSpot || spotLimitBlocked) return;
+    if (spotLimitNeedsConfirm && Date.now() >= spotLimitArmedUntil) {
+      spotLimitArmedUntil = Date.now() + 3_000;
+      return;
+    }
+    spotLimitArmedUntil = 0;
+    void submitSpotLimitOrder();
+  }
+
+  function onTicketKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Enter" || !(event.target instanceof HTMLInputElement)) return;
+    event.preventDefault();
+    // Same gate + arm/confirm two-step as the submit button.
+    onPerpSubmitClick();
+  }
+
+  function onSpotTicketKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Enter" || !(event.target instanceof HTMLInputElement)) return;
+    event.preventDefault();
+    if (!canSubmitSpot) return;
+    if (spotOrderType === "limit") onSpotLimitSubmitClick();
+    else void executeSpotSwap();
+  }
+
+  // Arrow keys step numeric ticket inputs (Shift = ×10), clamped at zero.
+  // Price fields step by the formatBookPrice magnitude rule and re-format
+  // via fmtTriggerPrice so the string stays Number()-parseable; USD fields
+  // step $5. Writes back through a real input event so bind:value (and any
+  // oninput side effect, e.g. scheduleSpotQuote) fires.
+  function stepInput(
+    node: HTMLInputElement,
+    params: { kind: "usd" | "price" },
+  ): { update: (next: { kind: "usd" | "price" }) => void; destroy: () => void } {
+    let kind = params.kind;
+    function onKeydown(event: KeyboardEvent): void {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      const current = Number(node.value);
+      const base = Number.isFinite(current) && current > 0 ? current : 0;
+      const unit =
+        kind === "usd" ? 5 : base >= 1_000 ? 1 : base >= 1 ? 0.01 : 0.0001;
+      const delta =
+        unit * (event.shiftKey ? 10 : 1) * (event.key === "ArrowUp" ? 1 : -1);
+      const next = Math.max(0, base + delta);
+      node.value =
+        kind === "price" ? fmtTriggerPrice(next) : String(Number(next.toFixed(2)));
+      node.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    node.addEventListener("keydown", onKeydown);
+    return {
+      update(next: { kind: "usd" | "price" }) {
+        kind = next.kind;
+      },
+      destroy() {
+        node.removeEventListener("keydown", onKeydown);
+      },
+    };
   }
 
   // ── Cross-venue twins: basis between the perp and its spot token ──
@@ -844,6 +1076,9 @@
       screenSort,
       screenHub,
       sizingMode,
+      tradeAmount,
+      tradeRiskUsd,
+      tradeLeverage,
     );
 
   onMount(() => {
@@ -912,10 +1147,19 @@
       }
     };
     document.addEventListener("visibilitychange", onVisible);
+    // Same breakpoint as the grid collapse: desktop stacks ladder + ticket,
+    // narrow keeps the tab UI (matches railTicketUsable()).
+    const stackMq = window.matchMedia("(max-width: 1100px)");
+    stackedBook = !stackMq.matches;
+    const onStackMq = (event: MediaQueryListEvent) => {
+      stackedBook = !event.matches;
+    };
+    stackMq.addEventListener("change", onStackMq);
     return () => {
       phoenixStream?.close();
       window.cancelAnimationFrame(bookFrame);
       document.removeEventListener("visibilitychange", onVisible);
+      stackMq.removeEventListener("change", onStackMq);
       for (const timer of timers) window.clearInterval(timer);
       if (fundsPollTimer !== null) window.clearInterval(fundsPollTimer);
       if (copyResetTimer) clearTimeout(copyResetTimer);
@@ -961,17 +1205,24 @@
         markets[0];
       selectedSymbol = defaultMarket?.symbol ?? DEFAULT_PHOENIX_SYMBOL;
       await switchPhoenixMarket(selectedSymbol);
-    } catch (error) {
+    } catch {
       streamHealth = "offline";
       marketSourceLabel = "Phoenix Perps unavailable";
-      statusMessage =
-        error instanceof Error ? error.message : "phoenix-market-load-failed";
     }
   }
 
   async function switchPhoenixMarket(symbol: string): Promise<void> {
     track("market_switched", { from: selectedSymbol, to: symbol, venue: "perps" });
     if (!symbol) return;
+    // Price-anchored ticket fields are stale on a different market — a SOL
+    // limit at 150 would cross the entire BTC book as taker. Clear them
+    // (never re-anchor); size and leverage persist across the switch.
+    if (symbol !== selectedSymbol) {
+      tradeLimitPrice = "";
+      tradeTakeProfit = "";
+      tradeStopLoss = "";
+      limitArmedUntil = 0;
+    }
     phoenixStream?.close();
     phoenixStream = null;
     selectedSymbol = symbol;
@@ -1007,12 +1258,9 @@
       }
       marketSourceLabel = `${snapshot.source.provider} ${snapshot.source.symbol}`;
       streamHealth = "live";
-      statusMessage = "phoenix-candles-loaded";
       startPhoenixStream(symbol);
-    } catch (error) {
+    } catch {
       streamHealth = latestPrice ? "stale" : "offline";
-      statusMessage =
-        error instanceof Error ? error.message : "phoenix-market-refresh-failed";
     }
   }
 
@@ -1039,7 +1287,6 @@
       {
       onOpen: () => {
         streamHealth = "live";
-        statusMessage = "phoenix-stream-open";
         // On reconnect, backfill candles missed while disconnected.
         if (chartPoints.length > 0) void healChartGaps(true);
       },
@@ -1048,7 +1295,6 @@
         if (status === "connecting" || status === "reconnecting") {
           streamHealth = latestPrice ? "stale" : "connecting";
         }
-        statusMessage = `phoenix-${status}`;
       },
       onCandle: (point) => {
         chartPoints = upsertLiveCandle(chartPoints, point);
@@ -1057,7 +1303,6 @@
         latestPrice = marketStats?.markPx ?? point.markClose ?? point.close;
         lastMarketUpdate = Date.now();
         streamHealth = "live";
-        statusMessage = "phoenix-live-candles";
       },
       onOrderbook: (payload) => {
         pendingBook = payload;
@@ -1095,9 +1340,6 @@
       onAllMids: (mids) => {
         marketMids = mids;
         latestPrice = mids[symbol] ?? latestPrice;
-      },
-      onError: (message) => {
-        statusMessage = message;
       },
       },
       selectedTimeframe,
@@ -1364,7 +1606,6 @@
         // notification construction can throw on some platforms
       }
     }
-    statusMessage = `alert: ${body}`;
     try {
       await fetch("/notify-discord", {
         method: "POST",
@@ -1894,6 +2135,54 @@
     programs?: string[];
   };
 
+  function setPhoenixBusy(key: string, busy: boolean): void {
+    const next = new Set(phoenixBusyKeys);
+    if (busy) next.add(key);
+    else next.delete(key);
+    phoenixBusyKeys = next; // reassign — legacy reactivity ignores mutation
+  }
+
+  // `order:SOL` → "SOL open" for the footer status line.
+  function txKeyLabel(key: string): string {
+    const [kind, symbol] = key.split(":");
+    return `${symbol ?? "?"} ${kind === "order" ? "open" : kind}`;
+  }
+
+  function setTxStage(key: string, stage: TxStage): void {
+    txStages = { ...txStages, [key]: { stage, sinceMs: Date.now() } };
+    lastTx = { key, label: txKeyLabel(key), stage, sinceMs: Date.now() };
+  }
+
+  function clearTxStage(key: string): void {
+    const next = { ...txStages };
+    delete next[key];
+    txStages = next;
+  }
+
+  // Only flip the footer to "failed" if THIS attempt actually entered the tx
+  // pipeline: a stage entry exists iff simulateConfirmAndSend ran (the
+  // caller's finally clears it after the catch). Keys repeat across attempts
+  // of the same action, so without this a pre-send validation throw would
+  // smear an earlier confirmed tx on the same key.
+  function markLastTxFailed(key: string): void {
+    if (!(key in txStages)) return;
+    if (lastTx?.key === key)
+      lastTx = { ...lastTx, stage: "failed", sinceMs: Date.now() };
+  }
+
+  function txStageText(
+    entry: { stage: TxStage | "failed"; sinceMs: number },
+    now: number,
+  ): string {
+    if (entry.stage === "simulating") return "Simulating…";
+    if (entry.stage === "signing") return "Signing…";
+    if (entry.stage === "confirming")
+      return `Confirming… ${Math.max(0, Math.round((now - entry.sinceMs) / 1000))}s`;
+    if (entry.stage === "confirmed") return "Confirmed";
+    if (entry.stage === "failed") return "Failed";
+    return "";
+  }
+
   async function simulateConfirmAndSend(
     transaction: VersionedTransaction,
     connection: Connection,
@@ -1902,8 +2191,9 @@
       blockhash: string;
       lastValidBlockHeight: number;
     },
+    stageKey?: string,
   ): Promise<string> {
-    statusMessage = "simulating-transaction";
+    if (stageKey) setTxStage(stageKey, "simulating");
     const simulation = await connection.simulateTransaction(transaction, {
       sigVerify: false,
     });
@@ -1934,12 +2224,12 @@
       `simulated: ${simulation.value.unitsConsumed ?? "?"} CU`,
     );
 
-    statusMessage = "awaiting-wallet-signature";
+    if (stageKey) setTxStage(stageKey, "signing");
     const signature = await signAndSendSolanaTransaction(
       transaction,
       connection,
     );
-    statusMessage = "confirming-transaction";
+    if (stageKey) setTxStage(stageKey, "confirming");
     if (latestBlockhash) {
       await connection.confirmTransaction(
         { signature, ...latestBlockhash },
@@ -1948,6 +2238,7 @@
     } else {
       await connection.confirmTransaction(signature, "confirmed");
     }
+    if (stageKey) setTxStage(stageKey, "confirmed");
     return signature;
   }
 
@@ -2032,7 +2323,6 @@
         feePayer: address,
       });
       swapStatus = "done";
-      statusMessage = "swap-submitted";
       track("swap_confirmed", { ...marketContext(), inSol: amount, outUsdc: swapQuote?.outUsdc ?? null });
       void refreshWalletBalance(address);
     } catch (error) {
@@ -2173,6 +2463,54 @@
     }
   }
 
+  // ── Spot side flip ─────────────────────────────────────────────────
+  // spotAmount means USDC-spent on buy but tokens-sold on sell; flipping
+  // the side without converting turns a $25 buy into a 25-token sell one
+  // keypress later. Convert through the asset price so the ticket keeps
+  // the same economic size. Every flip path (buttons + B/S hotkeys) goes
+  // through here.
+  function flipSpotSide(side: "buy" | "sell"): void {
+    if (side !== spotSide) {
+      const amount = Number(spotAmount);
+      const price = spotAsset?.price;
+      if (price && price > 0 && Number.isFinite(amount) && amount > 0) {
+        spotAmount = fmtTriggerPrice(side === "sell" ? amount / price : amount * price);
+      }
+      spotSide = side;
+    }
+    scheduleSpotQuote();
+  }
+
+  // ── Spot size chips ────────────────────────────────────────────────
+  // % of wallet USDC on buy, % of the token holding on sell — the same
+  // balances that power the ticket preview. Max buy keeps the $0.01 dust
+  // buffer the perp Max chip leaves.
+  const SPOT_CHIP_PCTS = [25, 50];
+  $: spotChipBalance = spotSide === "buy" ? (usdcBalanceValue ?? 0) : spotHolding;
+
+  function setSpotAmountChip(pct: number | "max"): void {
+    const amount =
+      pct === "max"
+        ? spotSide === "buy"
+          ? Math.max(0, spotChipBalance - 0.01)
+          : spotChipBalance
+        : (pct / 100) * spotChipBalance;
+    if (amount <= 0) return;
+    if (spotSide === "buy") {
+      spotAmount = amount.toFixed(2);
+    } else if (pct === "max") {
+      // Max sell floors at fmtTriggerPrice's precision — round-half-up
+      // could format above the real holding and the sell would fail
+      // simulation with insufficient funds. 25/50% keep round formatting;
+      // the remaining balance absorbs the half-ULP overage.
+      const p = amount >= 1000 ? 1 : amount >= 10 ? 2 : amount >= 1 ? 3 : 5;
+      spotAmount = (Math.floor(amount * 10 ** p) / 10 ** p).toFixed(p);
+    } else {
+      spotAmount = fmtTriggerPrice(amount);
+    }
+    scheduleSpotQuote();
+  }
+
   function scheduleSpotQuote(): void {
     if (spotQuoteTimer) clearTimeout(spotQuoteTimer);
     // Bumping the sequence invalidates any in-flight quote — covers every
@@ -2250,7 +2588,6 @@
         ],
         feePayer: address,
       });
-      statusMessage = "spot-swap-submitted";
       noteTrade({
         ts: Date.now(),
         venue: "spot",
@@ -2314,12 +2651,7 @@
           ONBOARD_KEY,
           JSON.stringify([...done, authority]),
         );
-        if (result.ok) {
-          phoenixWhitelisted = true;
-          statusMessage = result.signature
-            ? "phoenix-referral-activated"
-            : "phoenix-referral-active";
-        }
+        if (result.ok) phoenixWhitelisted = true;
       }
     } catch {
       // wallet declined the signature or transient failure — retry next visit
@@ -2350,6 +2682,13 @@
       // Store is keyed per wallet, so a mid-flight switch cannot
       // cross-pollinate — record under the authority we fetched for.
       recordSnapshot(authority, state);
+      // Day P&L rides the same refresh: sample equity as the terminal
+      // shows it (collateral + live uPnL), no extra RPC. Wait a tick so
+      // the snapshot-derived reactives have settled first.
+      await tick();
+      if (authority === phoenixAuthority) {
+        recordEquitySample(authority, accountEquityUsd);
+      }
     } catch {
       // transient API hiccup — keep last state
     }
@@ -2358,6 +2697,7 @@
   async function signAndSendPhoenixIxs(
     instructions: import("@solana/web3.js").TransactionInstruction[],
     summary: TransactionSummary,
+    stageKey?: string,
   ): Promise<string> {
     const { transaction, connection, latestBlockhash } =
       await buildSignableTransaction(
@@ -2378,24 +2718,139 @@
         ],
       },
       latestBlockhash,
+      stageKey,
     );
   }
 
+  // Raw Solana/Phoenix errors are hostile mid-trade; map the known shapes to
+  // a one-line instruction. `retriable` gates the inline Retry button (only
+  // where re-sending cannot double-fill); `confirmUncertain` means the tx may
+  // still have landed — burst-poll instead of calling it a failure.
+  const PHOENIX_CUSTOM_ERRORS: Record<number, string> = {
+    // Custom:1 observed on order placement with too little free collateral.
+    1: "Not enough free collateral — reduce size or deposit",
+  };
+
+  function humanizeTradeError(err: unknown): {
+    text: string;
+    retriable: boolean;
+    confirmUncertain: boolean;
+    detail: string;
+  } {
+    const raw = err instanceof Error ? err.message : String(err);
+    // Deliberately-human throws (TP/SL side checks, the rent shortfall in
+    // phoenix-trade.ts) pass through untouched.
+    if (
+      /^(Take profit|Stop loss) must be|^Registering your Phoenix margin/.test(raw)
+    ) {
+      return { text: raw, retriable: false, confirmUncertain: false, detail: "" };
+    }
+    if (/insufficient (funds|collateral|margin|lamports)/i.test(raw)) {
+      return {
+        text: "Not enough free collateral — reduce size or deposit",
+        retriable: false,
+        confirmUncertain: false,
+        detail: raw,
+      };
+    }
+    const custom = /"Custom":\s*(\d+)/.exec(raw);
+    const customText = custom ? PHOENIX_CUSTOM_ERRORS[Number(custom[1])] : undefined;
+    if (customText) {
+      return { text: customText, retriable: false, confirmUncertain: false, detail: raw };
+    }
+    if (/429|too many requests|rate.?limit/i.test(raw)) {
+      return {
+        text: "RPC rate limited — retry in a few seconds",
+        retriable: true,
+        confirmUncertain: false,
+        detail: raw,
+      };
+    }
+    if (/blockhash|block height exceeded|expired/i.test(raw)) {
+      return {
+        text: "Confirmation timed out — the order may still have landed; checking…",
+        retriable: false,
+        confirmUncertain: true,
+        detail: raw,
+      };
+    }
+    console.warn("phoenix action failed", raw);
+    return {
+      text: "Transaction failed — hover for details",
+      retriable: false,
+      confirmUncertain: false,
+      detail: raw,
+    };
+  }
+
+  // ── Post-tx indexer catch-up ──────────────────────────────────────
+  // Positions/orders come from a lagging indexer; after a confirmed tx the
+  // panel can lie for ~12-25s. Burst-poll until the snapshot fingerprint
+  // moves (or 20s), showing an explicit interim state meanwhile.
+  let burstToken = 0;
+  let pendingOrder: {
+    symbol: string;
+    side: PhoenixSide;
+    notionalUsd: number;
+    refPrice: number;
+    leverage: number;
+  } | null = null;
+  let closingKeys: Set<string> = new Set(); // `${symbol}:${subaccountIndex}`
+
+  function snapshotFingerprint(): string {
+    const positions = (phoenixTrader?.positions ?? [])
+      .map((position) => `${position.symbol}:${position.size.toFixed(4)}`)
+      .join("|");
+    const orders = (phoenixTrader?.orders ?? [])
+      .map((order) => order.orderSequenceNumber)
+      .join("|");
+    return `${positions}#${orders}`;
+  }
+
+  async function burstRefreshPhoenix(preFingerprint: string): Promise<void> {
+    const token = ++burstToken; // a newer burst supersedes this one
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && burstToken === token) {
+      await refreshPhoenixTrader();
+      await tick(); // let $: derivations settle before comparing
+      if (snapshotFingerprint() !== preFingerprint) break;
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    // Replaced by real data or timed out — either way, stop pretending.
+    if (burstToken === token) {
+      pendingOrder = null;
+      closingKeys = new Set();
+    }
+  }
+
   async function submitPhoenixOrder(): Promise<void> {
-    if (!phoenixAuthority || phoenixBusy || !tradePreview) return;
-    const entry = tradePreview.entry ?? latestPrice;
+    const symbol = selectedSymbol;
+    const busyKey = `order:${symbol}`;
+    if (!phoenixAuthority || phoenixBusyKeys.has(busyKey) || !tradePreview) return;
+    // Freeze the ticket state before the first await — inputs stay editable
+    // while the tx confirms, so a live read after an await could describe a
+    // different order than the one submitted (or throw once the $:-derived
+    // tradePreview turns null mid-flight).
+    const preview = tradePreview;
+    const orderType = tradeType;
+    const leverage = tradeLeverage;
+    const reduceOnly = tradeReduceOnly && selectedPosition !== null;
+    const entry = preview.entry ?? latestPrice;
     if (!entry || entry <= 0) return;
-    phoenixBusy = true;
+    setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
     lastTradeSignature = "";
+    const preFingerprint = snapshotFingerprint();
     try {
       const side: PhoenixSide = tradeSide === "buy" ? "bid" : "ask";
       const limitPrice = Number(tradeLimitPrice);
       const refPrice =
-        tradeType === "limit" && Number.isFinite(limitPrice) && limitPrice > 0
+        orderType === "limit" && Number.isFinite(limitPrice) && limitPrice > 0
           ? limitPrice
           : entry;
-      const quantity = tradePreview.notionalUsd / refPrice;
+      const quantity = preview.notionalUsd / refPrice;
       // Phoenix-native TP/SL trigger prices, validated against the side so a
       // mis-placed trigger can't slip through.
       const tp = Number(tradeTakeProfit);
@@ -2419,44 +2874,48 @@
       track("order_submitted", {
         ...marketContext(),
         side,
-        orderType: tradeType,
-        notionalUsd: tradePreview.notionalUsd,
-        leverage: tradeLeverage,
+        orderType,
+        notionalUsd: preview.notionalUsd,
+        leverage,
         sizingMode,
+        reduceOnly,
         takeProfitPrice,
         stopLossPrice,
-        estEntry: tradePreview.entry,
-        slippageBps: tradePreview.slippageBps,
-        estLiqPrice: tradePreview.liqPrice,
+        estEntry: preview.entry,
+        slippageBps: preview.slippageBps,
+        estLiqPrice: preview.liqPrice,
       });
       const plan = await buildPlaceOrderPlan({
         authority: phoenixAuthority,
-        symbol: selectedSymbol,
+        symbol,
         side,
-        orderType: tradeType,
+        orderType,
         quantity,
-        price: tradeType === "limit" ? refPrice : undefined,
-        marginUsd: tradePreview.notionalUsd / tradeLeverage,
+        price: orderType === "limit" ? refPrice : undefined,
+        marginUsd: reduceOnly ? undefined : preview.notionalUsd / leverage,
         takeProfitPrice,
         stopLossPrice,
+        reduceOnly,
       });
       lastTradeSignature = await signAndSendPhoenixIxs(
         [...registerIxs, ...plan.instructions],
         {
-          title: `${tradeSide === "buy" ? "Long" : "Short"} ${selectedSymbol}-PERP`,
+          title: `${side === "bid" ? "Long" : "Short"} ${symbol}-PERP`,
           details: [
             `Venue: Phoenix Perps`,
-            `Order: ${tradeType}`,
-            `Notional: $${formatNumber(tradePreview.notionalUsd, 2)}`,
-            `Margin: $${formatNumber(tradePreview.notionalUsd / tradeLeverage, 2)}`,
+            `Order: ${orderType}`,
+            `Notional: $${formatNumber(preview.notionalUsd, 2)}`,
+            reduceOnly
+              ? "Reduce-only (no new margin)"
+              : `Margin: $${formatNumber(preview.notionalUsd / leverage, 2)}`,
             `Entry ref.: ${formatPrice(refPrice)}`,
-            `Leverage: ${tradeLeverage}x`,
+            `Leverage: ${leverage}x`,
             ...(takeProfitPrice ? [`Take profit: ${formatPrice(takeProfitPrice)}`] : []),
             ...(stopLossPrice ? [`Stop loss: ${formatPrice(stopLossPrice)}`] : []),
           ],
         },
+        busyKey,
       );
-      statusMessage = "phoenix-order-submitted";
       track("order_confirmed", {
         ...marketContext(),
         side,
@@ -2465,28 +2924,56 @@
       noteTrade({
         ts: Date.now(),
         venue: "perp",
-        symbol: selectedSymbol,
-        action: tradeSide === "buy" ? "long" : "short",
-        notionalUsd: tradePreview?.notionalUsd ?? null,
+        symbol,
+        action: side === "bid" ? "long" : "short",
+        notionalUsd: preview.notionalUsd,
         price: refPrice,
-        leverage: tradeLeverage,
+        leverage,
         signature: lastTradeSignature,
       });
       tradeOpen = false;
-      void refreshPhoenixTrader();
+      // Optimistic pending row (from the params in hand) while the lagging
+      // indexer catches up; dropped by the burst if it never confirms.
+      pendingOrder = {
+        symbol,
+        side,
+        notionalUsd: preview.notionalUsd,
+        refPrice,
+        leverage,
+      };
+      void burstRefreshPhoenix(preFingerprint);
       void refreshWalletBalance(phoenixAuthority);
     } catch (error) {
-      phoenixActionError = error instanceof Error ? error.message : "order-failed";
-      track("order_failed", { ...marketContext(), error: phoenixActionError });
+      const raw = error instanceof Error ? error.message : "order-failed";
+      const human = humanizeTradeError(error);
+      phoenixActionError = human.text;
+      phoenixActionErrorDetail = human.detail;
+      phoenixActionRetry = human.retriable ? () => void submitPhoenixOrder() : null;
+      track("order_failed", { ...marketContext(), error: raw });
+      // Expired confirmation is not a definite failure — the order may have
+      // landed; let the burst poll find out.
+      if (human.confirmUncertain) void burstRefreshPhoenix(preFingerprint);
+      markLastTxFailed(busyKey);
     } finally {
-      phoenixBusy = false;
+      setPhoenixBusy(busyKey, false);
+      clearTxStage(busyKey);
     }
   }
 
-  async function closePhoenixPosition(symbol: string, size: number): Promise<void> {
-    if (!phoenixAuthority || phoenixBusy || size === 0) return;
-    phoenixBusy = true;
+  async function closePhoenixPosition(
+    symbol: string,
+    size: number,
+    subaccountIndex: number,
+    fraction = 1,
+  ): Promise<void> {
+    const busyKey = `close:${symbol}:${subaccountIndex}`;
+    if (!phoenixAuthority || phoenixBusyKeys.has(busyKey) || size === 0) return;
+    const partial = fraction < 1;
+    setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
+    const preFingerprint = snapshotFingerprint();
     try {
       const plan = await buildPlaceOrderPlan({
         authority: phoenixAuthority,
@@ -2496,23 +2983,29 @@
         quantity: Math.abs(size),
         reduceOnly: true,
       });
-      lastTradeSignature = await signAndSendPhoenixIxs(plan.instructions, {
-        title: `Close ${symbol}-PERP`,
-        details: [
-          `Venue: Phoenix Perps`,
-          `Reduce-only market order`,
-          `Size: ${formatNumber(Math.abs(size), 6)} ${symbol}`,
-        ],
-      });
-      statusMessage = "phoenix-position-close-submitted";
+      lastTradeSignature = await signAndSendPhoenixIxs(
+        plan.instructions,
+        {
+          title: partial
+            ? `Reduce ${symbol}-PERP ${Math.round(fraction * 100)}%`
+            : `Close ${symbol}-PERP`,
+          details: [
+            `Venue: Phoenix Perps`,
+            `Reduce-only market order`,
+            `Size: ${formatNumber(Math.abs(size), 6)} ${symbol}`,
+          ],
+        },
+        busyKey,
+      );
       {
         const closing = enrichedPositions.find(
           (position) => position.symbol === symbol,
         );
-        track("position_closed", {
+        track(partial ? "position_partial_close" : "position_closed", {
           ...marketContext(),
           closedSymbol: symbol,
           size,
+          ...(partial ? { fraction } : {}),
           entryPrice: closing?.entryPrice ?? null,
           realizedUpnlEst: closing?.unrealizedPnl ?? null,
           marginUsd: closing?.marginUsd ?? null,
@@ -2533,12 +3026,73 @@
         leverage: null,
         signature: lastTradeSignature,
       });
-      void refreshPhoenixTrader();
+      if (partial) {
+        // TP/SL are position-level triggers — a partial close leaves them
+        // armed on the remainder; say so instead of letting traders wonder.
+        pushToast({
+          ts: Date.now(),
+          title: `Reduced ${symbol}-PERP by ${Math.round(fraction * 100)}%`,
+          body: "TP/SL remain attached to the rest of the position.",
+        });
+      } else {
+        // Mark the row "closing…" until the indexer drops it.
+        closingKeys = new Set(closingKeys).add(`${symbol}:${subaccountIndex}`);
+      }
+      void burstRefreshPhoenix(preFingerprint);
     } catch (error) {
-      phoenixActionError = error instanceof Error ? error.message : "close-failed";
+      const human = humanizeTradeError(error);
+      phoenixActionError = human.text;
+      phoenixActionErrorDetail = human.detail;
+      phoenixActionRetry = human.retriable
+        ? () => void closePhoenixPosition(symbol, size, subaccountIndex, fraction)
+        : null;
+      if (human.confirmUncertain) void burstRefreshPhoenix(preFingerprint);
+      markLastTxFailed(busyKey);
     } finally {
-      phoenixBusy = false;
+      setPhoenixBusy(busyKey, false);
+      clearTxStage(busyKey);
     }
+  }
+
+  // 25/50/75% chips: quantize to the market's base lot so the venue can't
+  // reject a dust-sized reduce; 100% goes through the plain Close path with
+  // the exact position size (no quantization drift on a full exit).
+  async function closePhoenixPositionFraction(
+    position: PhoenixPosition,
+    fraction: number,
+  ): Promise<void> {
+    if (fraction >= 1) {
+      await closePhoenixPosition(
+        position.symbol,
+        position.size,
+        position.subaccountIndex,
+      );
+      return;
+    }
+    let size = position.size * fraction;
+    try {
+      const exchange = await fetchExchangeConfig();
+      const decimals =
+        exchange.markets.find((market) => market.symbol === position.symbol)
+          ?.baseLotsDecimals ?? 0;
+      const lots = Math.floor(Math.abs(size) * 10 ** decimals);
+      if (lots === 0) {
+        phoenixActionError = `Position too small to reduce by ${Math.round(fraction * 100)}% — use Close`;
+        phoenixActionErrorDetail = "";
+        phoenixActionRetry = null;
+        return;
+      }
+      size = (Math.sign(position.size) * lots) / 10 ** decimals;
+    } catch {
+      // exchange config unavailable — send the raw size and let the
+      // simulation gate rule on it
+    }
+    await closePhoenixPosition(
+      position.symbol,
+      size,
+      position.subaccountIndex,
+      fraction,
+    );
   }
 
   // Share card: numbers are the terminal's own deterministic state, passed
@@ -2563,25 +3117,371 @@
   }
 
   async function cancelPhoenixOrders(symbol: string, side: PhoenixSide): Promise<void> {
-    if (!phoenixAuthority || phoenixBusy) return;
-    phoenixBusy = true;
+    const busyKey = `cancel:${symbol}:${side}`;
+    if (!phoenixAuthority || phoenixBusyKeys.has(busyKey)) return;
+    setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
+    const preFingerprint = snapshotFingerprint();
     try {
       const instructions = await buildCancelAllIxs(phoenixAuthority, symbol, side);
-      lastTradeSignature = await signAndSendPhoenixIxs(instructions, {
-        title: `Cancel ${symbol}-PERP orders`,
-        details: [
-          `Venue: Phoenix Perps`,
-          `Side: ${side === "bid" ? "bids" : "asks"}`,
-        ],
-      });
-      statusMessage = "phoenix-cancel-submitted";
-      track("orders_cancelled", { ...marketContext(), cancelSymbol: symbol, cancelSide: side });
-      void refreshPhoenixTrader();
+      lastTradeSignature = await signAndSendPhoenixIxs(
+        instructions,
+        {
+          title: `Cancel ${symbol}-PERP orders`,
+          details: [
+            `Venue: Phoenix Perps`,
+            `Side: ${side === "bid" ? "bids" : "asks"}`,
+          ],
+        },
+        busyKey,
+      );
+      track("orders_cancelled", { ...marketContext(), cancelSymbol: symbol, cancelSide: side, scope: "side" });
+      void burstRefreshPhoenix(preFingerprint);
     } catch (error) {
-      phoenixActionError = error instanceof Error ? error.message : "cancel-failed";
+      const human = humanizeTradeError(error);
+      phoenixActionError = human.text;
+      phoenixActionErrorDetail = human.detail;
+      phoenixActionRetry = human.retriable
+        ? () => void cancelPhoenixOrders(symbol, side)
+        : null;
+      if (human.confirmUncertain) void burstRefreshPhoenix(preFingerprint);
+      markLastTxFailed(busyKey);
     } finally {
-      phoenixBusy = false;
+      setPhoenixBusy(busyKey, false);
+      clearTxStage(busyKey);
+    }
+  }
+
+  // Busy key for one order row — finer than the side-wide `cancel:SYM:SIDE`
+  // so cancelling one order never greys out its neighbours.
+  function orderCancelKey(order: PhoenixOpenOrder): string {
+    return `cancel:${order.symbol}:${order.side}:${order.isStopLoss ? "sl" : order.orderSequenceNumber}`;
+  }
+
+  // Cancels exactly one resting order (or one stop-loss trigger) — a row's
+  // Cancel must never sweep the whole side and take a protective stop with it.
+  async function cancelPhoenixOrderById(order: PhoenixOpenOrder): Promise<void> {
+    const busyKey = orderCancelKey(order);
+    if (!phoenixAuthority || phoenixBusyKeys.has(busyKey)) return;
+    setPhoenixBusy(busyKey, true);
+    phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
+    const preFingerprint = snapshotFingerprint();
+    try {
+      // Stop-loss triggers live on the child trader account holding the
+      // position, not the parent that book orders rest under.
+      const owner = order.isStopLoss
+        ? (phoenixTrader?.positions ?? []).find(
+            (position) => position.symbol === order.symbol,
+          )
+        : undefined;
+      const instructions = await buildCancelSingleOrderIxs(phoenixAuthority, {
+        symbol: order.symbol,
+        side: order.side,
+        price: order.price,
+        orderSequenceNumber: order.orderSequenceNumber,
+        isStopLoss: order.isStopLoss,
+        isStopLossDirection: order.isStopLossDirection,
+        traderPdaIndex: owner?.traderPdaIndex,
+        subaccountIndex: owner?.subaccountIndex,
+      });
+      lastTradeSignature = await signAndSendPhoenixIxs(
+        instructions,
+        {
+          title: `Cancel ${order.symbol}-PERP ${order.isStopLoss ? "stop" : "order"}`,
+          details: [
+            `Venue: Phoenix Perps`,
+            `Side: ${order.side === "bid" ? "bid" : "ask"}`,
+            `Order: #${order.orderSequenceNumber.slice(0, 8)}`,
+          ],
+        },
+        busyKey,
+      );
+      track("orders_cancelled", {
+        ...marketContext(),
+        cancelSymbol: order.symbol,
+        cancelSide: order.side,
+        scope: "single",
+        orderSequenceNumber: order.orderSequenceNumber,
+        isStopLoss: order.isStopLoss,
+      });
+      void burstRefreshPhoenix(preFingerprint);
+    } catch (error) {
+      const human = humanizeTradeError(error);
+      phoenixActionError = human.text;
+      phoenixActionErrorDetail = human.detail;
+      phoenixActionRetry = human.retriable
+        ? () => void cancelPhoenixOrderById(order)
+        : null;
+      if (human.confirmUncertain) void burstRefreshPhoenix(preFingerprint);
+      markLastTxFailed(busyKey);
+    } finally {
+      setPhoenixBusy(busyKey, false);
+      clearTxStage(busyKey);
+    }
+  }
+
+  // Side sweeps only reach book orders (cancel-up-to walks the book); stop
+  // triggers are cancelled per row. One side-wide tx per symbol on the side.
+  $: perpBidSweepSymbols = [
+    ...new Set(
+      perpOpenOrders
+        .filter((order) => order.side === "bid" && !order.isStopLoss)
+        .map((order) => order.symbol),
+    ),
+  ];
+  $: perpAskSweepSymbols = [
+    ...new Set(
+      perpOpenOrders
+        .filter((order) => order.side === "ask" && !order.isStopLoss)
+        .map((order) => order.symbol),
+    ),
+  ];
+  $: cancelSweepBusy = [...phoenixBusyKeys].some((key) =>
+    key.startsWith("cancel:"),
+  );
+
+  async function cancelAllPhoenixOrdersOnSide(side: PhoenixSide): Promise<void> {
+    const symbols = side === "bid" ? perpBidSweepSymbols : perpAskSweepSymbols;
+    for (const symbol of symbols) await cancelPhoenixOrders(symbol, side);
+  }
+
+  // X hotkey + palette "Cancel N orders": clear a symbol's book both sides.
+  async function cancelSymbolBookOrders(symbol: string): Promise<void> {
+    const sides = [
+      ...new Set(
+        perpOpenOrders
+          .filter((order) => order.symbol === symbol && !order.isStopLoss)
+          .map((order) => order.side),
+      ),
+    ];
+    for (const side of sides) await cancelPhoenixOrders(symbol, side);
+  }
+
+  // ── Margin top-up (isolated positions) ────────────────────────────
+  // Account deposits don't move an isolated position's liq price; only a
+  // transfer into its child subaccount does. Inline editor per pos-card,
+  // keyed `${symbol}:${subaccountIndex}`.
+  let marginAddKey: string | null = null;
+  let marginAddValue = "";
+
+  // Invert the liq estimate in enrichedPositions —
+  //   liq = (entry·size − margin) / (size − mmr·|size|)
+  // — for the margin that puts liquidation ~50% away from mark, capped at
+  // the free cross collateral actually available to transfer.
+  function marginToRestoreUsd(position: PhoenixPosition): number | null {
+    const mark =
+      marketMids[position.symbol] ??
+      (position.symbol === selectedSymbol ? latestPrice : null);
+    const entry = position.entryPrice;
+    const margin = position.marginUsd;
+    if (mark === null || entry === null || margin === null || position.size === 0) {
+      return null;
+    }
+    const config = markets.find((m) => m.symbol === position.symbol);
+    const mmr = config?.maxLeverage ? 0.5 / config.maxLeverage : 0.005;
+    const liqTarget = mark * (1 - 0.5 * Math.sign(position.size));
+    const needed =
+      entry * position.size -
+      liqTarget * (position.size - mmr * Math.abs(position.size));
+    const delta = needed - margin;
+    if (!Number.isFinite(delta) || delta <= 0) return null;
+    return Math.min(delta, Math.max(0, phoenixCollateral));
+  }
+
+  function openMarginAdd(position: PhoenixPosition): void {
+    const rowKey = `${position.symbol}:${position.subaccountIndex}`;
+    if (marginAddKey === rowKey) {
+      marginAddKey = null;
+      return;
+    }
+    marginAddKey = rowKey;
+    const suggested = marginToRestoreUsd(position);
+    marginAddValue = suggested !== null ? suggested.toFixed(2) : "";
+  }
+
+  async function submitMarginAdd(position: PhoenixPosition): Promise<void> {
+    const amount = Number(marginAddValue);
+    const busyKey = `margin:${position.symbol}:${position.subaccountIndex}`;
+    if (
+      !phoenixAuthority ||
+      phoenixBusyKeys.has(busyKey) ||
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      return;
+    }
+    setPhoenixBusy(busyKey, true);
+    phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
+    const preFingerprint = snapshotFingerprint();
+    const liqDistBefore = liqDistancePctOf(position);
+    try {
+      const instructions = await buildAddIsolatedMarginIxs(
+        phoenixAuthority,
+        position,
+        amount,
+      );
+      lastTradeSignature = await signAndSendPhoenixIxs(
+        instructions,
+        {
+          title: `Add margin to ${position.symbol}-PERP`,
+          details: [
+            `Venue: Phoenix Perps`,
+            `Amount: ${formatNumber(amount, 2)} USDC`,
+            `From free cross collateral into the isolated position`,
+          ],
+        },
+        busyKey,
+      );
+      track("margin_added", {
+        ...marketContext(),
+        amountUsd: amount,
+        liqDistBefore,
+        marginSymbol: position.symbol,
+        signature: lastTradeSignature,
+      });
+      marginAddKey = null;
+      marginAddValue = "";
+      void burstRefreshPhoenix(preFingerprint);
+    } catch (error) {
+      const human = humanizeTradeError(error);
+      phoenixActionError = human.text;
+      phoenixActionErrorDetail = human.detail;
+      phoenixActionRetry = human.retriable
+        ? () => void submitMarginAdd(position)
+        : null;
+      if (human.confirmUncertain) void burstRefreshPhoenix(preFingerprint);
+      markLastTxFailed(busyKey);
+    } finally {
+      setPhoenixBusy(busyKey, false);
+      clearTxStage(busyKey);
+    }
+  }
+
+  // ── Flatten (close everything) ────────────────────────────────────
+  // One reduce-only market order per position, concatenated so the whole
+  // book flattens in as few signatures as possible. Chunked — a v0 tx fits
+  // ~3 enhanced market orders before CU/size limits bite; the simulation in
+  // signAndSendPhoenixIxs stays the per-chunk safety gate.
+  const FLATTEN_CHUNK = 3;
+  let flattenArmedUntil = 0;
+  $: flattenArmed = nowMs < flattenArmedUntil;
+  $: flattenBusy = phoenixBusyKeys.has("flatten");
+
+  // Armed hotkeys (C = market-close, X = cancel orders on the selected
+  // symbol): first press arms for 3s and surfaces a prompt in the footer
+  // status line; the second press fires. nowMs ticks 1s — close enough.
+  let armedHotkey: { key: "c" | "x"; until: number } | null = null;
+  $: if (armedHotkey && nowMs > armedHotkey.until) armedHotkey = null;
+
+  function onFlattenClick(): void {
+    if (Date.now() < flattenArmedUntil) {
+      flattenArmedUntil = 0;
+      void closeAllPhoenixPositions();
+    } else {
+      flattenArmedUntil = Date.now() + 3_000;
+    }
+  }
+
+  async function closeAllPhoenixPositions(): Promise<void> {
+    const positions = enrichedPositions.filter(
+      (position) => position.size !== 0,
+    );
+    const busyKey = "flatten";
+    if (!phoenixAuthority || phoenixBusyKeys.has(busyKey) || positions.length === 0) {
+      return;
+    }
+    setPhoenixBusy(busyKey, true);
+    phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
+    const preFingerprint = snapshotFingerprint();
+    let confirmedChunks = 0; // a later chunk can fail after earlier ones land
+    try {
+      track("flatten_submitted", {
+        ...marketContext(),
+        positionCount: positions.length,
+        symbols: positions.map((position) => position.symbol),
+      });
+      const plans = await Promise.all(
+        positions.map((position) =>
+          buildPlaceOrderPlan({
+            authority: phoenixAuthority,
+            symbol: position.symbol,
+            side: position.size > 0 ? "ask" : "bid",
+            orderType: "market",
+            quantity: Math.abs(position.size),
+            reduceOnly: true,
+          }),
+        ),
+      );
+      for (let start = 0; start < positions.length; start += FLATTEN_CHUNK) {
+        const chunk = positions.slice(start, start + FLATTEN_CHUNK);
+        const instructions = plans
+          .slice(start, start + FLATTEN_CHUNK)
+          .flatMap((plan) => plan.instructions);
+        lastTradeSignature = await signAndSendPhoenixIxs(
+          instructions,
+          {
+            title: `Flatten ${chunk.length} position${chunk.length === 1 ? "" : "s"}`,
+            details: [
+              `Venue: Phoenix Perps`,
+              `Reduce-only market orders`,
+              ...chunk.map(
+                (position) =>
+                  `${position.symbol}: ${formatNumber(Math.abs(position.size), 6)}`,
+              ),
+            ],
+          },
+          busyKey,
+        );
+        confirmedChunks += 1;
+        for (const position of chunk) {
+          noteTrade({
+            ts: Date.now(),
+            venue: "perp",
+            symbol: position.symbol,
+            action: "close",
+            notionalUsd: marketMids[position.symbol]
+              ? Math.abs(position.size) * marketMids[position.symbol]
+              : null,
+            price: marketMids[position.symbol] ?? null,
+            leverage: null,
+            signature: lastTradeSignature,
+          });
+        }
+      }
+      track("flatten_confirmed", {
+        ...marketContext(),
+        positionCount: positions.length,
+        signature: lastTradeSignature,
+      });
+      closingKeys = new Set(
+        positions.map(
+          (position) => `${position.symbol}:${position.subaccountIndex}`,
+        ),
+      );
+      void burstRefreshPhoenix(preFingerprint);
+    } catch (error) {
+      const human = humanizeTradeError(error);
+      phoenixActionError = human.text;
+      phoenixActionErrorDetail = human.detail;
+      phoenixActionRetry = human.retriable
+        ? () => void closeAllPhoenixPositions()
+        : null;
+      // Earlier chunks may have landed — resync the panel either way.
+      if (human.confirmUncertain || confirmedChunks > 0) {
+        void burstRefreshPhoenix(preFingerprint);
+      }
+      markLastTxFailed(busyKey);
+    } finally {
+      setPhoenixBusy(busyKey, false);
+      clearTxStage(busyKey);
     }
   }
 
@@ -2616,12 +3516,18 @@
           ],
         },
       );
-      statusMessage = `phoenix-${direction}-submitted`;
       track(`${direction}_confirmed`, {
         ...marketContext(),
         amountUsd: amount,
         signature: collateralSignature,
       });
+      // Deposits/withdrawals move equity without being P&L — shift the day
+      // baseline by the same amount so Day P&L stays pure. External
+      // transfers straight to the wallet are not offset (accepted).
+      shiftEquityBaseline(
+        phoenixAuthority,
+        direction === "deposit" ? amount : -amount,
+      );
       depositAmount = "";
       withdrawAmount = "";
       void refreshPhoenixTrader();
@@ -2701,11 +3607,16 @@
     if (event.key === "Escape") accountMenuOpen = false;
   }
 
+  // Modals may keep keys away from the global hotkeys, but never Escape —
+  // the window handler owns close-on-Esc no matter where focus sits.
+  function swallowKeysExceptEscape(event: KeyboardEvent): void {
+    if (event.key !== "Escape") event.stopPropagation();
+  }
+
   async function copyWalletAddress(): Promise<void> {
     if (!$privyAuth.walletAddress) return;
     try {
       await navigator.clipboard.writeText($privyAuth.walletAddress);
-      statusMessage = "wallet-address-copied";
       walletCopied = true;
       if (copyResetTimer) clearTimeout(copyResetTimer);
       copyResetTimer = setTimeout(() => {
@@ -3136,22 +4047,54 @@
   }
 
   // Clicking a book level: prefill a limit order at that price in the
-  // right-rail Trade tab (no modal over the book).
+  // ticket. Side/type/price only — the book you were reading stays put
+  // (desktop stacks the ticket right below it).
   function prefillFromBook(price: number, rowSide: "ask" | "bid"): void {
     tradeSide = rowSide === "ask" ? "sell" : "buy";
     tradeType = "limit";
     tradeLimitPrice = String(price);
-    bookTab = "trade";
+    focusTicketSize();
+  }
+
+  // Hands land on size: focus+select whichever Size/Risk input is live
+  // (modal or rail) so the next keystrokes overtype the amount.
+  let ticketSizeInput: HTMLInputElement | null = null;
+
+  function focusTicketSize(): void {
+    void tick().then(() => {
+      ticketSizeInput?.focus();
+      ticketSizeInput?.select();
+    });
+  }
+
+  // Desktop = the rail ticket sits beside the chart; the grid collapses at
+  // the 1100px breakpoint (matches the media query in the style block).
+  function railTicketUsable(): boolean {
+    return (
+      typeof window !== "undefined" &&
+      !window.matchMedia("(max-width: 1100px)").matches
+    );
   }
 
   function openTrade(side: "buy" | "sell"): void {
+    // A live ticket flips in place: side only — size/TP/SL survive so both
+    // directions can be compared without retyping (wrong-side validation
+    // already flags stale triggers as you type). Size persists in prefs,
+    // so a fresh open keeps it too; only triggers and errors reset.
+    const flipOnly = ticketActive;
     tradeSide = side;
-    tradeAmount = "25";
-    tradeTakeProfit = "";
-    tradeStopLoss = "";
-    phoenixActionError = "";
-    lastTradeSignature = "";
-    tradeOpen = true;
+    if (!flipOnly) {
+      tradeTakeProfit = "";
+      tradeStopLoss = "";
+      phoenixActionError = "";
+      phoenixActionErrorDetail = "";
+      phoenixActionRetry = null;
+      lastTradeSignature = "";
+    }
+    // Desktop always shows the stacked rail ticket; the modal remains the
+    // narrow-viewport fallback where the rail lives below the fold.
+    if (!railTicketUsable()) tradeOpen = true;
+    focusTicketSize();
   }
 
   function bookLevelNotional(level: DepthLevel | null | undefined): number | null {
@@ -3230,7 +4173,6 @@
       await loginPrivyWithCode(authEmail, authCode);
       authOpen = false;
       authCode = "";
-      statusMessage = "privy-session-connected";
       await refreshEdgeModules();
     } catch (error) {
       authMessage = error instanceof Error ? error.message : "privy-login-failed";
@@ -3244,10 +4186,9 @@
     try {
       await logoutPrivy();
       accountMenuOpen = false;
-      statusMessage = "privy-session-cleared";
       await refreshEdgeModules();
-    } catch (error) {
-      statusMessage = error instanceof Error ? error.message : "privy-logout-failed";
+    } catch {
+      // logout failure is non-fatal — the session clears on next boot
     } finally {
       authBusy = false;
     }
@@ -3377,6 +4318,8 @@
       if (fund === "convert" || fund === "phoenix") fundsTab = fund;
     } else if (flag("ticket") && isPerp) {
       phoenixActionError = "";
+      phoenixActionErrorDetail = "";
+      phoenixActionRetry = null;
       lastTradeSignature = "";
       tradeOpen = true;
     } else if (flag("alerts")) {
@@ -3659,7 +4602,6 @@
           feePayer: address,
         },
       );
-      statusMessage = "spot-limit-placed";
       noteTrade({
         ts: Date.now(),
         venue: "spot",
@@ -3746,6 +4688,14 @@
       if (data.sizingMode === "usd" || data.sizingMode === "risk") {
         sizingMode = data.sizingMode;
       }
+      if (typeof data.tradeAmount === "string") tradeAmount = data.tradeAmount;
+      if (typeof data.tradeRiskUsd === "string") tradeRiskUsd = data.tradeRiskUsd;
+      if (
+        typeof data.tradeLeverage === "number" &&
+        [1, 2, 5, 10, 20].includes(data.tradeLeverage)
+      ) {
+        tradeLeverage = data.tradeLeverage;
+      }
     } catch {
       // ignore malformed persisted preferences
     }
@@ -3764,6 +4714,9 @@
     _screenSort: string,
     _screenHub: string,
     _sizingMode: string,
+    _tradeAmount: string,
+    _tradeRiskUsd: string,
+    _tradeLeverage: number,
   ): void {
     if (typeof window === "undefined") return;
     try {
@@ -3782,6 +4735,9 @@
           screenSort: _screenSort,
           screenHub: _screenHub,
           sizingMode: _sizingMode,
+          tradeAmount: _tradeAmount,
+          tradeRiskUsd: _tradeRiskUsd,
+          tradeLeverage: _tradeLeverage,
         }),
       );
     } catch {
@@ -3806,8 +4762,9 @@
   // ── Market palette — the "/" picker for every tradable market ──────
   // One primitive for both venues: perp markets (live mids) and the spot
   // catalog (full 24h stats). Selecting a row switches venue if needed.
+  // Action rows (close/cancel/flatten on live state) lead when applicable.
   type PaletteRow = {
-    kind: "perp" | "spot";
+    kind: "perp" | "spot" | "action";
     key: string;
     symbol: string;
     name: string;
@@ -3818,6 +4775,7 @@
     volumeUsd: number | null;
     hub: "perps" | "crypto" | "equities" | "pre-ipo";
     asset?: SpotAsset;
+    action?: () => void;
   };
   type PaletteTab = "all" | "perps" | "crypto" | "equities" | "pre-ipo";
   const PALETTE_TABS: { key: PaletteTab; label: string }[] = [
@@ -3841,7 +4799,61 @@
     stats: Record<string, PhoenixDailyStat>,
     query: string,
     tab: PaletteTab,
+    positions: PhoenixPosition[],
+    orders: PhoenixOpenOrder[],
   ): PaletteRow[] {
+    // Live-state actions: one Close per position, one Cancel per symbol with
+    // book orders, Flatten once there is more than one position to close.
+    const blank = {
+      imageUrl: null,
+      lev: null,
+      price: null,
+      change24hPct: null,
+      volumeUsd: null,
+      hub: "perps" as const,
+    };
+    const actions: PaletteRow[] = positions.map((position) => ({
+      kind: "action",
+      key: `action:close:${position.symbol}:${position.subaccountIndex}`,
+      symbol: position.symbol,
+      name: `Close ${position.symbol}-PERP${
+        position.unrealizedPnl !== null
+          ? ` · ${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
+          : ""
+      }`,
+      ...blank,
+      action: () =>
+        void closePhoenixPosition(
+          position.symbol,
+          position.size,
+          position.subaccountIndex,
+        ),
+    }));
+    const bookCounts = new Map<string, number>();
+    for (const order of orders) {
+      if (order.isStopLoss) continue;
+      bookCounts.set(order.symbol, (bookCounts.get(order.symbol) ?? 0) + 1);
+    }
+    for (const [symbol, count] of bookCounts) {
+      actions.push({
+        kind: "action",
+        key: `action:cancel:${symbol}`,
+        symbol,
+        name: `Cancel ${count} ${symbol}-PERP order${count === 1 ? "" : "s"}`,
+        ...blank,
+        action: () => void cancelSymbolBookOrders(symbol),
+      });
+    }
+    if (positions.length > 1) {
+      actions.push({
+        kind: "action",
+        key: "action:flatten",
+        symbol: "FLATTEN",
+        name: "Flatten all positions",
+        ...blank,
+        action: () => void closeAllPhoenixPositions(),
+      });
+    }
     const perps: PaletteRow[] = perpMarkets.map((market) => ({
       kind: "perp",
       key: `perp:${market.symbol}`,
@@ -3868,12 +4880,13 @@
     }));
     for (const [index, asset] of assets.entries()) spots[index].asset = asset;
     spots.sort((a, b) => (b.volumeUsd ?? -1) - (a.volumeUsd ?? -1));
-    // Perps lead — this is a perp terminal first; spot follows by volume.
+    // Actions lead, then perps — this is a perp terminal first; spot
+    // follows by volume.
     let rows =
       tab === "perps"
-        ? perps
+        ? [...actions, ...perps]
         : tab === "all"
-          ? [...perps, ...spots]
+          ? [...actions, ...perps, ...spots]
           : spots.filter((row) => row.hub === tab);
     const q = query.trim().toLowerCase();
     if (q) {
@@ -3893,6 +4906,8 @@
     dailyStats,
     paletteQuery,
     paletteTab,
+    enrichedPositions,
+    perpOpenOrders,
   );
   $: if (paletteIndex >= paletteRows.length) {
     paletteIndex = Math.max(0, paletteRows.length - 1);
@@ -3907,6 +4922,11 @@
   }
 
   function choosePalette(row: PaletteRow): void {
+    if (row.kind === "action") {
+      row.action?.();
+      paletteOpen = false;
+      return;
+    }
     if (row.kind === "perp") {
       if (tradeMode !== "perps") setTradeMode("perps", false);
       if (row.symbol !== selectedSymbol) void switchPhoenixMarket(row.symbol);
@@ -3988,7 +5008,32 @@
     ) {
       return;
     }
-    if (authOpen || tradeOpen || alertsOpen || fundsOpen || paletteOpen) {
+    // Live-ticket keys: while a perp ticket is up (rail or modal) and no
+    // other overlay owns the keyboard, flip it in place instead of
+    // rebuilding it — B/S swap side, M/L swap order type.
+    if (
+      ticketActive &&
+      tradeMode === "perps" &&
+      !authOpen &&
+      !alertsOpen &&
+      !fundsOpen &&
+      !paletteOpen &&
+      !cheatOpen
+    ) {
+      const ticketKey = event.key.toLowerCase();
+      if (ticketKey === "b" || ticketKey === "s") {
+        event.preventDefault();
+        tradeSide = ticketKey === "b" ? "buy" : "sell";
+        focusTicketSize();
+        return;
+      }
+      if (ticketKey === "m" || ticketKey === "l") {
+        event.preventDefault();
+        tradeType = ticketKey === "m" ? "market" : "limit";
+        return;
+      }
+    }
+    if (authOpen || tradeOpen || alertsOpen || fundsOpen || paletteOpen || cheatOpen) {
       return;
     }
     if (event.key === "/") {
@@ -4006,18 +5051,16 @@
       case "b":
         // In spot mode B/S drive the spot ticket — never a hidden perp order.
         if (tradeMode === "spot") {
-          spotSide = "buy";
+          flipSpotSide("buy");
           bookTab = "trade";
-          scheduleSpotQuote();
         } else {
           openTrade("buy");
         }
         break;
       case "s":
         if (tradeMode === "spot") {
-          spotSide = "sell";
+          flipSpotSide("sell");
           bookTab = "trade";
-          scheduleSpotQuote();
         } else {
           openTrade("sell");
         }
@@ -4025,6 +5068,36 @@
       case "f":
         resetChartView();
         break;
+      case "c": {
+        // Two-stage market close of the selected symbol's position.
+        if (tradeMode !== "perps" || !selectedPosition) break;
+        if (armedHotkey?.key === "c" && Date.now() < armedHotkey.until) {
+          armedHotkey = null;
+          void closePhoenixPosition(
+            selectedPosition.symbol,
+            selectedPosition.size,
+            selectedPosition.subaccountIndex,
+          );
+        } else {
+          armedHotkey = { key: "c", until: Date.now() + 3_000 };
+        }
+        break;
+      }
+      case "x": {
+        // Two-stage cancel of every book order on the selected symbol.
+        if (tradeMode !== "perps") break;
+        const hasOrders = perpOpenOrders.some(
+          (order) => order.symbol === selectedSymbol && !order.isStopLoss,
+        );
+        if (!hasOrders) break;
+        if (armedHotkey?.key === "x" && Date.now() < armedHotkey.until) {
+          armedHotkey = null;
+          void cancelSymbolBookOrders(selectedSymbol);
+        } else {
+          armedHotkey = { key: "x", until: Date.now() + 3_000 };
+        }
+        break;
+      }
       case ",":
         cycleWatchlist(-1);
         break;
@@ -4062,7 +5135,7 @@
 <main class="terminal-shell">
   <a class="skip-link" href="#terminal-content">Skip to terminal content</a>
 
-  <header class="topbar">
+  <header class="topbar" bind:clientHeight={topbarHeight}>
     <a class="brand" href="/terminal" aria-label="Trader Ralph terminal">
       <span class="brand-mark"><BrandMark /></span>
       <span>Trader Ralph</span>
@@ -4218,7 +5291,11 @@
     </div>
   </header>
 
-  <div class="market-rail">
+  <div
+    class="market-rail"
+    bind:clientHeight={marketRailHeight}
+    style={`--rail-top: ${topbarHeight}px;`}
+  >
   <div class="ticker" role="status" aria-live="polite">
     {#if tradeMode === "spot" && spotAsset}
       <div class="ticker-symbol">
@@ -4355,7 +5432,13 @@
   </div>
   </div>
 
-  <section id="terminal-content" class="dashboard">
+  <!-- Sticky chrome (topbar on desktop + market rail) covers the top of the
+       viewport — jump-to-section targets scroll-margin below it. -->
+  <section
+    id="terminal-content"
+    class="dashboard"
+    style={`--anchor-top: ${(stackedBook ? topbarHeight : 0) + marketRailHeight}px;`}
+  >
     <section id="section-chart" class="panel chart-panel">
       <div class="chart-toolbar">
         <div class="timeframe-tabs" aria-label="Chart timeframe">
@@ -4582,108 +5665,117 @@
     </section>
 
     <section id="section-book" class="panel orderbook-panel">
-      <div class="book-tabs" role="tablist" aria-label="Trade and order book">
-        <button
-          role="tab"
-          aria-selected={bookTab === "trade"}
-          class:active={bookTab === "trade"}
-          type="button"
-          onclick={() => (bookTab = "trade")}
-        >
-          Trade
-        </button>
-        <button
-          role="tab"
-          aria-selected={bookTab === "book"}
-          class:active={bookTab === "book"}
-          type="button"
-          onclick={() => (bookTab = "book")}
-        >
-          Order Book
-        </button>
-      </div>
-
-      {#if bookTab === "book" && tradeMode === "spot"}
-        <div class="empty spot-book-note">
-          Spot routes through Jupiter's aggregated AMMs — there's no central
-          order book. Pricing comes from the live best route in the Trade tab.
-        </div>
-      {:else if bookTab === "book"}
-        <div class="orderbook-controls">
-          <button class="lot-select" type="button">
-            <span>1</span>
-            <span class="chevron" aria-hidden="true"></span>
-          </button>
-          <strong>USDC</strong>
-          <div class="book-icons">
-            <button class="book-icon split-icon" type="button" aria-label="Book split">
-              <span></span>
-              <span></span>
-              <span></span>
-            </button>
-            <button class="book-icon depth-icon" type="button" aria-label="Depth bars">
-              <span></span>
-              <span></span>
-              <span></span>
-            </button>
-          </div>
-        </div>
-
-        <div class="book book-ladder">
-          <div class="book-header">
-            <span>Price USDC</span>
-            <span>Size USDC</span>
-            <span>Total USDC</span>
-          </div>
-
-          {#each visibleAskLevels as ask}
-            <button type="button" class="book-row ask" onclick={() => prefillFromBook(ask.price, "ask")}>
-              <span class="depth-bar" style={`width: ${depthWidth(ask)}%;`}></span>
-              <span class="book-price">{formatBookPrice(ask.price)}</span>
-              <span>{formatNumber(bookLevelNotional(ask), 0)}</span>
-              <span>{formatNumber(bookLevelTotalNotional(ask), 0)}</span>
-            </button>
-          {/each}
-
-          <div class="spread-row">
-            <span>{formatBookPrice(spread)}</span>
-            <strong>Spread</strong>
-            <span>{formatNumber(spreadPercent, 3)}%</span>
-          </div>
-
-          {#each visibleBidLevels as bid}
-            <button type="button" class="book-row bid" onclick={() => prefillFromBook(bid.price, "bid")}>
-              <span class="depth-bar" style={`width: ${depthWidth(bid)}%;`}></span>
-              <span class="book-price">{formatBookPrice(bid.price)}</span>
-              <span>{formatNumber(bookLevelNotional(bid), 0)}</span>
-              <span>{formatNumber(bookLevelTotalNotional(bid), 0)}</span>
-            </button>
-          {:else}
-            <div class="empty">No live order book levels loaded.</div>
-          {/each}
-        </div>
-
-        <!-- Time & sales: the prints are the heartbeat. -->
-        <div class="tape" aria-label="Time and sales">
-          <div class="tape-header"><span>Time</span><span>Price</span><span>Size</span></div>
-          {#each trades.slice(0, 18) as tick (tick.seq)}
-            <div class="tape-row" class:bid={tick.side === "buy"} class:ask={tick.side === "sell"}>
-              <span>{new Date(tick.ts).toISOString().slice(11, 19)}</span>
-              <span>{formatBookPrice(tick.price)}</span>
-              <span>{formatNumber(tick.size * tick.price, 0)}</span>
+      {#if stackedBook}
+        <!-- Desktop: ladder + ticket stack — reading the book and typing
+             the order are simultaneous, never tabs. The tape shares the
+             ladder slot (all three don't fit); its tabs only swap the feed. -->
+        {#if tradeMode === "perps"}
+          <div class="book-stack">
+            <div class="book-tabs" role="tablist" aria-label="Order book and tape">
+              <button
+                role="tab"
+                aria-selected={bookFeed === "ladder"}
+                class:active={bookFeed === "ladder"}
+                type="button"
+                onclick={() => (bookFeed = "ladder")}
+              >
+                Order Book
+              </button>
+              <button
+                role="tab"
+                aria-selected={bookFeed === "tape"}
+                class:active={bookFeed === "tape"}
+                type="button"
+                onclick={() => (bookFeed = "tape")}
+              >
+                Tape
+              </button>
             </div>
-          {:else}
-            <div class="empty">No prints yet.</div>
-          {/each}
-        </div>
-      {:else}
-        <div class="panel-ticket">
+            {#if bookFeed === "ladder"}
+              {@render BookLadder()}
+            {:else}
+              {@render TapeFeed()}
+            {/if}
+          </div>
+        {/if}
+        <!-- Enter from any ticket input submits, gated exactly like the button. -->
+        <div
+          class="panel-ticket"
+          class:stacked={tradeMode === "perps"}
+          role="presentation"
+          onkeydown={tradeMode === "spot" ? onSpotTicketKeydown : onTicketKeydown}
+        >
           {#if tradeMode === "spot"}
             {@render SpotTicketForm()}
           {:else}
             {@render TicketForm()}
           {/if}
         </div>
+      {:else}
+        <div class="book-tabs" role="tablist" aria-label="Trade and order book">
+          <button
+            role="tab"
+            aria-selected={bookTab === "trade"}
+            class:active={bookTab === "trade"}
+            type="button"
+            onclick={() => (bookTab = "trade")}
+          >
+            Trade
+          </button>
+          <button
+            role="tab"
+            aria-selected={bookTab === "book"}
+            class:active={bookTab === "book"}
+            type="button"
+            onclick={() => (bookTab = "book")}
+          >
+            Order Book
+          </button>
+        </div>
+
+        {#if bookTab === "book" && tradeMode === "spot"}
+          <div class="empty spot-book-note">
+            Spot routes through Jupiter's aggregated AMMs — there's no central
+            order book. Pricing comes from the live best route in the Trade tab.
+          </div>
+        {:else if bookTab === "book"}
+          <div class="orderbook-controls">
+            <button class="lot-select" type="button">
+              <span>1</span>
+              <span class="chevron" aria-hidden="true"></span>
+            </button>
+            <strong>USDC</strong>
+            <div class="book-icons">
+              <button class="book-icon split-icon" type="button" aria-label="Book split">
+                <span></span>
+                <span></span>
+                <span></span>
+              </button>
+              <button class="book-icon depth-icon" type="button" aria-label="Depth bars">
+                <span></span>
+                <span></span>
+                <span></span>
+              </button>
+            </div>
+          </div>
+
+          {@render BookLadder()}
+
+          {@render TapeFeed()}
+        {:else}
+          <!-- Enter from any ticket input submits, gated exactly like the button. -->
+          <div
+            class="panel-ticket"
+            role="presentation"
+            onkeydown={tradeMode === "spot" ? onSpotTicketKeydown : onTicketKeydown}
+          >
+            {#if tradeMode === "spot"}
+              {@render SpotTicketForm()}
+            {:else}
+              {@render TicketForm()}
+            {/if}
+          </div>
+        {/if}
       {/if}
     </section>
 
@@ -4757,6 +5849,19 @@
     >
       <div class="panel-head">
         {@render DragHead("perp", "PERP_DESK", "Phoenix account")}
+        {#if enrichedPositions.length > 0}
+          <!-- Two-stage armed; fixed width so the relabel never shifts layout. -->
+          <button
+            class="row-action flatten-btn"
+            class:armed={flattenArmed}
+            type="button"
+            disabled={flattenBusy}
+            onclick={onFlattenClick}
+          >
+            {#if flattenBusy}<span class="spinner" aria-hidden="true"></span>{/if}
+            {flattenBusy ? "Flattening…" : flattenArmed ? "Confirm flatten" : "FLATTEN"}
+          </button>
+        {/if}
         <button class="primary" type="button" onclick={() => openTrade("buy")}>Trade</button>
       </div>
       {@render AiReadLine(fundingRead)}
@@ -4782,6 +5887,18 @@
                 : "--"}
             </b>
           </div>
+          {#if sessionPnlUsd !== null && equityValues.length >= 2}
+            <!-- Since the UTC day's first equity sample, deposit/withdraw
+                 shifted out — needs two points before it means anything. -->
+            <div>
+              <span>Day P&L</span>
+              <b class:positive={sessionPnlUsd >= 0} class:negative={sessionPnlUsd < 0}>
+                {sessionPnlUsd >= 0 ? "+" : "-"}${formatNumber(Math.abs(sessionPnlUsd), 2)}
+                {#if sessionPnlPct !== null}({formatPercent(sessionPnlPct)}){/if}
+                {@render Spark(equityValues, sessionPnlUsd >= 0 ? "up" : "down")}
+              </b>
+            </div>
+          {/if}
           <button class="row-action" type="button" onclick={openFunds}>Deposit</button>
         </div>
 
@@ -4790,17 +5907,43 @@
         {/if}
 
         {#if phoenixActionError}
-          <p class="auth-note error venue-note">{phoenixActionError}</p>
+          <p class="auth-note error venue-note" title={phoenixActionErrorDetail || undefined}>
+            {phoenixActionError}
+            {#if phoenixActionRetry}
+              <button class="row-action" type="button" onclick={phoenixActionRetry}>Retry</button>
+            {/if}
+          </p>
         {/if}
 
-        {#if enrichedPositions.length > 0}
+        {#if enrichedPositions.length > 0 || pendingOrder}
           <div class="venue-section">Positions</div>
+          {#if pendingOrder}
+            <!-- Optimistic row while the indexer catches up; the burst poll
+                 replaces it with the real row or drops it on timeout. -->
+            <div class="pos-card pos-pending">
+              <div class="pos-card-top">
+                <span class="pos-side">{pendingOrder.side === "bid" ? "LONG" : "SHORT"}</span>
+                <span class="pos-symbol-static">{pendingOrder.symbol}</span>
+                <b class="mono">
+                  ${formatNumber(pendingOrder.notionalUsd, 2)}
+                  @ {formatPrice(pendingOrder.refPrice)} · {pendingOrder.leverage}x
+                </b>
+              </div>
+              <div class="pos-card-mid mono">
+                <span>
+                  confirming with indexer{apiSlotLag !== null ? ` · SYNC −${apiSlotLag}` : ""}
+                </span>
+              </div>
+            </div>
+          {/if}
           {#each enrichedPositions as position (`${position.symbol}:${position.subaccountIndex}`)}
             {@const roePct =
               position.unrealizedPnl !== null && position.marginUsd
                 ? (position.unrealizedPnl / position.marginUsd) * 100
                 : null}
             {@const liqDist = liqDistancePctOf(position)}
+            {@const rowKey = `${position.symbol}:${position.subaccountIndex}`}
+            {@const closeBusy = phoenixBusyKeys.has(`close:${rowKey}`)}
             <div class="pos-card">
               <div class="pos-card-top">
                 <span
@@ -4856,6 +5999,17 @@
                 {:else}
                   <span class="mono liq-none">liq --</span>
                 {/if}
+                {#if liqDist !== null && liqDist < 25}
+                  <!-- The remedy that actually moves an isolated liq price:
+                       margin into the child subaccount, not an account deposit. -->
+                  <button
+                    class="row-action"
+                    type="button"
+                    onclick={() => openMarginAdd(position)}
+                  >
+                    Margin +
+                  </button>
+                {/if}
                 {#if position.unrealizedPnl !== null}
                   <button
                     class="row-action"
@@ -4865,15 +6019,53 @@
                     Share
                   </button>
                 {/if}
+                {#each [25, 50, 75] as pct (pct)}
+                  <button
+                    class="pct-chip"
+                    type="button"
+                    disabled={closeBusy || closingKeys.has(rowKey)}
+                    title={`Close ${pct}% — TP/SL remain attached`}
+                    onclick={() => closePhoenixPositionFraction(position, pct / 100)}
+                  >
+                    {pct}%
+                  </button>
+                {/each}
                 <button
                   class="row-action"
                   type="button"
-                  disabled={phoenixBusy}
-                  onclick={() => closePhoenixPosition(position.symbol, position.size)}
+                  disabled={closeBusy || closingKeys.has(rowKey)}
+                  onclick={() =>
+                    closePhoenixPosition(
+                      position.symbol,
+                      position.size,
+                      position.subaccountIndex,
+                    )}
                 >
-                  Close
+                  {#if closeBusy}<span class="spinner" aria-hidden="true"></span>{/if}
+                  {closingKeys.has(rowKey) ? "Closing…" : "Close"}
                 </button>
               </div>
+              {#if marginAddKey === rowKey}
+                {@const marginBusy = phoenixBusyKeys.has(`margin:${rowKey}`)}
+                <div class="margin-add mono">
+                  <input
+                    bind:value={marginAddValue}
+                    inputmode="decimal"
+                    aria-label="Margin to add (USDC)"
+                    placeholder="USDC"
+                  />
+                  <button
+                    class="row-action"
+                    type="button"
+                    disabled={marginBusy || !(Number(marginAddValue) > 0)}
+                    onclick={() => submitMarginAdd(position)}
+                  >
+                    {#if marginBusy}<span class="spinner" aria-hidden="true"></span>{/if}
+                    Add margin
+                  </button>
+                  <span class="margin-add-note">free ${formatNumber(Math.max(0, phoenixCollateral), 2)}</span>
+                </div>
+              {/if}
             </div>
           {/each}
           <div class="pos-total mono">
@@ -4895,9 +6087,32 @@
         {/if}
 
         {#if perpOpenOrders.length > 0}
-          <div class="venue-section">Open orders</div>
+          <div class="venue-section venue-section-row">
+            <span>Open orders</span>
+            {#if perpBidSweepSymbols.length > 0}
+              <button
+                class="row-action"
+                type="button"
+                disabled={cancelSweepBusy}
+                onclick={() => cancelAllPhoenixOrdersOnSide("bid")}
+              >
+                Cancel all bids
+              </button>
+            {/if}
+            {#if perpAskSweepSymbols.length > 0}
+              <button
+                class="row-action"
+                type="button"
+                disabled={cancelSweepBusy}
+                onclick={() => cancelAllPhoenixOrdersOnSide("ask")}
+              >
+                Cancel all asks
+              </button>
+            {/if}
+          </div>
           {#each perpOpenOrders as order (order.orderSequenceNumber)}
             {@const mark = marketMids[order.symbol] ?? (order.symbol === selectedSymbol ? latestPrice : null)}
+            {@const cancelBusy = phoenixBusyKeys.has(orderCancelKey(order))}
             <div class="venue-row">
               <span class={order.side === "bid" ? "positive" : "negative"}>
                 {order.isStopLoss ? "STOP" : "LIMIT"} {order.side.toUpperCase()} {order.symbol}
@@ -4911,40 +6126,21 @@
                   ? `${formatNumber((Math.abs(order.price - mark) / mark) * 100, 2)}% away`
                   : "--"}
               </em>
+              <em class="mono order-seq">#{order.orderSequenceNumber.slice(0, 8)}</em>
               <button
                 class="row-action"
                 type="button"
-                disabled={phoenixBusy}
-                onclick={() => cancelPhoenixOrders(order.symbol, order.side)}
+                disabled={cancelBusy}
+                onclick={() => cancelPhoenixOrderById(order)}
               >
-                Cancel {order.side}s
+                {#if cancelBusy}<span class="spinner" aria-hidden="true"></span>{/if}
+                Cancel
               </button>
             </div>
           {/each}
         {/if}
 
-        {#if phoenixTrader.orders.length > 0}
-          <div class="venue-section">Open orders</div>
-          {#each phoenixTrader.orders as order}
-            <div class="venue-row">
-              <span class={order.side === "bid" ? "positive" : "negative"}>
-                {order.side.toUpperCase()} {order.symbol}{order.isStopLoss ? " · SL" : ""}
-              </span>
-              <b>{formatNumber(order.remaining, 4)} @ {formatPrice(order.price)}</b>
-              <em>#{order.orderSequenceNumber.slice(0, 8)}</em>
-              <button
-                class="row-action"
-                type="button"
-                disabled={phoenixBusy}
-                onclick={() => cancelPhoenixOrders(order.symbol, order.side)}
-              >
-                Cancel side
-              </button>
-            </div>
-          {/each}
-        {/if}
-
-        {#if phoenixTrader.positions.length === 0 && phoenixTrader.orders.length === 0}
+        {#if phoenixTrader.positions.length === 0 && phoenixTrader.orders.length === 0 && !pendingOrder}
           <div class="empty">
             {phoenixTrader.registered
               ? "No open positions or orders."
@@ -5283,7 +6479,40 @@
         SYNC −{apiSlotLag}
       </span>
     {/if}
+    {#if lastTx}
+      <span class="sl-sep" aria-hidden="true"></span>
+      <span class="mono" class:warn-txt={lastTx.stage === "failed"}>
+        TX {lastTx.label} · {txStageText(lastTx, nowMs)}
+      </span>
+    {/if}
+    {#if armedHotkey}
+      <span class="sl-sep" aria-hidden="true"></span>
+      <span class="warn-txt">
+        {armedHotkey.key === "c"
+          ? `press C again to market-close ${selectedSymbol}`
+          : `press X again to cancel ${selectedSymbol} orders`}
+      </span>
+    {/if}
     <span class="sl-grow" aria-hidden="true"></span>
+    {#if phoenixAuthority}
+      <!-- Money at a glance, always: the segment jumps to the perp desk. -->
+      <button
+        type="button"
+        class="sl-money"
+        title="Jump to positions"
+        onclick={() => scrollToSection("section-perp")}
+      >
+        <span>EQ ${formatNumber(accountEquityUsd, 0)}</span>
+        <span class:positive={accountUpnlUsd >= 0} class:negative={accountUpnlUsd < 0}>
+          uPNL {accountUpnlUsd >= 0 ? "+" : "-"}${formatNumber(Math.abs(accountUpnlUsd), 2)}
+        </span>
+        <span>FREE ${formatNumber(phoenixCollateral, 0)}</span>
+        {#if fundingPercent !== null}
+          <span>FUND {fundingPercent >= 0 ? "+" : ""}{formatNumber(fundingPercent, 3)}%/8h</span>
+        {/if}
+      </button>
+      <span class="sl-sep" aria-hidden="true"></span>
+    {/if}
     {#if $privyAuth.walletAddress}
       <span class="mono">{shortAddress($privyAuth.walletAddress)}</span>
       <span class="sl-sep" aria-hidden="true"></span>
@@ -5312,7 +6541,7 @@
       aria-label="Keyboard shortcuts"
       tabindex="-1"
       onclick={(event) => event.stopPropagation()}
-      onkeydown={(event) => event.stopPropagation()}
+      onkeydown={swallowKeysExceptEscape}
     >
       <div class="panel-head">
         <div><p>KEYBOARD</p><h2>Shortcuts</h2></div>
@@ -5321,7 +6550,10 @@
       <div class="modal-body cheat-body">
         {#each [
           ["/", "Market palette"],
-          ["B / S", "Long / Short ticket"],
+          ["B / S", "Long / Short — flips a live ticket in place"],
+          ["M / L", "Ticket order type market / limit"],
+          ["C C", "Market-close the selected position (press twice)"],
+          ["X X", "Cancel the selected market's orders (press twice)"],
           ["[ ]", "Previous / next timeframe"],
           [", .", "Cycle watchlist"],
           ["F", "Fit chart + re-arm autoscale"],
@@ -5345,7 +6577,7 @@
       aria-modal="true"
       tabindex="-1"
       onclick={(event) => event.stopPropagation()}
-      onkeydown={(event) => event.stopPropagation()}
+      onkeydown={swallowKeysExceptEscape}
     >
       <div class="panel-head">
         <div>
@@ -5440,13 +6672,15 @@
 
 {#if tradeOpen}
   <div class="modal-backdrop" role="presentation" onclick={() => (tradeOpen = false)}>
+    <!-- Enter from any ticket input submits, gated exactly like the button;
+         everything else bubbles so B/S/M/L flip the ticket and Esc closes. -->
     <section
       class="modal"
       role="dialog"
       aria-modal="true"
       tabindex="-1"
       onclick={(event) => event.stopPropagation()}
-      onkeydown={(event) => event.stopPropagation()}
+      onkeydown={onTicketKeydown}
     >
       <div class="panel-head">
         <div>
@@ -5470,7 +6704,7 @@
       aria-modal="true"
       tabindex="-1"
       onclick={(event) => event.stopPropagation()}
-      onkeydown={(event) => event.stopPropagation()}
+      onkeydown={swallowKeysExceptEscape}
     >
       <div class="panel-head">
         <div>
@@ -5578,21 +6812,29 @@
             onclick={() => choosePalette(row)}
             onmousemove={() => (paletteIndex = index)}
           >
-            <span
-              class="pal-star"
-              class:starred={watchlist.includes(row.symbol.toUpperCase())}
-              role="presentation"
-              onclick={(event) => {
-                event.stopPropagation();
-                toggleWatch(row.symbol);
-              }}
-            >{watchlist.includes(row.symbol.toUpperCase()) ? "★" : "☆"}</span>
-            <span class="pal-id">
-              {#if row.imageUrl}<img src={row.imageUrl} alt="" loading="lazy" />{/if}
-              <b>{row.kind === "perp" ? `${row.symbol}` : row.symbol}</b>
-              {#if row.lev}<i class="pal-lev">{row.lev}x</i>{/if}
-              <small>{row.kind === "perp" ? "PERP · Phoenix" : row.name}</small>
-            </span>
+            {#if row.kind === "action"}
+              <span class="pal-star" aria-hidden="true">▸</span>
+              <span class="pal-id">
+                <b>{row.name}</b>
+                <small>ACTION</small>
+              </span>
+            {:else}
+              <span
+                class="pal-star"
+                class:starred={watchlist.includes(row.symbol.toUpperCase())}
+                role="presentation"
+                onclick={(event) => {
+                  event.stopPropagation();
+                  toggleWatch(row.symbol);
+                }}
+              >{watchlist.includes(row.symbol.toUpperCase()) ? "★" : "☆"}</span>
+              <span class="pal-id">
+                {#if row.imageUrl}<img src={row.imageUrl} alt="" loading="lazy" />{/if}
+                <b>{row.kind === "perp" ? `${row.symbol}` : row.symbol}</b>
+                {#if row.lev}<i class="pal-lev">{row.lev}x</i>{/if}
+                <small>{row.kind === "perp" ? "PERP · Phoenix" : row.name}</small>
+              </span>
+            {/if}
             <span class="r mono">{formatPrice(row.price)}</span>
             <span
               class="r mono"
@@ -5625,7 +6867,7 @@
       aria-modal="true"
       tabindex="-1"
       onclick={(event) => event.stopPropagation()}
-      onkeydown={(event) => event.stopPropagation()}
+      onkeydown={swallowKeysExceptEscape}
     >
       <div class="panel-head">
         <div>
@@ -5800,20 +7042,14 @@
       <button
         class:active={spotSide === "buy"}
         type="button"
-        onclick={() => {
-          spotSide = "buy";
-          scheduleSpotQuote();
-        }}
+        onclick={() => flipSpotSide("buy")}
       >
         Buy
       </button>
       <button
         class:active={spotSide === "sell"}
         type="button"
-        onclick={() => {
-          spotSide = "sell";
-          scheduleSpotQuote();
-        }}
+        onclick={() => flipSpotSide("sell")}
       >
         Sell
       </button>
@@ -5836,15 +7072,48 @@
       </button>
     </div>
 
-    <label>
-      {spotSide === "buy" ? "Spend (USDC)" : `Sell (${spotAsset.symbol})`}
-      <input bind:value={spotAmount} oninput={scheduleSpotQuote} inputmode="decimal" placeholder={spotSide === "buy" ? "25" : "0.5"} />
-    </label>
+    <div class="field">
+      <label>
+        {spotSide === "buy" ? "Spend (USDC)" : `Sell (${spotAsset.symbol})`}
+        <input
+          bind:value={spotAmount}
+          oninput={scheduleSpotQuote}
+          inputmode="decimal"
+          placeholder={spotSide === "buy" ? "25" : "0.5"}
+          use:stepInput={{ kind: spotSide === "buy" ? "usd" : "price" }}
+        />
+      </label>
+      <div class="chip-row" role="group" aria-label="Spot size presets">
+        {#each SPOT_CHIP_PCTS as pct (pct)}
+          <button
+            class="pct-chip"
+            type="button"
+            disabled={spotChipBalance <= 0}
+            onclick={() => setSpotAmountChip(pct)}
+          >
+            {pct}%
+          </button>
+        {/each}
+        <button
+          class="pct-chip"
+          type="button"
+          disabled={spotChipBalance <= 0}
+          onclick={() => setSpotAmountChip("max")}
+        >
+          Max
+        </button>
+      </div>
+    </div>
 
     {#if spotOrderType === "limit"}
       <label>
         Limit price (USDC)
-        <input bind:value={spotLimitPrice} inputmode="decimal" placeholder={formatPrice(spotAsset.price)} />
+        <input
+          bind:value={spotLimitPrice}
+          inputmode="decimal"
+          placeholder={formatPrice(spotAsset.price)}
+          use:stepInput={{ kind: "price" }}
+        />
       </label>
     {/if}
 
@@ -5899,20 +7168,25 @@
       {:else if spotOrderType === "limit"}
         <button
           class="primary wide"
+          class:armed={spotLimitArmed}
           type="button"
-          disabled={spotBusy || !(Number(spotLimitPrice) > 0) || !(Number(spotAmount) > 0) || walletScreen.flagged}
-          onclick={submitSpotLimitOrder}
+          disabled={!canSubmitSpot || spotLimitBlocked}
+          onclick={onSpotLimitSubmitClick}
         >
           {#if spotBusy}<span class="spinner" aria-hidden="true"></span>{/if}
           {spotBusy
             ? "Signing…"
-            : `Limit ${spotSide} ${spotAsset.symbol} @ ${spotLimitPrice || "—"}`}
+            : spotLimitBlocked
+              ? `Price ${formatNumber(Math.abs(spotLimitDeviationPct ?? 0), 1)}% from mark — check decimals`
+              : spotLimitArmed
+                ? `Confirm limit ${formatNumber(Math.abs(spotLimitDeviationPct ?? 0), 1)}% from mark`
+                : `Limit ${spotSide} ${spotAsset.symbol} @ ${spotLimitPrice || "—"}`}
         </button>
       {:else}
         <button
           class="primary wide"
           type="button"
-          disabled={spotBusy || !spotQuote || spotQuoteStatus !== "quoted" || walletScreen.flagged}
+          disabled={!canSubmitSpot}
           onclick={executeSpotSwap}
         >
           {#if spotBusy}<span class="spinner" aria-hidden="true"></span>{/if}
@@ -5960,21 +7234,71 @@
     </div>
 
     <div class="ticket-grid-2">
-      <label>
-        <span class="label-row">
-          {sizingMode === "usd" ? "Size (USD)" : "Risk (USD)"}
-          <button
-            class="mode-flip"
-            type="button"
-            onclick={() => (sizingMode = sizingMode === "usd" ? "risk" : "usd")}
-          >{sizingMode === "usd" ? "from stop →" : "← plain size"}</button>
-        </span>
+      <div class="field">
+        <label>
+          <span class="label-row">
+            {sizingMode === "usd" ? "Size (USD)" : "Risk (USD)"}
+            <button
+              class="mode-flip"
+              type="button"
+              onclick={() => (sizingMode = sizingMode === "usd" ? "risk" : "usd")}
+            >{sizingMode === "usd" ? "from stop →" : "← plain size"}</button>
+          </span>
+          {#if sizingMode === "usd"}
+            <input
+              bind:this={ticketSizeInput}
+              bind:value={tradeAmount}
+              inputmode="decimal"
+              use:stepInput={{ kind: "usd" }}
+              oninput={() => (sizeSource = "manual")}
+            />
+          {:else}
+            <input
+              bind:this={ticketSizeInput}
+              bind:value={tradeRiskUsd}
+              inputmode="decimal"
+              placeholder="25"
+              use:stepInput={{ kind: "usd" }}
+              oninput={() => (sizeSource = "manual")}
+            />
+          {/if}
+        </label>
         {#if sizingMode === "usd"}
-          <input bind:value={tradeAmount} inputmode="decimal" />
+          <div class="chip-row" role="group" aria-label="Quick size">
+            {#each SIZE_CHIP_PCTS as pct (pct)}
+              <button
+                class="pct-chip"
+                type="button"
+                disabled={phoenixCollateral <= 0}
+                onclick={() => setSizeChip(pct)}
+              >
+                {pct}%
+              </button>
+            {/each}
+            <button
+              class="pct-chip"
+              type="button"
+              disabled={phoenixCollateral <= 0}
+              onclick={() => setSizeChip("max")}
+            >
+              Max
+            </button>
+          </div>
         {:else}
-          <input bind:value={tradeRiskUsd} inputmode="decimal" placeholder="25" />
+          <div class="chip-row" role="group" aria-label="Quick risk">
+            {#each RISK_CHIP_PCTS as pct (pct)}
+              <button
+                class="pct-chip"
+                type="button"
+                disabled={accountEquityUsd <= 0}
+                onclick={() => setRiskChip(pct)}
+              >
+                {pct}%
+              </button>
+            {/each}
+          </div>
         {/if}
-      </label>
+      </div>
       <label>
         Leverage
         <select bind:value={tradeLeverage}>
@@ -5993,12 +7317,18 @@
         </select>
       </label>
       <label class:ticket-field-muted={tradeType !== "limit"}>
-        Limit price
+        <span class="label-row">
+          Limit price
+          {#if limitCrossesBook}
+            <em class="field-note field-note-amber">crosses book — fills immediately as taker</em>
+          {/if}
+        </span>
         <input
           bind:value={tradeLimitPrice}
           inputmode="decimal"
           placeholder={formatPrice(latestPrice)}
           disabled={tradeType !== "limit"}
+          use:stepInput={{ kind: "price" }}
         />
       </label>
       <div class="field" class:field-error={tpWrongSide}>
@@ -6009,7 +7339,12 @@
               <em class="field-note">{tradeSide === "buy" ? "above" : "below"} entry</em>
             {/if}
           </span>
-          <input bind:value={tradeTakeProfit} inputmode="decimal" placeholder="optional" />
+          <input
+            bind:value={tradeTakeProfit}
+            inputmode="decimal"
+            placeholder="optional"
+            use:stepInput={{ kind: "price" }}
+          />
         </label>
         <div class="chip-row" role="group" aria-label="Quick take profit">
           {#each TP_CHIP_PCTS as pct (pct)}
@@ -6042,6 +7377,7 @@
             bind:value={tradeStopLoss}
             inputmode="decimal"
             placeholder={sizingMode === "risk" ? "required" : "optional"}
+            use:stepInput={{ kind: "price" }}
           />
         </label>
         <div class="chip-row" role="group" aria-label="Quick stop loss">
@@ -6058,6 +7394,15 @@
         </div>
       </div>
     </div>
+
+    {#if selectedPosition}
+      <!-- Only shown against a live position: without it a ticket sell opens
+           a second isolated position with fresh margin instead of reducing. -->
+      <label class="reduce-only">
+        <input type="checkbox" bind:checked={tradeReduceOnly} />
+        Reduce only — trade against the open {selectedPosition.size > 0 ? "long" : "short"}, no new margin
+      </label>
+    {/if}
 
     <div class="ticket-preview">
       {#if sizingMode === "risk"}
@@ -6112,28 +7457,31 @@
       </div>
     </div>
 
-    <!-- Always-on ladder: book and ticket are simultaneous, not tabs. -->
-    <div class="mini-book" aria-label="Order book preview">
-      {#each asks.slice(0, 5).reverse() as level (level.price)}
-        <button type="button" class="mini-row ask" onclick={() => prefillFromBook(level.price, "ask")}>
-          <span>{formatBookPrice(level.price)}</span>
-          <span>{formatNumber(bookLevelNotional(level), 0)}</span>
-        </button>
-      {/each}
-      <div class="mini-spread">
-        <span>{formatBookPrice(spread)}</span>
-        <em>spread</em>
-        <span>{formatNumber(spreadPercent, 3)}%</span>
+    {#if tradeOpen || !stackedBook}
+      <!-- Compact ladder for tickets that can't see the full book (modal,
+           narrow-viewport tabs); the desktop stack has the real one above. -->
+      <div class="mini-book" aria-label="Order book preview">
+        {#each asks.slice(0, 5).reverse() as level (level.price)}
+          <button type="button" class="mini-row ask" onclick={() => prefillFromBook(level.price, "ask")}>
+            <span>{formatBookPrice(level.price)}</span>
+            <span>{formatNumber(bookLevelNotional(level), 0)}</span>
+          </button>
+        {/each}
+        <div class="mini-spread">
+          <span>{formatBookPrice(spread)}</span>
+          <em>spread</em>
+          <span>{formatNumber(spreadPercent, 3)}%</span>
+        </div>
+        {#each bids.slice(0, 5) as level (level.price)}
+          <button type="button" class="mini-row bid" onclick={() => prefillFromBook(level.price, "bid")}>
+            <span>{formatBookPrice(level.price)}</span>
+            <span>{formatNumber(bookLevelNotional(level), 0)}</span>
+          </button>
+        {:else}
+          <div class="mini-empty">book warming up</div>
+        {/each}
       </div>
-      {#each bids.slice(0, 5) as level (level.price)}
-        <button type="button" class="mini-row bid" onclick={() => prefillFromBook(level.price, "bid")}>
-          <span>{formatBookPrice(level.price)}</span>
-          <span>{formatNumber(bookLevelNotional(level), 0)}</span>
-        </button>
-      {:else}
-        <div class="mini-empty">book warming up</div>
-      {/each}
-    </div>
+    {/if}
 
     <div class="ticket-actions">
       {#if phoenixAuthority && phoenixTotalCollateral > 0}
@@ -6156,12 +7504,21 @@
           >uPNL ${formatNumber(accountUpnlUsd, 2)}</span>
         </div>
       {/if}
-      <!-- Single reserved status line: error, tx link, or quiet hint. -->
-      <p class="ticket-status" class:error={Boolean(phoenixActionError)}>
+      <!-- Single reserved status line: error, live tx stage, tx link, or quiet hint. -->
+      <p
+        class="ticket-status"
+        class:error={Boolean(phoenixActionError)}
+        title={phoenixActionErrorDetail || undefined}
+      >
         {#if phoenixActionError}
           {phoenixActionError}
+          {#if phoenixActionRetry}
+            <button class="row-action" type="button" onclick={phoenixActionRetry}>Retry</button>
+          {/if}
+        {:else if orderStageEntry}
+          {txStageText(orderStageEntry, nowMs)}
         {:else if lastTradeSignature}
-          Order submitted ·
+          Confirmed ·
           <a class="news-domain" href={`https://solscan.io/tx/${lastTradeSignature}`} target="_blank" rel="noopener noreferrer">view tx</a>
         {:else}
           &nbsp;
@@ -6184,23 +7541,84 @@
           Deposit first · ${formatNumber(Math.max(0, requiredMarginUsd - phoenixCollateral), 2)}
         </button>
       {:else}
+        <!-- Two-stage armed when the limit is far from mark; the reserved
+             wide button self-documents each state, no extra layout. -->
         <button
           class="primary wide"
+          class:armed={limitArmed}
           type="button"
-          disabled={phoenixBusy || !tradePreview || walletScreen.flagged}
-          onclick={submitPhoenixOrder}
+          disabled={!canSubmitPerp || limitBlocked}
+          onclick={onPerpSubmitClick}
         >
-          {#if phoenixBusy}<span class="spinner" aria-hidden="true"></span>{/if}
-          {phoenixBusy
-            ? "Signing…"
-            : sizingMode === "risk" && !slSet
-              ? "Set a stop loss to size"
-              : !tradePreview
-                ? "Enter a size"
-                : `${tradeSide === "buy" ? "Long" : "Short"} ${selectedSymbol}-PERP · ${tradeLeverage}x`}
+          {#if orderBusy}<span class="spinner" aria-hidden="true"></span>{/if}
+          {orderBusy
+            ? orderStageEntry
+              ? txStageText(orderStageEntry, nowMs)
+              : "Simulating…"
+            : limitBlocked
+              ? `Price ${formatNumber(Math.abs(limitDeviationPct ?? 0), 1)}% from mark — check decimals`
+              : limitArmed
+                ? `Confirm limit ${formatNumber(Math.abs(limitDeviationPct ?? 0), 1)}% from mark`
+                : sizingMode === "risk" && !slSet
+                  ? "Set a stop loss to size"
+                  : !tradePreview
+                    ? "Enter a size"
+                    : `${tradeSide === "buy" ? "Long" : "Short"} ${selectedSymbol}-PERP · ${tradeLeverage}x`}
         </button>
       {/if}
     </div>
+{/snippet}
+
+{#snippet BookLadder()}
+  <div class="book book-ladder">
+    <div class="book-header">
+      <span>Price USDC</span>
+      <span>Size USDC</span>
+      <span>Total USDC</span>
+    </div>
+
+    {#each visibleAskLevels as ask}
+      <button type="button" class="book-row ask" onclick={() => prefillFromBook(ask.price, "ask")}>
+        <span class="depth-bar" style={`width: ${depthWidth(ask)}%;`}></span>
+        <span class="book-price">{formatBookPrice(ask.price)}</span>
+        <span>{formatNumber(bookLevelNotional(ask), 0)}</span>
+        <span>{formatNumber(bookLevelTotalNotional(ask), 0)}</span>
+      </button>
+    {/each}
+
+    <div class="spread-row">
+      <span>{formatBookPrice(spread)}</span>
+      <strong>Spread</strong>
+      <span>{formatNumber(spreadPercent, 3)}%</span>
+    </div>
+
+    {#each visibleBidLevels as bid}
+      <button type="button" class="book-row bid" onclick={() => prefillFromBook(bid.price, "bid")}>
+        <span class="depth-bar" style={`width: ${depthWidth(bid)}%;`}></span>
+        <span class="book-price">{formatBookPrice(bid.price)}</span>
+        <span>{formatNumber(bookLevelNotional(bid), 0)}</span>
+        <span>{formatNumber(bookLevelTotalNotional(bid), 0)}</span>
+      </button>
+    {:else}
+      <div class="empty">No live order book levels loaded.</div>
+    {/each}
+  </div>
+{/snippet}
+
+{#snippet TapeFeed()}
+  <!-- Time & sales: the prints are the heartbeat. -->
+  <div class="tape" aria-label="Time and sales">
+    <div class="tape-header"><span>Time</span><span>Price</span><span>Size</span></div>
+    {#each trades.slice(0, 18) as tick (tick.seq)}
+      <div class="tape-row" class:bid={tick.side === "buy"} class:ask={tick.side === "sell"}>
+        <span>{new Date(tick.ts).toISOString().slice(11, 19)}</span>
+        <span>{formatBookPrice(tick.price)}</span>
+        <span>{formatNumber(tick.size * tick.price, 0)}</span>
+      </div>
+    {:else}
+      <div class="empty">No prints yet.</div>
+    {/each}
+  </div>
 {/snippet}
 
 {#snippet TickerStat(
@@ -6739,6 +8157,30 @@
     border-color: rgba(255, 77, 151, 0.45);
   }
 
+  /* In-flight indication on the acting row button (the big spinner is
+     tuned for the light primary button). */
+  .row-action .spinner {
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-color: var(--line);
+    border-top-color: var(--muted);
+    margin-right: 0.2rem;
+    vertical-align: -0.05rem;
+  }
+
+  /* Two-stage flatten in the PERP_DESK head: reserved width so the
+     FLATTEN ↔ Confirm flatten relabel never shifts the layout. */
+  .flatten-btn {
+    min-width: 7.5rem;
+    letter-spacing: 0.05em;
+  }
+
+  .flatten-btn.armed {
+    color: var(--down);
+    border-color: rgba(255, 90, 106, 0.6);
+  }
+
   .account-dropdown-note {
     margin: 0;
     font-size: 0.72rem;
@@ -6826,6 +8268,11 @@
     font-size: 0.8rem;
   }
 
+  /* Day P&L sparkline rides the stat value line. */
+  .venue-strip .spark {
+    vertical-align: -0.25rem;
+  }
+
   .venue-section {
     margin: 0.35rem 0.75rem 0.1rem;
     color: var(--accent);
@@ -6833,6 +8280,17 @@
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  /* Section header variant with side-wide sweep actions on the right. */
+  .venue-section-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .venue-section-row span {
+    margin-right: auto;
   }
 
   .venue-row {
@@ -6862,6 +8320,13 @@
 
   .venue-row em {
     font-style: normal;
+  }
+
+  /* FIFO id suffix — identifying, not load-bearing; keep it quiet. */
+  .venue-row .order-seq {
+    color: var(--faint);
+    font-size: 0.62rem;
+    font-weight: 500;
   }
 
   .venue-note {
@@ -6926,10 +8391,51 @@
     flex-wrap: wrap;
   }
 
+  /* Optimistic row while the indexer catches up — visibly interim. */
+  .pos-pending {
+    color: var(--faint);
+  }
+
+  .pos-symbol-static {
+    color: var(--muted);
+    font-weight: 800;
+    font-size: 0.85rem;
+  }
+
   .pos-card-bottom {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+
+  /* Partial-close chips: fixed-size, never fight the liq bar for width. */
+  .pos-card-bottom .pct-chip {
+    flex: 0 0 auto;
+    min-width: 2.2rem;
+  }
+
+  /* Inline margin top-up editor under the liq bar. */
+  .margin-add {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.68rem;
+  }
+
+  .margin-add input {
+    width: 6rem;
+    min-height: 1.6rem;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 0;
+    background: var(--surface-2);
+    color: var(--ink);
+    font: inherit;
+  }
+
+  .margin-add-note {
+    color: var(--faint);
+    font-size: 0.62rem;
   }
 
   .liq-bar {
@@ -7052,6 +8558,8 @@
   .panel {
     position: relative;
     min-height: 12rem;
+    /* Jump-to-section lands below the sticky chrome (topbar + rail). */
+    scroll-margin-top: var(--anchor-top, 0px);
     border: 1px solid var(--line);
     border-radius: 0;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
@@ -7542,6 +9050,27 @@
     padding: 0.6rem 0.65rem 0;
     min-height: 0;
     overflow-y: auto;
+  }
+
+  /* Desktop stack: ladder on top, ticket pinned below — both always live.
+     The stack's floor holds ~8 levels a side (proportional on cramped
+     heights); the ticket takes what's left, scrolling internally under
+     its sticky actions footer. */
+  .book-stack {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    min-height: min(24rem, 55%);
+  }
+
+  .book-stack .tape {
+    flex: 1;
+    max-height: none;
+  }
+
+  .orderbook-panel .panel-ticket.stacked {
+    flex: 0 1 auto;
+    border-top: 1px solid var(--line-soft);
   }
 
   /* The primary action never requires scrolling: status + submit stick to
@@ -8178,6 +9707,12 @@
     padding-block: 0.55rem;
   }
 
+  /* Armed limit-deviation confirm: same red cue as the flatten button. */
+  .primary.wide.armed {
+    background: var(--down);
+    border-color: var(--down);
+  }
+
   /* Reserved single-line status (error / tx link / blank). */
   .ticket-status {
     margin: 0;
@@ -8421,6 +9956,12 @@
   }
 
   .market-rail {
+    /* Sticky on every width: prices/funding stay in view while scrolling.
+       Desktop pins below the sticky topbar (measured height via the inline
+       var); the sub-1100px override returns it to the viewport top where
+       the topbar goes static. */
+    position: sticky;
+    top: var(--rail-top, 0px);
     z-index: 15;
     background: rgba(8, 10, 13, 0.92);
     backdrop-filter: blur(16px);
@@ -9001,6 +10542,22 @@
 
   .sl-help:hover { color: var(--ink); }
 
+  /* Account money in the fixed line: equity/uPnL/free/funding, one click
+     from the perp desk. */
+  .sl-money {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .sl-money:hover { color: var(--ink); }
+
   .dashboard { padding-bottom: 2.6rem; }
 
   /* ── Toasts ──────────────────────────────────────────────────────── */
@@ -9113,6 +10670,23 @@
   .pct-chip:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+
+  /* Reduce-only toggle: a one-line row, not a grid field. */
+  .reduce-only {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.68rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .reduce-only input {
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    accent-color: var(--accent);
   }
 
   .field-error input {
