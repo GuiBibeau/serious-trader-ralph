@@ -19,6 +19,8 @@
     headlineMatches,
     matchAlerts,
   } from "$lib/terminal/alerts";
+  import { buildChartLineSpecs } from "$lib/terminal/chart-lines";
+  import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
   import {
     aiErr,
     humanizeBalanceError,
@@ -3796,111 +3798,52 @@
   // overlay (funds > ticket > alerts) opens per link — modals never stack.
   function applyDeepLink(): void {
     if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const KNOWN = [
-      "asset", "venue", "side", "size", "leverage", "type", "price", "tp",
-      "sl", "ticket", "tf", "mode", "fund", "tab", "alerts", "cmd", "watch",
-    ];
-    if (!KNOWN.some((key) => params.has(key))) return;
+    const intent = parseTerminalDeepLink(window.location.search);
+    if (!intent) return;
 
-    const str = (key: string) => params.get(key)?.trim() || null;
-    const lower = (key: string) => str(key)?.toLowerCase() ?? null;
-    // Positive finite number within sane bounds, else null.
-    const numParam = (key: string, max: number): number | null => {
-      const value = Number(str(key));
-      return Number.isFinite(value) && value > 0 && value <= max ? value : null;
-    };
-    const flag = (key: string) => {
-      const value = lower(key);
-      return value !== null && value !== "0" && value !== "false";
-    };
-
-    const asset = str("asset");
-    const venue = lower("venue");
-    const side = lower("side");
-    const isPerp = venue === "perp" || venue === "perps";
-    const wantsSell = side === "sell" || side === "short";
-    const size = numParam("size", 10_000_000);
-    const tab = lower("tab");
-
-    if (isPerp) {
+    if (intent.venue === "perp") {
       pendingTradeMode = null;
-      if (asset) selectedSymbol = asset.toUpperCase().replace(/-PERP$/, "");
-      if (side) tradeSide = wantsSell ? "sell" : "buy";
-      if (size !== null) tradeAmount = String(size);
-
-      const leverage = numParam("leverage", 100);
-      if (leverage !== null) {
-        // Snap to the select's options so the binding displays correctly.
-        const allowed = [1, 2, 5, 10, 20];
-        tradeLeverage = allowed.reduce((best, option) =>
-          Math.abs(option - leverage) < Math.abs(best - leverage) ? option : best,
-        );
-      }
-
-      const limitPrice = numParam("price", 100_000_000);
-      const type = lower("type");
-      if (limitPrice !== null) {
+      if (intent.symbol) selectedSymbol = intent.symbol;
+      if (intent.side) tradeSide = intent.side;
+      if (intent.sizeUsd !== null) tradeAmount = String(intent.sizeUsd);
+      if (intent.leverage !== null) tradeLeverage = intent.leverage;
+      if (intent.limitPrice !== null) {
         tradeType = "limit";
-        tradeLimitPrice = String(limitPrice);
-      } else if (type === "limit" || type === "market") {
-        tradeType = type;
+        tradeLimitPrice = String(intent.limitPrice);
+      } else if (intent.orderType) {
+        tradeType = intent.orderType;
       }
-      const takeProfit = numParam("tp", 100_000_000);
-      const stopLoss = numParam("sl", 100_000_000);
-      if (takeProfit !== null) tradeTakeProfit = String(takeProfit);
-      if (stopLoss !== null) tradeStopLoss = String(stopLoss);
-
-      bookTab = tab === "book" ? "book" : "trade";
-    } else if (asset || venue || side || size !== null) {
-      // Default venue is spot — the broader universe.
+      if (intent.takeProfit !== null) tradeTakeProfit = String(intent.takeProfit);
+      if (intent.stopLoss !== null) tradeStopLoss = String(intent.stopLoss);
+    } else if (intent.venue === "spot") {
       pendingTradeMode = "spot";
-      if (asset) pendingSpotAssetId = asset.toLowerCase();
-      if (side) spotSide = wantsSell ? "sell" : "buy";
-      if (size !== null) spotAmount = String(size);
-      const spotLimit = numParam("price", 100_000_000);
-      if (spotLimit !== null) {
+      if (intent.spotAssetId) pendingSpotAssetId = intent.spotAssetId;
+      if (intent.side) spotSide = intent.side;
+      if (intent.sizeUsd !== null) spotAmount = String(intent.sizeUsd);
+      if (intent.limitPrice !== null) {
         spotOrderType = "limit";
-        spotLimitPrice = String(spotLimit);
+        spotLimitPrice = String(intent.limitPrice);
       }
-      if (asset || side || size !== null) bookTab = tab === "book" ? "book" : "trade";
     }
-    if (tab === "book" || tab === "trade") bookTab = tab;
-
-    const tf = lower("tf");
-    if (PHOENIX_TIMEFRAMES.includes(tf as PhoenixTimeframe)) {
-      selectedTimeframe = tf as PhoenixTimeframe;
+    if (intent.bookTab) bookTab = intent.bookTab;
+    if (intent.timeframe) selectedTimeframe = intent.timeframe;
+    if (intent.priceMode) priceMode = intent.priceMode;
+    if (intent.watchSymbols.length > 0) {
+      watchlist = [...new Set([...watchlist, ...intent.watchSymbols])].slice(0, 24);
     }
-    const mode = lower("mode");
-    if (mode === "last" || mode === "mark") priceMode = mode;
-
-    const watch = str("watch");
-    if (watch) {
-      const symbols = watch
-        .split(",")
-        .map((sym) => sym.trim().toUpperCase())
-        .filter((sym) => /^[A-Z0-9]{1,12}$/.test(sym));
-      watchlist = [...new Set([...watchlist, ...symbols])].slice(0, 24);
-    }
-
-    const cmd = str("cmd");
-    if (cmd) {
-      bookTab = "trade";
-      void runCommand(cmd.slice(0, 200)); // parses straight into the ticket
-    }
+    if (intent.cmd) void runCommand(intent.cmd.slice(0, 200)); // parses straight into the ticket
 
     // Overlays — at most one (funds > ticket > alerts), modals never stack.
-    const fund = lower("fund");
-    if (fund) {
+    if (intent.overlay?.kind === "funds") {
       openFunds();
-      if (fund === "convert" || fund === "phoenix") fundsTab = fund;
-    } else if (flag("ticket") && isPerp) {
+      if (intent.overlay.tab) fundsTab = intent.overlay.tab;
+    } else if (intent.overlay?.kind === "ticket") {
       phoenixActionError = "";
       phoenixActionErrorDetail = "";
       phoenixActionRetry = null;
       lastTradeSignature = "";
       tradeOpen = true;
-    } else if (flag("alerts")) {
+    } else if (intent.overlay?.kind === "alerts") {
       alertsOpen = true;
     }
 
@@ -3947,86 +3890,15 @@
     if (!series) return;
     for (const line of liqLines) series.removePriceLine(line);
     liqLines = [];
-    if (mode !== "perps") return;
-    const add = (options: Parameters<typeof series.createPriceLine>[0]) =>
-      liqLines.push(series.createPriceLine(options));
-
-    for (const position of positions) {
-      if (position.symbol !== symbol) continue;
-      const side = position.size > 0 ? "LONG" : "SHORT";
-      const sideColor = position.size > 0 ? colors.up : colors.down;
-      if (prefs.pos && position.entryPrice !== null) {
-        const upnl =
-          position.unrealizedPnl !== null
-            ? ` · ${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
-            : "";
-        add({
-          price: position.entryPrice,
-          color: sideColor,
-          lineWidth: 2,
-          lineStyle: 0, // solid
-          axisLabelVisible: true,
-          title: `${side} ${formatNumber(Math.abs(position.size), 4)} @ ${formatPrice(position.entryPrice)}${upnl}`,
-        });
-      }
-      if (prefs.pos && position.liquidationPrice !== null) {
-        add({
-          price: position.liquidationPrice,
-          color: colors.down,
-          lineWidth: 1,
-          lineStyle: 2, // dashed
-          axisLabelVisible: true,
-          title: "LIQ est",
-        });
-      }
-      if (prefs.tpsl && position.takeProfitPrice !== null && position.entryPrice !== null) {
-        const gain = Math.abs(position.takeProfitPrice - position.entryPrice) * Math.abs(position.size);
-        add({
-          price: position.takeProfitPrice,
-          color: colors.up,
-          lineWidth: 1,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `TP · +$${formatNumber(gain, 2)}`,
-        });
-      }
-      if (prefs.tpsl && position.stopLossPrice !== null && position.entryPrice !== null) {
-        const loss = Math.abs(position.stopLossPrice - position.entryPrice) * Math.abs(position.size);
-        add({
-          price: position.stopLossPrice,
-          color: colors.down,
-          lineWidth: 1,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `SL · -$${formatNumber(loss, 2)}`,
-        });
-      }
-    }
-    if (prefs.orders) {
-      for (const order of orders) {
-        if (order.symbol !== symbol || order.price === null) continue;
-        add({
-          price: order.price,
-          color: colors.amber,
-          lineWidth: 1,
-          lineStyle: 1, // dotted
-          axisLabelVisible: true,
-          title: `${order.side === "bid" ? "BID" : "ASK"} ${order.remaining !== null ? formatNumber(order.remaining, 4) : ""}`.trim(),
-        });
-      }
-    }
-    if (prefs.alerts) {
-      for (const alert of armed) {
-        if (alert.symbol !== symbol || alert.triggered) continue;
-        add({
-          price: alert.price,
-          color: colors.accent,
-          lineWidth: 1,
-          lineStyle: 1,
-          axisLabelVisible: true,
-          title: `ALERT ${alert.op === "above" ? "↑" : "↓"}`,
-        });
-      }
+    for (const spec of buildChartLineSpecs(
+      positions,
+      orders,
+      armed,
+      prefs,
+      symbol,
+      mode,
+    )) {
+      liqLines.push(series.createPriceLine(spec));
     }
   }
 
