@@ -2146,10 +2146,12 @@
     phoenixBusyKeys = next; // reassign — legacy reactivity ignores mutation
   }
 
-  // `order:SOL` → "SOL open" for the footer status line.
+  // `order:SOL` → "SOL open"; keys without a symbol segment ("flatten")
+  // label as the bare kind for the footer status line.
   function txKeyLabel(key: string): string {
     const [kind, symbol] = key.split(":");
-    return `${symbol ?? "?"} ${kind === "order" ? "open" : kind}`;
+    if (!symbol) return kind;
+    return `${symbol} ${kind === "order" ? "open" : kind}`;
   }
 
   function setTxStage(key: string, stage: TxStage): void {
