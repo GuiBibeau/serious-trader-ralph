@@ -5,6 +5,7 @@ export { default as AssetTable } from "./components/AssetTable.svelte";
 export { default as BrandMark } from "./components/BrandMark.svelte";
 export { default as Button } from "./components/Button.svelte";
 export { default as NewsItem } from "./components/NewsItem.svelte";
+export { default as OpenBetaBanner } from "./components/OpenBetaBanner.svelte";
 export { default as SiteFooter } from "./components/SiteFooter.svelte";
 export { default as SiteNav } from "./components/SiteNav.svelte";
 export { default as StatCard } from "./components/StatCard.svelte";
