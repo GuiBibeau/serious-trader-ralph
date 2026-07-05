@@ -65,6 +65,29 @@ export function formatAge(ts: number | string | null | undefined): string {
   return `${Math.floor(hr / 24)}d ago`;
 }
 
+// toLocaleString constructs a fresh Intl.NumberFormat on every call, and
+// these formatters run in the highest-frequency DOM regions (book ladder,
+// tape, preview and position rows — per rAF book frame). Cache formatters
+// by fraction-digit pair; output is spec-identical to toLocaleString with
+// the same options.
+const numberFormats = new Map<string, Intl.NumberFormat>();
+
+export function cachedNumberFormat(
+  minimumFractionDigits: number,
+  maximumFractionDigits: number,
+): Intl.NumberFormat {
+  const key = `${minimumFractionDigits}:${maximumFractionDigits}`;
+  let format = numberFormats.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat(undefined, {
+      minimumFractionDigits,
+      maximumFractionDigits,
+    });
+    numberFormats.set(key, format);
+  }
+  return format;
+}
+
 export function formatNumber(
   value: number | null | undefined,
   digits = 2,
@@ -72,10 +95,7 @@ export function formatNumber(
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "--";
   }
-  return value.toLocaleString(undefined, {
-    maximumFractionDigits: digits,
-    minimumFractionDigits: digits,
-  });
+  return cachedNumberFormat(digits, digits).format(value);
 }
 
 export function formatPrice(value: number | null | undefined): string {
@@ -86,10 +106,10 @@ export function formatPrice(value: number | null | undefined): string {
   const maximumFractionDigits =
     abs >= 1_000 ? 2 : abs >= 1 ? 4 : abs >= 0.01 ? 6 : 8;
   const minimumFractionDigits = abs >= 1 ? 2 : 0;
-  return value.toLocaleString(undefined, {
+  return cachedNumberFormat(
     minimumFractionDigits,
     maximumFractionDigits,
-  });
+  ).format(value);
 }
 
 export function formatPercent(value: number | null | undefined): string {

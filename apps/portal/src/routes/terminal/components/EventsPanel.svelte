@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { AiRead } from "$lib/ai";
   import type { NewsItem } from "$lib/intel";
   import { headlineMatches } from "$lib/terminal/alerts";
@@ -13,15 +14,24 @@
     spotSymbol,
     tradeMode,
     eventRead,
-    nowMs,
   }: {
     news: NewsItem[];
     selectedSymbol: string;
     spotSymbol: string | null;
     tradeMode: "perps" | "spot";
     eventRead: AiRead;
-    nowMs: number;
   } = $props();
+
+  // Headline velocity counts a 1-hour window — per-second recompute is
+  // meaningless resolution, so the panel keeps its own coarse ~10 s clock
+  // instead of the page's 1 s tick (plan 7.6, sanctioned cadence change).
+  let velocityNowMs = $state(Date.now());
+  onMount(() => {
+    const timer = window.setInterval(() => {
+      velocityNowMs = Date.now();
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  });
 
   const {
     panelOrder,
@@ -48,7 +58,7 @@
       ? news.filter(
           (item) =>
             headlineMatches(item.title, activeNewsSymbol) &&
-            nowMs - item.seenMs < 3_600_000,
+            velocityNowMs - item.seenMs < 3_600_000,
         ).length
       : 0,
   );

@@ -3,6 +3,7 @@
 // state; the ladder max is passed in explicitly.
 
 import type { DepthLevel } from "$lib/phoenix-market-data";
+import { cachedNumberFormat } from "$lib/utils";
 
 export const BOOK_LADDER_LEVELS = 10;
 // Stacked desktop shares the panel with the ticket — cap the ladder so
@@ -47,8 +48,6 @@ export function formatBookPrice(value: number | null | undefined): string {
   }
   const abs = Math.abs(value);
   const digits = abs >= 1_000 ? 0 : abs >= 1 ? 2 : 4;
-  return value.toLocaleString(undefined, {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  // Cached formatter — this runs 3× per ladder row per rAF book frame.
+  return cachedNumberFormat(digits, digits).format(value);
 }

@@ -39,8 +39,11 @@ export function getCachedCandles(
     };
     if (saved.key !== key) return null;
     if (Date.now() - saved.t > CANDLE_STORE_MAX_AGE_MS) return null;
-    candleCache.set(key, { points: saved.points, fetchedAt: saved.t });
-    return saved.points;
+    // Sanitize snapshots persisted before normalizeCandle dropped
+    // zero-close bars, so a stale junk bar never seeds a session.
+    const points = saved.points.filter((point) => point.close > 0);
+    candleCache.set(key, { points, fetchedAt: saved.t });
+    return points;
   } catch {
     return null;
   }
@@ -291,6 +294,27 @@ export function upsertLiveCandle(
   points: MarketPoint[],
   point: MarketPoint,
 ): MarketPoint[] {
+  // Fast paths for the two shapes every live message takes: an update to
+  // the in-progress candle (same ts as the tail) or a brand-new candle
+  // (later ts). History arrays are sorted ascending with unique timestamps
+  // by construction (normalizeCandles + this function's own output), so
+  // neither shape needs the O(n log n) filter/sort defence below — that
+  // only exists for out-of-order backfill and zero-close points.
+  const last = points[points.length - 1];
+  if (last !== undefined && point.close > 0 && point.ts >= last.ts) {
+    if (point.ts === last.ts) {
+      const next = points.slice();
+      next[next.length - 1] = point;
+      return next;
+    }
+    const next =
+      points.length >= CANDLE_HISTORY_LIMIT
+        ? points.slice(points.length - (CANDLE_HISTORY_LIMIT - 1))
+        : points.slice();
+    next.push(point);
+    return next;
+  }
+  // Slow path: empty history, zero/negative close, or out-of-order point.
   const existingIndex = points.findIndex((item) => item.ts === point.ts);
   const next =
     existingIndex >= 0
@@ -513,6 +537,12 @@ function normalizeCandle(candle: Record<string, unknown>): MarketPoint | null {
   const rawTime = parseFiniteNumber(candle.time);
   if (
     close === null ||
+    // Zero/negative closes are junk bars (they collapse the chart's price
+    // autoscale to include 0). Dropping them here makes every candle
+    // producer — snapshot fetch, cache/persisted snapshot, heal refetch,
+    // live stream — zero-close-free by construction, which is the
+    // invariant upsertLiveCandle's fast path relies on.
+    close <= 0 ||
     open === null ||
     high === null ||
     low === null ||
