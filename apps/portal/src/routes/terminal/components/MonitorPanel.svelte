@@ -68,8 +68,8 @@
         >{key}</button>
       {/each}
     </div>
-  <AiReadLine read={scannerRead} />
   </div>
+  <AiReadLine read={scannerRead} />
   <div class="monitor-list">
     <div class="monitor-row monitor-head" aria-hidden="true">
       <span>Market</span><span class="r">Mark</span><span class="r">24h</span><span class="r">Volume</span>

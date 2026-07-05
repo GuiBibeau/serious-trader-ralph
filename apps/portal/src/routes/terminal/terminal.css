@@ -614,6 +614,10 @@ button.account-row.copyable:hover:not(:disabled) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.45rem 0.6rem;
+  /* start, not stretch: a bare label paired with a taller field (size input
+     + preset chips) must top-align — stretch centers its control in the
+     leftover space and the rows read misaligned. */
+  align-items: start;
 }
 
 /* Panel-header dialect on ticket labels; inputs keep body sizing. The
