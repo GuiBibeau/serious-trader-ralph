@@ -1143,15 +1143,21 @@
         selectedTimeframe,
       );
       const historyEnd = snapshot.chartPoints.at(-1)?.ts ?? 0;
-      // Live candles beyond the history window survive the merge; the live
-      // price stamp wins only when a tick actually arrived after connect
-      // (cache paints carry historical stamps, always older).
-      const liveTail = chartPoints.filter((point) => point.ts > historyEnd);
+      // Live candles at or beyond the history boundary survive the merge —
+      // including a same-period update to history's last candle: the stream
+      // sends exchange-computed full candles, so the live version carries
+      // the freshest close. Route them through the same upsert the stream
+      // handler uses. Gated on a real post-connect tick (cache paints carry
+      // historical stamps, always older than streamStartedAt).
       const liveTicked =
         lastMarketUpdate !== null && lastMarketUpdate >= streamStartedAt;
-      chartPoints = liveTail.length
-        ? [...snapshot.chartPoints, ...liveTail]
-        : snapshot.chartPoints;
+      const liveSince = liveTicked
+        ? chartPoints.filter((point) => point.ts >= historyEnd)
+        : [];
+      chartPoints = liveSince.reduce(
+        (acc, point) => upsertLiveCandle(acc, point),
+        snapshot.chartPoints,
+      );
       if (!liveTicked) {
         latestPrice = snapshot.latestPrice;
         lastMarketUpdate = snapshot.lastMarketUpdate;
