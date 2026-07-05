@@ -29,6 +29,7 @@
     limitDeviationPct,
     triggerOrders,
     triggerBusy,
+    mintSafety,
     onswap,
     onlimitsubmit,
     onopenauth,
@@ -50,6 +51,9 @@
     limitDeviationPct: number | null;
     triggerOrders: TriggerOrder[];
     triggerBusy: boolean;
+    // null = loading/unknown for the selected mint (rugs hide in unknowns —
+    // the chips render amber until the account decode lands).
+    mintSafety: import("$lib/solana-rpc").MintSafety | null;
     onswap: () => void | Promise<void>;
     onlimitsubmit: () => void;
     onopenauth: () => void;
@@ -68,9 +72,13 @@
     spotQuote,
     spotQuoteStatus,
     spotQuoteError,
+    spotSlippageBps,
     scheduleQuote,
     flipSide,
   } = ticket;
+
+  const SLIPPAGE_CHOICES = [50, 100, 500] as const; // 0.5% / 1% / 5%
+  const QUICK_BUY_USD = [10, 50, 100] as const;
 
   // ── Spot size chips ────────────────────────────────────────────────
   // % of wallet USDC on buy, % of the token holding on sell — the same
@@ -160,7 +168,53 @@
       >
         Max
       </button>
+      {#if $spotSide === "buy"}
+        {#each QUICK_BUY_USD as usd (usd)}
+          <button
+            class="pct-chip"
+            type="button"
+            onclick={() => {
+              $spotAmount = String(usd);
+              scheduleQuote();
+            }}
+          >
+            ${usd}
+          </button>
+        {/each}
+      {/if}
     </div>
+    <div class="chip-row" role="group" aria-label="Slippage tolerance">
+      <span class="slippage-label">Slip</span>
+      {#each SLIPPAGE_CHOICES as bps (bps)}
+        <button
+          class="pct-chip"
+          class:active={$spotSlippageBps === bps}
+          type="button"
+          onclick={() => {
+            $spotSlippageBps = bps;
+            scheduleQuote();
+          }}
+        >
+          {bps / 100}%
+        </button>
+      {/each}
+    </div>
+  </div>
+
+  <!-- Token safety rails: SPL authority checks straight from the chain.
+       Green = revoked (safe), red = live authority (supply can inflate /
+       holders can be frozen), amber = not yet decoded. -->
+  <div class="safety-row" role="group" aria-label="Token safety checks">
+    {#if mintSafety}
+      <span class="safety-chip" class:up={mintSafety.mintAuthorityRevoked} class:down={!mintSafety.mintAuthorityRevoked}>
+        mint {mintSafety.mintAuthorityRevoked ? "revoked ✓" : "LIVE ✗"}
+      </span>
+      <span class="safety-chip" class:up={mintSafety.freezeAuthorityRevoked} class:down={!mintSafety.freezeAuthorityRevoked}>
+        freeze {mintSafety.freezeAuthorityRevoked ? "revoked ✓" : "LIVE ✗"}
+      </span>
+    {:else}
+      <span class="safety-chip warn">checking mint…</span>
+    {/if}
   </div>
 
   {#if $spotOrderType === "limit"}
@@ -341,6 +395,50 @@
   .pct-chip:hover:not(:disabled) {
     color: var(--ink);
     border-color: var(--muted);
+  }
+
+  .pct-chip.active {
+    color: var(--ink);
+    border-color: var(--accent);
+  }
+
+  .slippage-label {
+    align-self: center;
+    color: var(--faint);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-right: 0.15rem;
+  }
+
+  .safety-row {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+  }
+
+  .safety-chip {
+    font-size: 0.62rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--line-soft);
+    color: var(--muted);
+  }
+
+  .safety-chip.up {
+    color: var(--up);
+    border-color: var(--up);
+  }
+
+  .safety-chip.down {
+    color: var(--down);
+    border-color: var(--down);
+  }
+
+  .safety-chip.warn {
+    color: var(--amber);
+    border-color: var(--amber);
   }
 
   .pct-chip:disabled {

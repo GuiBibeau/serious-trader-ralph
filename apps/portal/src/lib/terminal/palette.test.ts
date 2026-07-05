@@ -287,3 +287,45 @@ describe("PALETTE_TABS", () => {
     ]);
   });
 });
+
+describe("repeat-last action row", () => {
+  test("leads the action list when provided and fires its apply", () => {
+    let applied = false;
+    const rows = buildPaletteRows(
+      [],
+      [],
+      {},
+      {},
+      "",
+      "all",
+      [],
+      [],
+      () => {},
+      () => {},
+      () => {},
+      { label: "Repeat last · LONG $50 SOL 5x", apply: () => (applied = true) },
+    );
+    expect(rows[0]?.kind).toBe("action");
+    expect(rows[0]?.name).toContain("Repeat last");
+    rows[0]?.action?.();
+    expect(applied).toBe(true);
+  });
+
+  test("absent when null", () => {
+    const rows = buildPaletteRows(
+      [],
+      [],
+      {},
+      {},
+      "",
+      "all",
+      [],
+      [],
+      () => {},
+      () => {},
+      () => {},
+      null,
+    );
+    expect(rows.some((row) => row.key === "action:repeat-last")).toBe(false);
+  });
+});

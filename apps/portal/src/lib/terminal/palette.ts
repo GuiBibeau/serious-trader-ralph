@@ -45,6 +45,7 @@ export function buildPaletteRows(
   closePosition: (position: PhoenixPosition) => void,
   cancelSymbolOrders: (symbol: string) => void,
   flattenAll: () => void,
+  repeatLast: { label: string; apply: () => void } | null = null,
 ): PaletteRow[] {
   // Live-state actions: one Close per position, one Cancel per symbol with
   // book orders, Flatten once there is more than one position to close.
@@ -56,18 +57,33 @@ export function buildPaletteRows(
     volumeUsd: null,
     hub: "perps" as const,
   };
-  const actions: PaletteRow[] = positions.map((position) => ({
-    kind: "action",
-    key: `action:close:${position.symbol}:${position.subaccountIndex}`,
-    symbol: position.symbol,
-    name: `Close ${position.symbol}-PERP${
-      position.unrealizedPnl !== null
-        ? ` · ${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
-        : ""
-    }`,
-    ...blank,
-    action: () => closePosition(position),
-  }));
+  const actions: PaletteRow[] = [];
+  if (repeatLast) {
+    actions.push({
+      kind: "action",
+      key: "action:repeat-last",
+      symbol: "REPEAT",
+      name: repeatLast.label,
+      ...blank,
+      action: repeatLast.apply,
+    });
+  }
+  actions.push(
+    ...positions.map(
+      (position): PaletteRow => ({
+        kind: "action",
+        key: `action:close:${position.symbol}:${position.subaccountIndex}`,
+        symbol: position.symbol,
+        name: `Close ${position.symbol}-PERP${
+          position.unrealizedPnl !== null
+            ? ` · ${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
+            : ""
+        }`,
+        ...blank,
+        action: () => closePosition(position),
+      }),
+    ),
+  );
   const bookCounts = new Map<string, number>();
   for (const order of orders) {
     if (order.isStopLoss) continue;

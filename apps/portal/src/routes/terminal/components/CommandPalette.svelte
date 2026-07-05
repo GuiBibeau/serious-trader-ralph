@@ -25,6 +25,7 @@
     oncloseposition,
     oncancelorders,
     onflatten,
+    repeatLast,
     onselect,
     ontogglewatch,
     onclose,
@@ -39,6 +40,7 @@
     oncloseposition: (position: PhoenixPosition) => void;
     oncancelorders: (symbol: string) => void;
     onflatten: () => void;
+    repeatLast: { label: string; apply: () => void } | null;
     onselect: (row: PaletteRow) => void;
     ontogglewatch: (symbol: string) => void;
     onclose: () => void;
@@ -67,6 +69,7 @@
       oncloseposition,
       oncancelorders,
       onflatten,
+      repeatLast,
     ),
   );
   $effect(() => {

@@ -62,3 +62,54 @@ export async function fetchSolanaLamports(address: string): Promise<string> {
   const payload = (await response.json().catch(() => null)) as unknown;
   return parseLamportsResponse(payload, response.ok, response.status);
 }
+
+// ── SPL mint safety (meme-coin rails) ────────────────────────────────
+// Decodes the two authority slots of an SPL mint account straight from a
+// raw getAccountInfo — no web3.js. A revoked mint authority means supply
+// is fixed; a revoked freeze authority means holders can't be frozen.
+// Token-2022 shares the same base layout (extensions live past byte 82).
+
+export type MintSafety = {
+  mintAuthorityRevoked: boolean;
+  freezeAuthorityRevoked: boolean;
+  decimals: number;
+};
+
+/** Pure decoder for a base64 SPL mint account — testable with fixtures. */
+export function parseMintAccount(base64Data: string): MintSafety {
+  const raw = atob(base64Data);
+  if (raw.length < 82) throw new Error("mint-account-too-short");
+  const u32 = (offset: number) =>
+    raw.charCodeAt(offset) |
+    (raw.charCodeAt(offset + 1) << 8) |
+    (raw.charCodeAt(offset + 2) << 16) |
+    (raw.charCodeAt(offset + 3) << 24);
+  return {
+    mintAuthorityRevoked: u32(0) === 0,
+    decimals: raw.charCodeAt(44),
+    freezeAuthorityRevoked: u32(46) === 0,
+  };
+}
+
+export async function fetchMintSafety(mint: string): Promise<MintSafety> {
+  const response = await fetch(solanaRpcUrl(), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: "trader-ralph-mint-safety",
+      method: "getAccountInfo",
+      params: [mint, { encoding: "base64" }],
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) throw new Error(`solana-rpc-http-${response.status}`);
+  if (!isRecord(payload) || !isRecord(payload.result)) {
+    throw new Error("solana-rpc-invalid-response");
+  }
+  const value = payload.result.value;
+  if (!isRecord(value) || !Array.isArray(value.data)) {
+    throw new Error("mint-account-missing");
+  }
+  return parseMintAccount(String(value.data[0]));
+}

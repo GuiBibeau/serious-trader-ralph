@@ -102,7 +102,7 @@
     screenSolanaAddress,
     type NewsItem,
   } from "$lib/intel";
-  import { fetchSolanaLamports, solanaRpcUrl } from "$lib/solana-rpc";
+  import { fetchMintSafety, fetchSolanaLamports, solanaRpcUrl } from "$lib/solana-rpc";
   import { swrRead, swrWrite } from "$lib/swr";
   import {
     edgeApiBase,
@@ -271,6 +271,22 @@
     } catch {
       // sweep is best-effort; keep last values
     }
+  }
+
+  function applyLastOrderIntent(): void {
+    const intent = lastOrderIntent;
+    if (!intent) return;
+    if (tradeMode !== "perps") setTradeMode("perps", false);
+    // switchPhoenixMarket clears price-anchored fields synchronously at its
+    // top, so re-applying after the call keeps the intent's values.
+    if (intent.symbol !== selectedSymbol) void switchPhoenixMarket(intent.symbol);
+    $tradeSide = intent.side;
+    $tradeType = intent.type;
+    $tradeAmount = intent.amount;
+    $tradeLeverage = intent.leverage;
+    $tradeLimitPrice = intent.limitPrice;
+    $tradeTakeProfit = intent.tp;
+    $tradeStopLoss = intent.sl;
   }
 
   function chooseMonitorRow(symbol: string): void {
@@ -490,6 +506,33 @@
   let dockTab: "desk" | "journal" | "alerts" = "desk";
   let macroOpen = false;
   const { alertLog } = alertsStore;
+  // Meme safety rails: SPL authority checks per selected mint (cached —
+  // authorities effectively never un-revoke).
+  let mintSafetyCache: Record<string, import("$lib/solana-rpc").MintSafety> = {};
+  let mintSafetyMisses: Record<string, true> = {};
+  $: if (spotAsset && !mintSafetyCache[spotAsset.mint] && !mintSafetyMisses[spotAsset.mint]) {
+    const mint = spotAsset.mint;
+    mintSafetyMisses = { ...mintSafetyMisses, [mint]: true };
+    void fetchMintSafety(mint)
+      .then((safety) => {
+        mintSafetyCache = { ...mintSafetyCache, [mint]: safety };
+      })
+      .catch(() => {
+        // decode failed (RPC hiccup / exotic mint) — chips stay amber
+      });
+  }
+  // Repeat-last-order: the exact ticket inputs of the last CONFIRMED perp
+  // order; the palette re-applies them (never auto-submits).
+  let lastOrderIntent: {
+    symbol: string;
+    side: "buy" | "sell";
+    type: "market" | "limit";
+    amount: string;
+    leverage: number;
+    limitPrice: string;
+    tp: string;
+    sl: string;
+  } | null = null;
 
   $: selectedMarket = markets.find((market) => market.symbol === selectedSymbol) ?? null;
   // Funds = everything the user considers theirs: wallet USDC + ALL Phoenix
@@ -2241,6 +2284,18 @@
   async function submitPhoenixOrder(): Promise<void> {
     const symbol = selectedSymbol;
     const busyKey = `order:${symbol}`;
+    // Snapshot the ticket inputs now — on confirm they become the
+    // repeat-last intent exactly as sent, even if edited mid-flight.
+    const intentSnapshot = {
+      symbol,
+      side: $tradeSide,
+      type: $tradeType,
+      amount: $tradeAmount,
+      leverage: $tradeLeverage,
+      limitPrice: $tradeLimitPrice,
+      tp: $tradeTakeProfit,
+      sl: $tradeStopLoss,
+    };
     if (!phoenixAuthority || phoenixBusyKeys.has(busyKey) || !$tradePreview) return;
     // Freeze the ticket state before the first await — inputs stay editable
     // while the tx confirms, so a live read after an await could describe a
@@ -2337,6 +2392,7 @@
         side,
         signature: lastTradeSignature,
       });
+      lastOrderIntent = intentSnapshot;
       noteTrade({
         ts: Date.now(),
         venue: "perp",
@@ -4237,7 +4293,13 @@
       </div>
       <div class="dock-body">
         {#if dockTab === "journal"}
-          <JournalPanel {journalEntries} {journalToday} {recapRead} onwipe={wipeJournal} />
+          <JournalPanel
+            {journalEntries}
+            {journalToday}
+            {recapRead}
+            {sessionPnlUsd}
+            onwipe={wipeJournal}
+          />
         {:else if dockTab === "alerts"}
           <div class="dock-alert-log">
             {#each $alertLog as fired (fired.ts)}
@@ -4609,6 +4671,12 @@
       )}
     oncancelorders={(symbol) => void cancelSymbolBookOrders(symbol)}
     onflatten={() => void closeAllPhoenixPositions()}
+    repeatLast={lastOrderIntent
+      ? {
+          label: `Repeat last · ${lastOrderIntent.side === "buy" ? "LONG" : "SHORT"} $${lastOrderIntent.amount} ${lastOrderIntent.symbol} ${lastOrderIntent.leverage}x`,
+          apply: applyLastOrderIntent,
+        }
+      : null}
     onselect={choosePalette}
     ontogglewatch={toggleWatch}
     onclose={() => (paletteOpen = false)}
@@ -4655,6 +4723,7 @@
     limitDeviationPct={spotLimitDeviationPct}
     {triggerOrders}
     {triggerBusy}
+    mintSafety={spotAsset ? (mintSafetyCache[spotAsset.mint] ?? null) : null}
     onswap={executeSpotSwap}
     onlimitsubmit={onSpotLimitSubmitClick}
     onopenauth={openAuthModal}

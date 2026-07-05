@@ -10,11 +10,14 @@
     journalEntries,
     journalToday,
     recapRead,
+    sessionPnlUsd,
     onwipe,
   }: {
     journalEntries: JournalEntry[];
     journalToday: JournalEntry[];
     recapRead: AiRead;
+    /** Day P&L from the equity baseline — null when no wallet/history. */
+    sessionPnlUsd: number | null;
     // Wiping resets page-owned state too (entries source + recap AI state),
     // so the clear action stays a page callback.
     onwipe: () => void;
@@ -58,6 +61,26 @@
       <button class="row-action" type="button" onclick={onwipe}>Clear</button>
     {/if}
   </div>
+  <!-- Session strip: honest numbers only — trade count and notional come
+       from the journal; day P&L from the equity baseline. Win rates wait
+       for a real fills feed. -->
+  <div class="session-strip">
+    <span>Trades <b>{journalToday.length}</b></span>
+    <span>
+      Notional
+      <b>
+        ${formatNumber(
+          journalToday.reduce((sum, entry) => sum + (entry.notionalUsd ?? 0), 0),
+          0,
+        )}
+      </b>
+    </span>
+    {#if sessionPnlUsd !== null}
+      <span class={sessionPnlUsd >= 0 ? "up" : "down"}>
+        Day P&L <b>{sessionPnlUsd >= 0 ? "+" : "-"}${formatNumber(Math.abs(sessionPnlUsd), 2)}</b>
+      </span>
+    {/if}
+  </div>
   {#if journalToday.length >= 2}
     <AiReadLine read={recapRead} />
   {/if}
@@ -88,6 +111,20 @@
 </section>
 
 <style>
+  .session-strip {
+    display: flex;
+    gap: 0.9rem;
+    padding: 0.35rem 0;
+    font-size: 0.72rem;
+    color: var(--muted);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .session-strip b {
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .session-strip .up b { color: var(--up); }
+  .session-strip .down b { color: var(--down); }
   .journal-list { display: grid; }
   .journal-row {
     display: grid;

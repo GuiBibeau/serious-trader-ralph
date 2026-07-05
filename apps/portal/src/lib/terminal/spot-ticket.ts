@@ -40,6 +40,8 @@ export function createSpotTicket(options: SpotTicketOptions) {
   const spotAmount = writable("25");
   const spotOrderType = writable<SpotOrderType>("market");
   const spotLimitPrice = writable("");
+  // Meme execution preset: 50 bps default; volatile pairs need 1–5%.
+  const spotSlippageBps = writable(50);
   const spotQuote = writable<SpotQuote | null>(null);
   const spotQuoteStatus = writable<SpotQuoteStatus>("idle");
   const spotQuoteError = writable("");
@@ -79,12 +81,14 @@ export function createSpotTicket(options: SpotTicketOptions) {
               asset.mint,
               usdcToAtoms(amount),
               asset.decimals,
+              get(spotSlippageBps),
             )
           : await fetchQuote(
               asset.mint,
               USDC_MINT,
               tokenToAtoms(amount, asset.decimals),
               6,
+              get(spotSlippageBps),
             );
       if (seq !== quoteSeq) return; // stale response — newer request owns state
       spotQuote.set(quote);
@@ -141,6 +145,7 @@ export function createSpotTicket(options: SpotTicketOptions) {
   return {
     spotSide,
     spotAmount,
+    spotSlippageBps,
     spotOrderType,
     spotLimitPrice,
     spotQuote,
