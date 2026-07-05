@@ -60,6 +60,7 @@
   import {
     BOOK_LADDER_LEVELS,
     BOOK_LADDER_LEVELS_STACKED,
+    formatBookPrice,
     maxBookNotional,
   } from "$lib/terminal/book";
   import {
@@ -3056,6 +3057,14 @@
       wickDownColor: DOWN_COLOR,
       borderVisible: false,
       priceLineVisible: false,
+      // Meme-ready axis: sub-cent prices need the subscript-zero dialect —
+      // the default 2dp formatter flat-lines them at 0.00. minMove keeps
+      // axis steps meaningful down to 8 decimals.
+      priceFormat: {
+        type: "custom",
+        formatter: (price: number) => formatBookPrice(price),
+        minMove: 0.00000001,
+      },
     });
     volumeSeries = lwChart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },

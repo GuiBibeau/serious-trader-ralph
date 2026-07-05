@@ -98,11 +98,37 @@ export function formatNumber(
   return cachedNumberFormat(digits, digits).format(value);
 }
 
+const SUBSCRIPT_DIGITS =
+  "\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089";
+
+/**
+ * Meme-coin price dialect: 0.00004821 -> "0.0\u20844821" (subscript counts
+ * the zeros after the point). Display-only — never feed this back into a
+ * Number() parse. Falls through for anything >= 0.001.
+ */
+export function formatSubZeroPrice(value: number): string {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  const zeros = Math.max(0, -Math.floor(Math.log10(abs)) - 1);
+  const digits = Math.round(abs * 10 ** (zeros + 4))
+    .toString()
+    .padStart(4, "0")
+    .replace(/0+$/, "");
+  const sub = String(zeros)
+    .split("")
+    .map((ch) => SUBSCRIPT_DIGITS[Number(ch)])
+    .join("");
+  return `${sign}0.0${sub}${digits || "0"}`;
+}
+
 export function formatPrice(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "--";
   }
   const abs = Math.abs(value);
+  // Sub-cent (meme) territory: subscript-zero notation stays legible where
+  // fixed decimals turn into a wall of zeros.
+  if (abs > 0 && abs < 0.001) return formatSubZeroPrice(value);
   const maximumFractionDigits =
     abs >= 1_000 ? 2 : abs >= 1 ? 4 : abs >= 0.01 ? 6 : 8;
   const minimumFractionDigits = abs >= 1 ? 2 : 0;
