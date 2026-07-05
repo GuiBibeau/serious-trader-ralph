@@ -395,3 +395,16 @@ describe("orderCancelKey", () => {
     );
   });
 });
+
+describe("fmtTriggerPrice sub-cent precision", () => {
+  test("keeps 4 significant digits below a cent and stays parseable", () => {
+    expect(fmtTriggerPrice(0.00004821)).toBe("0.00004821");
+    expect(Number(fmtTriggerPrice(0.00004821))).toBeCloseTo(0.00004821, 10);
+    expect(fmtTriggerPrice(0.0001)).toBe("0.0001");
+  });
+
+  test("a cent and above keep the original tiers", () => {
+    expect(fmtTriggerPrice(0.5)).toBe("0.50000");
+    expect(fmtTriggerPrice(150.234)).toBe("150.23");
+  });
+});

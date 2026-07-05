@@ -6,6 +6,8 @@
   import { panelStyle, usePanelLayout } from "$lib/terminal/layout";
   import { buildMonitorRows, type MonitorSort } from "$lib/terminal/panels";
   import { formatNumber, formatPercent, formatPrice } from "$lib/utils";
+  import type { AiRead } from "$lib/ai";
+  import AiReadLine from "./AiReadLine.svelte";
   import DragHead from "./DragHead.svelte";
 
   let {
@@ -14,6 +16,7 @@
     dailyStats,
     selectedSymbol,
     tradeMode,
+    scannerRead,
     onselect,
   }: {
     markets: PhoenixMarketConfig[];
@@ -21,6 +24,8 @@
     dailyStats: Record<string, PhoenixDailyStat>;
     selectedSymbol: string;
     tradeMode: "perps" | "spot";
+    // Absorbed from the retired PhoenixMarketsPanel: the AI scanner line.
+    scannerRead: AiRead;
     onselect: (symbol: string) => void;
   } = $props();
 
@@ -41,6 +46,7 @@
 </script>
 
 <section
+  id="section-markets"
   class="panel monitor-panel"
   role="group"
   data-panel="monitor"
@@ -62,6 +68,7 @@
         >{key}</button>
       {/each}
     </div>
+  <AiReadLine read={scannerRead} />
   </div>
   <div class="monitor-list">
     <div class="monitor-row monitor-head" aria-hidden="true">

@@ -24,21 +24,16 @@ export const ONBOARD_KEY = "trader-ralph-terminal/phx-referral/v2";
 // "monitor" is the markets-monitor panel; "markets" is the Phoenix markets
 // list. Old payloads persisted both as "markets" — migrateLayout in
 // $lib/terminal/layout maps the first occurrence to "monitor".
+// Day-trading grid: the desk/journal live in the bottom dock (always
+// visible, not draggable), the five macro panels + ideas fold into the
+// macro drawer, and the Phoenix markets list merged into the monitor —
+// mergeLayout drops the retired ids from old saves automatically.
 export const DEFAULT_PANEL_ORDER = [
   "watch",
   "monitor",
-  "perp",
   "spot",
   "screener",
-  "macro",
-  "fred",
-  "etf",
-  "stablecoins",
-  "oil",
   "events",
-  "ideas",
-  "markets",
-  "journal",
 ];
 
 export const SECTION_LINKS: { id: string; label: string }[] = [
@@ -65,6 +60,8 @@ export type TerminalPrefs = {
   tradeAmount: string;
   tradeRiskUsd: string;
   tradeLeverage: number;
+  dockTab: "desk" | "journal" | "alerts";
+  macroOpen: boolean;
 };
 
 /**
@@ -140,6 +137,14 @@ export function parsePrefs(raw: string | null): Partial<TerminalPrefs> {
   ) {
     prefs.tradeLeverage = data.tradeLeverage;
   }
+  if (
+    data.dockTab === "desk" ||
+    data.dockTab === "journal" ||
+    data.dockTab === "alerts"
+  ) {
+    prefs.dockTab = data.dockTab;
+  }
+  if (typeof data.macroOpen === "boolean") prefs.macroOpen = data.macroOpen;
   return prefs;
 }
 
@@ -173,6 +178,8 @@ export function persistPrefs(
   _tradeAmount: string,
   _tradeRiskUsd: string,
   _tradeLeverage: number,
+  _dockTab: "desk" | "journal" | "alerts",
+  _macroOpen: boolean,
 ): void {
   if (typeof window === "undefined") return;
   try {
@@ -194,6 +201,8 @@ export function persistPrefs(
         tradeAmount: _tradeAmount,
         tradeRiskUsd: _tradeRiskUsd,
         tradeLeverage: _tradeLeverage,
+        dockTab: _dockTab,
+        macroOpen: _macroOpen,
       }),
     );
   } catch {

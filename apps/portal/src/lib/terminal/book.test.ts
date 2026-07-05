@@ -95,3 +95,15 @@ describe("formatBookPrice", () => {
     expect(formatBookPrice(Number.POSITIVE_INFINITY)).toBe("--");
   });
 });
+
+describe("sub-cent (meme) pricing", () => {
+  test("formatBookPrice uses subscript-zero below 0.001", () => {
+    expect(formatBookPrice(0.00004821)).toBe("0.0₄4821");
+    expect(formatBookPrice(0.0001234)).toBe("0.0₃1234");
+    expect(formatBookPrice(-0.00004821)).toBe("-0.0₄4821");
+  });
+
+  test("0.001 and above keep fixed decimals", () => {
+    expect(formatBookPrice(0.0012)).toContain("0.0012");
+  });
+});

@@ -85,7 +85,12 @@ export function fmtTriggerPrice(value: number): string {
   if (value >= 1000) return value.toFixed(1);
   if (value >= 10) return value.toFixed(2);
   if (value >= 1) return value.toFixed(3);
-  return value.toFixed(5);
+  if (value >= 0.01 || value <= 0) return value.toFixed(5);
+  // Sub-cent (meme) prices: 5 fixed decimals destroy the value
+  // (0.00004821 -> 0.00005). Keep 4 significant digits, still plain
+  // decimals — this string round-trips through Number() in the ticket.
+  const zeros = Math.max(0, -Math.floor(Math.log10(value)) - 1);
+  return value.toFixed(Math.min(12, zeros + 4)).replace(/0+$/, "");
 }
 
 // The trader API stopped shipping uPnL/liq per position; reconstruct

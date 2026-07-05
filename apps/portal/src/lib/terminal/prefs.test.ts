@@ -111,3 +111,26 @@ describe("mergeLayout", () => {
     expect(merged).toEqual(["perp", "watch"]);
   });
 });
+
+describe("dock + drawer prefs", () => {
+  test("dockTab whitelists the three tabs", () => {
+    expect(parsePrefs(JSON.stringify({ dockTab: "journal" })).dockTab).toBe(
+      "journal",
+    );
+    expect(parsePrefs(JSON.stringify({ dockTab: "desk" })).dockTab).toBe(
+      "desk",
+    );
+    expect(
+      parsePrefs(JSON.stringify({ dockTab: "settings" })).dockTab,
+    ).toBeUndefined();
+  });
+
+  test("macroOpen accepts booleans only", () => {
+    expect(parsePrefs(JSON.stringify({ macroOpen: true })).macroOpen).toBe(
+      true,
+    );
+    expect(
+      parsePrefs(JSON.stringify({ macroOpen: "yes" })).macroOpen,
+    ).toBeUndefined();
+  });
+});

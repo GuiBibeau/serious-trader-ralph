@@ -15,7 +15,6 @@
   import MacroPanel from "./components/MacroPanel.svelte";
   import MonitorPanel from "./components/MonitorPanel.svelte";
   import PerpDeskPanel from "./components/PerpDeskPanel.svelte";
-  import PhoenixMarketsPanel from "./components/PhoenixMarketsPanel.svelte";
   import ScreenerPanel from "./components/ScreenerPanel.svelte";
   import SpotMarketsPanel from "./components/SpotMarketsPanel.svelte";
   import SpotTicketForm from "./components/SpotTicketForm.svelte";
@@ -61,6 +60,7 @@
   import {
     BOOK_LADDER_LEVELS,
     BOOK_LADDER_LEVELS_STACKED,
+    formatBookPrice,
     maxBookNotional,
   } from "$lib/terminal/book";
   import {
@@ -486,6 +486,10 @@
   const OPEN_BETA_BANNER_STORAGE_KEY =
     "trader-ralph-terminal/open-beta-banner/v1";
   let showOpenBetaBanner = false;
+  // Bottom dock (desk / journal / alerts) + macro drawer — day-trading grid.
+  let dockTab: "desk" | "journal" | "alerts" = "desk";
+  let macroOpen = false;
+  const { alertLog } = alertsStore;
 
   $: selectedMarket = markets.find((market) => market.symbol === selectedSymbol) ?? null;
   // Funds = everything the user considers theirs: wallet USDC + ALL Phoenix
@@ -925,6 +929,8 @@
       $tradeAmount,
       $tradeRiskUsd,
       $tradeLeverage,
+      dockTab,
+      macroOpen,
     );
 
   onMount(() => {
@@ -3057,6 +3063,14 @@
       wickDownColor: DOWN_COLOR,
       borderVisible: false,
       priceLineVisible: false,
+      // Meme-ready axis: sub-cent prices need the subscript-zero dialect —
+      // the default 2dp formatter flat-lines them at 0.00. minMove keeps
+      // axis steps meaningful down to 8 decimals.
+      priceFormat: {
+        type: "custom",
+        formatter: (price: number) => formatBookPrice(price),
+        minMove: 0.00000001,
+      },
     });
     volumeSeries = lwChart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
@@ -3673,6 +3687,8 @@
     if (prefs.tradeAmount !== undefined) $tradeAmount = prefs.tradeAmount;
     if (prefs.tradeRiskUsd !== undefined) $tradeRiskUsd = prefs.tradeRiskUsd;
     if (prefs.tradeLeverage !== undefined) $tradeLeverage = prefs.tradeLeverage;
+    if (prefs.dockTab !== undefined) dockTab = prefs.dockTab;
+    if (prefs.macroOpen !== undefined) macroOpen = prefs.macroOpen;
   }
 
   function loadOpenBetaBanner(): void {
@@ -3958,6 +3974,9 @@
     class="dashboard"
     style={`--anchor-top: ${(stackedBook ? topbarHeight : 0) + marketRailHeight}px;`}
   >
+    <!-- Chart column: chart stacked over the dock (Hyperliquid posture) —
+         the dock's height is independent of the taller ticket rail. -->
+    <div class="chart-col">
     <section id="section-chart" class="panel chart-panel">
       <div class="chart-toolbar">
         <div class="timeframe-tabs" aria-label="Chart timeframe">
@@ -4183,6 +4202,63 @@
       </div>
     </section>
 
+    <!-- Bottom dock: risk never leaves the screen — desk/journal/alerts
+         tabs span the full width directly under the chart row. -->
+    <section class="panel dock" aria-label="Trading desk dock">
+      <div class="dock-tabs" role="tablist" aria-label="Dock views">
+        <button
+          role="tab"
+          aria-selected={dockTab === "desk"}
+          class:active={dockTab === "desk"}
+          type="button"
+          onclick={() => (dockTab = "desk")}
+        >
+          Desk
+        </button>
+        <button
+          role="tab"
+          aria-selected={dockTab === "journal"}
+          class:active={dockTab === "journal"}
+          type="button"
+          onclick={() => (dockTab = "journal")}
+        >
+          Journal
+        </button>
+        <button
+          role="tab"
+          aria-selected={dockTab === "alerts"}
+          class:active={dockTab === "alerts"}
+          type="button"
+          onclick={() => (dockTab = "alerts")}
+        >
+          Alerts{#if $alertLog.length > 0}
+            <span class="dock-count">{$alertLog.length}</span>{/if}
+        </button>
+      </div>
+      <div class="dock-body">
+        {#if dockTab === "journal"}
+          <JournalPanel {journalEntries} {journalToday} {recapRead} onwipe={wipeJournal} />
+        {:else if dockTab === "alerts"}
+          <div class="dock-alert-log">
+            {#each $alertLog as fired (fired.ts)}
+              <div class="dock-alert-row">
+                <span class="dock-alert-ts">
+                  {new Date(fired.ts).toISOString().slice(11, 19)}
+                </span>
+                <b>{fired.title}</b>
+                <span>{fired.body}</span>
+              </div>
+            {:else}
+              <p class="dock-empty">No alerts fired this session.</p>
+            {/each}
+          </div>
+        {:else}
+          {@render perpDeskPanel()}
+        {/if}
+      </div>
+    </section>
+    </div>
+
     <section id="section-book" class="panel orderbook-panel">
       {#if stackedBook}
         <!-- Desktop: ticket + ladder stack (Hyperliquid order) — the ticket
@@ -4313,15 +4389,18 @@
       {/if}
     </section>
 
+
     <MonitorPanel
       {markets}
       {marketMids}
       {dailyStats}
       {selectedSymbol}
       {tradeMode}
+      {scannerRead}
       onselect={chooseMonitorRow}
     />
 
+{#snippet perpDeskPanel()}
     <PerpDeskPanel
       authority={phoenixAuthority}
       trader={phoenixTrader}
@@ -4374,7 +4453,23 @@
       onmarginopen={openMarginAdd}
       onmarginsubmit={(position) => submitMarginAdd(position)}
     />
+{/snippet}
 
+    <!-- Macro drawer: the research desk folds away — day traders open it
+         when they want regime context; the chip carries edge status. -->
+    <section class="panel macro-drawer" id="section-macro">
+      <button
+        class="drawer-head"
+        type="button"
+        aria-expanded={macroOpen}
+        onclick={() => (macroOpen = !macroOpen)}
+      >
+        <span class="drawer-kicker">MACRO_DESK</span>
+        <span class="drawer-status">{edgeStatus}</span>
+        <span class="drawer-caret" aria-hidden="true">{macroOpen ? "▾" : "▸"}</span>
+      </button>
+      {#if macroOpen}
+        <div class="drawer-grid">
     <MacroPanel
       title="MACRO_RADAR"
       subtitle="Signal blend"
@@ -4393,14 +4488,6 @@
     />
     <MacroPanel title="OIL_MACRO" subtitle="Energy regime" panel={oilPanel} panelId="oil" />
 
-    <EventsPanel
-      {news}
-      {selectedSymbol}
-      spotSymbol={spotAsset?.symbol ?? null}
-      {tradeMode}
-      {eventRead}
-    />
-
     <section
       class="panel macro-panel"
       role="group"
@@ -4417,6 +4504,17 @@
       </div>
       <AiReadLine read={ideasRead} />
     </section>
+        </div>
+      {/if}
+    </section>
+
+    <EventsPanel
+      {news}
+      {selectedSymbol}
+      spotSymbol={spotAsset?.symbol ?? null}
+      {tradeMode}
+      {eventRead}
+    />
 
     <WatchlistPanel
       {watchlist}
@@ -4442,16 +4540,6 @@
       {spotAsset}
       onselect={selectSpotAsset}
     />
-
-    <PhoenixMarketsPanel
-      {markets}
-      {marketMids}
-      {scannerRead}
-      {selectedSymbol}
-      onmarketchange={onMarketChange}
-    />
-
-    <JournalPanel {journalEntries} {journalToday} {recapRead} onwipe={wipeJournal} />
 
   </section>
   <StatusLine
@@ -4715,6 +4803,138 @@
   }
 
 
+  /* ── Day-trading grid: bottom dock + macro drawer ─────────────────── */
+  /* The dock spans the full row directly under the chart (order 1 slots
+     between the anchored chart/book pair at 0 and ordered panels at 2+),
+     so open risk never leaves the screen. */
+  .chart-col {
+    grid-column: span 9;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+  }
+  .chart-col .chart-panel {
+    grid-column: auto;
+  }
+  .dock {
+    grid-column: 1 / -1;
+    order: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .dock-tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .dock-tabs button {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.45rem 0.7rem;
+    cursor: pointer;
+  }
+  .dock-tabs button.active {
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+  }
+  .dock-count {
+    margin-left: 0.35rem;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .dock-body {
+    min-height: 12rem;
+    max-height: 38vh;
+    overflow-y: auto;
+  }
+  /* Panels re-mounted in the dock keep their component shells; neutralize
+     the grid-era chrome (drag grips, panelStyle ordering, card borders). */
+  .dock-body :global([data-panel]) {
+    order: 0 !important;
+    border: 0;
+    background: none;
+  }
+  .dock-body :global(.drag-grip) {
+    display: none;
+  }
+  .dock-alert-log {
+    display: grid;
+    gap: 0.3rem;
+    padding: 0.55rem 0.65rem;
+    font-size: 0.74rem;
+  }
+  .dock-alert-row {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    gap: 0.6rem;
+    align-items: baseline;
+    color: var(--muted);
+  }
+  .dock-alert-row b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .dock-alert-ts {
+    color: var(--faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .dock-empty {
+    color: var(--faint);
+    margin: 0;
+  }
+
+  /* Macro drawer: research desk folds away below the trading panels. */
+  .macro-drawer {
+    grid-column: 1 / -1;
+    order: 80;
+    padding: 0;
+  }
+  .drawer-head {
+    appearance: none;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font: inherit;
+    padding: 0.55rem 0.7rem;
+    cursor: pointer;
+  }
+  .drawer-kicker {
+    color: var(--ink);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+  }
+  .drawer-status {
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .drawer-caret {
+    margin-left: auto;
+  }
+  .drawer-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 0.75rem;
+    padding: 0 0.7rem 0.7rem;
+    border-top: 1px solid var(--line-soft);
+  }
+  .drawer-grid :global(.drag-grip) {
+    display: none;
+  }
+
   .dashboard {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -4723,12 +4943,12 @@
   }
 
   .chart-panel {
-    /* Bloomberg posture: the chart + ticket row IS the first screen. Fill
-       the viewport below the fixed chrome (topbar + ticker rail + news
-       strip + dashboard padding ≈ 11.5rem); secondary panels start cleanly
-       below the fold. Floor keeps laptops usable, ceiling keeps ultra-tall
-       monitors from stretching candles into noodles. */
-    --market-panel-height: clamp(30rem, calc(100dvh - 13.4rem), 72rem);
+    /* Day-trading posture: chart + ticket row AND the dock's first rows
+       share the first screen — the extra 11rem subtraction reserves the
+       dock's tab strip + a few position rows above the fold (fixed chrome
+       ≈ 13.4rem as before). Floor keeps laptops usable, ceiling keeps
+       ultra-tall monitors from stretching candles into noodles. */
+    --market-panel-height: clamp(26rem, calc(100dvh - 24.4rem), 72rem);
     grid-column: span 9;
     display: flex;
     flex-direction: column;
@@ -4745,7 +4965,7 @@
        and when that outgrows the viewport clamp the PAGE scrolls — the
        ticket itself must never require scrolling to be seen in full. */
     height: auto;
-    min-height: var(--market-panel-height, clamp(30rem, calc(100dvh - 13.4rem), 72rem));
+    min-height: var(--market-panel-height, clamp(26rem, calc(100dvh - 24.4rem), 72rem));
   }
 
   .macro-panel {
@@ -5324,6 +5544,11 @@
   /* ── Alerts (the topbar button + badge live in Topbar.svelte) ─────── */
 
   @media (max-width: 1100px) {
+    /* Narrow: dissolve the chart column so chart + dock become direct
+       grid items again (single-column flow). */
+    .chart-col {
+      display: contents;
+    }
     .macro-panel {
       grid-column: span 6;
     }

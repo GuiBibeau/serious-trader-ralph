@@ -51,16 +51,18 @@ describe("migrateLayout", () => {
     expect(merged).toEqual(DEFAULT_PANEL_ORDER);
   });
 
-  test('single leftover "markets" (a markets panel was dragged) becomes the monitor; mergeLayout restores the Phoenix list', () => {
+  test('single leftover "markets" becomes the monitor; dock-era retired ids drop', () => {
     // Dragging either "markets" panel collapsed the duplicate to ONE entry
-    // (the drop handler filters every occurrence of the dragged id).
+    // (the drop handler filters every occurrence of the dragged id). The
+    // day-trading grid then retires "perp" (lives in the dock) and the
+    // Phoenix "markets" list (merged into the monitor) from the defaults —
+    // mergeLayout drops them from old saves and appends what's missing.
     const saved = ["perp", "markets", "watch"];
     const merged = mergeLayout(migrateLayout(saved), DEFAULT_PANEL_ORDER);
-    expect(merged[0]).toBe("perp");
-    expect(merged[1]).toBe("monitor");
-    expect(merged[2]).toBe("watch");
-    // The Phoenix markets list is restored from the defaults, once.
-    expect(merged.filter((id) => id === "markets")).toEqual(["markets"]);
+    expect(merged[0]).toBe("monitor");
+    expect(merged[1]).toBe("watch");
+    expect(merged).not.toContain("perp");
+    expect(merged).not.toContain("markets");
     expect(merged.toSorted()).toEqual([...DEFAULT_PANEL_ORDER].toSorted());
   });
 
