@@ -82,7 +82,7 @@
         onclick={() => onselect(row.symbol)}
       >
         <span class="monitor-sym">
-          {row.symbol}
+          <span class="sym-name">{row.symbol}</span>
           {#if row.lev}<i>{row.lev}x</i>{/if}
         </span>
         <span class="r mono">{formatPrice(row.mid)}</span>
@@ -105,6 +105,9 @@
     display: flex;
     flex-direction: column;
     max-height: 26rem;
+    /* Rows adapt to the panel's own width (it ranges ~230-340px on
+       720-1100px viewports where the dashboard grid stays 12-col). */
+    container-type: inline-size;
   }
 
   /* ── Markets monitor panel ───────────────────────────────────────── */
@@ -134,7 +137,7 @@
 
   .monitor-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 5.5rem 4.5rem 6rem;
+    grid-template-columns: minmax(0, 1fr) 5rem 3.6rem 5.2rem;
     gap: 0.5rem;
     width: 100%;
     padding: 0.3rem 0.9rem;
@@ -162,8 +165,30 @@
     background: var(--surface);
   }
 
-  .monitor-sym { font-weight: 700; display: flex; gap: 0.35rem; align-items: baseline; }
+  /* Shed the lowest-value columns as the panel narrows: volume first,
+     then 24h — the symbol + mark price must always stay legible. */
+  @container (max-width: 21rem) {
+    .monitor-row {
+      grid-template-columns: minmax(0, 1fr) 5rem 3.6rem;
+    }
+    .monitor-row > :nth-child(4) {
+      display: none;
+    }
+  }
+
+  @container (max-width: 16rem) {
+    .monitor-row {
+      grid-template-columns: minmax(0, 1fr) 5rem;
+    }
+    .monitor-row > :nth-child(3) {
+      display: none;
+    }
+  }
+
+  .monitor-sym { font-weight: 700; display: flex; gap: 0.35rem; align-items: baseline; min-width: 0; }
+  .monitor-sym .sym-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .monitor-sym i {
+    flex-shrink: 0;
     font-style: normal;
     font-family: ui-monospace, monospace;
     font-size: 0.6rem;
