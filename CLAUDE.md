@@ -11,6 +11,33 @@ The factory loop is encoded as project skills: `/factory-prd` (decompose) →
 pitfalls live in `.factory/`. `AGENTS.md` is the instruction sheet every
 delegate must follow; this file is how Claude runs the floor.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live in this repo's GitHub Issues via the `gh` CLI; external
+PRs are NOT a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles use their default strings (`needs-triage`,
+`needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (created lazily
+by `/domain-modeling`). See `docs/agents/domain.md`.
+
+### PRD flow into the factory
+
+The Matt Pocock collection (`.agents/skills/`, symlinked into
+`.claude/skills/`) is the PRD front-end: `/grill-me` or `/grill-with-docs`
+to sharpen an idea, `/to-prd` to publish it as a GitHub issue, `/to-issues`
+to slice it. `/factory-prd` then consumes the PRD (issue number or text) and
+produces dispatch orders; `ready-for-agent` marks issues the factory may
+pick up without further human context.
+
 ## Routing table
 
 | Work class | Model | Invocation |
