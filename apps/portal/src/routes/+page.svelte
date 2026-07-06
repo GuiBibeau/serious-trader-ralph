@@ -246,6 +246,8 @@
       Trading involves risk. Tokenized equities provide synthetic exposure and carry no
       shareholder rights. Desk commentary is informational, not financial advice.
       <a href="/llms.txt">llms.txt</a>
+      <a href="/terms">Terms</a>
+      <a href="/privacy">Privacy</a>
     </div>
   </footer>
 </div>
