@@ -11,6 +11,8 @@
     <a href="/pre-ipo">Pre-IPO</a>
     <a href="/crypto">Crypto</a>
     <a href="/terminal">Terminal</a>
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy</a>
   </div>
   <p class="provenance">
     Data: tokens.xyz, Phoenix, Jupiter, Yahoo Finance. Wallets by Privy,
