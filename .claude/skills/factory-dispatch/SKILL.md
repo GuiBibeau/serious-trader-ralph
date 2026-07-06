@@ -15,6 +15,10 @@ delegate, reviews the result adversarially, and commits only what survives.
 2. Working tree must be clean apart from expected untracked files
    (`git status --porcelain`) — never dispatch onto a dirty tree.
 3. The order file exists and has no unfilled `<placeholders>`.
+4. **Branch**: for a slug's first WP, `git fetch origin main` and cut
+   `codex/<slug>` from `origin/main` before dispatching; for later WPs,
+   confirm you're already on that branch. The delegate mutates whatever
+   is checked out — never dispatch from a stale or unrelated branch.
 
 ## Dispatch
 

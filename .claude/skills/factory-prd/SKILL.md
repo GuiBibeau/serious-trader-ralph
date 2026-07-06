@@ -21,6 +21,14 @@ ARTIFACTS ONLY — no code changes, no delegate invocations.
    implementation exists. Check `.factory/PITFALLS.md` for constraints that
    shape the design.
 
+   For UI/layout WPs: **measure the component's real rendered size range
+   before writing acceptance criteria** — check its grid span, the page's
+   media queries, and compute (or probe) the actual min/max container
+   width. Never anchor acceptance to an assumed viewport. (Learned on
+   monitor-row-overlap: the order fixed "no overlap at ~900px viewport"
+   without knowing the panel shrinks to ~230px there — the delegate
+   executed a perfect fix to an insufficient spec.)
+
 3. **Decompose into 1–N work packages.** Each WP must be:
    - Independently validatable (the full validation suite passes after it).
    - ≤ ~400 changed lines.

@@ -40,3 +40,8 @@ gate.
 13. **Kill any dev server you start** before reporting done.
 14. **No fake data.** Missing feeds render as explicit unavailable/gated
     states, never invented rows or stats.
+15. **Terminal panels get much narrower than you think.** On 720–1100px
+    viewports the dashboard grid stays 12-col, so a `span 4` panel is only
+    ~230–340px wide. Design rows for the panel's own width (inline-size
+    container queries are established practice — see MonitorPanel), and
+    verify layout claims with a real-browser geometry probe, not by eye.
