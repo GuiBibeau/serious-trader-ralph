@@ -16,13 +16,48 @@
     panel?.focus();
   });
 
+  // Real focus trap: Tab cycles within the dialog's controls, and if focus
+  // ever ends up outside the panel it is pulled back — the ack must own the
+  // whole interaction while open (review: keyboard users could Tab to the
+  // ticket behind the overlay).
+  function trapTab(event: KeyboardEvent): void {
+    if (!panel) return;
+    const focusables = panel.querySelectorAll<HTMLElement>(
+      "a[href], button:not([disabled])",
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (!panel.contains(active)) {
+      event.preventDefault();
+      first.focus();
+      return;
+    }
+    if (event.shiftKey && (active === first || active === panel)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   function onWinKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") onclose();
+    if (event.key === "Escape") {
+      onclose();
+      return;
+    }
+    if (event.key === "Tab") trapTab(event);
   }
 
   function onPanelKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       onclose();
+      return;
+    }
+    if (event.key === "Tab") {
+      trapTab(event);
       return;
     }
     event.stopPropagation();
