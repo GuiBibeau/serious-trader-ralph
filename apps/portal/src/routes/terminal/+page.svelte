@@ -312,6 +312,53 @@
   let ackOpen = false;
   let pendingAckAction: (() => void) | null = null;
 
+  // Perp soft gate (PRD #493 / #498): a definitive not-whitelisted answer
+  // swaps the ticket submit for an inline activation state. Activation is
+  // self-serve — the app re-runs the referral onboarding with Ralph's
+  // invite code (one signature), same flow every new wallet gets on
+  // connect. Unknown (null) fails open — the venue's own error is the
+  // honest signal then.
+  let perpGateNotice = false;
+  // The wallet:symbol pair whose submit tripped the notice — a different
+  // context (market switch, wallet switch) must re-earn it with its own
+  // submit click (review).
+  let perpGateContext = "";
+  let perpAccessBusy = false;
+
+  async function activatePerpAccess(): Promise<void> {
+    const wallet = $privyAuth.walletAddress;
+    if (!wallet || perpAccessBusy) return;
+    perpAccessBusy = true;
+    // A stale failure from a previous attempt must not outlive a retry
+    // (review): clear before the attempt; the catch below re-sets it.
+    phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    try {
+      // Force a fresh referral attempt even if an earlier one was recorded
+      // for this wallet (covers the recorded-but-not-whitelisted edge).
+      const done = JSON.parse(
+        window.localStorage.getItem(ONBOARD_KEY) ?? "[]",
+      ) as string[];
+      window.localStorage.setItem(
+        ONBOARD_KEY,
+        JSON.stringify(done.filter((a) => a !== wallet)),
+      );
+      onboardedAddress = "";
+      await ensurePhoenixOnboarding(wallet);
+      track("perp_access_activation", {
+        wallet,
+        ok: phoenixWhitelisted === true,
+      });
+      if (phoenixWhitelisted !== true) {
+        phoenixActionError = "Activation didn't complete — try again.";
+      }
+    } catch {
+      phoenixActionError = "Activation didn't complete — try again.";
+    } finally {
+      perpAccessBusy = false;
+    }
+  }
+
   // Gate a trading submit behind the one-time risk ack (PRD #493). The
   // pending action runs only after "I agree" — closing the modal drops it.
   function requireTradeAck(action: () => void): void {
@@ -867,6 +914,11 @@
   $: limitArmed = limitNeedsConfirm && nowMs < limitArmedUntil;
 
   function onPerpSubmitClick(): void {
+    if (phoenixWhitelisted === false) {
+      perpGateContext = `${$privyAuth.walletAddress ?? ""}:${selectedSymbol}`;
+      perpGateNotice = true;
+      return;
+    }
     if (!canSubmitPerp || limitBlocked) return;
     if (limitNeedsConfirm && Date.now() >= limitArmedUntil) {
       limitArmedUntil = Date.now() + 3_000;
@@ -875,6 +927,15 @@
     limitArmedUntil = 0;
     requireTradeAck(() => void submitPhoenixOrder());
   }
+
+  // The gate notice clears on a whitelist flip OR any context change
+  // (market/wallet switch) — each context re-earns it with its own submit.
+  $: if (
+    perpGateNotice &&
+    (phoenixWhitelisted !== false ||
+      perpGateContext !== `${$privyAuth.walletAddress ?? ""}:${selectedSymbol}`)
+  )
+    perpGateNotice = false;
 
   $: spotLimitPriceValue = $spotOrderType === "limit" ? Number($spotLimitPrice) : 0;
   $: spotLimitDeviationPct =
@@ -4783,6 +4844,11 @@
     {selectedLiqDistancePct}
     {accountUpnlUsd}
     canSubmit={canSubmitPerp}
+    perpGate={{
+      show: perpGateNotice && phoenixWhitelisted === false,
+      busy: perpAccessBusy,
+    }}
+    onrequestaccess={() => void activatePerpAccess()}
     {orderBusy}
     {orderStageEntry}
     {nowMs}

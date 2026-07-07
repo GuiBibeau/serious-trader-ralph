@@ -67,7 +67,7 @@
         Telemetry is retained in rolling aggregate logs. You can stop using the
         Service at any time; your wallet remains yours through Privy
         independently of us. For data questions or deletion requests:
-        gui.bibeau@solana.org.
+        <a href="mailto:gui.bibeau@solana.org">gui.bibeau@solana.org</a>.
       </p>
 
       <h2>Changes</h2>

@@ -48,6 +48,7 @@
     limitBlocked,
     limitDeviationPct,
     limitCrossesBook,
+    perpGate,
     actionError,
     actionErrorDetail,
     actionRetry,
@@ -58,6 +59,7 @@
     stackedBook,
     // Callbacks into the page.
     onsubmit,
+    onrequestaccess,
     onopenauth,
     onopenfunds,
     onpick,
@@ -92,6 +94,7 @@
     limitBlocked: boolean;
     limitDeviationPct: number | null;
     limitCrossesBook: boolean;
+    perpGate: { show: boolean; busy: boolean };
     actionError: string;
     actionErrorDetail: string;
     actionRetry: (() => void) | null;
@@ -100,6 +103,7 @@
     tradeOpen: boolean;
     stackedBook: boolean;
     onsubmit: () => void;
+    onrequestaccess: () => void;
     onopenauth: () => void;
     onopenfunds: () => void;
     onpick: (price: number, side: "ask" | "bid") => void;
@@ -460,6 +464,19 @@
     <button class="primary wide" type="button" onclick={onopenfunds}>
       Deposit first · ${formatNumber(Math.max(0, $requiredMarginUsd - phoenixCollateral), 2)}
     </button>
+  {:else if perpGate.show}
+    <div class="perp-gate" role="status">
+      <p>One step left: activate perp access with Ralph's invite — a single signature, then deposit and trade.</p>
+      <button
+        class="primary wide"
+        type="button"
+        disabled={perpGate.busy}
+        onclick={onrequestaccess}
+      >
+        {#if perpGate.busy}<span class="spinner" aria-hidden="true"></span>{/if}
+        {perpGate.busy ? "Activating…" : "Activate perp access"}
+      </button>
+    </div>
   {:else}
     <!-- Two-stage armed when the limit is far from mark; the reserved
          wide button self-documents each state, no extra layout. -->
@@ -490,6 +507,18 @@
 
 <style>
   /* ── Trade ticket ─────────────────────────────────────────────────── */
+  .perp-gate {
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .perp-gate p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.74rem;
+    line-height: 1.4;
+  }
+
   .field {
     display: grid;
     gap: 0.3rem;

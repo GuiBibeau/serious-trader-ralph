@@ -88,8 +88,21 @@
         updated" date above.
       </p>
 
-      <h2>9. Contact</h2>
-      <p>Questions about these terms: gui.bibeau@solana.org.</p>
+      <h2>9. Privacy and telemetry</h2>
+      <p>
+        The Service records usage telemetry — product events such as orders
+        submitted, markets viewed, feature usage, errors, and approximate
+        location (country/region) inferred from your IP at request time — as
+        described in our <a href="/privacy">Privacy Policy</a>. By using the
+        Service you consent to this collection. Telemetry is used to operate,
+        secure, and improve the Service; it is never sold.
+      </p>
+
+      <h2>10. Contact</h2>
+      <p>
+        Questions about these terms:
+        <a href="mailto:gui.bibeau@solana.org">gui.bibeau@solana.org</a>.
+      </p>
     </section>
   </main>
 
