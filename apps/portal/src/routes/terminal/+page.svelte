@@ -2,6 +2,7 @@
   import "./terminal.css";
 
   import { onMount, tick } from "svelte";
+  import AckModal from "./components/AckModal.svelte";
   import AiReadLine from "./components/AiReadLine.svelte";
   import AlertsModal from "./components/AlertsModal.svelte";
   import AuthModal from "./components/AuthModal.svelte";
@@ -39,6 +40,7 @@
     type AiRead,
   } from "$lib/ai";
   import { track } from "$lib/telemetry";
+  import { hasAcked, recordAck } from "$lib/terminal/ack";
   import { type Alert, alertsStore } from "$lib/terminal/alerts";
   import {
     buildChartLineSpecs,
@@ -307,6 +309,29 @@
   );
   let oilPanel: DataPanel = disconnectedPanel("Edge energy source required");
   let authOpen = false;
+  let ackOpen = false;
+  let pendingAckAction: (() => void) | null = null;
+
+  // Gate a trading submit behind the one-time risk ack (PRD #493). The
+  // pending action runs only after "I agree" — closing the modal drops it.
+  function requireTradeAck(action: () => void): void {
+    if (hasAcked($privyAuth.walletAddress)) {
+      action();
+      return;
+    }
+    pendingAckAction = action;
+    ackOpen = true;
+  }
+
+  function onAckAgree(): void {
+    recordAck($privyAuth.walletAddress);
+    track("ack_accepted", {});
+    ackOpen = false;
+    const action = pendingAckAction;
+    pendingAckAction = null;
+    action?.();
+  }
+
   let logoutBusy = false;
   let walletBalanceAddress = "";
   let walletBalanceText = "-- SOL";
@@ -848,7 +873,7 @@
       return;
     }
     limitArmedUntil = 0;
-    void submitPhoenixOrder();
+    requireTradeAck(() => void submitPhoenixOrder());
   }
 
   $: spotLimitPriceValue = $spotOrderType === "limit" ? Number($spotLimitPrice) : 0;
@@ -870,7 +895,7 @@
       return;
     }
     spotLimitArmedUntil = 0;
-    void submitSpotLimitOrder();
+    requireTradeAck(() => void submitSpotLimitOrder());
   }
 
   function onTicketKeydown(event: KeyboardEvent): void {
@@ -885,7 +910,7 @@
     event.preventDefault();
     if (!canSubmitSpot) return;
     if ($spotOrderType === "limit") onSpotLimitSubmitClick();
-    else void executeSpotSwap();
+    else requireTradeAck(() => void executeSpotSwap());
   }
 
   // Arrow-key stepping on ticket inputs (use:stepInput) moved to
@@ -4621,6 +4646,10 @@
   <AuthModal onclose={() => (authOpen = false)} onauthenticated={refreshEdgeModules} />
 {/if}
 
+{#if ackOpen}
+  <AckModal onagree={onAckAgree} onclose={() => { ackOpen = false; pendingAckAction = null; }} />
+{/if}
+
 {#if tradeOpen}
   <div class="modal-backdrop" role="presentation" onclick={() => (tradeOpen = false)}>
     <!-- Enter from any ticket input submits, gated exactly like the button;
@@ -4724,7 +4753,7 @@
     {triggerOrders}
     {triggerBusy}
     mintSafety={spotAsset ? (mintSafetyCache[spotAsset.mint] ?? null) : null}
-    onswap={executeSpotSwap}
+    onswap={() => requireTradeAck(() => void executeSpotSwap())}
     onlimitsubmit={onSpotLimitSubmitClick}
     onopenauth={openAuthModal}
     onchip={setSpotAmountChip}
