@@ -319,12 +319,20 @@
   // connect. Unknown (null) fails open — the venue's own error is the
   // honest signal then.
   let perpGateNotice = false;
+  // The wallet:symbol pair whose submit tripped the notice — a different
+  // context (market switch, wallet switch) must re-earn it with its own
+  // submit click (review).
+  let perpGateContext = "";
   let perpAccessBusy = false;
 
   async function activatePerpAccess(): Promise<void> {
     const wallet = $privyAuth.walletAddress;
     if (!wallet || perpAccessBusy) return;
     perpAccessBusy = true;
+    // A stale failure from a previous attempt must not outlive a retry
+    // (review): clear before the attempt; the catch below re-sets it.
+    phoenixActionError = "";
+    phoenixActionErrorDetail = "";
     try {
       // Force a fresh referral attempt even if an earlier one was recorded
       // for this wallet (covers the recorded-but-not-whitelisted edge).
@@ -907,6 +915,7 @@
 
   function onPerpSubmitClick(): void {
     if (phoenixWhitelisted === false) {
+      perpGateContext = `${$privyAuth.walletAddress ?? ""}:${selectedSymbol}`;
       perpGateNotice = true;
       return;
     }
@@ -919,8 +928,14 @@
     requireTradeAck(() => void submitPhoenixOrder());
   }
 
-  // A new wallet or a whitelist flip clears the inline gate notice.
-  $: if (phoenixWhitelisted !== false && perpGateNotice) perpGateNotice = false;
+  // The gate notice clears on a whitelist flip OR any context change
+  // (market/wallet switch) — each context re-earns it with its own submit.
+  $: if (
+    perpGateNotice &&
+    (phoenixWhitelisted !== false ||
+      perpGateContext !== `${$privyAuth.walletAddress ?? ""}:${selectedSymbol}`)
+  )
+    perpGateNotice = false;
 
   $: spotLimitPriceValue = $spotOrderType === "limit" ? Number($spotLimitPrice) : 0;
   $: spotLimitDeviationPct =
