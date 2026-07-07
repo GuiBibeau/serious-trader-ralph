@@ -41,10 +41,6 @@
   } from "$lib/ai";
   import { track } from "$lib/telemetry";
   import { hasAcked, recordAck } from "$lib/terminal/ack";
-  import {
-    hasRequestedPerpAccess,
-    recordPerpAccessRequest,
-  } from "$lib/terminal/access";
   import { type Alert, alertsStore } from "$lib/terminal/alerts";
   import {
     buildChartLineSpecs,
@@ -317,32 +313,39 @@
   let pendingAckAction: (() => void) | null = null;
 
   // Perp soft gate (PRD #493 / #498): a definitive not-whitelisted answer
-  // swaps the ticket submit for an inline request-access state. Unknown
-  // (null) fails open — the venue's own error is the honest signal then.
+  // swaps the ticket submit for an inline activation state. Activation is
+  // self-serve — the app re-runs the referral onboarding with Ralph's
+  // invite code (one signature), same flow every new wallet gets on
+  // connect. Unknown (null) fails open — the venue's own error is the
+  // honest signal then.
   let perpGateNotice = false;
   let perpAccessBusy = false;
-  let perpAccessTick = 0;
-  $: perpAccessRequested =
-    perpAccessTick >= 0 && hasRequestedPerpAccess($privyAuth.walletAddress);
 
-  async function requestPerpAccess(): Promise<void> {
+  async function activatePerpAccess(): Promise<void> {
     const wallet = $privyAuth.walletAddress;
     if (!wallet || perpAccessBusy) return;
     perpAccessBusy = true;
     try {
-      const res = await fetch("/notify-discord", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          content: `Perp access request: ${wallet} · ${$privyAuth.email ?? "no-email"}`,
-        }),
+      // Force a fresh referral attempt even if an earlier one was recorded
+      // for this wallet (covers the recorded-but-not-whitelisted edge).
+      const done = JSON.parse(
+        window.localStorage.getItem(ONBOARD_KEY) ?? "[]",
+      ) as string[];
+      window.localStorage.setItem(
+        ONBOARD_KEY,
+        JSON.stringify(done.filter((a) => a !== wallet)),
+      );
+      onboardedAddress = "";
+      await ensurePhoenixOnboarding(wallet);
+      track("perp_access_activation", {
+        wallet,
+        ok: phoenixWhitelisted === true,
       });
-      if (!res.ok && res.status !== 204) throw new Error(`notify ${res.status}`);
-      recordPerpAccessRequest(wallet);
-      track("perp_access_requested", { wallet });
-      perpAccessTick += 1;
+      if (phoenixWhitelisted !== true) {
+        phoenixActionError = "Activation didn't complete — try again.";
+      }
     } catch {
-      phoenixActionError = "Could not send the access request — try again.";
+      phoenixActionError = "Activation didn't complete — try again.";
     } finally {
       perpAccessBusy = false;
     }
@@ -4828,10 +4831,9 @@
     canSubmit={canSubmitPerp}
     perpGate={{
       show: perpGateNotice && phoenixWhitelisted === false,
-      requested: perpAccessRequested,
       busy: perpAccessBusy,
     }}
-    onrequestaccess={() => void requestPerpAccess()}
+    onrequestaccess={() => void activatePerpAccess()}
     {orderBusy}
     {orderStageEntry}
     {nowMs}

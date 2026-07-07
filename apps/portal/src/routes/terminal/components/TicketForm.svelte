@@ -94,7 +94,7 @@
     limitBlocked: boolean;
     limitDeviationPct: number | null;
     limitCrossesBook: boolean;
-    perpGate: { show: boolean; requested: boolean; busy: boolean };
+    perpGate: { show: boolean; busy: boolean };
     actionError: string;
     actionErrorDetail: string;
     actionRetry: (() => void) | null;
@@ -466,22 +466,16 @@
     </button>
   {:else if perpGate.show}
     <div class="perp-gate" role="status">
-      <p>Perps are invite-only for now. Spot trading is open.</p>
-      {#if perpGate.requested}
-        <button class="primary wide" type="button" disabled>
-          Access requested — we'll be in touch
-        </button>
-      {:else}
-        <button
-          class="primary wide"
-          type="button"
-          disabled={perpGate.busy}
-          onclick={onrequestaccess}
-        >
-          {#if perpGate.busy}<span class="spinner" aria-hidden="true"></span>{/if}
-          {perpGate.busy ? "Requesting…" : "Request perp access"}
-        </button>
-      {/if}
+      <p>One step left: activate perp access with Ralph's invite — a single signature, then deposit and trade.</p>
+      <button
+        class="primary wide"
+        type="button"
+        disabled={perpGate.busy}
+        onclick={onrequestaccess}
+      >
+        {#if perpGate.busy}<span class="spinner" aria-hidden="true"></span>{/if}
+        {perpGate.busy ? "Activating…" : "Activate perp access"}
+      </button>
     </div>
   {:else}
     <!-- Two-stage armed when the limit is far from mark; the reserved
