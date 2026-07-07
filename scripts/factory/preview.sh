@@ -14,7 +14,15 @@ for i in $(seq 1 12); do
   id=$(gh api "repos/$REPO_SLUG/deployments?sha=$sha&environment=Preview&per_page=1" -q '.[0].id' 2>/dev/null)
   if [[ -n "$id" && "$id" != "null" ]]; then
     read -r state url <<< "$(gh api "repos/$REPO_SLUG/deployments/$id/statuses" -q '.[0] | .state + " " + (.environment_url // "")' 2>/dev/null)"
-    if [[ "$state" == "success" && -n "$url" ]]; then echo "$url"; exit 0; fi
+    if [[ "$state" == "success" && -n "$url" ]]; then
+      echo "$url"
+      # Stable QA alias: Privy allows exactly https://preview.trader-ralph.com,
+      # so the deployment under review is aliased there for auth flows.
+      # One preview holds the alias at a time — matches the serial QA lane.
+      vercel alias set "${url#https://}" preview.trader-ralph.com --scope guivercelpro >/dev/null 2>&1 \
+        && echo "https://preview.trader-ralph.com (auth-enabled alias)"
+      exit 0
+    fi
     [[ "$state" == "failure" || "$state" == "error" ]] && { echo "preview deployment $state" >&2; exit 1; }
   fi
   sleep 20
