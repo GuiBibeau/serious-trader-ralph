@@ -43,7 +43,7 @@ pick up without further human context.
 | Work class | Model | Invocation |
 |---|---|---|
 | Plan, decompose, adversarial review, commit, merge, deploy verify, anything ambiguous | Claude (this session) | — |
-| Implementation WPs (Svelte/UI/features) — favored implementer | GLM 5.2 | `pi --provider glm-cloud --model glm-5.2 --thinking high -p "$(cat .factory/orders/<slug>/wpN.md)"` |
+| Implementation WPs (Svelte/UI/features) — favored implementer | GLM 5.2 | `glm-claude -p "$(cat .factory/orders/<slug>/wpN.md)" --allowedTools ...` (Claude Code harness via Z.ai; git read-only enforced by tool permissions — see factory-dispatch skill for the exact whitelist; `pi --provider glm-cloud` is the fallback) |
 | Backend-ish work: scripts, config, CI, data plumbing, heavy refactors | GPT 5.5 | `pi --provider openai-codex --model gpt-5.5 --thinking high -p "$(cat ...)"` |
 | Routine read-heavy/write-light: triage, PR summaries, changelogs, doc sync | north-mini (local) | `pi --provider north-mini-code --model north-mini-code -p "..."` |
 

@@ -45,3 +45,13 @@ gate.
     ~230–340px wide. Design rows for the panel's own width (inline-size
     container queries are established practice — see MonitorPanel), and
     verify layout claims with a real-browser geometry probe, not by eye.
+16. **Token-only CSS — no fallback hexes.** `var(--amber)` yes,
+    `var(--amber, #d9a441)` no. Palette hexes outside `packages/ui` are
+    forbidden (AGENTS.md) except the terminal chart theme and
+    `static/brand`; fallbacks silently drift from the real token and dodge
+    the drift guard. Applies to order payloads too — reject them in review.
+17. **The codex review bot is part of the pipeline.** It reviews most PRs
+    and its P2 findings are usually correct — treat them as review input,
+    not noise. Unresolved threads hold the PR at BLOCKED
+    (`required_conversation_resolution`): fix, reply, resolve via GraphQL
+    `resolveReviewThread`.

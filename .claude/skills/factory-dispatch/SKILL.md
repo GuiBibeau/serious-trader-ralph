@@ -23,17 +23,27 @@ delegate, reviews the result adversarially, and commits only what survives.
 ## Dispatch
 
 Pick the invocation from the CLAUDE.md routing table. Default
-(implementation WP):
+(implementation WP) — **glm-claude**, GLM 5.2 under the Claude Code
+harness, git read-only enforced by tool permissions:
 
 ```bash
 cd /Users/guillaume/Github/serious-trader-ralph
-pi --provider glm-cloud --model glm-5.2 --thinking high -p "$(cat .factory/orders/<slug>/wpN.md)"
+glm-claude -p "$(cat .factory/orders/<slug>/wpN.md)" \
+  --allowedTools "Read" "Edit" "Write" "Grep" "Glob" \
+  "Bash(bun:*)" "Bash(bunx:*)" \
+  "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" \
+  "Bash(curl:*)" "Bash(ls:*)" "Bash(cat:*)" "Bash(head:*)" "Bash(tail:*)" \
+  "Bash(grep:*)" "Bash(rg:*)" "Bash(lsof:*)" "Bash(kill:*)" "Bash(sleep:*)"
 ```
 
-Backend/config WP: `--provider openai-codex --model gpt-5.5`. Routine WP:
-`--provider north-mini-code --model north-mini-code`.
+(`glm-claude` = `~/bin/glm-claude`: Z.ai Anthropic endpoint, isolated
+`~/.claude-glm` config. Never widen --allowedTools to bare "Bash".)
 
-- Fresh session per WP (no `--continue` across WPs).
+Backend/config WP: `pi --provider openai-codex --model gpt-5.5 --thinking
+high -p "$(cat ...)"`. Routine WP: `pi --provider north-mini-code --model
+north-mini-code -p "..."`.
+
+- Fresh session per WP (no `--continue`/`--session` reuse across WPs).
 - Run in background for long WPs; watch for stalls. If a delegate stalls
   twice on the same WP, take it over by hand — don't spin a third time.
 
