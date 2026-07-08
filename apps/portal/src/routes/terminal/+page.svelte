@@ -5025,9 +5025,12 @@
     gap: 0.75rem;
     min-height: 0;
   }
-  .chart-col .chart-panel {
-    grid-column: auto;
-  }
+  /* NOTE: no `.chart-col .chart-panel { grid-column: auto }` here — inside
+     the flex .chart-col grid-column is inert anyway, and because
+     display: contents (≤1100px) removes the box but NOT the element, the
+     descendant selector kept matching at narrow widths and its higher
+     specificity defeated the full-width override below — the chart
+     collapsed to one auto-placed grid column (bug, 2026-07-07). */
   .dock {
     grid-column: 1 / -1;
     order: 1;
@@ -5792,10 +5795,16 @@
       grid-template-columns: 1fr;
     }
 
-    .chart-panel,
-    .orderbook-panel,
-    .macro-panel {
-      grid-column: span 1;
+    /* Every panel goes full-width on phones. The :global child reset is
+       load-bearing: component panels (monitor, watch, spot, …) carry
+       `grid-column: span N` in their OWN scoped styles, which this page's
+       media query can't otherwise reach — their spans were forcing implicit
+       columns and shattering the 1fr grid. chart-panel is listed explicitly
+       because it's a grandchild via the display:contents .chart-col, so the
+       direct-child selector misses it. */
+    .dashboard > :global(*),
+    .chart-panel {
+      grid-column: 1 / -1;
     }
 
     /* Ticket + funds forms collapse to a single column on phones —
