@@ -3,45 +3,48 @@
     address,
     funded,
     traded,
-    onfund,
+    onopen,
     ondismiss,
   }: {
     /** shortened wallet address, e.g. "3Qw1…9xKe" */
     address: string;
     funded: boolean;
     traded: boolean;
-    onfund: () => void;
+    /** opens the funding wizard — the strip is the wizard's re-entry point. */
+    onopen: () => void;
     ondismiss: () => void;
   } = $props();
 </script>
 
 <div class="welcome-strip" role="status">
-  <span class="step step-done">
-    <span class="check">✓</span> Wallet ready
-    <span class="mono">{address}</span>
-    <span class="hint">self-custodial via Privy</span>
-  </span>
-
-  {#if funded}
+  <button class="strip-open" type="button" aria-label="Open funding wizard" onclick={onopen}>
     <span class="step step-done">
-      <span class="check">✓</span> Funded
+      <span class="check">✓</span> Wallet ready
+      <span class="mono">{address}</span>
+      <span class="hint">self-custodial via Privy</span>
     </span>
-  {:else}
-    <span class="step">
-      <button class="step-action" onclick={onfund}>2. Fund it</button>
-      <span class="hint">USDC to trade · keep ~0.04 SOL for rent + fees</span>
-    </span>
-  {/if}
 
-  {#if traded}
-    <span class="step step-done">
-      <span class="check">✓</span> First trade placed
-    </span>
-  {:else}
-    <span class="step">
-      <span class="hint">3. Place your first trade — start small</span>
-    </span>
-  {/if}
+    {#if funded}
+      <span class="step step-done">
+        <span class="check">✓</span> Funded
+      </span>
+    {:else}
+      <span class="step">
+        <span class="step-action">2. Fund it</span>
+        <span class="hint">USDC to trade · keep ~0.04 SOL for rent + fees</span>
+      </span>
+    {/if}
+
+    {#if traded}
+      <span class="step step-done">
+        <span class="check">✓</span> First trade placed
+      </span>
+    {:else}
+      <span class="step">
+        <span class="hint">3. Place your first trade — start small</span>
+      </span>
+    {/if}
+  </button>
 
   <button class="strip-dismiss" aria-label="Dismiss welcome" onclick={ondismiss}
     >×</button
@@ -58,6 +61,23 @@
     background: var(--surface-2);
     color: var(--muted);
     font-size: 0.74rem;
+  }
+  .strip-open {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: 0;
+    cursor: pointer;
+  }
+  .strip-open:hover {
+    color: var(--ink);
   }
   .step {
     display: inline-flex;
@@ -97,6 +117,10 @@
   }
   @media (max-width: 720px) {
     .welcome-strip {
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .strip-open {
       flex-wrap: wrap;
       gap: 0.5rem;
     }
