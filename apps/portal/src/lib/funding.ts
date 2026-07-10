@@ -99,3 +99,114 @@ export async function getJupiterSwapTransaction(
   if (!data.swapTransaction) throw new Error("jupiter-no-transaction");
   return data.swapTransaction;
 }
+
+// ── Jupiter Ultra (RPC-less swaps, gasless-capable) ────────────────────
+// Order → sign → execute: Ultra builds the transaction, we sign it with
+// the user's wallet, Ultra broadcasts and polls. Routed through the
+// same-origin /jupiter proxy (lite-api.jup.ag). Gasless eligibility is
+// derived defensively from the order response — a null means "could not
+// determine", and callers must treat null as NOT gasless (honest-data
+// rule: never promise free gas we can't verify).
+
+export type UltraOrder = {
+  requestId: string;
+  /** base64 unsigned transaction; null when Ultra returned no route. */
+  transaction: string | null;
+  inAmount: string | null;
+  outAmount: string | null;
+  gasless: boolean | null;
+  router: string | null;
+  raw: Record<string, unknown>;
+};
+
+export type UltraExecuteResult = {
+  status: string;
+  signature: string | null;
+  raw: Record<string, unknown>;
+};
+
+/** Best-effort gasless detection across Ultra response variants. */
+export function deriveUltraGasless(
+  raw: Record<string, unknown>,
+): boolean | null {
+  if (raw.gasless === true) return true;
+  if (raw.gasless === false) return false;
+  const router = typeof raw.router === "string" ? raw.router.toLowerCase() : "";
+  const swapType =
+    typeof raw.swapType === "string" ? raw.swapType.toLowerCase() : "";
+  // JupiterZ / RFQ routes: the market maker is the fee payer.
+  if (
+    router.includes("rfq") ||
+    router.includes("jupiterz") ||
+    swapType === "rfq"
+  )
+    return true;
+  const sigFee = raw.signatureFee ?? raw.signatureFeeLamports;
+  if (typeof sigFee === "number") return sigFee === 0;
+  return null;
+}
+
+export function parseUltraOrder(raw: Record<string, unknown>): UltraOrder {
+  return {
+    requestId: typeof raw.requestId === "string" ? raw.requestId : "",
+    // Live API returns "" (not absent) when there's no signable route —
+    // normalize both to null so callers have one no-route signal.
+    transaction:
+      typeof raw.transaction === "string" && raw.transaction.length > 0
+        ? raw.transaction
+        : null,
+    inAmount: typeof raw.inAmount === "string" ? raw.inAmount : null,
+    outAmount: typeof raw.outAmount === "string" ? raw.outAmount : null,
+    gasless: deriveUltraGasless(raw),
+    router: typeof raw.router === "string" ? raw.router : null,
+    raw,
+  };
+}
+
+export async function getUltraOrder(
+  inputMint: string,
+  outputMint: string,
+  amountAtoms: string,
+  taker: string,
+  fetcher: typeof fetch = fetch,
+): Promise<UltraOrder> {
+  const params = new URLSearchParams({
+    inputMint,
+    outputMint,
+    amount: amountAtoms,
+    taker,
+  });
+  const response = await fetcher(`/jupiter/ultra/v1/order?${params}`);
+  if (!response.ok) throw new Error(`ultra-order-${response.status}`);
+  const data = (await response.json()) as Record<string, unknown>;
+  const order = parseUltraOrder(data);
+  if (!order.requestId) throw new Error("ultra-no-request-id");
+  return order;
+}
+
+export async function executeUltraOrder(
+  signedTransactionBase64: string,
+  requestId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<UltraExecuteResult> {
+  const response = await fetcher("/jupiter/ultra/v1/execute", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      signedTransaction: signedTransactionBase64,
+      requestId,
+    }),
+  });
+  if (!response.ok) throw new Error(`ultra-execute-${response.status}`);
+  const data = (await response.json()) as Record<string, unknown>;
+  const status = typeof data.status === "string" ? data.status : "unknown";
+  if (status.toLowerCase() === "failed") {
+    const err = typeof data.error === "string" ? data.error : "unknown";
+    throw new Error(`ultra-execute-failed-${err}`);
+  }
+  return {
+    status,
+    signature: typeof data.signature === "string" ? data.signature : null,
+    raw: data,
+  };
+}
