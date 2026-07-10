@@ -11,6 +11,7 @@
   import CommandPalette from "./components/CommandPalette.svelte";
   import DragHead from "./components/DragHead.svelte";
   import EventsPanel from "./components/EventsPanel.svelte";
+  import FundingWizard from "./components/FundingWizard.svelte";
   import FundsModal from "./components/FundsModal.svelte";
   import JournalPanel from "./components/JournalPanel.svelte";
   import MacroPanel from "./components/MacroPanel.svelte";
@@ -43,8 +44,10 @@
   import { track } from "$lib/telemetry";
   import { hasAcked, recordAck } from "$lib/terminal/ack";
   import {
+    hasAutoOpenedWizard,
     hasDismissedWelcome,
     recordWelcomeDismissed,
+    recordWizardAutoOpened,
   } from "$lib/terminal/welcome";
   import { type Alert, alertsStore } from "$lib/terminal/alerts";
   import {
@@ -608,6 +611,28 @@
   function dismissWelcome(): void {
     recordWelcomeDismissed($privyAuth.walletAddress);
     welcomeTick += 1;
+  }
+
+  // Funding wizard (PRD #510): the welcome strip's expanded form. Auto-opens
+  // once per wallet for fresh authed accounts that still need onboarding —
+  // afterwards the strip is the re-entry point. Reload never re-opens (the
+  // wizard-auto key is set on first open); signed-out never opens.
+  let wizardOpen = false;
+  // In-memory guard alongside the persisted key: if the localStorage write
+  // fails (private mode, quota), the reactive must NOT re-fire and reopen
+  // the wizard every time it closes (review). Session memory wins.
+  const wizardAutoOpenedSession = new Set<string>();
+  $: welcomeCollateralized = phoenixTotalCollateral > 0;
+  $: if (
+    showWelcomeStrip &&
+    !wizardOpen &&
+    $privyAuth.walletAddress &&
+    !wizardAutoOpenedSession.has($privyAuth.walletAddress) &&
+    !hasAutoOpenedWizard($privyAuth.walletAddress)
+  ) {
+    wizardAutoOpenedSession.add($privyAuth.walletAddress);
+    recordWizardAutoOpened($privyAuth.walletAddress);
+    wizardOpen = true;
   }
   // Bottom dock (desk / journal / alerts) + macro drawer — day-trading grid.
   let dockTab: "desk" | "journal" | "alerts" = "desk";
@@ -4133,7 +4158,7 @@
         address={`${($privyAuth.walletAddress ?? "").slice(0, 4)}…${($privyAuth.walletAddress ?? "").slice(-4)}`}
         funded={welcomeFunded}
         traded={welcomeTraded}
-        onfund={openFunds}
+        onopen={() => (wizardOpen = true)}
         ondismiss={dismissWelcome}
       />
     </div>
@@ -4756,6 +4781,20 @@
 
 {#if ackOpen}
   <AckModal onagree={onAckAgree} onclose={() => { ackOpen = false; pendingAckAction = null; }} />
+{/if}
+
+{#if wizardOpen}
+  <FundingWizard
+    address={$privyAuth.walletAddress ?? ""}
+    funded={welcomeFunded}
+    collateralized={welcomeCollateralized}
+    traded={welcomeTraded}
+    onopenfunds={() => {
+      wizardOpen = false;
+      openFunds();
+    }}
+    onclose={() => (wizardOpen = false)}
+  />
 {/if}
 
 {#if tradeOpen}
