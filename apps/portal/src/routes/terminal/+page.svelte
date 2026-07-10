@@ -618,13 +618,19 @@
   // afterwards the strip is the re-entry point. Reload never re-opens (the
   // wizard-auto key is set on first open); signed-out never opens.
   let wizardOpen = false;
+  // In-memory guard alongside the persisted key: if the localStorage write
+  // fails (private mode, quota), the reactive must NOT re-fire and reopen
+  // the wizard every time it closes (review). Session memory wins.
+  const wizardAutoOpenedSession = new Set<string>();
   $: welcomeCollateralized = phoenixTotalCollateral > 0;
   $: if (
     showWelcomeStrip &&
     !wizardOpen &&
     $privyAuth.walletAddress &&
+    !wizardAutoOpenedSession.has($privyAuth.walletAddress) &&
     !hasAutoOpenedWizard($privyAuth.walletAddress)
   ) {
+    wizardAutoOpenedSession.add($privyAuth.walletAddress);
     recordWizardAutoOpened($privyAuth.walletAddress);
     wizardOpen = true;
   }
