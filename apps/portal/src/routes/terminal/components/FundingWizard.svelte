@@ -31,6 +31,19 @@
   let copied = $state(false);
   let stepBodyReady = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
+  // QR of the wallet address, generated lazily so the `qrcode` package
+  // stays out of the entry chunk (same pattern as FundsModal).
+  let qrSvg = $state<string | null>(null);
+  // Funds-detected beat: a brief celebratory pulse when the balance flips
+  // to funded while the wizard is open. It renders as an overlay outside the
+  // step branches — the same flip advances `step` past 1, so a beat rendered
+  // inside step 1 would unmount before it was ever visible.
+  let fundsJustArrived = $state(false);
+  let fundsBeatTimer: ReturnType<typeof setTimeout> | null = null;
+  // Previous `funded` value across effect runs; starts undefined so the first
+  // run primes it without firing a spurious beat on mount. (Reading the
+  // reactive prop at init would only capture its initial value.)
+  let prevFunded: boolean | undefined;
 
   // Focus the dialog on open so keys originate here: terminal hotkeys are
   // swallowed below instead of flipping the ticket behind the overlay. The
@@ -59,8 +72,52 @@
     };
   });
 
+  // QR regenerates whenever the address changes (wallet switch). The lazy
+  // import keeps `qrcode` (+ dijkstrajs) out of the entry chunk; later opens
+  // hit the module cache. toString options mirror FundsModal verbatim.
+  $effect(() => {
+    if (!address) return;
+    let cancelled = false;
+    void import("qrcode")
+      .then(async ({ default: QRCode }) => {
+        const svg = await QRCode.toString(address, {
+          type: "svg",
+          margin: 1,
+          errorCorrectionLevel: "M",
+          color: { dark: "#f5eff7", light: "#00000000" },
+        });
+        if (!cancelled) qrSvg = svg;
+      })
+      .catch(() => {
+        /* generation failed — keep the skeleton tile */
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  // Funds-detected flip: funded going false→true fires the beat for 1400ms.
+  // The wizard only mounts while open, so "while the wizard is open" is
+  // implicit; opening onto an already-funded step (prevFunded starts true)
+  // does not fire it. The step indicator advances via the `step` derivation —
+  // the beat overlaps that transition, it never drives it.
+  $effect(() => {
+    const now = funded;
+    if (prevFunded === undefined) {
+      prevFunded = now;
+      return;
+    }
+    if (!prevFunded && now) {
+      fundsJustArrived = true;
+      if (fundsBeatTimer) clearTimeout(fundsBeatTimer);
+      fundsBeatTimer = setTimeout(() => (fundsJustArrived = false), 1400);
+    }
+    prevFunded = now;
+  });
+
   onDestroy(() => {
     if (copyTimer) clearTimeout(copyTimer);
+    if (fundsBeatTimer) clearTimeout(fundsBeatTimer);
   });
 
   // Real focus trap: Tab cycles within the dialog's controls, and if focus
@@ -159,10 +216,19 @@
         </li>
       </ol>
 
+      {#if fundsJustArrived}
+        <p class="funds-beat" role="status">✓ Funds received</p>
+      {/if}
+
       <div class="step-body" class:ready={stepBodyReady}>
         {#if step === 1}
           <h3 class="step-title">Send funds to your wallet</h3>
           <p class="step-copy">USDC or SOL on Solana. Your address:</p>
+          <div class="qr-wrap">
+            <div class="qr-tile" aria-hidden={qrSvg === null}>
+              {#if qrSvg}{@html qrSvg}{/if}
+            </div>
+          </div>
           <button class="address-copy" type="button" onclick={copyAddress}>
             <span class="mono">{address || "—"}</span>
             <span class="copy-hint">{copied ? "Copied" : "Copy"}</span>
@@ -229,6 +295,7 @@
   }
 
   .wizard-scroll {
+    position: relative;
     overflow-y: auto;
     overflow-x: hidden;
     display: grid;
@@ -297,6 +364,48 @@
     line-height: 1.4;
   }
 
+  .qr-wrap {
+    display: flex;
+    justify-content: center;
+  }
+  .qr-tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 10rem;
+    height: 10rem;
+    padding: 0.6rem;
+    border: 1px solid var(--line-soft);
+    border-radius: 0;
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .qr-tile :global(svg) {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Overlays top-right of the scroll area (out of flow) so its 1400ms
+     appearance never reflows the step body under it. */
+  .funds-beat {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    margin: 0;
+    color: var(--up);
+    font-size: 0.8rem;
+    animation: funds-pulse 480ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  @keyframes funds-pulse {
+    0% {
+      transform: scale(0.94);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+
   .address-copy {
     display: flex;
     align-items: center;
@@ -339,6 +448,9 @@
       opacity: 1 !important;
       transform: none !important;
       transition: none !important;
+    }
+    .funds-beat {
+      animation: none;
     }
   }
 </style>

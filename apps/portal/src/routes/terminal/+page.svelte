@@ -634,6 +634,23 @@
     recordWizardAutoOpened($privyAuth.walletAddress);
     wizardOpen = true;
   }
+  // While the wizard is open and the wallet is unfunded, poll balances
+  // every 5s so "this screen will advance on its own" is actually prompt —
+  // the ambient 30s cadence stays for everything else.
+  let wizardPollTimer: ReturnType<typeof setInterval> | null = null;
+  $: {
+    const wantFast = wizardOpen && !welcomeFunded && Boolean(walletBalanceAddress);
+    if (wantFast && wizardPollTimer === null) {
+      wizardPollTimer = setInterval(() => {
+        if (walletBalanceAddress) {
+          void refreshWalletBalance(walletBalanceAddress, { quiet: true });
+        }
+      }, 5_000);
+    } else if (!wantFast && wizardPollTimer !== null) {
+      clearInterval(wizardPollTimer);
+      wizardPollTimer = null;
+    }
+  }
   // Bottom dock (desk / journal / alerts) + macro drawer — day-trading grid.
   let dockTab: "desk" | "journal" | "alerts" = "desk";
   let macroOpen = false;
@@ -1211,6 +1228,7 @@
       stackMq.removeEventListener("change", onStackMq);
       for (const timer of timers) window.clearInterval(timer);
       if (fundsPollTimer !== null) window.clearInterval(fundsPollTimer);
+      if (wizardPollTimer !== null) window.clearInterval(wizardPollTimer);
       if (copyResetTimer) clearTimeout(copyResetTimer);
       spotTicket.dispose();
       if (spotChartTimer) clearInterval(spotChartTimer);
