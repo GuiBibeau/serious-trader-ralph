@@ -1,6 +1,7 @@
 // Terminal OG card: the trading desk at a glance — brand bar, live SOL
 // price with 24h badge, and a real 7-day sparkline in a chart panel.
-// Every number comes from tokens.xyz; any fetch failure is a 503.
+// Every number comes from tokens.xyz; any fetch failure — or a bundle
+// without enough candles to draw the chart — is a 503.
 
 import { error } from "@sveltejs/kit";
 import {
@@ -41,20 +42,20 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
   const trendColor = up ? C.up : C.down;
 
   // Sparkline — same idiom as the spotlight card, sized as a wide band.
+  // The panel advertises "SOL / USDC · 7 DAYS"; without a drawable line the
+  // card is a silent bad-data render (and cacheable), so 503 instead.
   const closes = bundle.candles.map((candle) => candle.close);
-  let sparkPoints = "";
-  if (closes.length > 1) {
-    const min = Math.min(...closes);
-    const max = Math.max(...closes);
-    const span = max - min || 1;
-    sparkPoints = closes
-      .map((close, index) => {
-        const x = (index / (closes.length - 1)) * SPARK_W;
-        const y = SPARK_H - 12 - ((close - min) / span) * (SPARK_H - 24);
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      })
-      .join(" ");
-  }
+  if (closes.length < 2) error(503, "SOL market data unavailable");
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const span = max - min || 1;
+  const sparkPoints = closes
+    .map((close, index) => {
+      const x = (index / (closes.length - 1)) * SPARK_W;
+      const y = SPARK_H - 12 - ((close - min) / span) * (SPARK_H - 24);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
 
   const tree = frame([
     // Top bar: mark + desk label left, live chip right.
@@ -156,36 +157,34 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
             text(utcStamp(), { fontSize: "18px", color: C.faint }),
           ],
         ),
-        sparkPoints
-          ? {
-              type: "svg",
-              props: {
-                width: SPARK_W,
-                height: SPARK_H,
-                viewBox: `0 0 ${SPARK_W} ${SPARK_H}`,
-                style: { margin: "8px 24px", display: "flex" },
-                children: [
-                  {
-                    type: "polyline",
-                    props: {
-                      points: sparkPoints,
-                      fill: "none",
-                      stroke: trendColor,
-                      "stroke-width": 4,
-                    },
-                  },
-                  {
-                    type: "polygon",
-                    props: {
-                      points: `0,${SPARK_H} ${sparkPoints} ${SPARK_W},${SPARK_H}`,
-                      fill: trendColor,
-                      opacity: 0.08,
-                    },
-                  },
-                ],
+        {
+          type: "svg",
+          props: {
+            width: SPARK_W,
+            height: SPARK_H,
+            viewBox: `0 0 ${SPARK_W} ${SPARK_H}`,
+            style: { margin: "8px 24px", display: "flex" },
+            children: [
+              {
+                type: "polyline",
+                props: {
+                  points: sparkPoints,
+                  fill: "none",
+                  stroke: trendColor,
+                  "stroke-width": 4,
+                },
               },
-            }
-          : el("div", { height: `${SPARK_H}px` }),
+              {
+                type: "polygon",
+                props: {
+                  points: `0,${SPARK_H} ${sparkPoints} ${SPARK_W},${SPARK_H}`,
+                  fill: trendColor,
+                  opacity: 0.08,
+                },
+              },
+            ],
+          },
+        },
       ],
     ),
 

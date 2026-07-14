@@ -56,7 +56,8 @@
 ## Environment and Domains
 
 - Production branch: `main`.
-- Production domain: `trader-ralph.com` and `www.trader-ralph.com`.
+- Production domain: `traderralph.com`; `trader-ralph.com` and
+  `www.trader-ralph.com` redirect to it.
 - Lower environment: `dev` branch -> `dev.trader-ralph.com`.
 - There is no frontend requirement for `api.trader-ralph.com` in the current
   repo shape.
