@@ -34,11 +34,18 @@ bundle: change summary, validation commands + results, local URL used for
 UI verification, browser artifacts (screenshots) for UI changes, risk
 notes / deferred items. Reference the ticket (`Closes #N`).
 
-## 3. Preview URL (approval lane)
+## 3. Preview URL (approval lane) — NEVER skip the script
 
 ```bash
 scripts/factory/preview.sh <pr-number>
 ```
+
+This step is what moves the `preview.trader-ralph.com` alias. The domain
+is NOT automatic: until the script runs for this PR it silently serves
+whatever PR was QA'd last, and Guillaume tests stale code with no visible
+error (happened on #520 — the "fixed" bug reproduced because the alias
+still pointed at #519's build). Only post the QA link AFTER the script
+prints the `(auth-enabled alias)` line.
 
 Post PR link + preview URL + concrete QA notes ("what to check") to
 Guillaume. Wait. Do not gate.

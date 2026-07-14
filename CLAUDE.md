@@ -61,6 +61,12 @@ pick up without further human context.
    with build log grepped for `unused css selector` = 0.
 3. PR against `main` with the WORKFLOW.md proof bundle (summary, validation
    output, local URL, browser artifacts for UI, risk notes).
+   **Approval-lane QA handoff: run `scripts/factory/preview.sh <PR>` BEFORE
+   posting the QA link.** `preview.trader-ralph.com` is a manually-moved
+   alias — until the script runs for THIS PR it silently serves the
+   previous PR's build, and Guillaume QAs stale code (burned a QA round on
+   #520). This also means: don't hand-roll the ship flow from memory — the
+   `/factory-ship` skill already encodes this step; use it.
 4. Gate (background): poll `mergeStateStatus == CLEAN`, fail-fast on any
    check failure, merge, then verify — never walk away before this is green.
 5. Verify main CI for the exact merge sha, then the Vercel production
