@@ -1,144 +1,113 @@
-// Static OG card for the landing, hubs and /news — same satori pipeline as
-// the spotlight cards.
+// Landing OG card: brand statement plus a LIVE strip of curated flagships.
+// Same honest-data rule as the hub cards: catalog failure is a 503, never
+// placeholder numbers.
 
-import { Resvg } from "@resvg/resvg-js";
-import satori from "satori";
-import { read } from "$app/server";
-import interBold from "$lib/server/fonts/Inter-Bold.ttf";
-import interRegular from "$lib/server/fonts/Inter-Regular.ttf";
-import { brandMark, C } from "$lib/server/og";
+import { error } from "@sveltejs/kit";
+import {
+  brandRow,
+  C,
+  el,
+  fmtPct,
+  fmtPrice,
+  frame,
+  renderOgPng,
+  text,
+  utcStamp,
+} from "$lib/server/og";
+import { type CatalogAsset, getCatalog } from "$lib/server/tokensxyz";
 import type { RequestHandler } from "./$types";
 
-const W = 1200;
-const H = 630;
-
-let fontsPromise: Promise<{ regular: ArrayBuffer; bold: ArrayBuffer }> | null =
-  null;
-function loadFonts() {
-  fontsPromise ??= (async () => {
-    const [regular, bold] = await Promise.all([
-      read(interRegular).arrayBuffer(),
-      read(interBold).arrayBuffer(),
-    ]);
-    return { regular, bold };
-  })();
-  return fontsPromise;
+function moverCell(asset: CatalogAsset): Record<string, unknown> {
+  const up = (asset.change24hPct ?? 0) >= 0;
+  return el(
+    "div",
+    {
+      flexDirection: "column",
+      flexGrow: 1,
+      flexBasis: 0,
+      border: `1px solid ${C.line}`,
+      borderRadius: "0",
+      backgroundColor: C.surface,
+      padding: "18px 24px",
+      gap: "6px",
+    },
+    [
+      text(asset.symbol, {
+        fontSize: "22px",
+        fontWeight: 700,
+        letterSpacing: "2px",
+        color: C.ink,
+      }),
+      text(fmtPrice(asset.price), {
+        fontSize: "30px",
+        fontWeight: 700,
+        color: C.muted,
+      }),
+      text(fmtPct(asset.change24hPct), {
+        fontSize: "22px",
+        fontWeight: 700,
+        color: up ? C.up : C.down,
+      }),
+    ],
+  );
 }
 
 export const GET: RequestHandler = async ({ setHeaders }) => {
-  const fonts = await loadFonts();
-
-  const tree = {
-    type: "div",
-    props: {
-      style: {
-        width: `${W}px`,
-        height: `${H}px`,
-        display: "flex",
-        flexDirection: "column",
-        backgroundColor: C.paper,
-        padding: "64px 80px",
-        fontFamily: "Inter",
-        color: C.ink,
-      },
-      children: [
-        {
-          type: "div",
-          props: {
-            style: {
-              display: "flex",
-              alignItems: "center",
-              fontSize: "26px",
-              fontWeight: 700,
-              letterSpacing: "4px",
-            },
-            children: [
-              brandMark(34),
-              {
-                type: "span",
-                props: { style: { marginLeft: "14px" }, children: "RALPH" },
-              },
-              {
-                type: "span",
-                props: { style: { color: C.accent }, children: "·TERMINAL" },
-              },
-            ],
-          },
-        },
-        {
-          type: "div",
-          props: {
-            style: {
-              display: "flex",
-              flexDirection: "column",
-              fontSize: "86px",
-              fontWeight: 700,
-              lineHeight: 1.05,
-              letterSpacing: "-2px",
-              marginTop: "96px",
-            },
-            children: [
-              {
-                type: "div",
-                props: {
-                  style: { display: "flex" },
-                  children: "SOL to SPACEX.",
-                },
-              },
-              {
-                type: "div",
-                props: {
-                  style: { display: "flex", color: C.accent },
-                  children: "One account.",
-                },
-              },
-            ],
-          },
-        },
-        {
-          type: "div",
-          props: {
-            style: {
-              display: "flex",
-              fontSize: "30px",
-              color: C.muted,
-              marginTop: "40px",
-            },
-            children: "Spot and perps on 300+ Solana markets, settled in USDC",
-          },
-        },
-        {
-          type: "div",
-          props: {
-            style: {
-              display: "flex",
-              marginTop: "auto",
-              fontSize: "24px",
-              color: C.muted,
-            },
-            children:
-              "Spot by Jupiter · perps on Phoenix · email login, no seed phrase",
-          },
-        },
-      ],
-    },
-  };
-
-  const svg = await satori(tree as Parameters<typeof satori>[0], {
-    width: W,
-    height: H,
-    fonts: [
-      { name: "Inter", data: fonts.regular, weight: 400, style: "normal" },
-      { name: "Inter", data: fonts.bold, weight: 700, style: "normal" },
-    ],
+  const assets = await getCatalog().catch(() => {
+    error(503, "Catalog unavailable");
   });
 
-  const png = new Resvg(svg, { fitTo: { mode: "width", value: W } })
-    .render()
-    .asPng();
+  // Curated flagship lineup — this is a marketing card, so it delivers the
+  // hero tagline ("SOL to SPACEX. One account."): SOL, BTC, NVDA, SpaceX.
+  // Top-mover selection was tried and surfaced crash-outliers and sub-penny
+  // unknowns (extreme tokens.xyz prints are often data artifacts) — never
+  // lead an acquisition card with those. Real prices only: any of the four
+  // that is missing or unpriced is honestly omitted, never faked.
+  const FLAGSHIP_ASSET_IDS = ["solana", "bitcoin", "nvidia", "spacex"];
+  const movers = FLAGSHIP_ASSET_IDS.map(
+    (id) =>
+      assets.find((asset) => asset.assetId === id && asset.price !== null) ??
+      null,
+  ).filter((asset): asset is CatalogAsset => asset !== null);
+  if (movers.length === 0) error(503, "Market data unavailable");
+
+  const tree = frame([
+    brandRow(`LIVE ${utcStamp()}`),
+
+    // Hero — the brand statement.
+    el(
+      "div",
+      {
+        flexDirection: "column",
+        fontSize: "84px",
+        fontWeight: 700,
+        lineHeight: 1.05,
+        letterSpacing: "-2px",
+        marginTop: "52px",
+      },
+      [
+        text("SOL to SPACEX.", { color: C.ink }),
+        text("One account.", { color: C.accent }),
+      ],
+    ),
+
+    // Live movers strip.
+    el(
+      "div",
+      { gap: "16px", width: "100%", marginTop: "48px" },
+      movers.map((asset) => moverCell(asset)),
+    ),
+
+    text("Spot and perps on Solana — settled in USDC · traderralph.com", {
+      marginTop: "auto",
+      fontSize: "24px",
+      color: C.muted,
+    }),
+  ]);
+
   setHeaders({
     "content-type": "image/png",
-    "cache-control": "public, s-maxage=604800, stale-while-revalidate=86400",
+    "cache-control": "public, s-maxage=900, stale-while-revalidate=3600",
   });
-  return new Response(new Uint8Array(png));
+  return new Response(await renderOgPng(tree));
 };
