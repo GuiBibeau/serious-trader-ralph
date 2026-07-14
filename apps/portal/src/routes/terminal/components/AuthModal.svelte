@@ -28,6 +28,7 @@
   let authBusy = $state(false);
   let authStep: "email" | "code" = $state($privyAuth.otpSentTo ? "code" : "email");
   let authMessage = $state($privyAuth.error ?? "");
+  let betaClosed = $state(false);
 
   let authNote = $derived(humanizePrivyError(authMessage || $privyAuth.error));
   let authNoteIsError = $derived(
@@ -42,11 +43,33 @@
     if (event.key !== "Escape") event.stopPropagation();
   }
 
+  // Beta-cap check before the OTP fires. Fail-open: our own endpoint being
+  // down or slow must never strand a user — only an explicit
+  // `{ allowed: false }` blocks the send.
+  async function checkBetaEligibility(email: string): Promise<boolean> {
+    try {
+      const response = await fetch("/api/beta/eligibility", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!response.ok) return true;
+      const data = (await response.json()) as { allowed?: boolean };
+      return data.allowed !== false;
+    } catch {
+      return true;
+    }
+  }
+
   async function submitAuthEmail(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     authBusy = true;
     authMessage = "";
     try {
+      if (!(await checkBetaEligibility(authEmail))) {
+        betaClosed = true;
+        return;
+      }
       await sendPrivyEmailCode(authEmail);
       authStep = "code";
       authMessage = "Code sent.";
@@ -116,6 +139,16 @@
         <div class="auth-callout error">
           <strong>Auth is not configured</strong>
           <span>Set <code>PUBLIC_PRIVY_APP_ID</code> (or <code>VITE_PRIVY_APP_ID</code> / <code>NEXT_PUBLIC_PRIVY_APP_ID</code>) for this frontend, then reload.</span>
+        </div>
+      {:else if betaClosed}
+        <div class="beta-closed">
+          <div class="auth-callout notice">
+            <strong>The beta is full</strong>
+            <span>All beta seats are taken right now. We'll open more soon — check back.</span>
+          </div>
+          <button class="primary wide" type="button" onclick={() => (betaClosed = false)}>
+            Back
+          </button>
         </div>
       {:else if $privyAuth.authenticated}
         <div class="auth-success">
@@ -289,6 +322,16 @@
 
   .auth-callout.error {
     border-color: rgba(240, 107, 99, 0.35);
+  }
+
+  /* A state, not a failure — blue accent instead of the error red. */
+  .auth-callout.notice {
+    border-color: var(--blue);
+  }
+
+  .beta-closed {
+    display: grid;
+    gap: 0.7rem;
   }
 
   .auth-callout strong {
