@@ -11,6 +11,7 @@ import {
   riskNotional,
   SL_CHIP_PCTS,
   TP_CHIP_PCTS,
+  tpSlExecutionPrice,
   triggerPriceForPct,
 } from "./trade-math";
 
@@ -343,6 +344,23 @@ describe("triggerPriceForPct", () => {
   test("SL moves against the trade side", () => {
     expect(triggerPriceForPct(100, "buy", 5, "sl")).toBeCloseTo(95, 10);
     expect(triggerPriceForPct(100, "sell", 5, "sl")).toBeCloseTo(105, 10);
+  });
+});
+
+describe("tpSlExecutionPrice", () => {
+  test("ask close (long) bands the limit 10% below the trigger", () => {
+    expect(tpSlExecutionPrice(80.5, "ask", 1000)).toBe(72.45);
+    expect(tpSlExecutionPrice(73.8, "ask", 1000)).toBe(66.42);
+  });
+
+  test("bid close (short) bands the limit 10% above the trigger", () => {
+    expect(tpSlExecutionPrice(100, "bid", 1000)).toBeCloseTo(110, 10);
+    expect(tpSlExecutionPrice(62, "bid", 1000)).toBe(68.2);
+  });
+
+  test("0 bps collapses execution onto the trigger", () => {
+    expect(tpSlExecutionPrice(80.5, "ask", 0)).toBe(80.5);
+    expect(tpSlExecutionPrice(80.5, "bid", 0)).toBe(80.5);
   });
 });
 

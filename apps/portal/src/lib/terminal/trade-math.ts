@@ -166,6 +166,23 @@ export function triggerPriceForPct(
   return ref * factor;
 }
 
+// The Phoenix ix API requires an execution price beside every TP/SL trigger
+// (400 without it); it becomes the triggered close order's limit price.
+// Mirror the SDK's executionPriceFromSlippageBps semantics in USD: an "ask"
+// close (long position) gets a limit floor below the trigger, a "bid" close
+// (short) a ceiling above. The band only binds when price gaps through the
+// trigger — otherwise the close fills at the trigger or better.
+export function tpSlExecutionPrice(
+  triggerUsd: number,
+  closeSide: "ask" | "bid",
+  slippageBps: number,
+): number {
+  const band = slippageBps / 10_000;
+  return closeSide === "ask"
+    ? triggerUsd * (1 - band)
+    : triggerUsd * (1 + band);
+}
+
 // Busy key for one order row — finer than the side-wide `cancel:SYM:SIDE`
 // so cancelling one order never greys out its neighbours.
 export function orderCancelKey(order: PhoenixOpenOrder): string {

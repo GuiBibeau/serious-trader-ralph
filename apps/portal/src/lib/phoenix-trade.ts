@@ -25,6 +25,7 @@ import {
   Direction as RiseDirection,
   Side as RiseSide,
   resolvePhoenixInstructionAddresses,
+  TP_SL_MAX_SLIPPAGE_BPS,
   toMaxPositions,
 } from "@ellipsis-labs/rise";
 import {
@@ -37,6 +38,7 @@ import {
 } from "@solana/web3.js";
 import { Buffer as BrowserBuffer } from "buffer/";
 import { USDC_MINT } from "./funding";
+import { tpSlExecutionPrice } from "./terminal/trade-math";
 import { isRecord } from "./utils";
 
 const PHOENIX_API = "https://perp-api.phoenix.trade";
@@ -620,10 +622,29 @@ export async function buildPlaceOrderPlan(
     input.orderType === "market"
       ? "/v1/ix/place-isolated-market-order-enhanced"
       : "/v1/ix/place-isolated-limit-order-enhanced";
+  // TP/SL close the position, so they trade opposite the entry side. The
+  // API rejects a trigger without an execution price (400: "requires both
+  // trigger and execution prices"); the execution price is the triggered
+  // close's limit price, banded 10% past the trigger to mirror the SDK's
+  // TP_SL_MAX_SLIPPAGE_BPS default.
+  const closeSide: PhoenixSide = input.side === "bid" ? "ask" : "bid";
   const tpSl: Record<string, number> = {};
-  if (input.takeProfitPrice)
+  if (input.takeProfitPrice) {
     tpSl.takeProfitTriggerPrice = input.takeProfitPrice;
-  if (input.stopLossPrice) tpSl.stopLossTriggerPrice = input.stopLossPrice;
+    tpSl.takeProfitExecutionPrice = tpSlExecutionPrice(
+      input.takeProfitPrice,
+      closeSide,
+      TP_SL_MAX_SLIPPAGE_BPS,
+    );
+  }
+  if (input.stopLossPrice) {
+    tpSl.stopLossTriggerPrice = input.stopLossPrice;
+    tpSl.stopLossExecutionPrice = tpSlExecutionPrice(
+      input.stopLossPrice,
+      closeSide,
+      TP_SL_MAX_SLIPPAGE_BPS,
+    );
+  }
   const body: Record<string, unknown> = {
     authority: input.authority,
     symbol: input.symbol,
@@ -844,16 +865,29 @@ export async function buildSetPositionTpSlIxs(
         );
       }
       if (update.next !== null) {
-        // Trigger prices go up in USD like the order-time tpSl config; the
-        // API picks the venue defaults (TP executes as limit at the
-        // trigger, SL as IOC with capped slippage).
+        // Trigger prices go up in USD like the order-time tpSl config. The
+        // API requires an execution price beside every trigger (400 without
+        // it); it becomes the triggered close's limit price, banded 10%
+        // past the trigger to mirror the SDK's TP_SL_MAX_SLIPPAGE_BPS
+        // default. `side` already holds the close side.
+        const executionPrice = tpSlExecutionPrice(
+          update.next,
+          side,
+          TP_SL_MAX_SLIPPAGE_BPS,
+        );
         built.push(
           ...(await orders.placeStopLossOrder({
             ...scope,
             side,
             ...(update.kind === "tp"
-              ? { takeProfitTriggerPrice: update.next }
-              : { stopLossTriggerPrice: update.next }),
+              ? {
+                  takeProfitTriggerPrice: update.next,
+                  takeProfitExecutionPrice: executionPrice,
+                }
+              : {
+                  stopLossTriggerPrice: update.next,
+                  stopLossExecutionPrice: executionPrice,
+                }),
           })),
         );
       }
