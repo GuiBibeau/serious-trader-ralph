@@ -624,18 +624,15 @@ export async function buildPlaceOrderPlan(
       : "/v1/ix/place-isolated-limit-order-enhanced";
   // TP/SL close the position, so they trade opposite the entry side. The
   // API rejects a trigger without an execution price (400: "requires both
-  // trigger and execution prices"); the execution price is the triggered
-  // close's limit price, banded 10% past the trigger to mirror the SDK's
-  // TP_SL_MAX_SLIPPAGE_BPS default.
+  // trigger and execution prices"). Mirroring the SDK's split: the TP
+  // executes as a limit AT the trigger (a limit at target can never fill
+  // past it), while only the SL gets the 10% TP_SL_MAX_SLIPPAGE_BPS band
+  // so it can fill through gaps (Limit-at-trigger TP / IOC-banded SL).
   const closeSide: PhoenixSide = input.side === "bid" ? "ask" : "bid";
   const tpSl: Record<string, number> = {};
   if (input.takeProfitPrice) {
     tpSl.takeProfitTriggerPrice = input.takeProfitPrice;
-    tpSl.takeProfitExecutionPrice = tpSlExecutionPrice(
-      input.takeProfitPrice,
-      closeSide,
-      TP_SL_MAX_SLIPPAGE_BPS,
-    );
+    tpSl.takeProfitExecutionPrice = input.takeProfitPrice;
   }
   if (input.stopLossPrice) {
     tpSl.stopLossTriggerPrice = input.stopLossPrice;
@@ -867,14 +864,11 @@ export async function buildSetPositionTpSlIxs(
       if (update.next !== null) {
         // Trigger prices go up in USD like the order-time tpSl config. The
         // API requires an execution price beside every trigger (400 without
-        // it); it becomes the triggered close's limit price, banded 10%
-        // past the trigger to mirror the SDK's TP_SL_MAX_SLIPPAGE_BPS
-        // default. `side` already holds the close side.
-        const executionPrice = tpSlExecutionPrice(
-          update.next,
-          side,
-          TP_SL_MAX_SLIPPAGE_BPS,
-        );
+        // it). Mirroring the SDK's split: the TP executes as a limit AT the
+        // trigger (can never fill past target); only the SL is banded 10%
+        // past the trigger (TP_SL_MAX_SLIPPAGE_BPS) so it can fill through
+        // gaps (Limit-at-trigger TP / IOC-banded SL). `side` already holds
+        // the close side.
         built.push(
           ...(await orders.placeStopLossOrder({
             ...scope,
@@ -882,11 +876,15 @@ export async function buildSetPositionTpSlIxs(
             ...(update.kind === "tp"
               ? {
                   takeProfitTriggerPrice: update.next,
-                  takeProfitExecutionPrice: executionPrice,
+                  takeProfitExecutionPrice: update.next,
                 }
               : {
                   stopLossTriggerPrice: update.next,
-                  stopLossExecutionPrice: executionPrice,
+                  stopLossExecutionPrice: tpSlExecutionPrice(
+                    update.next,
+                    side,
+                    TP_SL_MAX_SLIPPAGE_BPS,
+                  ),
                 }),
           })),
         );
