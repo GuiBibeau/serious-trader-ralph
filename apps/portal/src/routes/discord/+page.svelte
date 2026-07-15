@@ -144,8 +144,8 @@
   </header>
 
   <main class="wrap">
-    <p class="eyebrow">DISCORD_VERIFY</p>
-    <h1>Active traders only.</h1>
+    <p class="eyebrow">DISCORD_COMMUNITY</p>
+    <h1>Discord community for active members.</h1>
     <p class="lead">
       The Trader Ralph Discord grants the <b>Active Trader</b> role to
       accounts with skin in the game. Two requirements, checked on-chain:
@@ -212,6 +212,11 @@
             <strong>Login is not configured.</strong>
             <span>This deployment has no Privy app id set, so verification is unavailable.</span>
           </div>
+        {:else if !$privyAuth.ready && !$privyAuth.authenticated}
+          <!-- Session restore in flight: render a quiet placeholder instead of
+               flashing the email form and swapping to "Signed in" a beat later
+               (the swap reads as a layout jump). .action reserves the height. -->
+          <p class="signed-in">Checking your session…</p>
         {:else if $privyAuth.authenticated}
           <p class="signed-in">
             Signed in as <b>{$privyAuth.email ?? "your account"}</b>
@@ -325,11 +330,6 @@
       </section>
     {/if}
 
-    <p class="fine">
-      Verification links a wallet to one Discord account. Balances are read
-      from the Solana chain at verification time; the role is not revoked if
-      you later move funds.
-    </p>
   </main>
 </div>
 
@@ -451,6 +451,10 @@
     gap: 0.9rem;
     justify-items: start;
     margin-bottom: 2rem;
+    /* Tall enough for the settled states (signed-in + button, or the email
+       form), so the loading placeholder → content swap never shifts the
+       page below. */
+    min-height: 9.5rem;
   }
 
   .signed-in {
@@ -554,12 +558,4 @@
     margin-top: 0.5rem;
   }
 
-  .fine {
-    color: var(--faint);
-    font-size: 0.74rem;
-    line-height: 1.6;
-    border-top: 1px solid var(--line-soft);
-    padding-top: 1.2rem;
-    margin: 0;
-  }
 </style>
