@@ -1,4 +1,5 @@
-// Server-only Discord client for the funded-trader verification flow.
+// Server-only Discord client for the funded-trader verification flow and
+// the cron-driven bot operations (market-move alerts, moderation sweep).
 // Endpoint shapes verified against docs.discord.com/developers:
 // - authorize: https://discord.com/oauth2/authorize with response_type=code,
 //   client_id, scope ("identify guilds.join"), redirect_uri, state
@@ -9,6 +10,12 @@
 //   from the guilds.join grant; 201 = added, 204 = already a member
 // - PUT /guilds/{guild}/members/{user}/roles/{role} — bot token with
 //   Manage Roles; 204 on success
+// - GET /guilds/{guild}/channels — bot token; guild channel objects
+//   (type 0 = GUILD_TEXT), no threads
+// - GET /channels/{id}/messages?after=&limit= — limit max 100, newest first
+// - POST /channels/{id}/messages — JSON { content?, embeds? }, needs
+//   Send Messages + View Channel
+// - DELETE /channels/{id}/messages/{mid} — needs Manage Messages; 204
 //
 // Same never-throw idiom as lib/server/privy.ts: every function fails soft
 // (null / false / "unavailable") and callers decide policy.
@@ -28,6 +35,11 @@ const DISCORD_AUTHORIZE = "https://discord.com/oauth2/authorize";
 const DISCORD_TOKEN = "https://discord.com/api/oauth2/token";
 const DISCORD_API = "https://discord.com/api/v10";
 const OAUTH_SCOPES = "identify guilds.join";
+// Discord requires the DiscordBot User-Agent form for API clients, and its
+// Cloudflare front 1010-blocks requests with default fetch user agents
+// (confirmed empirically from local probes). Every Discord API fetch in
+// this module must send this.
+const DISCORD_USER_AGENT = "DiscordBot (https://traderralph.com, 1.0)";
 
 type DiscordConfig = {
   clientId: string;
@@ -82,6 +94,7 @@ export async function exchangeCode(
       headers: {
         authorization: `Basic ${basic}`,
         "content-type": "application/x-www-form-urlencoded",
+        "user-agent": DISCORD_USER_AGENT,
       },
       body: new URLSearchParams({
         grant_type: "authorization_code",
@@ -104,7 +117,10 @@ export async function fetchDiscordUser(
 ): Promise<{ id: string; username: string } | null> {
   try {
     const response = await fetch(`${DISCORD_API}/users/@me`, {
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "user-agent": DISCORD_USER_AGENT,
+      },
     });
     if (!response.ok) return null;
     const data = (await response.json()) as {
@@ -133,6 +149,7 @@ export async function joinGuild(
         headers: {
           authorization: `Bot ${config.botToken}`,
           "content-type": "application/json",
+          "user-agent": DISCORD_USER_AGENT,
         },
         body: JSON.stringify({ access_token: userAccessToken }),
       },
@@ -152,7 +169,10 @@ export async function grantRole(discordUserId: string): Promise<boolean> {
       `${DISCORD_API}/guilds/${config.guildId}/members/${discordUserId}/roles/${config.roleId}`,
       {
         method: "PUT",
-        headers: { authorization: `Bot ${config.botToken}` },
+        headers: {
+          authorization: `Bot ${config.botToken}`,
+          "user-agent": DISCORD_USER_AGENT,
+        },
       },
     );
     return response.status === 204;
@@ -299,6 +319,193 @@ async function readLink(
     return { wallet: data.wallet, discordId: data.discordId };
   } catch {
     return "error";
+  }
+}
+
+// ── Bot channel/message helpers (cron operations) ─────────────────────
+// These read only the env they need (DISCORD_BOT_TOKEN, DISCORD_GUILD_ID) —
+// the cron endpoints must work without the OAuth half of the verification
+// config. Same never-throw convention: null/false on any failure.
+
+export type BotChannel = { id: string; name: string };
+
+export type BotMessage = {
+  id: string;
+  channelId: string;
+  /** Discord message type; 0 = DEFAULT, 19 = REPLY (user content). */
+  type: number;
+  content: string;
+  authorId: string;
+  /** Display handle for modlog embeds ("@username"). */
+  authorTag: string;
+  authorIsBot: boolean;
+};
+
+export function hasBotToken(): boolean {
+  return clean(env.DISCORD_BOT_TOKEN) !== "";
+}
+
+function botHeaders(): Record<string, string> | null {
+  const botToken = clean(env.DISCORD_BOT_TOKEN);
+  if (!botToken) return null;
+  return {
+    authorization: `Bot ${botToken}`,
+    "user-agent": DISCORD_USER_AGENT,
+  };
+}
+
+/** Text channels (type 0) of the configured guild. Threads not included. */
+export async function listGuildTextChannels(): Promise<BotChannel[] | null> {
+  const headers = botHeaders();
+  const guildId = clean(env.DISCORD_GUILD_ID);
+  if (!headers || !guildId) return null;
+  try {
+    const response = await fetch(`${DISCORD_API}/guilds/${guildId}/channels`, {
+      headers,
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as unknown;
+    if (!Array.isArray(data)) return null;
+    const channels: BotChannel[] = [];
+    for (const item of data) {
+      if (typeof item !== "object" || item === null) continue;
+      const record = item as Record<string, unknown>;
+      if (record.type !== 0) continue; // GUILD_TEXT only
+      if (typeof record.id !== "string" || !record.id) continue;
+      channels.push({ id: record.id, name: String(record.name ?? "") });
+    }
+    return channels;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GET /channels/{id}/messages. `after` pages forward from a message id;
+ * limit max 100 (Discord cap). Discord returns newest first — callers
+ * sort if they need chronological order.
+ */
+export async function fetchChannelMessages(
+  channelId: string,
+  options: { after?: string; limit?: number } = {},
+): Promise<BotMessage[] | null> {
+  const headers = botHeaders();
+  if (!headers) return null;
+  const url = new URL(`${DISCORD_API}/channels/${channelId}/messages`);
+  if (options.after) url.searchParams.set("after", options.after);
+  url.searchParams.set("limit", String(options.limit ?? 100));
+  try {
+    const response = await fetch(url, { headers });
+    if (!response.ok) return null;
+    const data = (await response.json()) as unknown;
+    if (!Array.isArray(data)) return null;
+    const messages: BotMessage[] = [];
+    for (const item of data) {
+      if (typeof item !== "object" || item === null) continue;
+      const record = item as Record<string, unknown>;
+      if (typeof record.id !== "string" || !record.id) continue;
+      const author =
+        typeof record.author === "object" && record.author !== null
+          ? (record.author as Record<string, unknown>)
+          : {};
+      messages.push({
+        id: record.id,
+        channelId,
+        type: Number(record.type ?? 0),
+        content: String(record.content ?? ""),
+        authorId: String(author.id ?? ""),
+        authorTag: `@${String(author.username ?? "unknown")}`,
+        authorIsBot: author.bot === true,
+      });
+    }
+    return messages;
+  } catch {
+    return null;
+  }
+}
+
+/** POST a message (content and/or embeds — max 10 embeds per message). */
+export async function postChannelMessage(
+  channelId: string,
+  payload: { content?: string; embeds?: unknown[] },
+): Promise<boolean> {
+  const headers = botHeaders();
+  if (!headers) return false;
+  try {
+    const response = await fetch(
+      `${DISCORD_API}/channels/${channelId}/messages`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** DELETE a message. 204 = deleted; 404 = already gone, counts as done. */
+export async function deleteChannelMessage(
+  channelId: string,
+  messageId: string,
+): Promise<boolean> {
+  const headers = botHeaders();
+  if (!headers) return false;
+  try {
+    const response = await fetch(
+      `${DISCORD_API}/channels/${channelId}/messages/${messageId}`,
+      { method: "DELETE", headers },
+    );
+    return response.status === 204 || response.status === 404;
+  } catch {
+    return false;
+  }
+}
+
+// ── Cron state blobs ──────────────────────────────────────────────────
+// Small JSON documents under discord-ops/. Single-writer (one Vercel cron
+// per path), so allowOverwrite is safe — last write wins by design.
+
+export type OpsStateRead =
+  | { status: "ok"; value: unknown }
+  | { status: "missing" } // no blob yet — first run
+  | { status: "unavailable" }; // storage down/unconfigured — callers skip
+
+export async function readOpsState(pathname: string): Promise<OpsStateRead> {
+  const token = env.BLOB_READ_WRITE_TOKEN;
+  if (!token) return { status: "unavailable" };
+  try {
+    const result = await get(pathname, { access: "private", token });
+    if (result === null) return { status: "missing" };
+    if (result.statusCode !== 200 || !result.stream) {
+      return { status: "unavailable" };
+    }
+    const text = await new Response(result.stream).text();
+    return { status: "ok", value: JSON.parse(text) as unknown };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+export async function writeOpsState(
+  pathname: string,
+  value: unknown,
+): Promise<boolean> {
+  const token = env.BLOB_READ_WRITE_TOKEN;
+  if (!token) return false;
+  try {
+    await put(pathname, JSON.stringify(value), {
+      access: "private",
+      contentType: "application/json",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      token,
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
