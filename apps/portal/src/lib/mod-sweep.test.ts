@@ -9,8 +9,10 @@ import {
   compareSnowflakes,
   DELETE_COLOR,
   decideAction,
+  decideCursorAdvances,
   eligibleChannels,
   FLAG_COLOR,
+  MAX_PARSE_RETRIES,
   MODERATION_SYSTEM_PROMPT,
   maxSnowflake,
   messageLink,
@@ -19,6 +21,7 @@ import {
   parseModState,
   type SweepMessage,
   snowflakeForTimestamp,
+  surrenderNote,
 } from "./mod-sweep";
 
 // 2026-07-14T12:00:00.000Z
@@ -186,9 +189,7 @@ describe("parseClassifications", () => {
   });
 
   test("parseFailureNote is a single public-facing line", () => {
-    expect(parseFailureNote("1 malformed entries")).toContain(
-      "treated as ok for this run",
-    );
+    expect(parseFailureNote("1 malformed entries")).toContain("held for retry");
   });
 });
 
@@ -219,12 +220,21 @@ describe("decideAction", () => {
 
 describe("cursors and snowflakes", () => {
   test("parseModState keeps only numeric-string cursors", () => {
-    expect(parseModState(null)).toEqual({ cursors: {} });
+    expect(parseModState(null)).toEqual({ cursors: {}, parseRetries: {} });
     expect(
       parseModState({
         cursors: { a: "123", b: 42, c: "not-a-snowflake", d: "999" },
       }),
-    ).toEqual({ cursors: { a: "123", d: "999" } });
+    ).toEqual({ cursors: { a: "123", d: "999" }, parseRetries: {} });
+  });
+
+  test("parseModState keeps only positive-integer retry counters", () => {
+    expect(
+      parseModState({
+        cursors: { a: "123" },
+        parseRetries: { a: 1, b: 2.5, c: -1, d: 0, e: "2", f: Number.NaN },
+      }),
+    ).toEqual({ cursors: { a: "123" }, parseRetries: { a: 1 } });
   });
 
   test("compareSnowflakes orders by length then lexicographically", () => {
@@ -245,6 +255,85 @@ describe("cursors and snowflakes", () => {
     expect(snowflakeForTimestamp(1420070401000)).toBe("4194304000");
     const nowFlake = snowflakeForTimestamp(NOW);
     expect(compareSnowflakes(nowFlake, "4194304000")).toBeGreaterThan(0);
+  });
+});
+
+describe("decideCursorAdvances", () => {
+  const msg = (id: string, channelId: string) => ({ id, channelId });
+
+  test("all classified → every fetched channel advances, counters reset", () => {
+    const decision = decideCursorAdvances(
+      ["c1", "c2"],
+      [msg("1", "c1"), msg("2", "c2")],
+      new Set(["1", "2"]),
+      { c1: 1 },
+    );
+    expect(decision.advance).toEqual(["c1", "c2"]);
+    expect(decision.held).toEqual([]);
+    expect(decision.surrendered).toEqual([]);
+    expect(decision.nextRetries).toEqual({});
+  });
+
+  test("channels with unclassified messages hold; fully classified ones advance", () => {
+    const decision = decideCursorAdvances(
+      ["c1", "c2"],
+      [msg("1", "c1"), msg("2", "c1"), msg("3", "c2")],
+      new Set(["1", "3"]), // "2" (in c1) never came back
+      {},
+    );
+    expect(decision.advance).toEqual(["c2"]);
+    expect(decision.held).toEqual(["c1"]);
+    expect(decision.surrendered).toEqual([]);
+    expect(decision.nextRetries).toEqual({ c1: 1 });
+  });
+
+  test("total parse failure holds every channel with classifiable messages", () => {
+    // c3's window held only bot/system noise — nothing to classify, so it
+    // still advances even when the classifier returned garbage.
+    const decision = decideCursorAdvances(
+      ["c1", "c2", "c3"],
+      [msg("1", "c1"), msg("2", "c2")],
+      new Set(),
+      {},
+    );
+    expect(decision.advance).toEqual(["c3"]);
+    expect(decision.held).toEqual(["c1", "c2"]);
+    expect(decision.nextRetries).toEqual({ c1: 1, c2: 1 });
+  });
+
+  test("consecutive holds increment the counter", () => {
+    const decision = decideCursorAdvances(["c1"], [msg("1", "c1")], new Set(), {
+      c1: 1,
+    });
+    expect(decision.held).toEqual(["c1"]);
+    expect(decision.nextRetries).toEqual({ c1: 2 });
+  });
+
+  test("after MAX_PARSE_RETRIES held runs the channel surrenders and resets", () => {
+    const decision = decideCursorAdvances(["c1"], [msg("1", "c1")], new Set(), {
+      c1: MAX_PARSE_RETRIES,
+    });
+    expect(decision.advance).toEqual([]);
+    expect(decision.held).toEqual([]);
+    expect(decision.surrendered).toEqual(["c1"]);
+    expect(decision.nextRetries).toEqual({});
+  });
+
+  test("counters for channels not fetched this run carry through", () => {
+    const decision = decideCursorAdvances(
+      ["c1"],
+      [msg("1", "c1")],
+      new Set(["1"]),
+      { c9: 2 },
+    );
+    expect(decision.advance).toEqual(["c1"]);
+    expect(decision.nextRetries).toEqual({ c9: 2 });
+  });
+
+  test("surrenderNote names the channels and admits the pass-through", () => {
+    const note = surrenderNote(["#general", "#trading-floor"]);
+    expect(note).toContain("#general, #trading-floor");
+    expect(note).toContain("passed unmoderated");
   });
 });
 

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   type AssetInput,
+  alertDedupMarks,
   buildMoveEmbeds,
+  chunkEmbeds,
   computeAlerts,
   DOWN_COLOR,
   fastBaseline,
@@ -10,6 +12,7 @@ import {
   type MarketState,
   type MoveAlert,
   parseMarketState,
+  pruneDedupMarks,
   SNAPSHOT_RETENTION_MS,
   signedPct,
   UP_COLOR,
@@ -407,11 +410,95 @@ describe("buildMoveEmbeds", () => {
     expect(embed.description).toContain("over the last 24 hours");
   });
 
-  test("caps at Discord's 10-embed limit", () => {
+  test("builds one embed per alert — no silent truncation", () => {
     const alerts = Array.from({ length: 14 }, (_, i) => ({
       ...alert,
       assetId: `asset-${i}`,
     }));
-    expect(buildMoveEmbeds(alerts, NOW)).toHaveLength(MAX_EMBEDS_PER_MESSAGE);
+    expect(buildMoveEmbeds(alerts, NOW)).toHaveLength(14);
+  });
+});
+
+describe("chunkEmbeds", () => {
+  test("splits into groups of at most size, remainder last", () => {
+    const items = Array.from({ length: 14 }, (_, i) => i);
+    const chunks = chunkEmbeds(items, MAX_EMBEDS_PER_MESSAGE);
+    expect(chunks.map((group) => group.length)).toEqual([10, 4]);
+    expect(chunks.flat()).toEqual(items);
+  });
+
+  test("exact multiple → no empty trailing chunk", () => {
+    expect(chunkEmbeds([1, 2, 3, 4], 2)).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
+  });
+
+  test("empty input → no chunks", () => {
+    expect(chunkEmbeds([], MAX_EMBEDS_PER_MESSAGE)).toEqual([]);
+  });
+
+  test("fewer items than size → single chunk", () => {
+    expect(chunkEmbeds([1], MAX_EMBEDS_PER_MESSAGE)).toEqual([[1]]);
+  });
+});
+
+describe("dedup mark helpers", () => {
+  const alert = (assetId: string, tier: MoveAlert["tier"]): MoveAlert => ({
+    assetId,
+    symbol: assetId.toUpperCase(),
+    tier,
+    price: 100,
+    movePct: 12,
+  });
+
+  test("pruneDedupMarks keeps only today's marks", () => {
+    expect(
+      pruneDedupMarks(
+        { "solana:big": "2026-07-14", "bitcoin:fast": "2026-07-13" },
+        "2026-07-14",
+      ),
+    ).toEqual({ "solana:big": "2026-07-14" });
+  });
+
+  test("alertDedupMarks marks each alert's own slot", () => {
+    expect(
+      alertDedupMarks(
+        [alert("solana", "fast"), alert("bitcoin", "session")],
+        "2026-07-14",
+      ),
+    ).toEqual({
+      "solana:fast": "2026-07-14",
+      "bitcoin:session": "2026-07-14",
+    });
+  });
+
+  test("a big alert consumes the same-day session slot too", () => {
+    expect(alertDedupMarks([alert("bonk", "big")], "2026-07-14")).toEqual({
+      "bonk:big": "2026-07-14",
+      "bonk:session": "2026-07-14",
+    });
+  });
+
+  test("marks applied chunk-by-chunk converge to computeAlerts' next state", () => {
+    // The endpoint persists pruned carryover + per-chunk marks; the union
+    // over all chunks must equal what computeAlerts computed in one shot.
+    const prev: MarketState = {
+      snapshots: {},
+      posted: { "solana:session": "2026-07-14", "old:big": "2026-07-13" },
+    };
+    const { alerts, next } = computeAlerts(
+      [
+        asset({ change24hPct: 12 }), // solana big (session already consumed)
+        asset({ assetId: "bonk", symbol: "BONK", change24hPct: -15 }),
+      ],
+      prev,
+      NOW,
+    );
+    let marks = pruneDedupMarks(prev.posted, utcDay(NOW));
+    for (const group of chunkEmbeds(alerts, 1)) {
+      marks = { ...marks, ...alertDedupMarks(group, utcDay(NOW)) };
+    }
+    expect(marks).toEqual(next.posted);
   });
 });

@@ -170,7 +170,7 @@ export function parseClassifications(
 }
 
 export function parseFailureNote(detail: string): string {
-  return `Moderation sweep: classifier output was partially unparseable (${detail}). Affected messages were treated as ok for this run.`;
+  return `Moderation sweep: classifier output was partially unparseable (${detail}). Channels with unclassified messages are held for retry.`;
 }
 
 // ── Decision matrix ───────────────────────────────────────────────────
@@ -198,10 +198,12 @@ export function decideAction(
 export type ModState = {
   /** channelId -> last seen message id (snowflake). */
   cursors: Record<string, string>;
+  /** channelId -> consecutive runs its window was held unclassified. */
+  parseRetries: Record<string, number>;
 };
 
 export function parseModState(raw: unknown): ModState {
-  const state: ModState = { cursors: {} };
+  const state: ModState = { cursors: {}, parseRetries: {} };
   if (typeof raw !== "object" || raw === null) return state;
   const record = raw as Record<string, unknown>;
   if (typeof record.cursors === "object" && record.cursors !== null) {
@@ -213,7 +215,79 @@ export function parseModState(raw: unknown): ModState {
       }
     }
   }
+  if (typeof record.parseRetries === "object" && record.parseRetries !== null) {
+    for (const [channelId, count] of Object.entries(
+      record.parseRetries as Record<string, unknown>,
+    )) {
+      if (typeof count === "number" && Number.isInteger(count) && count > 0) {
+        state.parseRetries[channelId] = count;
+      }
+    }
+  }
   return state;
+}
+
+// ── Cursor-advance decision (partial classification) ─────────────────
+
+/** Consecutive held runs before a channel's window advances unmoderated. */
+export const MAX_PARSE_RETRIES = 2;
+
+export type CursorAdvanceDecision = {
+  /** Fully classified windows: advance, retry counter reset. */
+  advance: string[];
+  /** Windows with unclassified messages: cursor held, retried next run. */
+  held: string[];
+  /** Retries exhausted: advance anyway, messages pass unmoderated. */
+  surrendered: string[];
+  /** Next consecutive-hold counters to persist alongside the cursors. */
+  nextRetries: Record<string, number>;
+};
+
+/**
+ * Which fetched windows may advance their cursor after a classification
+ * run. A channel whose window contains a classifiable message the LLM
+ * returned no usable verdict for is held — its cursor stays put, so the
+ * same window is refetched and reclassified next run — unless it has
+ * already been held MAX_PARSE_RETRIES consecutive runs, in which case it
+ * advances anyway and the caller posts an honest surrender note (an
+ * infinite retry loop moderates nothing either, and blocks the channel's
+ * newer messages forever). Counters reset whenever a channel advances.
+ */
+export function decideCursorAdvances(
+  fetchedChannelIds: readonly string[],
+  classifiable: readonly Pick<SweepMessage, "id" | "channelId">[],
+  classifiedIds: ReadonlySet<string>,
+  prevRetries: Record<string, number>,
+): CursorAdvanceDecision {
+  const unclassified = new Set<string>();
+  for (const message of classifiable) {
+    if (!classifiedIds.has(message.id)) unclassified.add(message.channelId);
+  }
+  const advance: string[] = [];
+  const held: string[] = [];
+  const surrendered: string[] = [];
+  // Counters for channels not fetched this run carry through untouched
+  // (e.g. a held channel whose refetch failed this time around).
+  const nextRetries: Record<string, number> = { ...prevRetries };
+  for (const channelId of fetchedChannelIds) {
+    if (!unclassified.has(channelId)) {
+      advance.push(channelId);
+      delete nextRetries[channelId];
+    } else if ((prevRetries[channelId] ?? 0) >= MAX_PARSE_RETRIES) {
+      surrendered.push(channelId);
+      delete nextRetries[channelId];
+    } else {
+      held.push(channelId);
+      nextRetries[channelId] = (prevRetries[channelId] ?? 0) + 1;
+    }
+  }
+  return { advance, held, surrendered, nextRetries };
+}
+
+export function surrenderNote(channelNames: readonly string[]): string {
+  return `Moderation sweep: gave up classifying the window in ${channelNames.join(
+    ", ",
+  )} after retries — those messages passed unmoderated.`;
 }
 
 /**

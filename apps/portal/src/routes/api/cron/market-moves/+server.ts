@@ -7,9 +7,14 @@
 import { json } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
 import {
+  alertDedupMarks,
   buildMoveEmbeds,
+  chunkEmbeds,
   computeAlerts,
+  MAX_EMBEDS_PER_MESSAGE,
   parseMarketState,
+  pruneDedupMarks,
+  utcDay,
 } from "$lib/market-moves";
 import * as discord from "$lib/server/discord";
 import { type CatalogAsset, getCatalog } from "$lib/server/tokensxyz";
@@ -64,22 +69,36 @@ export const GET: RequestHandler = async ({ request, setHeaders }) => {
     now,
   );
 
-  // Persist the dedup marks BEFORE posting: if this write fails we skip the
-  // post entirely. A missed alert self-heals (the next qualifying run posts);
-  // posting without durable dedup would repeat the alert every 5 minutes.
-  const persisted = await discord.writeOpsState(STATE_PATH, next);
-  if (!persisted) return json({ skipped: "state-unavailable" });
+  if (alerts.length === 0) {
+    // Quiet run: still persist snapshot upkeep and pruned dedup marks.
+    const persisted = await discord.writeOpsState(STATE_PATH, next);
+    if (!persisted) return json({ skipped: "state-unavailable" });
+    return json({ ok: true, alerts: 0, posted: 0, failed: 0 });
+  }
 
-  if (alerts.length === 0) return json({ ok: true, alerts: 0, posted: 0 });
-
-  const posted = await discord.postChannelMessage(channelId, {
-    embeds: buildMoveEmbeds(alerts, now),
-  });
-  // Honest report either way: the dedup marks are already written, so a
-  // failed post is a dropped alert for the day, not a retry loop.
-  return json({
-    ok: posted,
-    alerts: alerts.length,
-    posted: posted ? alerts.length : 0,
-  });
+  // Discord caps a message at 10 embeds, so a broad move posts as several
+  // sequential messages. Each chunk's dedup marks are persisted BEFORE that
+  // chunk posts — the standing bias is a missed alert over duplicate spam:
+  // a failed write skips that chunk and everything after (unwritten marks
+  // self-heal on a later qualifying run), while a failed post after a
+  // successful write drops just that chunk's alerts for the day. State only
+  // ever claims alerts whose chunk was actually attempted.
+  const day = utcDay(now);
+  let marks = pruneDedupMarks(prev.posted, day);
+  let posted = 0;
+  for (const group of chunkEmbeds(alerts, MAX_EMBEDS_PER_MESSAGE)) {
+    marks = { ...marks, ...alertDedupMarks(group, day) };
+    const persisted = await discord.writeOpsState(STATE_PATH, {
+      snapshots: next.snapshots,
+      posted: marks,
+    });
+    if (!persisted) break;
+    const sent = await discord.postChannelMessage(channelId, {
+      embeds: buildMoveEmbeds(group, now),
+    });
+    if (sent) posted += group.length;
+  }
+  // Honest report: only alerts whose chunk actually POSTed count as posted.
+  const failed = alerts.length - posted;
+  return json({ ok: failed === 0, alerts: alerts.length, posted, failed });
 };

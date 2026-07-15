@@ -12,8 +12,10 @@ import {
   buildDeletedEmbed,
   buildFlaggedEmbed,
   buildModerationUserPrompt,
+  type Classification,
   classifiableMessages,
   decideAction,
+  decideCursorAdvances,
   eligibleChannels,
   MODERATION_SYSTEM_PROMPT,
   maxSnowflake,
@@ -22,6 +24,7 @@ import {
   parseModState,
   type SweepMessage,
   snowflakeForTimestamp,
+  surrenderNote,
 } from "$lib/mod-sweep";
 import * as discord from "$lib/server/discord";
 import type { RequestHandler } from "./$types";
@@ -119,6 +122,7 @@ export const GET: RequestHandler = async ({ request, setHeaders }) => {
 
   const classifiable = classifiableMessages(batch);
   const modlogEmbeds: DiscordEmbed[] = [];
+  let byId = new Map<string, Classification>();
   let parseNote: string | null = null;
   let deleted = 0;
   let flagged = 0;
@@ -130,16 +134,21 @@ export const GET: RequestHandler = async ({ request, setHeaders }) => {
       // LLM down mid-run: none of the fetched windows were classified, so
       // none of their cursors advance — the same window is retried next
       // run. First-sighting baselines still persist (they classify nothing
-      // by design either way).
-      await discord.writeOpsState(STATE_PATH, { cursors: nextCursors });
+      // by design either way). This is an outage, not a parse hold, so the
+      // per-channel retry counters carry through unchanged.
+      await discord.writeOpsState(STATE_PATH, {
+        cursors: nextCursors,
+        parseRetries: state.parseRetries,
+      });
       return json({ skipped: "llm-unavailable" });
     }
 
-    const { byId, parseFailure } = parseClassifications(
+    const parsed = parseClassifications(
       raw,
       classifiable.map((item) => item.id),
     );
-    if (parseFailure) parseNote = parseFailureNote(parseFailure);
+    byId = parsed.byId;
+    if (parsed.parseFailure) parseNote = parseFailureNote(parsed.parseFailure);
 
     for (const item of classifiable) {
       const classification = byId.get(item.id);
@@ -164,13 +173,25 @@ export const GET: RequestHandler = async ({ request, setHeaders }) => {
     }
   }
 
-  // The batch was classified (or there was nothing to classify): swept
-  // windows may now advance.
-  for (const [channelId, cursor] of pendingAdvance) {
-    nextCursors[channelId] = cursor;
+  // Only fully classified windows advance. A window with unclassified
+  // messages is held (bounded — see decideCursorAdvances) so those messages
+  // are refetched and retried next run; already-actioned messages in a held
+  // window may be re-flagged on retry — a duplicate modlog line beats an
+  // unmoderated message. Retries exhausted → advance anyway, with an honest
+  // surrender note below.
+  const decision = decideCursorAdvances(
+    [...pendingAdvance.keys()],
+    classifiable,
+    new Set(byId.keys()),
+    state.parseRetries,
+  );
+  for (const channelId of [...decision.advance, ...decision.surrendered]) {
+    const cursor = pendingAdvance.get(channelId);
+    if (cursor) nextCursors[channelId] = cursor;
   }
   const persisted = await discord.writeOpsState(STATE_PATH, {
     cursors: nextCursors,
+    parseRetries: decision.nextRetries,
   });
 
   for (let i = 0; i < modlogEmbeds.length; i += MAX_EMBEDS_PER_POST) {
@@ -181,6 +202,13 @@ export const GET: RequestHandler = async ({ request, setHeaders }) => {
   if (parseNote) {
     await discord.postChannelMessage(modlogChannelId, { content: parseNote });
   }
+  if (decision.surrendered.length > 0) {
+    await discord.postChannelMessage(modlogChannelId, {
+      content: surrenderNote(
+        decision.surrendered.map((id) => `#${namesById.get(id) ?? id}`),
+      ),
+    });
+  }
 
   return json({
     ok: true,
@@ -190,6 +218,8 @@ export const GET: RequestHandler = async ({ request, setHeaders }) => {
     deleted,
     deleteFailures,
     flagged,
+    heldChannels: decision.held.length,
+    surrenderedChannels: decision.surrendered.length,
     statePersisted: persisted,
   });
 };

@@ -144,11 +144,7 @@ export function computeAlerts(
   const day = utcDay(nowMs);
   const alerts: MoveAlert[] = [];
 
-  // Dedup marks from previous UTC days can never match again — drop them.
-  const posted: Record<string, string> = {};
-  for (const [key, markedDay] of Object.entries(prev.posted)) {
-    if (markedDay === day) posted[key] = markedDay;
-  }
+  const posted = pruneDedupMarks(prev.posted, day);
 
   // Prune history beyond retention (also drops bogus future-dated points).
   const snapshots: Record<string, PricePoint[]> = {};
@@ -228,6 +224,37 @@ export function computeAlerts(
   return { alerts, next: { snapshots, posted } };
 }
 
+// ── Dedup marks (per-chunk persistence) ───────────────────────────────
+
+/** Dedup marks from previous UTC days can never match again — drop them. */
+export function pruneDedupMarks(
+  posted: Record<string, string>,
+  day: string,
+): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [key, markedDay] of Object.entries(posted)) {
+    if (markedDay === day) kept[key] = markedDay;
+  }
+  return kept;
+}
+
+/**
+ * The dedup marks a group of alerts consumes once posted: each alert takes
+ * its own asset:tier slot for the day, and a `big` alert also takes the
+ * same-day `session` slot (big supersedes session — mirrors computeAlerts).
+ */
+export function alertDedupMarks(
+  alerts: readonly MoveAlert[],
+  day: string,
+): Record<string, string> {
+  const marks: Record<string, string> = {};
+  for (const alert of alerts) {
+    marks[`${alert.assetId}:${alert.tier}`] = day;
+    if (alert.tier === "big") marks[`${alert.assetId}:session`] = day;
+  }
+  return marks;
+}
+
 // ── Embeds ────────────────────────────────────────────────────────────
 
 export type DiscordEmbed = {
@@ -245,6 +272,15 @@ export const DOWN_COLOR = 0xff5a6a;
 
 /** Discord allows at most 10 embeds per message. */
 export const MAX_EMBEDS_PER_MESSAGE = 10;
+
+/** Split alerts into Discord-postable groups of at most `size`. */
+export function chunkEmbeds<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
 
 const TIER_LABELS: Record<MoveTier, string> = {
   fast: "1h move",
@@ -269,12 +305,16 @@ export function formatUsd(price: number): string {
   return `$${sig.includes("e") ? Number(sig).toFixed(12).replace(/0+$/, "") : sig}`;
 }
 
+/**
+ * One embed per alert. Callers are responsible for chunking to Discord's
+ * 10-embed cap (chunkEmbeds) — no silent truncation here.
+ */
 export function buildMoveEmbeds(
   alerts: MoveAlert[],
   nowMs: number,
 ): DiscordEmbed[] {
   const timestamp = new Date(nowMs).toISOString();
-  return alerts.slice(0, MAX_EMBEDS_PER_MESSAGE).map((alert) => ({
+  return alerts.map((alert) => ({
     title: `${alert.symbol} ${signedPct(alert.movePct)} — ${TIER_LABELS[alert.tier]}`,
     description: `Last price ${formatUsd(alert.price)} · ${signedPct(alert.movePct)} ${
       alert.tier === "fast" ? "over the last hour" : "over the last 24 hours"
