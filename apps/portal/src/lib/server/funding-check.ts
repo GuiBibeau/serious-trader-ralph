@@ -10,9 +10,7 @@ import { decodeTrader, getTraderAddresses } from "@ellipsis-labs/rise";
 import { env as privateEnv } from "$env/dynamic/private";
 import { env as publicEnv } from "$env/dynamic/public";
 import { fundingDecision, parseFundedMinUsd } from "$lib/discord-verify";
-// funding.ts is server-safe: it imports only $lib/utils (pure helpers, no
-// browser modules, no @solana/web3.js).
-import { fetchUsdcBalance } from "$lib/funding";
+import { USDC_MINT } from "$lib/funding";
 import { getCatalog } from "./tokensxyz";
 
 const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
@@ -38,11 +36,14 @@ export async function checkFunding(
   try {
     const url = rpcUrl();
     const [usdc, lamports, solPrice, phoenixUsd] = await Promise.all([
-      fetchUsdcBalance(url, wallet),
+      fetchUsdcUsd(url, wallet),
       fetchLamports(url, wallet),
       fetchSolPriceUsd(),
       fetchPhoenixCollateralUsd(url, wallet),
     ]);
+    // A failed USDC read is "unknown", never "$0 of USDC" — a zero here
+    // would flow straight into a not-funded refusal.
+    if (usdc === null) return null;
     // No SOL price means the SOL leg is unknowable — the whole check is
     // "unknown", not "SOL is worth $0".
     if (solPrice === null) return null;
@@ -101,6 +102,67 @@ async function fetchLamports(url: string, owner: string): Promise<number> {
     throw new Error("solana-balance-missing");
   }
   return Math.max(0, value);
+}
+
+// Gate-specific USDC read. The display helper ($lib/funding fetchUsdcBalance)
+// deliberately shrugs at soft failures — an HTTP 200 carrying a JSON-RPC
+// `error` envelope falls through to an empty account list and returns 0,
+// which is fine for a balance widget (worst case it briefly shows $0) but
+// poison for a refusal gate: that 0 would flow into fundingDecision and
+// refuse a funded user as "not-funded" instead of the honest
+// "unknown → error". So this gate inspects the JSON-RPC envelope itself and
+// returns:
+//   number — total USDC (0 ONLY when the response legitimately lists no
+//            token accounts, or lists accounts holding nothing);
+//   null   — unknown (HTTP failure, JSON-RPC `error`, malformed shape).
+async function fetchUsdcUsd(
+  url: string,
+  owner: string,
+): Promise<number | null> {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "trader-ralph-discord-usdc",
+        method: "getTokenAccountsByOwner",
+        // "confirmed" for the same reason as fetchLamports above.
+        params: [
+          owner,
+          { mint: USDC_MINT },
+          { encoding: "jsonParsed", commitment: "confirmed" },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as {
+      result?: { value?: unknown };
+      error?: unknown;
+    };
+    if (payload.error) return null;
+    const value = payload.result?.value;
+    if (!Array.isArray(value)) return null;
+    let total = 0;
+    for (const account of value) {
+      const ui = (
+        account as {
+          account?: {
+            data?: {
+              parsed?: { info?: { tokenAmount?: { uiAmount?: unknown } } };
+            };
+          };
+        }
+      )?.account?.data?.parsed?.info?.tokenAmount?.uiAmount;
+      // An account we cannot read is an unknown balance, not a $0 one —
+      // the display helper skips these; the gate must not undercount.
+      if (typeof ui !== "number" || !Number.isFinite(ui)) return null;
+      total += ui;
+    }
+    return total;
+  } catch {
+    return null;
+  }
 }
 
 // Phoenix margin collateral, chain-first: the chain is truth, the Phoenix

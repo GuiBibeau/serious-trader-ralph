@@ -34,6 +34,9 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
   const discordUser = await discord.fetchDiscordUser(accessToken);
   if (!discordUser) redirect(302, "/discord?status=error");
 
+  // Fast pre-check. Still load-bearing for the user-side record: the
+  // reservation below only guards the wallet-side path, so a Discord
+  // account already linked to a DIFFERENT wallet is caught here.
   const guard = await discord.checkLinkGuard(payload.wallet, discordUser.id);
   if (guard === "already-linked") {
     redirect(302, "/discord?status=already-linked");
@@ -41,13 +44,44 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
   // guard "unavailable" proceeds: verification is gated on funding + email,
   // not on our own storage being up (see lib/server/discord.ts).
 
-  const joined = await discord.joinGuild(discordUser.id, accessToken);
-  if (!joined) redirect(302, "/discord?status=error");
-  const granted = await discord.grantRole(discordUser.id);
-  if (!granted) redirect(302, "/discord?status=error");
+  // Atomic wallet-side reservation BEFORE anything is granted. The
+  // pre-check above is check-then-act; without this, two concurrent
+  // callbacks for the same wallet (different Discord accounts) both pass
+  // the guard and both get the role.
+  const reservation = await discord.reserveWalletLink(
+    payload.wallet,
+    discordUser.id,
+  );
+  if (reservation === "already-linked") {
+    redirect(302, "/discord?status=already-linked");
+  }
+  // "unavailable" proceeds — same fail-open convention as the guard.
 
-  // Only record the linkage once the role actually landed — a failed grant
-  // must not burn the wallet's one link.
-  await discord.writeLinks(payload.wallet, discordUser.id);
+  const joined = await discord.joinGuild(discordUser.id, accessToken);
+  if (!joined) {
+    // Compensation, not a transaction: a failed grant must not burn the
+    // wallet's one link. If this delete fails too, nothing is bricked —
+    // re-verifying the same wallet+Discord pair reserves idempotently.
+    if (reservation === "reserved") {
+      await discord.releaseWalletLink(payload.wallet);
+    }
+    redirect(302, "/discord?status=error");
+  }
+  const granted = await discord.grantRole(discordUser.id);
+  if (!granted) {
+    if (reservation === "reserved") {
+      await discord.releaseWalletLink(payload.wallet);
+    }
+    redirect(302, "/discord?status=error");
+  }
+
+  // Role landed: persist the user-side record (the wallet-side one was
+  // already written by the reservation). If the reservation was skipped by
+  // the outage fail-open, best-effort re-attempt the wallet-side record now
+  // — the CAS is idempotent, so this can't clobber a concurrent winner.
+  if (reservation === "unavailable") {
+    await discord.reserveWalletLink(payload.wallet, discordUser.id);
+  }
+  await discord.writeUserLink(payload.wallet, discordUser.id);
   redirect(302, "/discord?status=success");
 };

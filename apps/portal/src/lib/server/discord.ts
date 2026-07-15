@@ -13,7 +13,7 @@
 // Same never-throw idiom as lib/server/privy.ts: every function fails soft
 // (null / false / "unavailable") and callers decide policy.
 
-import { get, put } from "@vercel/blob";
+import { BlobError, del, get, put } from "@vercel/blob";
 import { env } from "$env/dynamic/private";
 import {
   type DiscordStatePayload,
@@ -187,8 +187,80 @@ export async function checkLinkGuard(
   return linkGuardDecision(walletLink, userLink, wallet, discordId);
 }
 
-/** Persist both link records. Call only after the role grant succeeded. */
-export async function writeLinks(
+/**
+ * Atomically reserve the wallet-side link record BEFORE granting anything.
+ * checkLinkGuard alone is check-then-act: two concurrent callbacks for the
+ * same wallet both read "no record" and both grant. Blob's
+ * `allowOverwrite: false` is the compare-and-swap that closes that window —
+ * exactly one concurrent put creates the record; the loser's put rejects.
+ *
+ * - "reserved":       we created the record, or it already held this exact
+ *                     wallet↔discordId pair (idempotent re-verify).
+ * - "already-linked": the wallet's record points at a different Discord id.
+ * - "unavailable":    Blob outage/unconfigured — fail-open, matching the
+ *                     module convention above: verification is gated on
+ *                     funding + email, not on our own storage being up.
+ */
+export async function reserveWalletLink(
+  wallet: string,
+  discordId: string,
+): Promise<"reserved" | "already-linked" | "unavailable"> {
+  const token = env.BLOB_READ_WRITE_TOKEN;
+  if (!token) return "unavailable";
+  const record = JSON.stringify({ wallet, discordId } satisfies LinkRecord);
+  try {
+    await put(walletLinkPath(wallet), record, {
+      access: "private",
+      contentType: "application/json",
+      addRandomSuffix: false,
+      allowOverwrite: false,
+      token,
+    });
+    return "reserved";
+  } catch (error) {
+    // @vercel/blob v2 has no dedicated "already exists" error class: the
+    // API answers `bad_request` with an "…already exists, use
+    // allowOverwrite…" message, which the SDK surfaces as the base
+    // BlobError (non-retryable; only unknown/service_unavailable retry).
+    // Anything else — outage, auth, rate limit — is "unavailable".
+    if (!isBlobAlreadyExists(error)) return "unavailable";
+    // The path is taken. Read it to see by whom: the winning writer's
+    // record is durably there by the time our put was refused.
+    const existing = await readLink(walletLinkPath(wallet));
+    if (existing === "error" || existing === null) return "unavailable";
+    return existing.discordId === discordId ? "reserved" : "already-linked";
+  }
+}
+
+function isBlobAlreadyExists(error: unknown): boolean {
+  return (
+    error instanceof BlobError && /already exists/i.test(error.message ?? "")
+  );
+}
+
+/**
+ * Best-effort compensation when the grant fails after a reservation. This
+ * is NOT transactional: if the delete itself fails, the orphaned
+ * reservation blocks nothing — a retry by the same wallet+Discord pair is
+ * idempotent through reserveWalletLink, and a different Discord account is
+ * exactly what the reservation exists to refuse.
+ */
+export async function releaseWalletLink(wallet: string): Promise<void> {
+  const token = env.BLOB_READ_WRITE_TOKEN;
+  if (!token) return;
+  try {
+    await del(walletLinkPath(wallet), { token });
+  } catch {
+    // Swallowed on purpose — see docblock.
+  }
+}
+
+/**
+ * Persist the user-side (Discord-id-keyed) record. Call only after the
+ * role grant succeeded; the wallet-side record was already written by
+ * reserveWalletLink.
+ */
+export async function writeUserLink(
   wallet: string,
   discordId: string,
 ): Promise<boolean> {
@@ -196,22 +268,13 @@ export async function writeLinks(
   if (!token) return false;
   const record = JSON.stringify({ wallet, discordId } satisfies LinkRecord);
   try {
-    await Promise.all([
-      put(walletLinkPath(wallet), record, {
-        access: "private",
-        contentType: "application/json",
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        token,
-      }),
-      put(userLinkPath(discordId), record, {
-        access: "private",
-        contentType: "application/json",
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        token,
-      }),
-    ]);
+    await put(userLinkPath(discordId), record, {
+      access: "private",
+      contentType: "application/json",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      token,
+    });
     return true;
   } catch {
     return false;
