@@ -1,9 +1,12 @@
 // Server-side wallet funding check for Discord verification: USD value of
-// the wallet's USDC + SOL, priced off the same tokens.xyz catalog the OG
-// cards use. Honest-data rule: any failed read (RPC, price) returns null —
-// "unknown" — never a zero that would read as "unfunded". Callers must
-// treat null and { funded: false } differently.
+// the wallet's USDC + SOL (priced off the same tokens.xyz catalog the OG
+// cards use) plus Phoenix margin collateral. Honest-data rule: any failed
+// read (RPC, price, decode) returns null — "unknown" — never a zero that
+// would read as "unfunded". Callers must treat null and { funded: false }
+// differently.
 
+// Plain-JS SDK helpers (no @solana/web3.js) — server-safe.
+import { decodeTrader, getTraderAddresses } from "@ellipsis-labs/rise";
 import { env as privateEnv } from "$env/dynamic/private";
 import { env as publicEnv } from "$env/dynamic/public";
 import { fundingDecision, parseFundedMinUsd } from "$lib/discord-verify";
@@ -14,12 +17,17 @@ import { getCatalog } from "./tokensxyz";
 
 const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
 const LAMPORTS_PER_SOL = 1_000_000_000;
+const USDC_DECIMALS = 6;
+const PHOENIX_API = "https://perp-api.phoenix.trade";
 
 export type FundingCheck = {
   funded: boolean;
   totalUsd: number;
   usdcUsd: number;
   solUsd: number;
+  /** Phoenix margin collateral; null = the read was indeterminate (the
+   * wallet still cleared the threshold on wallet assets alone). */
+  phoenixUsd: number | null;
 };
 
 /** Funding snapshot for a wallet, or null when any read failed (unknown). */
@@ -29,17 +37,29 @@ export async function checkFunding(
   const threshold = parseFundedMinUsd(privateEnv.DISCORD_FUNDED_MIN_USD);
   try {
     const url = rpcUrl();
-    const [usdc, lamports, solPrice] = await Promise.all([
+    const [usdc, lamports, solPrice, phoenixUsd] = await Promise.all([
       fetchUsdcBalance(url, wallet),
       fetchLamports(url, wallet),
       fetchSolPriceUsd(),
+      fetchPhoenixCollateralUsd(url, wallet),
     ]);
     // No SOL price means the SOL leg is unknowable — the whole check is
     // "unknown", not "SOL is worth $0".
     if (solPrice === null) return null;
     const solUsd = (lamports / LAMPORTS_PER_SOL) * solPrice;
-    const decision = fundingDecision(usdc, solUsd, threshold);
-    return { ...decision, usdcUsd: usdc, solUsd };
+    // Asymmetric on purpose: a wallet that clears the threshold on
+    // USDC + SOL alone is funded even when the Phoenix read is
+    // indeterminate — the old wallet-only check would have passed it, and
+    // a flaky Phoenix leg must never refuse (or error) someone it can only
+    // help. Only when the wallet alone is below the bar does an unknown
+    // Phoenix read make the whole check unknown.
+    if (phoenixUsd === null) {
+      const walletOnly = fundingDecision(usdc, solUsd, 0, threshold);
+      if (!walletOnly.funded) return null;
+      return { ...walletOnly, usdcUsd: usdc, solUsd, phoenixUsd: null };
+    }
+    const decision = fundingDecision(usdc, solUsd, phoenixUsd, threshold);
+    return { ...decision, usdcUsd: usdc, solUsd, phoenixUsd };
   } catch {
     return null;
   }
@@ -81,6 +101,91 @@ async function fetchLamports(url: string, owner: string): Promise<number> {
     throw new Error("solana-balance-missing");
   }
   return Math.max(0, value);
+}
+
+// Phoenix margin collateral, chain-first: the chain is truth, the Phoenix
+// API indexer is a lagging hint — so collateral comes from the trader PDA
+// via RPC, never the REST trader endpoint. This mirrors the client's
+// fetchOnChainCollateralUsd (lib/phoenix-trade.ts) with the same SDK
+// helpers; only the exchange config (the canonical mint that keys the PDA)
+// comes from the Phoenix REST API. Returns:
+//   number — collateral in USD (0 when the wallet never registered);
+//   null   — indeterminate (config/RPC/decode failure), never coerced to 0.
+async function fetchPhoenixCollateralUsd(
+  url: string,
+  wallet: string,
+): Promise<number | null> {
+  try {
+    const mint = await fetchPhoenixCanonicalMint();
+    const addresses = await getTraderAddresses(
+      wallet as never,
+      mint as never,
+      0,
+      0,
+    );
+    const data = await fetchAccountData(url, String(addresses.traderAccount));
+    // Account not found = the wallet never registered with Phoenix, which
+    // is honestly $0 of collateral there — NOT an unknown.
+    if (data === null) return 0;
+    const trader = decodeTrader(data);
+    // Quote lots are USDC atoms (QUOTE_LOTS_DECIMALS = 6 in the SDK).
+    const usd = Number(trader.state.quoteLotCollateral) / 10 ** USDC_DECIMALS;
+    return Number.isFinite(usd) && usd >= 0 && usd < 1e9 ? usd : null;
+  } catch {
+    // RPC error, config fetch failure, or decode throw — unknown, never 0.
+    return null;
+  }
+}
+
+// Same fetch-and-cache pattern as the client's fetchExchangeConfig, trimmed
+// to the one key this check needs.
+let phoenixCanonicalMintCache: string | null = null;
+
+async function fetchPhoenixCanonicalMint(): Promise<string> {
+  if (phoenixCanonicalMintCache) return phoenixCanonicalMintCache;
+  const response = await fetch(`${PHOENIX_API}/exchange`);
+  if (!response.ok) throw new Error(`phoenix-exchange-${response.status}`);
+  const data = (await response.json()) as {
+    keys?: { canonicalMint?: unknown };
+  };
+  const mint = data.keys?.canonicalMint;
+  if (typeof mint !== "string" || mint.length === 0) {
+    throw new Error("phoenix-exchange-mint-missing");
+  }
+  phoenixCanonicalMintCache = mint;
+  return mint;
+}
+
+/** getAccountInfo (base64). Missing account → null; malformed reply throws. */
+async function fetchAccountData(
+  url: string,
+  address: string,
+): Promise<Uint8Array | null> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: "trader-ralph-discord-phoenix",
+      method: "getAccountInfo",
+      // "confirmed" for the same reason as fetchLamports above.
+      params: [address, { commitment: "confirmed", encoding: "base64" }],
+    }),
+  });
+  if (!response.ok) throw new Error(`solana-rpc-http-${response.status}`);
+  const payload = (await response.json()) as {
+    result?: { value?: { data?: unknown } | null };
+    error?: unknown;
+  };
+  if (payload.error) throw new Error("solana-rpc-error");
+  if (!payload.result || !("value" in payload.result)) {
+    throw new Error("solana-account-info-missing");
+  }
+  if (payload.result.value === null) return null;
+  const data = payload.result.value?.data;
+  const base64 = Array.isArray(data) ? data[0] : data;
+  if (typeof base64 !== "string") throw new Error("solana-account-data-shape");
+  return Uint8Array.from(Buffer.from(base64, "base64"));
 }
 
 // SOL priced from the tokens.xyz catalog — the same source the OG cards

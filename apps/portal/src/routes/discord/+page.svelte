@@ -120,13 +120,13 @@
   <title>Trader Ralph Discord — verified active traders</title>
   <meta
     name="description"
-    content="Join the Trader Ralph Discord as a verified active trader: confirm your email and hold at least $10 of USDC + SOL in your trading wallet."
+    content="Join the Trader Ralph Discord as a verified active trader: confirm your email and hold at least $10 of USDC + SOL in your trading wallet or Phoenix margin balance."
   />
   <link rel="canonical" href="https://traderralph.com/discord" />
   <meta property="og:title" content="Trader Ralph Discord — verified active traders" />
   <meta
     property="og:description"
-    content="A Discord role for traders with skin in the game: email-confirmed account, at least $10 of USDC + SOL in the wallet."
+    content="A Discord role for traders with skin in the game: email-confirmed account, at least $10 of USDC + SOL on the platform."
   />
   <meta property="og:image" content="https://traderralph.com/og/home.png" />
   <meta name="twitter:card" content="summary_large_image" />
@@ -162,8 +162,8 @@
       <li>
         <span class="n">2</span>
         <div>
-          <h2>At least $10 in the wallet</h2>
-          <p>USDC + SOL in your trading wallet, valued at current prices when you verify.</p>
+          <h2>At least $10 on the platform</h2>
+          <p>USDC + SOL in your wallet or Phoenix margin balance, valued at current prices when you verify.</p>
         </div>
       </li>
     </ol>
@@ -194,7 +194,7 @@
         <strong>Wallet below the threshold.</strong>
         <span>
           Your balance was re-checked during verification and came in under
-          $10 of USDC + SOL.
+          $10 of USDC + SOL, wallet and Phoenix margin combined.
           <a href="/terminal">Fund your wallet in the terminal</a> and try again.
         </span>
       </div>
@@ -225,9 +225,10 @@
               <div class="callout warn">
                 <strong>Wallet below the threshold.</strong>
                 <span>
-                  Your wallet holds
+                  You hold
                   {refusal.totalUsd !== undefined ? fmtUsd(refusal.totalUsd) : "less than $10"}
-                  of USDC + SOL — the role needs at least $10.
+                  of USDC + SOL across your wallet and Phoenix margin — the
+                  role needs at least $10.
                   <a href="/terminal">Fund your wallet in the terminal</a> and try again.
                 </span>
               </div>

@@ -89,13 +89,18 @@ export type FundingDecision = {
   totalUsd: number;
 };
 
-/** `>=` on purpose: holding exactly the threshold counts as funded. */
+/**
+ * `>=` on purpose: holding exactly the threshold counts as funded. All
+ * three legs count — wallet USDC, wallet SOL (priced), and Phoenix margin
+ * collateral; funds parked in the margin account are still the trader's.
+ */
 export function fundingDecision(
   usdcUsd: number,
   solUsd: number,
+  phoenixUsd: number,
   thresholdUsd: number,
 ): FundingDecision {
-  const totalUsd = usdcUsd + solUsd;
+  const totalUsd = usdcUsd + solUsd + phoenixUsd;
   return { funded: totalUsd >= thresholdUsd, totalUsd };
 }
 

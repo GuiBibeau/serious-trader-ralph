@@ -116,30 +116,53 @@ describe("signState / verifyState", () => {
 
 describe("fundingDecision", () => {
   test("below threshold is not funded", () => {
-    expect(fundingDecision(4, 5.99, 10)).toEqual({
+    expect(fundingDecision(4, 5.99, 0, 10)).toEqual({
       funded: false,
       totalUsd: 9.99,
     });
   });
 
   test("exactly at threshold is funded", () => {
-    expect(fundingDecision(6, 4, 10)).toEqual({ funded: true, totalUsd: 10 });
+    expect(fundingDecision(6, 4, 0, 10)).toEqual({
+      funded: true,
+      totalUsd: 10,
+    });
   });
 
   test("above threshold is funded", () => {
-    expect(fundingDecision(100, 0, 10)).toEqual({
+    expect(fundingDecision(100, 0, 0, 10)).toEqual({
       funded: true,
       totalUsd: 100,
     });
   });
 
   test("zero balances are not funded", () => {
-    expect(fundingDecision(0, 0, 10)).toEqual({ funded: false, totalUsd: 0 });
+    expect(fundingDecision(0, 0, 0, 10)).toEqual({
+      funded: false,
+      totalUsd: 0,
+    });
   });
 
-  test("either asset alone can cross the threshold", () => {
-    expect(fundingDecision(0, 12, 10).funded).toBe(true);
-    expect(fundingDecision(12, 0, 10).funded).toBe(true);
+  test("any asset alone can cross the threshold", () => {
+    expect(fundingDecision(0, 12, 0, 10).funded).toBe(true);
+    expect(fundingDecision(12, 0, 0, 10).funded).toBe(true);
+    expect(fundingDecision(0, 0, 12, 10).funded).toBe(true);
+  });
+
+  test("phoenix collateral counts toward the threshold (QA case)", () => {
+    // $1.11 wallet USDC + ~$1.50 of SOL + $62.83 in Phoenix margin.
+    expect(fundingDecision(1.11, 1.5, 62.83, 10)).toEqual({
+      funded: true,
+      totalUsd: 65.44,
+    });
+  });
+
+  test("all three legs sum across the threshold together", () => {
+    expect(fundingDecision(4, 3, 3, 10)).toEqual({
+      funded: true,
+      totalUsd: 10,
+    });
+    expect(fundingDecision(4, 3, 2.99, 10).funded).toBe(false);
   });
 });
 
