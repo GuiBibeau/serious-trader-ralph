@@ -117,13 +117,13 @@
 </script>
 
 <svelte:head>
-  <title>Trader Ralph Discord — verified funded traders</title>
+  <title>Trader Ralph Discord — verified active traders</title>
   <meta
     name="description"
-    content="Join the Trader Ralph Discord as a verified funded trader: confirm your email and hold at least $10 of USDC + SOL in your trading wallet."
+    content="Join the Trader Ralph Discord as a verified active trader: confirm your email and hold at least $10 of USDC + SOL in your trading wallet."
   />
   <link rel="canonical" href="https://traderralph.com/discord" />
-  <meta property="og:title" content="Trader Ralph Discord — verified funded traders" />
+  <meta property="og:title" content="Trader Ralph Discord — verified active traders" />
   <meta
     property="og:description"
     content="A Discord role for traders with skin in the game: email-confirmed account, at least $10 of USDC + SOL in the wallet."
@@ -145,9 +145,9 @@
 
   <main class="wrap">
     <p class="eyebrow">DISCORD_VERIFY</p>
-    <h1>Funded traders only.</h1>
+    <h1>Active traders only.</h1>
     <p class="lead">
-      The Trader Ralph Discord grants the <b>Funded Trader</b> role to
+      The Trader Ralph Discord grants the <b>Active Trader</b> role to
       accounts with skin in the game. Two requirements, checked on-chain:
     </p>
 
@@ -171,7 +171,7 @@
     {#if status === "success"}
       <div class="callout ok">
         <strong>You're verified.</strong>
-        <span>The Funded Trader role is on your account and you've been added to the server.</span>
+        <span>The Active Trader role is on your account and you've been added to the server.</span>
         <div class="callout-cta">
           <Button href="https://discord.com/app">Open Discord</Button>
         </div>
