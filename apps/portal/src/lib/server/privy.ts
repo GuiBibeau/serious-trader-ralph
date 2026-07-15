@@ -13,9 +13,13 @@ const COUNT_TTL_MS = 60_000;
 // pathological cursor loop can never spin forever.
 const MAX_COUNT_PAGES = 20;
 
-// Module-level 60s cache (same idiom as /api/desk/[slug]). A cached count
-// is only reusable when its scan went at least as deep as the caller needs.
-let countCache: { count: number; max: number; at: number } | null = null;
+// Module-level 60s cache (same idiom as /api/desk/[slug]). Reuse is
+// asymmetric on purpose: an at-cap result (count >= the cap being asked
+// about) only gets MORE true as users sign up, so it holds for the TTL.
+// A below-cap result is the dangerous one to reuse — serving a stale
+// under-cap count would keep admitting signups after the last seat fills —
+// so anything short of the requested cap always triggers a fresh scan.
+let countCache: { count: number; at: number } | null = null;
 
 type PrivyCredentials = { appId: string; appSecret: string };
 
@@ -55,12 +59,11 @@ export async function countUsers(max: number): Promise<number | null> {
   const creds = readCredentials();
   if (!creds) return null;
 
+  // Only serve the cache when the counted value already reached the cap
+  // being asked about — a count of 200 proves "at least 200 exist", which
+  // answers any max <= 200 regardless of how deep that scan went.
   const cached = countCache;
-  if (
-    cached &&
-    Date.now() - cached.at < COUNT_TTL_MS &&
-    (cached.max >= max || cached.count >= max)
-  ) {
+  if (cached && Date.now() - cached.at < COUNT_TTL_MS && cached.count >= max) {
     return cached.count;
   }
 
@@ -85,7 +88,7 @@ export async function countUsers(max: number): Promise<number | null> {
           : null;
       if (count >= max || !cursor) break;
     }
-    countCache = { count, max, at: Date.now() };
+    countCache = { count, at: Date.now() };
     return count;
   } catch {
     return null;
