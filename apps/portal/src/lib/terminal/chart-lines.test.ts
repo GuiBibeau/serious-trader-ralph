@@ -8,6 +8,7 @@ import {
   buildStructureLineSpecs,
   clickTradeLabel,
   clickTradeSide,
+  positionLineSpecs,
 } from "./chart-lines";
 
 const PREFS_ALL = { pos: true, tpsl: true, orders: true, alerts: true };
@@ -64,7 +65,7 @@ describe("buildChartLineSpecs", () => {
     ).toEqual([]);
   });
 
-  test("full long position renders entry/LIQ/TP/SL with exact fields", () => {
+  test("position renders only the liq estimate — entry/TP/SL belong to the draggable overlay", () => {
     const specs = buildChartLineSpecs(
       [position()],
       [],
@@ -73,41 +74,29 @@ describe("buildChartLineSpecs", () => {
       "SOL",
       "perps",
     );
-    expect(specs).toHaveLength(4);
-    const [entry, liq, tp, sl] = specs;
-    expect(entry.price).toBe(100);
-    expect(entry.color).toBe(colors.up);
-    expect(entry.lineWidth).toBe(2);
-    expect(entry.lineStyle).toBe(0);
-    expect(entry.title).toContain("LONG");
-    expect(entry.title).toContain("+$12.35"); // signed uPnL in the label
-    expect(liq.title).toBe("LIQ est");
-    expect(liq.lineStyle).toBe(2);
-    expect(tp.title).toBe("TP · +$60.00"); // |130-100| × 2
-    expect(tp.color).toBe(colors.up);
-    expect(sl.title).toBe("SL · -$20.00"); // |90-100| × 2
-    expect(sl.color).toBe(colors.down);
+    expect(specs).toEqual([
+      {
+        price: 80,
+        color: colors.down,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "LIQ est",
+      },
+    ]);
   });
 
-  test("short position gets down-colored solid entry with SHORT label", () => {
-    const specs = buildChartLineSpecs(
-      [
-        position({
-          size: -2,
-          takeProfitPrice: null,
-          stopLossPrice: null,
-          liquidationPrice: null,
-        }),
-      ],
-      [],
-      [],
-      PREFS_ALL,
-      "SOL",
-      "perps",
-    );
-    expect(specs).toHaveLength(1);
-    expect(specs[0].color).toBe(colors.down);
-    expect(specs[0].title).toContain("SHORT");
+  test("position without a liq estimate renders nothing here", () => {
+    expect(
+      buildChartLineSpecs(
+        [position({ liquidationPrice: null })],
+        [],
+        [],
+        PREFS_ALL,
+        "SOL",
+        "perps",
+      ),
+    ).toEqual([]);
   });
 
   test("pref groups gate independently", () => {
@@ -119,10 +108,7 @@ describe("buildChartLineSpecs", () => {
       "SOL",
       "perps",
     );
-    expect(posOnly.map((s) => s.title)).toEqual([
-      expect.stringContaining("LONG"),
-      "LIQ est",
-    ]);
+    expect(posOnly.map((s) => s.title)).toEqual(["LIQ est"]);
     const ordersOnly = buildChartLineSpecs(
       [position()],
       [order()],
@@ -173,6 +159,78 @@ describe("buildChartLineSpecs", () => {
       "perps",
     );
     expect(specs[0].title).toBe("ASK");
+  });
+});
+
+describe("positionLineSpecs", () => {
+  test("position with both triggers → entry/tp/sl with exact fields", () => {
+    expect(positionLineSpecs(position())).toEqual([
+      {
+        kind: "entry",
+        price: 100,
+        color: colors.muted,
+        lineWidth: 1,
+        lineStyle: 0,
+        axisLabelVisible: true,
+        title: "entry",
+      },
+      {
+        kind: "tp",
+        price: 130,
+        color: colors.up,
+        lineWidth: 1,
+        lineStyle: 0,
+        axisLabelVisible: true,
+        title: "",
+      },
+      {
+        kind: "sl",
+        price: 90,
+        color: colors.down,
+        lineWidth: 1,
+        lineStyle: 0,
+        axisLabelVisible: true,
+        title: "",
+      },
+    ]);
+  });
+
+  test("missing TP → no tp line at all (drag edits existing triggers only)", () => {
+    expect(
+      positionLineSpecs(position({ takeProfitPrice: null })).map(
+        (spec) => spec.kind,
+      ),
+    ).toEqual(["entry", "sl"]);
+  });
+
+  test("missing SL → no sl line at all", () => {
+    expect(
+      positionLineSpecs(position({ stopLossPrice: null })).map(
+        (spec) => spec.kind,
+      ),
+    ).toEqual(["entry", "tp"]);
+  });
+
+  test("no triggers → entry only", () => {
+    expect(
+      positionLineSpecs(
+        position({ takeProfitPrice: null, stopLossPrice: null }),
+      ).map((spec) => spec.kind),
+    ).toEqual(["entry"]);
+  });
+
+  test("null entry price → triggers still render without an entry anchor", () => {
+    expect(
+      positionLineSpecs(position({ entryPrice: null })).map(
+        (spec) => spec.kind,
+      ),
+    ).toEqual(["tp", "sl"]);
+  });
+
+  test("entry stays muted regardless of position direction", () => {
+    const short = positionLineSpecs(position({ size: -2 }));
+    expect(short[0].color).toBe(colors.muted);
+    expect(short[0].title).toBe("entry");
   });
 });
 

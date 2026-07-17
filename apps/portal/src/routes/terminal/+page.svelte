@@ -60,6 +60,8 @@
     buildStructureLineSpecs,
     clickTradeLabel,
     clickTradeSide,
+    type PositionLineKind,
+    positionLineSpecs,
     type PriceLineSpec,
   } from "$lib/terminal/chart-lines";
   import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
@@ -578,6 +580,48 @@
   let clickTradeLine: IPriceLine | null = null;
   let clickTradeHover: { y: number; right: number; label: string } | null =
     null;
+  // Draggable TP/SL overlay: the charted position's entry/TP/SL price lines
+  // plus DOM grab handles on the TP/SL lines. Line handles are reusable
+  // (applyOptions on change, guarded by a price memo — never re-created per
+  // WS event); the drag itself is transform/option-update only. tpslPending
+  // holds a just-submitted trigger at the dragged price until the lagging
+  // indexer confirms it (or 25s pass) — the position ROW keeps rendering
+  // chain state throughout; only these chart lines preview.
+  type TpSlKind = Exclude<PositionLineKind, "entry">;
+  let posOverlayLines: Record<PositionLineKind, IPriceLine | null> = {
+    entry: null,
+    tp: null,
+    sl: null,
+  };
+  let posOverlayPrices: Record<PositionLineKind, number | null> = {
+    entry: null,
+    tp: null,
+    sl: null,
+  };
+  let tpHandleEl: HTMLButtonElement | null = null;
+  let slHandleEl: HTMLButtonElement | null = null;
+  let tpslHandleCache: Record<
+    TpSlKind,
+    { el: HTMLButtonElement | null; y: number | null; right: number | null }
+  > = {
+    tp: { el: null, y: null, right: null },
+    sl: { el: null, y: null, right: null },
+  };
+  let tpslDrag: {
+    kind: TpSlKind;
+    pointerId: number;
+    startPrice: number;
+    price: number;
+    chartTop: number;
+    moved: boolean;
+  } | null = null;
+  let tpslPending: {
+    kind: TpSlKind;
+    price: number;
+    from: number;
+    until: number;
+  } | null = null;
+  let tpslFrame: number | null = null;
 
   // Intel feeds (Crucix-inspired): event radar, news ticker, sanctions, ideas.
   let news: NewsItem[] = [];
@@ -1262,6 +1306,10 @@
       spotTicket.dispose();
       if (spotChartTimer) clearInterval(spotChartTimer);
       if (structureTimer !== null) clearTimeout(structureTimer);
+      if (tpslFrame !== null) cancelAnimationFrame(tpslFrame);
+      tpslFrame = null;
+      posOverlayLines = { entry: null, tp: null, sl: null };
+      posOverlayPrices = { entry: null, tp: null, sl: null };
       lwChart?.remove();
       lwChart = null;
       candleSeries = null;
@@ -3397,6 +3445,17 @@
     liqLines = [];
     chartLineFullSig = null;
     chartLineStructSig = null;
+    // The draggable TP/SL overlay's lines died with the old series too —
+    // drop the stale handles and redraw against the fresh series.
+    posOverlayLines = { entry: null, tp: null, sl: null };
+    posOverlayPrices = { entry: null, tp: null, sl: null };
+    syncPositionOverlay(
+      selectedPosition,
+      entryLinePrice,
+      tpHandlePrice,
+      slHandlePrice,
+      tradeMode,
+    );
     refreshChartLines(
       enrichedPositions,
       perpOpenOrders,
@@ -3882,6 +3941,347 @@
     focusTicketSize();
   }
 
+  // ── Draggable TP/SL overlay: the open position drawn on the chart ───
+  // Entry line (muted, not draggable) whenever the charted perp position
+  // exists; TP/SL lines with DOM grab handles ONLY when the position has
+  // that trigger set on-chain — dragging EDITS existing triggers, adding
+  // new ones by drag is out of scope (the ticket sets them at order time).
+  // Footer prefs keep their meaning: POS gates entry, TP/SL gates triggers.
+  // No position on the charted symbol → zero lines, zero rAF, zero
+  // subscriptions (the handles are the only event surface).
+
+  // Line/handle price per trigger: live drag preview wins, then an
+  // in-flight (submitted, indexer-lagging) edit, then chain state.
+  function tpslOverlayPrice(
+    kind: TpSlKind,
+    drag: typeof tpslDrag,
+    pending: typeof tpslPending,
+    position: PhoenixPosition | null,
+    mode: "perps" | "spot",
+    enabled: boolean,
+  ): number | null {
+    if (mode !== "perps" || !enabled || !position) return null;
+    const trigger =
+      kind === "tp" ? position.takeProfitPrice : position.stopLossPrice;
+    if (trigger === null) return null; // no trigger → no line, no handle
+    if (drag?.kind === kind) return drag.price;
+    if (pending?.kind === kind) return pending.price;
+    return trigger;
+  }
+
+  $: entryLinePrice =
+    tradeMode === "perps" && $chartLinePrefs.pos && selectedPosition
+      ? selectedPosition.entryPrice
+      : null;
+  $: tpHandlePrice = tpslOverlayPrice(
+    "tp",
+    tpslDrag,
+    tpslPending,
+    selectedPosition,
+    tradeMode,
+    $chartLinePrefs.tpsl,
+  );
+  $: slHandlePrice = tpslOverlayPrice(
+    "sl",
+    tpslDrag,
+    tpslPending,
+    selectedPosition,
+    tradeMode,
+    $chartLinePrefs.tpsl,
+  );
+  $: syncPositionOverlay(
+    selectedPosition,
+    entryLinePrice,
+    tpHandlePrice,
+    slHandlePrice,
+    tradeMode,
+  );
+
+  // An in-flight edit's preview clears the moment the indexer reports a
+  // trigger different from the pre-drag one (fmtTriggerPrice equality — the
+  // chain quantizes to tick size, exact float match would never clear), the
+  // trigger disappears, or the 25 s horizon passes. Only then does chain
+  // state own the line again.
+  $: if (tpslPending) {
+    const confirmed = selectedPosition
+      ? tpslPending.kind === "tp"
+        ? selectedPosition.takeProfitPrice
+        : selectedPosition.stopLossPrice
+      : null;
+    if (
+      nowMs >= tpslPending.until ||
+      confirmed === null ||
+      fmtTriggerPrice(confirmed) !== fmtTriggerPrice(tpslPending.from)
+    ) {
+      tpslPending = null;
+    }
+  }
+
+  function syncPositionOverlay(
+    position: PhoenixPosition | null,
+    entryPrice: number | null,
+    tpPrice: number | null,
+    slPrice: number | null,
+    mode: "perps" | "spot",
+  ): void {
+    const series = candleSeries;
+    if (!series) return;
+    const specs =
+      mode === "perps" && position ? positionLineSpecs(position) : [];
+    const prices: Record<PositionLineKind, number | null> = {
+      entry: entryPrice,
+      tp: tpPrice,
+      sl: slPrice,
+    };
+    for (const kind of ["entry", "tp", "sl"] as const) {
+      const spec = specs.find((candidate) => candidate.kind === kind);
+      const price = spec ? prices[kind] : null;
+      const held = posOverlayLines[kind];
+      if (spec === undefined || price === null) {
+        if (held) {
+          series.removePriceLine(held);
+          posOverlayLines[kind] = null;
+          posOverlayPrices[kind] = null;
+        }
+        // Position/trigger vanished mid-drag (closed, symbol or mode
+        // switch) — drop the drag rather than edit a ghost.
+        if (tpslDrag?.kind === kind) tpslDrag = null;
+        continue;
+      }
+      if (held) {
+        // Option-update only (styles are static per kind); the price memo
+        // keeps WS-rate reruns from repainting an unchanged line.
+        if (posOverlayPrices[kind] !== price) {
+          held.applyOptions({ price });
+          posOverlayPrices[kind] = price;
+        }
+      } else {
+        posOverlayLines[kind] = series.createPriceLine({
+          price,
+          color: spec.color,
+          lineWidth: spec.lineWidth,
+          lineStyle: spec.lineStyle,
+          axisLabelVisible: spec.axisLabelVisible,
+          title: spec.title,
+        });
+        posOverlayPrices[kind] = price;
+      }
+    }
+    // The reposition loop exists ONLY while a draggable handle is on
+    // screen; it dies with the last TP/SL line.
+    const needsFrame =
+      posOverlayLines.tp !== null || posOverlayLines.sl !== null;
+    if (needsFrame && tpslFrame === null) {
+      tpslFrame = requestAnimationFrame(tpslFrameTick);
+    } else if (!needsFrame && tpslFrame !== null) {
+      cancelAnimationFrame(tpslFrame);
+      tpslFrame = null;
+    }
+  }
+
+  // Handle repositioning mechanism: lightweight-charts v5 exposes NO
+  // price-scale change hook (typings checked — only timeScale
+  // visible-range/size and series dataChanged; a manual price-axis rescale
+  // or an autoscale shift from a live tick fires none of them), so a rAF
+  // loop owns handle geometry while handles exist. Cost: ≤2
+  // priceToCoordinate calls (pure math, no layout read) and ≤2 memoized
+  // transform writes per frame — and syncPositionOverlay cancels the loop
+  // the moment the charted position loses its triggers.
+  function tpslFrameTick(): void {
+    tpslFrame = requestAnimationFrame(tpslFrameTick);
+    placeTpSlHandle("tp", tpHandleEl, tpHandlePrice);
+    placeTpSlHandle("sl", slHandleEl, slHandlePrice);
+  }
+
+  function placeTpSlHandle(
+    kind: TpSlKind,
+    el: HTMLButtonElement | null,
+    price: number | null,
+  ): void {
+    if (tpslHandleCache[kind].el !== el) {
+      // Fresh (re)mount: forget cached geometry so the new element gets
+      // positioned before its CSS visibility:hidden lifts.
+      tpslHandleCache[kind] = { el, y: null, right: null };
+    }
+    if (!el || price === null || !candleSeries || !lwChart) return;
+    const cache = tpslHandleCache[kind];
+    const y = candleSeries.priceToCoordinate(price);
+    // Null = scale not ready; out-of-pane coordinates (the library returns
+    // them for prices beyond the visible range, it does NOT null them) would
+    // float the handle over the chart header — hide in both cases.
+    if (y === null || y < 0 || y > lwChart.paneSize().height) {
+      if (cache.y !== null) {
+        el.style.visibility = "hidden";
+        cache.y = null;
+      }
+      return;
+    }
+    const snapped = Math.round(y * 2) / 2;
+    if (cache.y !== snapped) {
+      // Transform-only write — translates, never triggers layout.
+      el.style.transform = `translate(0, ${snapped}px) translateY(-50%)`;
+      el.style.visibility = "visible";
+      cache.y = snapped;
+    }
+    const right = Math.round(lwChart.priceScale("right").width()) + 4;
+    if (right !== cache.right) {
+      // `right` is a layout write, but the price-scale width changes only
+      // when the axis re-measures — effectively never per frame.
+      el.style.right = `${right}px`;
+      cache.right = right;
+    }
+  }
+
+  function tpslBusyKey(position: PhoenixPosition): string {
+    return `tpsl:${position.symbol}:${position.subaccountIndex}`;
+  }
+
+  function onTpSlHandleDown(event: PointerEvent, kind: TpSlKind): void {
+    const position = selectedPosition;
+    if (!position || !chartContainer || tpslDrag || tpslPending) return;
+    if (phoenixBusyKeys.has(tpslBusyKey(position))) return;
+    const trigger =
+      kind === "tp" ? position.takeProfitPrice : position.stopLossPrice;
+    if (trigger === null) return;
+    event.preventDefault();
+    (kind === "tp" ? tpHandleEl : slHandleEl)?.setPointerCapture(
+      event.pointerId,
+    );
+    tpslDrag = {
+      kind,
+      pointerId: event.pointerId,
+      startPrice: trigger,
+      price: trigger,
+      // Cached once — the chart doesn't move mid-drag, so pointermove
+      // never needs a layout read.
+      chartTop: chartContainer.getBoundingClientRect().top,
+      moved: false,
+    };
+  }
+
+  function onTpSlHandleMove(event: PointerEvent): void {
+    if (!tpslDrag || event.pointerId !== tpslDrag.pointerId || !candleSeries) {
+      return;
+    }
+    const price = Number(
+      candleSeries.coordinateToPrice(event.clientY - tpslDrag.chartTop),
+    );
+    if (!Number.isFinite(price) || price <= 0) return;
+    // Reassign, never mutate: line price and handle label derive from this.
+    tpslDrag = { ...tpslDrag, price, moved: true };
+  }
+
+  // ESC mid-drag and pointercancel land here: dropping the drag state
+  // snaps line + label back to the position's real trigger.
+  function cancelTpSlDrag(): void {
+    tpslDrag = null;
+  }
+
+  function onTpSlHandleUp(event: PointerEvent): void {
+    const drag = tpslDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    tpslDrag = null;
+    const position = selectedPosition;
+    if (!drag.moved || !position) return;
+    const current =
+      drag.kind === "tp" ? position.takeProfitPrice : position.stopLossPrice;
+    if (current === null) return; // trigger vanished mid-drag
+    // Unchanged at the trigger dialect's own precision → a grab, not an edit.
+    if (fmtTriggerPrice(drag.price) === fmtTriggerPrice(current)) return;
+    // Same side-validity the ticket enforces at order time, against the
+    // mark: a wrong-side trigger would fire the moment it lands on-chain.
+    const mark =
+      marketMids[position.symbol] ??
+      (position.symbol === selectedSymbol ? latestPrice : null);
+    const long = position.size > 0;
+    if (mark !== null) {
+      const valid =
+        drag.kind === "tp"
+          ? long
+            ? drag.price > mark
+            : drag.price < mark
+          : long
+            ? drag.price < mark
+            : drag.price > mark;
+      if (!valid) {
+        phoenixActionError =
+          drag.kind === "tp"
+            ? `Take profit must be ${long ? "above" : "below"} the mark — trigger unchanged`
+            : `Stop loss must be ${long ? "below" : "above"} the mark — trigger unchanged`;
+        phoenixActionErrorDetail = "";
+        phoenixActionRetry = null;
+        return; // snap back — the drag state is already cleared
+      }
+    }
+    void submitTpSlDrag(position, drag.kind, drag.price, current);
+  }
+
+  // Release path: the position row has NO TP/SL editor today —
+  // buildSetPositionTpSlIxs (phoenix-trade.ts) is the app's only TP/SL
+  // edit machinery, and simulate→auto-sign (ratified 2026-07-02) its only
+  // confirmation posture, exactly how Close/Margin+ submit from the row.
+  // A completed drag therefore submits through that same existing pipeline
+  // (no new transaction code, no new confirm UI). The drag is pointer-only
+  // by design: keyboard/AT users keep the position row as the accessible
+  // TP/SL surface (read-only there today — a follow-up row editor should
+  // reuse submitTpSlDrag's body).
+  async function submitTpSlDrag(
+    position: PhoenixPosition,
+    kind: TpSlKind,
+    price: number,
+    fromPrice: number,
+  ): Promise<void> {
+    const busyKey = tpslBusyKey(position);
+    if (!phoenixAuthority || phoenixBusyKeys.has(busyKey)) return;
+    setPhoenixBusy(busyKey, true);
+    phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
+    // Hold the line at the dragged price while the tx flies and the lagging
+    // indexer catches up; the position ROW keeps rendering chain state the
+    // whole time — only the chart line previews.
+    tpslPending = { kind, price, from: fromPrice, until: Date.now() + 25_000 };
+    const preFingerprint = snapshotFingerprint();
+    const label = kind === "tp" ? "take profit" : "stop loss";
+    try {
+      const instructions = await (await tradeModule()).buildSetPositionTpSlIxs(
+        phoenixAuthority,
+        position,
+        kind === "tp" ? { takeProfitPrice: price } : { stopLossPrice: price },
+      );
+      lastTradeSignature = await signAndSendPhoenixIxs(
+        instructions,
+        {
+          title: `Move ${label} · ${position.symbol}-PERP`,
+          details: [
+            "Venue: Phoenix Perps",
+            `${kind === "tp" ? "Take profit" : "Stop loss"}: ${formatPrice(fromPrice)} → ${formatPrice(price)}`,
+          ],
+        },
+        busyKey,
+      );
+      track("tpsl_dragged", {
+        ...marketContext(),
+        trigger: kind,
+        fromPrice,
+        toPrice: price,
+        signature: lastTradeSignature,
+      });
+      void burstRefreshPhoenix(preFingerprint);
+    } catch (error) {
+      tpslPending = null; // snap back to the position's real trigger
+      const human = humanizeTradeError(error);
+      phoenixActionError = human.text;
+      phoenixActionErrorDetail = human.detail;
+      phoenixActionRetry = null; // re-dragging is the natural retry gesture
+      if (human.confirmUncertain) void burstRefreshPhoenix(preFingerprint);
+      markLastTxFailed(busyKey);
+    } finally {
+      setPhoenixBusy(busyKey, false);
+      clearTxStage(busyKey);
+    }
+  }
+
   // ── Journal ────────────────────────────────────────────────────────
   function noteTrade(entry: JournalEntry): void {
     journalEntries = recordTrade(entry);
@@ -4157,6 +4557,13 @@
   }
 
   function onGlobalKeydown(event: KeyboardEvent): void {
+    // A live TP/SL drag owns Escape ahead of everything: cancel the drag
+    // (snap back) and swallow — one Escape never doubles as anything else.
+    if (event.key === "Escape" && tpslDrag) {
+      event.stopPropagation();
+      cancelTpSlDrag();
+      return;
+    }
     // Armed click-to-trade owns Escape: disarm only, swallowed before the
     // modal-close block below so one Escape never doubles as modal-close
     // (same key-swallowing posture as the funding wizard).
@@ -4528,6 +4935,44 @@
             >
               {clickTradeHover.label}
             </div>
+          {/if}
+
+          <!-- Draggable TP/SL grab handles. Geometry (transform/right) is
+               written imperatively by the rAF loop — never through Svelte
+               attributes, so a re-render can't clobber a mid-drag position.
+               Pointer-only affordance: the accessible TP/SL surface stays
+               the position row, not these handles. -->
+          {#if tpHandlePrice !== null}
+            <button
+              class="tpsl-handle tpsl-handle-tp"
+              class:pending={tpslPending?.kind === "tp"}
+              type="button"
+              aria-label="Drag to move the take-profit trigger"
+              bind:this={tpHandleEl}
+              onpointerdown={(event) => onTpSlHandleDown(event, "tp")}
+              onpointermove={onTpSlHandleMove}
+              onpointerup={onTpSlHandleUp}
+              onpointercancel={cancelTpSlDrag}
+            >
+              <span>TP {fmtTriggerPrice(tpHandlePrice)}</span>
+              <i aria-hidden="true">⋮⋮</i>
+            </button>
+          {/if}
+          {#if slHandlePrice !== null}
+            <button
+              class="tpsl-handle tpsl-handle-sl"
+              class:pending={tpslPending?.kind === "sl"}
+              type="button"
+              aria-label="Drag to move the stop-loss trigger"
+              bind:this={slHandleEl}
+              onpointerdown={(event) => onTpSlHandleDown(event, "sl")}
+              onpointermove={onTpSlHandleMove}
+              onpointerup={onTpSlHandleUp}
+              onpointercancel={cancelTpSlDrag}
+            >
+              <span>SL {fmtTriggerPrice(slHandlePrice)}</span>
+              <i aria-hidden="true">⋮⋮</i>
+            </button>
           {/if}
         </div>
       </div>
@@ -5676,6 +6121,51 @@
   .chart-canvas {
     position: absolute;
     inset: 0;
+  }
+
+  /* Draggable TP/SL grab handles: bordered pills riding their price lines
+     at the plot's right edge (just left of the price scale). Vertical
+     position + right offset are written imperatively by the rAF loop —
+     keep transforms out of this rule. Hidden until first placement so a
+     fresh mount never flashes at the top-left corner. */
+  .tpsl-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 24px;
+    height: 14px;
+    margin: 0;
+    padding: 0 0.3rem;
+    border: 1px solid var(--up);
+    background: var(--surface);
+    color: var(--up);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: ns-resize;
+    touch-action: none;
+    visibility: hidden;
+  }
+
+  .tpsl-handle-sl {
+    border-color: var(--down);
+    color: var(--down);
+  }
+
+  /* In-flight edit: inert until the chain answers. */
+  .tpsl-handle.pending {
+    cursor: progress;
+    opacity: 0.6;
+  }
+
+  .tpsl-handle i {
+    font-style: normal;
+    letter-spacing: -2px;
   }
 
   /* Armed click-to-trade: side/price preview pill riding the crosshair

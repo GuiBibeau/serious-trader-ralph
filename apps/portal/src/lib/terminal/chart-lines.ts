@@ -7,7 +7,7 @@
 import { colors } from "@trader-ralph/ui/tokens";
 import type { ChartLinePrefs } from "$lib/phoenix-cache";
 import type { PhoenixOpenOrder, PhoenixPosition } from "$lib/phoenix-trade";
-import { formatNumber, formatPrice } from "$lib/utils";
+import { formatNumber } from "$lib/utils";
 import type { Alert } from "./alerts";
 import type { StructureLevels } from "./autocomplete";
 import { fmtTriggerPrice } from "./trade-math";
@@ -34,22 +34,10 @@ export function buildChartLineSpecs(
 
   for (const position of positions) {
     if (position.symbol !== symbol) continue;
-    const side = position.size > 0 ? "LONG" : "SHORT";
-    const sideColor = position.size > 0 ? colors.up : colors.down;
-    if (prefs.pos && position.entryPrice !== null) {
-      const upnl =
-        position.unrealizedPnl !== null
-          ? ` · ${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
-          : "";
-      specs.push({
-        price: position.entryPrice,
-        color: sideColor,
-        lineWidth: 2,
-        lineStyle: 0, // solid
-        axisLabelVisible: true,
-        title: `${side} ${formatNumber(Math.abs(position.size), 4)} @ ${formatPrice(position.entryPrice)}${upnl}`,
-      });
-    }
+    // Entry/TP/SL for the charted position moved to the draggable overlay
+    // (positionLineSpecs + the page's DOM grab handles) — only the liq
+    // estimate still renders from this builder, so the two layers never
+    // draw duplicate lines at the same price.
     if (prefs.pos && position.liquidationPrice !== null) {
       specs.push({
         price: position.liquidationPrice,
@@ -58,40 +46,6 @@ export function buildChartLineSpecs(
         lineStyle: 2, // dashed
         axisLabelVisible: true,
         title: "LIQ est",
-      });
-    }
-    if (
-      prefs.tpsl &&
-      position.takeProfitPrice !== null &&
-      position.entryPrice !== null
-    ) {
-      const gain =
-        Math.abs(position.takeProfitPrice - position.entryPrice) *
-        Math.abs(position.size);
-      specs.push({
-        price: position.takeProfitPrice,
-        color: colors.up,
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: true,
-        title: `TP · +$${formatNumber(gain, 2)}`,
-      });
-    }
-    if (
-      prefs.tpsl &&
-      position.stopLossPrice !== null &&
-      position.entryPrice !== null
-    ) {
-      const loss =
-        Math.abs(position.stopLossPrice - position.entryPrice) *
-        Math.abs(position.size);
-      specs.push({
-        price: position.stopLossPrice,
-        color: colors.down,
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: true,
-        title: `SL · -$${formatNumber(loss, 2)}`,
       });
     }
   }
@@ -121,6 +75,61 @@ export function buildChartLineSpecs(
         title: `ALERT ${alert.op === "above" ? "↑" : "↓"}`,
       });
     }
+  }
+  return specs;
+}
+
+export type PositionLineKind = "entry" | "tp" | "sl";
+
+export type PositionLineSpec = PriceLineSpec & { kind: PositionLineKind };
+
+/**
+ * The charted position's own lines — the draggable TP/SL overlay's pure
+ * half. Entry is a muted always-there anchor (whenever the position has an
+ * entry price), never draggable; TP/SL render ONLY when the position has
+ * that trigger set on-chain. A position without a TP (or SL) gets no line
+ * for it: dragging edits existing triggers, adding new triggers by drag is
+ * out of scope (the ticket sets them at order time). TP/SL carry no pane
+ * title — the price text lives in the DOM grab handle the page attaches at
+ * the right edge — but keep the axis label so the trigger stays readable
+ * when the handle sits off-scale.
+ */
+export function positionLineSpecs(
+  position: PhoenixPosition,
+): PositionLineSpec[] {
+  const specs: PositionLineSpec[] = [];
+  if (position.entryPrice !== null) {
+    specs.push({
+      kind: "entry",
+      price: position.entryPrice,
+      color: colors.muted,
+      lineWidth: 1,
+      lineStyle: 0, // solid
+      axisLabelVisible: true,
+      title: "entry",
+    });
+  }
+  if (position.takeProfitPrice !== null) {
+    specs.push({
+      kind: "tp",
+      price: position.takeProfitPrice,
+      color: colors.up,
+      lineWidth: 1,
+      lineStyle: 0, // solid
+      axisLabelVisible: true,
+      title: "",
+    });
+  }
+  if (position.stopLossPrice !== null) {
+    specs.push({
+      kind: "sl",
+      price: position.stopLossPrice,
+      color: colors.down,
+      lineWidth: 1,
+      lineStyle: 0, // solid
+      axisLabelVisible: true,
+      title: "",
+    });
   }
   return specs;
 }
