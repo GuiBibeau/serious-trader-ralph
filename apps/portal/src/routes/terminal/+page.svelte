@@ -3338,6 +3338,16 @@
     setChartData();
   }
 
+  // Creation-time scroll behavior, named so the measure tool's disarm can
+  // restore EXACTLY this (a blanket `handleScroll: true` would silently
+  // re-enable vertTouchDrag and let the chart hijack page scrolling).
+  const CHART_SCROLL_OPTIONS = {
+    mouseWheel: true,
+    pressedMouseMove: true,
+    horzTouchDrag: true,
+    vertTouchDrag: false,
+  };
+
   function createChartInstance(): void {
     if (!chartContainer || lwChart) return;
     lwChart = createChart(chartContainer, {
@@ -3347,12 +3357,7 @@
       // it, double-click an axis to reset. Vertical touch-drag stays off so
       // the chart never hijacks page scrolling; kinetic momentum is
       // touch-only (mouse panning should stop where you stop).
-      handleScroll: {
-        mouseWheel: true,
-        pressedMouseMove: true,
-        horzTouchDrag: true,
-        vertTouchDrag: false,
-      },
+      handleScroll: CHART_SCROLL_OPTIONS,
       handleScale: {
         mouseWheel: true,
         pinch: true,
@@ -3906,6 +3911,7 @@
   // never created/removed per crosshair move.
   function armClickTrade(): void {
     if (clickTradeArmed || tradeMode !== "perps" || !lwChart) return;
+    disarmChartTools();
     clickTradeArmed = true;
     lwChart.subscribeCrosshairMove(onClickTradeCrosshair);
     lwChart.subscribeClick(onClickTradeClick);
@@ -3984,6 +3990,15 @@
     return clickTradeArmed || rayArmed || measureArmed;
   }
 
+  // Armed chart tools are mutually exclusive — one crosshair, one intent.
+  // Every arm path disarms the others through here; each disarm is a no-op
+  // when its tool is not armed (including the caller's own, still unarmed).
+  function disarmChartTools(): void {
+    disarmClickTrade();
+    disarmRay();
+    disarmMeasure();
+  }
+
   // ── Horizontal rays: armed click places/removes a persisted line ────
   // Venue-agnostic drawings keyed by the CHARTED symbol (perp market or
   // spot asset). One-shot arming; the click subscription exists only while
@@ -4013,9 +4028,7 @@
 
   function armRay(): void {
     if (rayArmed || !lwChart || !chartedRaySymbol) return;
-    // Armed chart tools are mutually exclusive — one crosshair, one intent.
-    disarmClickTrade();
-    disarmMeasure();
+    disarmChartTools();
     rayArmed = true;
     lwChart.subscribeClick(onRayClick);
     if (chartContainer) chartContainer.style.cursor = "crosshair";
@@ -4065,8 +4078,7 @@
 
   function armMeasure(): void {
     if (measureArmed || !lwChart || !chartContainer) return;
-    disarmClickTrade();
-    disarmRay();
+    disarmChartTools();
     measureArmed = true;
     lwChart.applyOptions({ handleScroll: false });
     chartContainer.addEventListener("pointerdown", onMeasureDown);
@@ -4080,7 +4092,7 @@
     clearMeasure();
     if (!measureArmed) return;
     measureArmed = false;
-    lwChart?.applyOptions({ handleScroll: true });
+    lwChart?.applyOptions({ handleScroll: CHART_SCROLL_OPTIONS });
     if (chartContainer) {
       chartContainer.removeEventListener("pointerdown", onMeasureDown);
       chartContainer.removeEventListener("pointermove", onMeasureMove);
