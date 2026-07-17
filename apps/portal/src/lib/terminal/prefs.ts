@@ -62,7 +62,37 @@ export type TerminalPrefs = {
   tradeLeverage: number;
   dockTab: "desk" | "journal" | "alerts";
   macroOpen: boolean;
+  /** Structure-level chart lines (PDH/PDL + swing pivots) — default ON. */
+  showLevels: boolean;
+  /** User-drawn horizontal rays per symbol (array order = placement order). */
+  rays: Record<string, number[]>;
 };
+
+/** Rays per symbol — placing a 13th evicts the oldest (FIFO). */
+export const RAYS_PER_SYMBOL_CAP = 12;
+
+/**
+ * Validate a persisted rays payload: prices must be finite positive numbers,
+ * capped at RAYS_PER_SYMBOL_CAP per symbol (keeping the newest tail — the
+ * same end FIFO eviction preserves), symbols left with no valid price are
+ * dropped, any non-object garbage collapses to {}.
+ */
+export function parseRays(value: unknown): Record<string, number[]> {
+  const rays: Record<string, number[]> = {};
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return rays;
+  }
+  for (const [symbol, prices] of Object.entries(value)) {
+    if (!Array.isArray(prices)) continue;
+    const valid = prices.filter(
+      (price): price is number =>
+        typeof price === "number" && Number.isFinite(price) && price > 0,
+    );
+    if (valid.length === 0) continue;
+    rays[symbol] = valid.slice(-RAYS_PER_SYMBOL_CAP);
+  }
+  return rays;
+}
 
 /**
  * Validate a raw localStorage prefs payload into the subset of fields that
@@ -145,6 +175,8 @@ export function parsePrefs(raw: string | null): Partial<TerminalPrefs> {
     prefs.dockTab = data.dockTab;
   }
   if (typeof data.macroOpen === "boolean") prefs.macroOpen = data.macroOpen;
+  if (typeof data.showLevels === "boolean") prefs.showLevels = data.showLevels;
+  if (data.rays !== undefined) prefs.rays = parseRays(data.rays);
   return prefs;
 }
 
@@ -180,6 +212,8 @@ export function persistPrefs(
   _tradeLeverage: number,
   _dockTab: "desk" | "journal" | "alerts",
   _macroOpen: boolean,
+  _showLevels: boolean,
+  _rays: Record<string, number[]>,
 ): void {
   if (typeof window === "undefined") return;
   try {
@@ -203,6 +237,8 @@ export function persistPrefs(
         tradeLeverage: _tradeLeverage,
         dockTab: _dockTab,
         macroOpen: _macroOpen,
+        showLevels: _showLevels,
+        rays: _rays,
       }),
     );
   } catch {

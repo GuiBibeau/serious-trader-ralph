@@ -51,8 +51,22 @@
   } from "$lib/terminal/welcome";
   import { type Alert, alertsStore } from "$lib/terminal/alerts";
   import {
+    GHOST_DEFAULTS,
+    type StructureLevels,
+    structureLevels,
+  } from "$lib/terminal/autocomplete";
+  import {
     buildChartLineSpecs,
+    buildStructureLineSpecs,
+    clickTradeLabel,
+    clickTradeSide,
+    measureParts,
+    nearestRay,
+    type PositionLineKind,
+    positionLineSpecs,
     type PriceLineSpec,
+    RAY_TOLERANCE_PCT,
+    rayLineSpec,
   } from "$lib/terminal/chart-lines";
   import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
   import {
@@ -87,6 +101,7 @@
     parsePrefs,
     persistPrefs,
     PREFS_STORAGE_KEY,
+    RAYS_PER_SYMBOL_CAP,
   } from "$lib/terminal/prefs";
   import {
     disconnectedPanel,
@@ -550,6 +565,93 @@
   let chartLineFullSig: string | null = null;
   let chartLineStructSig: string | null = null;
   let chartLineTick = -1;
+  // Structure levels (PDH/PDL + swing pivots) drawn quietly on the chart.
+  // Full data loads recompute immediately (renderChartSeries); websocket
+  // candle ticks only arm the trailing 2 s debounce — never per tick.
+  let showLevels = true;
+  let structLevels: StructureLevels = {
+    prevDayHigh: null,
+    prevDayLow: null,
+    swings: [],
+  };
+  let structureLines: IPriceLine[] = [];
+  let structureTimer: ReturnType<typeof setTimeout> | null = null;
+  // Click-to-trade: armed per-session only (never persisted — arming is an
+  // intent, not a preference; defaults OFF every load). While armed, ONE
+  // reusable price line follows the crosshair and a click prefills the perp
+  // ticket then disarms. Zero overhead when off: the crosshair/click
+  // subscriptions exist only while armed.
+  let clickTradeArmed = false;
+  let clickTradeLine: IPriceLine | null = null;
+  let clickTradeHover: { y: number; right: number; label: string } | null =
+    null;
+  // Horizontal rays — user-drawn price lines persisted per symbol in prefs
+  // (max 12, FIFO eviction). Arming is one-shot like click-to-trade: the
+  // armed click places a ray, or removes the nearest existing ray within
+  // ±0.5% instead. Zero overhead unarmed with no rays for the symbol: no
+  // subscriptions, no lines.
+  let rays: Record<string, number[]> = {};
+  let rayArmed = false;
+  let rayLines: IPriceLine[] = [];
+  // Measure tool — armed pointer drag between two points shows a Δ/%/bars
+  // chip near the cursor; ephemeral by design (never persisted). The chip
+  // lingers 2 s after release; ESC cancels. Pointer listeners exist only
+  // while armed.
+  let measureArmed = false;
+  let measure: {
+    pointerId: number;
+    p1: number;
+    p2: number;
+    startLogical: number;
+    bars: number;
+    x: number;
+    y: number;
+    moved: boolean;
+    done: boolean;
+  } | null = null;
+  let measureLingerTimer: ReturnType<typeof setTimeout> | null = null;
+  // Draggable TP/SL overlay: the charted position's entry/TP/SL price lines
+  // plus DOM grab handles on the TP/SL lines. Line handles are reusable
+  // (applyOptions on change, guarded by a price memo — never re-created per
+  // WS event); the drag itself is transform/option-update only. tpslPending
+  // holds a just-submitted trigger at the dragged price until the lagging
+  // indexer confirms it (or 25s pass) — the position ROW keeps rendering
+  // chain state throughout; only these chart lines preview.
+  type TpSlKind = Exclude<PositionLineKind, "entry">;
+  let posOverlayLines: Record<PositionLineKind, IPriceLine | null> = {
+    entry: null,
+    tp: null,
+    sl: null,
+  };
+  let posOverlayPrices: Record<PositionLineKind, number | null> = {
+    entry: null,
+    tp: null,
+    sl: null,
+  };
+  let tpHandleEl: HTMLButtonElement | null = null;
+  let slHandleEl: HTMLButtonElement | null = null;
+  let tpslHandleCache: Record<
+    TpSlKind,
+    { el: HTMLButtonElement | null; y: number | null; right: number | null }
+  > = {
+    tp: { el: null, y: null, right: null },
+    sl: { el: null, y: null, right: null },
+  };
+  let tpslDrag: {
+    kind: TpSlKind;
+    pointerId: number;
+    startPrice: number;
+    price: number;
+    chartTop: number;
+    moved: boolean;
+  } | null = null;
+  let tpslPending: {
+    kind: TpSlKind;
+    price: number;
+    from: number;
+    until: number;
+  } | null = null;
+  let tpslFrame: number | null = null;
 
   // Intel feeds (Crucix-inspired): event radar, news ticker, sanctions, ideas.
   let news: NewsItem[] = [];
@@ -1137,6 +1239,8 @@
       $tradeLeverage,
       dockTab,
       macroOpen,
+      showLevels,
+      rays,
     );
 
   onMount(() => {
@@ -1232,6 +1336,12 @@
       if (copyResetTimer) clearTimeout(copyResetTimer);
       spotTicket.dispose();
       if (spotChartTimer) clearInterval(spotChartTimer);
+      if (structureTimer !== null) clearTimeout(structureTimer);
+      if (measureLingerTimer !== null) clearTimeout(measureLingerTimer);
+      if (tpslFrame !== null) cancelAnimationFrame(tpslFrame);
+      tpslFrame = null;
+      posOverlayLines = { entry: null, tp: null, sl: null };
+      posOverlayPrices = { entry: null, tp: null, sl: null };
       lwChart?.remove();
       lwChart = null;
       candleSeries = null;
@@ -1387,6 +1497,8 @@
     if (tradeMode === "perps") {
       candleSeries?.setData([]);
       volumeSeries?.setData([]);
+      // No candles → no levels; the old market's lines must not linger.
+      recomputeStructureLevels([]);
     }
     legendCandle = null;
     bids = [];
@@ -2069,6 +2181,9 @@
     }
     if (mode === "spot") {
       bookTab = "trade";
+      // Click-to-trade is perp-only — the armed crosshair must not survive
+      // onto the spot surface.
+      disarmClickTrade();
       // Take ownership of the chart surface immediately — never leave the
       // perp series sitting under a spot label while candles load.
       spotChartPoints = [];
@@ -3223,6 +3338,16 @@
     setChartData();
   }
 
+  // Creation-time scroll behavior, named so the measure tool's disarm can
+  // restore EXACTLY this (a blanket `handleScroll: true` would silently
+  // re-enable vertTouchDrag and let the chart hijack page scrolling).
+  const CHART_SCROLL_OPTIONS = {
+    mouseWheel: true,
+    pressedMouseMove: true,
+    horzTouchDrag: true,
+    vertTouchDrag: false,
+  };
+
   function createChartInstance(): void {
     if (!chartContainer || lwChart) return;
     lwChart = createChart(chartContainer, {
@@ -3232,12 +3357,7 @@
       // it, double-click an axis to reset. Vertical touch-drag stays off so
       // the chart never hijacks page scrolling; kinetic momentum is
       // touch-only (mouse panning should stop where you stop).
-      handleScroll: {
-        mouseWheel: true,
-        pressedMouseMove: true,
-        horzTouchDrag: true,
-        vertTouchDrag: false,
-      },
+      handleScroll: CHART_SCROLL_OPTIONS,
       handleScale: {
         mouseWheel: true,
         pinch: true,
@@ -3313,8 +3433,12 @@
     // FIT or a double-click on the price axis re-arms auto-fit.
     let pressPoint: { x: number; y: number } | null = null;
     container.addEventListener("mousedown", (event) => {
-      container.style.cursor = "grabbing";
-      pressPoint = { x: event.clientX, y: event.clientY };
+      // While an armed chart tool owns the pointer the crosshair cursor
+      // wins throughout (click-to-trade, ray placement, measure).
+      container.style.cursor = chartToolArmed() ? "crosshair" : "grabbing";
+      // An armed measure drag must never double as the vertical-pan
+      // autoscale-off gesture.
+      pressPoint = measureArmed ? null : { x: event.clientX, y: event.clientY };
     });
     container.addEventListener("mousemove", (event) => {
       if (!pressPoint || event.buttons !== 1) return;
@@ -3326,11 +3450,11 @@
       }
     });
     container.addEventListener("mouseup", () => {
-      container.style.cursor = "grab";
+      container.style.cursor = chartToolArmed() ? "crosshair" : "grab";
       pressPoint = null;
     });
     container.addEventListener("mouseleave", () => {
-      container.style.cursor = "grab";
+      container.style.cursor = chartToolArmed() ? "crosshair" : "grab";
       pressPoint = null;
     });
     // Alt+click sets a price alert at the cursor — drag infra's cousin.
@@ -3361,6 +3485,20 @@
     liqLines = [];
     chartLineFullSig = null;
     chartLineStructSig = null;
+    // Ray line handles died with the old series too — redraw from prefs.
+    rayLines = [];
+    applyRayLines(chartedRaySymbol, rays);
+    // The draggable TP/SL overlay's lines died with the old series too —
+    // drop the stale handles and redraw against the fresh series.
+    posOverlayLines = { entry: null, tp: null, sl: null };
+    posOverlayPrices = { entry: null, tp: null, sl: null };
+    syncPositionOverlay(
+      selectedPosition,
+      entryLinePrice,
+      tpHandlePrice,
+      slHandlePrice,
+      tradeMode,
+    );
     refreshChartLines(
       enrichedPositions,
       perpOpenOrders,
@@ -3376,6 +3514,9 @@
     if (!candleSeries || !volumeSeries) return;
     candleSeries.setData(points.map((point) => toCandle(point, priceMode)));
     volumeSeries.setData(points.map(toVolume));
+    // Full loads are the immediate structure path — every symbol/timeframe
+    // switch, boot paint, gap heal, and spot swap funnels through here.
+    recomputeStructureLevels(points);
   }
 
   function setChartData(): void {
@@ -3391,6 +3532,8 @@
     if (!candleSeries || !volumeSeries) return;
     candleSeries.update(toCandle(point, priceMode));
     volumeSeries.update(toVolume(point));
+    // Debounced — this is the per-tick hot path; see the scheduler.
+    scheduleStructureRecompute();
   }
 
   function applyPriceScaleMode(mode: PriceScaleMode): void {
@@ -3721,6 +3864,659 @@
     return sig;
   }
 
+  // ── Structure levels: PDH/PDL + swing pivots, drawn quietly ─────────
+  const STRUCTURE_DEBOUNCE_MS = 2_000;
+
+  // Immediate path: full data loads only (symbol/timeframe switch, boot,
+  // gap heal, spot swaps) plus the footer toggle — infrequent by nature.
+  function recomputeStructureLevels(points: MarketPoint[]): void {
+    structLevels = structureLevels(
+      points,
+      GHOST_DEFAULTS.swingWindow,
+      Date.now(),
+    );
+    applyStructureLines();
+  }
+
+  // Tick path: the websocket can update the live candle many times a
+  // second, but swing pivots and PDH/PDL barely move within a bar — arm a
+  // single trailing 2 s timer and recompute once when it fires. Never
+  // recompute per tick.
+  function scheduleStructureRecompute(): void {
+    if (structureTimer !== null) return; // already armed — coalesce
+    structureTimer = setTimeout(() => {
+      structureTimer = null;
+      recomputeStructureLevels(
+        tradeMode === "spot" ? spotChartPoints : chartPoints,
+      );
+    }, STRUCTURE_DEBOUNCE_MS);
+  }
+
+  function applyStructureLines(): void {
+    const series = candleSeries;
+    if (!series) return;
+    // Remove before re-adding — stale handles must never leak duplicates.
+    for (const line of structureLines) series.removePriceLine(line);
+    structureLines = [];
+    if (!showLevels) return;
+    for (const spec of buildStructureLineSpecs(structLevels)) {
+      structureLines.push(series.createPriceLine(spec));
+    }
+  }
+
+  // ── Click-to-trade: armed crosshair → one-shot limit prefill ────────
+  // Perp-only. Subscribe on arm, unsubscribe on disarm — the unarmed path
+  // registers nothing. The follow line is ONE reusable price-line handle
+  // (created on first hover, applyOptions per move, removed on disarm) —
+  // never created/removed per crosshair move.
+  function armClickTrade(): void {
+    if (clickTradeArmed || tradeMode !== "perps" || !lwChart) return;
+    disarmChartTools();
+    clickTradeArmed = true;
+    lwChart.subscribeCrosshairMove(onClickTradeCrosshair);
+    lwChart.subscribeClick(onClickTradeClick);
+    if (chartContainer) chartContainer.style.cursor = "crosshair";
+  }
+
+  function disarmClickTrade(): void {
+    if (!clickTradeArmed) return;
+    clickTradeArmed = false;
+    lwChart?.unsubscribeCrosshairMove(onClickTradeCrosshair);
+    lwChart?.unsubscribeClick(onClickTradeClick);
+    removeClickTradeLine();
+    if (chartContainer) chartContainer.style.cursor = "grab";
+  }
+
+  function removeClickTradeLine(): void {
+    if (clickTradeLine && candleSeries) {
+      candleSeries.removePriceLine(clickTradeLine);
+    }
+    clickTradeLine = null;
+    clickTradeHover = null;
+  }
+
+  // Hovered PRICE from the crosshair's y coordinate — valid only over the
+  // plot area with a live mark to preview the side against.
+  function clickTradeHoverPrice(param: MouseEventParams): number | null {
+    if (!param.point || !candleSeries || latestPrice === null) return null;
+    const price = Number(candleSeries.coordinateToPrice(param.point.y));
+    return Number.isFinite(price) && price > 0 ? price : null;
+  }
+
+  function onClickTradeCrosshair(param: MouseEventParams): void {
+    const price = clickTradeHoverPrice(param);
+    if (price === null || latestPrice === null || !param.point) {
+      // Left the plot (or no mark yet): hide the preview, keep armed.
+      removeClickTradeLine();
+      return;
+    }
+    if (clickTradeLine) {
+      clickTradeLine.applyOptions({ price });
+    } else if (candleSeries) {
+      clickTradeLine = candleSeries.createPriceLine({
+        price,
+        color: colors.muted,
+        lineWidth: 1,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: "",
+      });
+    }
+    clickTradeHover = {
+      y: param.point.y,
+      right: (lwChart?.priceScale("right").width() ?? 0) + 6,
+      label: clickTradeLabel(price, latestPrice),
+    };
+  }
+
+  function onClickTradeClick(param: MouseEventParams): void {
+    // Alt+click stays the set-alert gesture even while armed.
+    if (param.sourceEvent?.altKey) return;
+    const mark = latestPrice;
+    const price = clickTradeHoverPrice(param);
+    if (price === null || mark === null || tradeMode !== "perps") return;
+    // One-shot fill: limit ticket at the hovered price, side per the
+    // long-at-or-below / short-above rule. NOTHING submits — the trader
+    // lands on the size input with the order staged.
+    $tradeType = "limit";
+    $tradeLimitPrice = fmtTriggerPrice(price);
+    $tradeSide = clickTradeSide(price, mark) === "long" ? "buy" : "sell";
+    disarmClickTrade();
+    focusTicketSize();
+  }
+
+  // Any armed chart tool → the crosshair cursor owns the plot.
+  function chartToolArmed(): boolean {
+    return clickTradeArmed || rayArmed || measureArmed;
+  }
+
+  // Armed chart tools are mutually exclusive — one crosshair, one intent.
+  // Every arm path disarms the others through here; each disarm is a no-op
+  // when its tool is not armed (including the caller's own, still unarmed).
+  function disarmChartTools(): void {
+    disarmClickTrade();
+    disarmRay();
+    disarmMeasure();
+  }
+
+  // ── Horizontal rays: armed click places/removes a persisted line ────
+  // Venue-agnostic drawings keyed by the CHARTED symbol (perp market or
+  // spot asset). One-shot arming; the click subscription exists only while
+  // armed, and the line set is empty for symbols without rays.
+  $: chartedRaySymbol =
+    tradeMode === "spot"
+      ? (spotAsset?.symbol.toUpperCase() ?? null)
+      : selectedSymbol;
+  // Reapply on symbol/mode switches and every rays mutation. Timeframe
+  // switches setData on the same series, so the lines simply survive.
+  $: applyRayLines(chartedRaySymbol, rays);
+
+  function applyRayLines(
+    symbol: string | null,
+    bySymbol: Record<string, number[]>,
+  ): void {
+    const series = candleSeries;
+    if (!series) return;
+    // Remove before re-adding — stale handles must never leak duplicates.
+    for (const line of rayLines) series.removePriceLine(line);
+    rayLines = [];
+    const prices = symbol ? (bySymbol[symbol] ?? []) : [];
+    for (const price of prices) {
+      rayLines.push(series.createPriceLine(rayLineSpec(price)));
+    }
+  }
+
+  function armRay(): void {
+    if (rayArmed || !lwChart || !chartedRaySymbol) return;
+    disarmChartTools();
+    rayArmed = true;
+    lwChart.subscribeClick(onRayClick);
+    if (chartContainer) chartContainer.style.cursor = "crosshair";
+  }
+
+  function disarmRay(): void {
+    if (!rayArmed) return;
+    rayArmed = false;
+    lwChart?.unsubscribeClick(onRayClick);
+    if (chartContainer) chartContainer.style.cursor = "grab";
+  }
+
+  function onRayClick(param: MouseEventParams): void {
+    // Alt+click stays the set-alert gesture even while armed.
+    if (param.sourceEvent?.altKey) return;
+    const symbol = chartedRaySymbol;
+    if (!param.point || !candleSeries || !symbol) return;
+    const price = Number(candleSeries.coordinateToPrice(param.point.y));
+    if (!Number.isFinite(price) || price <= 0) return;
+    const existing = rays[symbol] ?? [];
+    const hit = nearestRay(existing, price, RAY_TOLERANCE_PCT);
+    const next = { ...rays };
+    if (hit !== null) {
+      // Click landed on an existing ray (nearest within ±0.5%): remove
+      // that one occurrence instead of stacking a near-duplicate.
+      const index = existing.indexOf(hit);
+      const remaining = existing.filter((_, i) => i !== index);
+      if (remaining.length > 0) next[symbol] = remaining;
+      else delete next[symbol];
+    } else {
+      // Append newest-last; the slice evicts the oldest at the cap (FIFO).
+      next[symbol] = [...existing, price].slice(-RAYS_PER_SYMBOL_CAP);
+    }
+    rays = next; // reactive: reapplies lines + persists via prefs
+    disarmRay(); // one-shot — place/remove, then back to normal
+  }
+
+  // ── Measure tool: armed drag → Δ/%/bars chip near the cursor ────────
+  // Chart scroll is suspended while armed so the drag measures instead of
+  // panning; bars come from the time scale's logical indices
+  // (coordinateToLogical), so the delta IS the bar count.
+  const MEASURE_LINGER_MS = 2_000;
+
+  $: measureChip = measure
+    ? measureParts(measure.p1, measure.p2, measure.bars)
+    : null;
+
+  function armMeasure(): void {
+    if (measureArmed || !lwChart || !chartContainer) return;
+    disarmChartTools();
+    measureArmed = true;
+    lwChart.applyOptions({ handleScroll: false });
+    chartContainer.addEventListener("pointerdown", onMeasureDown);
+    chartContainer.addEventListener("pointermove", onMeasureMove);
+    chartContainer.addEventListener("pointerup", onMeasureUp);
+    chartContainer.addEventListener("pointercancel", onMeasureCancel);
+    chartContainer.style.cursor = "crosshair";
+  }
+
+  function disarmMeasure(): void {
+    clearMeasure();
+    if (!measureArmed) return;
+    measureArmed = false;
+    lwChart?.applyOptions({ handleScroll: CHART_SCROLL_OPTIONS });
+    if (chartContainer) {
+      chartContainer.removeEventListener("pointerdown", onMeasureDown);
+      chartContainer.removeEventListener("pointermove", onMeasureMove);
+      chartContainer.removeEventListener("pointerup", onMeasureUp);
+      chartContainer.removeEventListener("pointercancel", onMeasureCancel);
+      chartContainer.style.cursor = "grab";
+    }
+  }
+
+  function clearMeasure(): void {
+    if (measureLingerTimer !== null) {
+      clearTimeout(measureLingerTimer);
+      measureLingerTimer = null;
+    }
+    measure = null;
+  }
+
+  function onMeasureDown(event: PointerEvent): void {
+    // Alt+click stays the set-alert gesture even while armed.
+    if (event.altKey || !candleSeries || !lwChart || !chartContainer) return;
+    const rect = chartContainer.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const price = Number(candleSeries.coordinateToPrice(y));
+    const logical = lwChart.timeScale().coordinateToLogical(x);
+    if (!Number.isFinite(price) || price <= 0 || logical === null) return;
+    clearMeasure(); // a fresh press replaces any lingering chip
+    event.preventDefault();
+    chartContainer.setPointerCapture(event.pointerId);
+    measure = {
+      pointerId: event.pointerId,
+      p1: price,
+      p2: price,
+      startLogical: logical,
+      bars: 0,
+      x,
+      y,
+      moved: false,
+      done: false,
+    };
+  }
+
+  function onMeasureMove(event: PointerEvent): void {
+    const active = measure;
+    if (!active || active.done || event.pointerId !== active.pointerId) return;
+    if (!candleSeries || !lwChart || !chartContainer) return;
+    const rect = chartContainer.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const price = Number(candleSeries.coordinateToPrice(y));
+    const logical = lwChart.timeScale().coordinateToLogical(x);
+    if (!Number.isFinite(price) || price <= 0 || logical === null) return;
+    // Reassign, never mutate: the chip derives from this state.
+    measure = {
+      ...active,
+      p2: price,
+      bars: Math.abs(Math.round(logical - active.startLogical)),
+      x,
+      y,
+      moved: true,
+    };
+  }
+
+  function onMeasureUp(event: PointerEvent): void {
+    const active = measure;
+    if (!active || active.done || event.pointerId !== active.pointerId) return;
+    if (!active.moved) {
+      clearMeasure(); // a click, not a drag — nothing measured, no chip
+      return;
+    }
+    measure = { ...active, done: true };
+    measureLingerTimer = setTimeout(() => {
+      measureLingerTimer = null;
+      measure = null;
+    }, MEASURE_LINGER_MS);
+  }
+
+  function onMeasureCancel(event: PointerEvent): void {
+    if (measure && !measure.done && event.pointerId === measure.pointerId) {
+      clearMeasure();
+    }
+  }
+
+  // ── Draggable TP/SL overlay: the open position drawn on the chart ───
+  // Entry line (muted, not draggable) whenever the charted perp position
+  // exists; TP/SL lines with DOM grab handles ONLY when the position has
+  // that trigger set on-chain — dragging EDITS existing triggers, adding
+  // new ones by drag is out of scope (the ticket sets them at order time).
+  // Footer prefs keep their meaning: POS gates entry, TP/SL gates triggers.
+  // No position on the charted symbol → zero lines, zero rAF, zero
+  // subscriptions (the handles are the only event surface).
+
+  // Line/handle price per trigger: live drag preview wins, then an
+  // in-flight (submitted, indexer-lagging) edit, then chain state.
+  function tpslOverlayPrice(
+    kind: TpSlKind,
+    drag: typeof tpslDrag,
+    pending: typeof tpslPending,
+    position: PhoenixPosition | null,
+    mode: "perps" | "spot",
+    enabled: boolean,
+  ): number | null {
+    if (mode !== "perps" || !enabled || !position) return null;
+    const trigger =
+      kind === "tp" ? position.takeProfitPrice : position.stopLossPrice;
+    if (trigger === null) return null; // no trigger → no line, no handle
+    if (drag?.kind === kind) return drag.price;
+    if (pending?.kind === kind) return pending.price;
+    return trigger;
+  }
+
+  $: entryLinePrice =
+    tradeMode === "perps" && $chartLinePrefs.pos && selectedPosition
+      ? selectedPosition.entryPrice
+      : null;
+  $: tpHandlePrice = tpslOverlayPrice(
+    "tp",
+    tpslDrag,
+    tpslPending,
+    selectedPosition,
+    tradeMode,
+    $chartLinePrefs.tpsl,
+  );
+  $: slHandlePrice = tpslOverlayPrice(
+    "sl",
+    tpslDrag,
+    tpslPending,
+    selectedPosition,
+    tradeMode,
+    $chartLinePrefs.tpsl,
+  );
+  $: syncPositionOverlay(
+    selectedPosition,
+    entryLinePrice,
+    tpHandlePrice,
+    slHandlePrice,
+    tradeMode,
+  );
+
+  // An in-flight edit's preview clears the moment the indexer reports a
+  // trigger different from the pre-drag one (fmtTriggerPrice equality — the
+  // chain quantizes to tick size, exact float match would never clear), the
+  // trigger disappears, or the 25 s horizon passes. Only then does chain
+  // state own the line again.
+  $: if (tpslPending) {
+    const confirmed = selectedPosition
+      ? tpslPending.kind === "tp"
+        ? selectedPosition.takeProfitPrice
+        : selectedPosition.stopLossPrice
+      : null;
+    if (
+      nowMs >= tpslPending.until ||
+      confirmed === null ||
+      fmtTriggerPrice(confirmed) !== fmtTriggerPrice(tpslPending.from)
+    ) {
+      tpslPending = null;
+    }
+  }
+
+  function syncPositionOverlay(
+    position: PhoenixPosition | null,
+    entryPrice: number | null,
+    tpPrice: number | null,
+    slPrice: number | null,
+    mode: "perps" | "spot",
+  ): void {
+    const series = candleSeries;
+    if (!series) return;
+    const specs =
+      mode === "perps" && position ? positionLineSpecs(position) : [];
+    const prices: Record<PositionLineKind, number | null> = {
+      entry: entryPrice,
+      tp: tpPrice,
+      sl: slPrice,
+    };
+    for (const kind of ["entry", "tp", "sl"] as const) {
+      const spec = specs.find((candidate) => candidate.kind === kind);
+      const price = spec ? prices[kind] : null;
+      const held = posOverlayLines[kind];
+      if (spec === undefined || price === null) {
+        if (held) {
+          series.removePriceLine(held);
+          posOverlayLines[kind] = null;
+          posOverlayPrices[kind] = null;
+        }
+        // Position/trigger vanished mid-drag (closed, symbol or mode
+        // switch) — drop the drag rather than edit a ghost.
+        if (tpslDrag?.kind === kind) tpslDrag = null;
+        continue;
+      }
+      if (held) {
+        // Option-update only (styles are static per kind); the price memo
+        // keeps WS-rate reruns from repainting an unchanged line.
+        if (posOverlayPrices[kind] !== price) {
+          held.applyOptions({ price });
+          posOverlayPrices[kind] = price;
+        }
+      } else {
+        posOverlayLines[kind] = series.createPriceLine({
+          price,
+          color: spec.color,
+          lineWidth: spec.lineWidth,
+          lineStyle: spec.lineStyle,
+          axisLabelVisible: spec.axisLabelVisible,
+          title: spec.title,
+        });
+        posOverlayPrices[kind] = price;
+      }
+    }
+    // The reposition loop exists ONLY while a draggable handle is on
+    // screen; it dies with the last TP/SL line.
+    const needsFrame =
+      posOverlayLines.tp !== null || posOverlayLines.sl !== null;
+    if (needsFrame && tpslFrame === null) {
+      tpslFrame = requestAnimationFrame(tpslFrameTick);
+    } else if (!needsFrame && tpslFrame !== null) {
+      cancelAnimationFrame(tpslFrame);
+      tpslFrame = null;
+    }
+  }
+
+  // Handle repositioning mechanism: lightweight-charts v5 exposes NO
+  // price-scale change hook (typings checked — only timeScale
+  // visible-range/size and series dataChanged; a manual price-axis rescale
+  // or an autoscale shift from a live tick fires none of them), so a rAF
+  // loop owns handle geometry while handles exist. Cost: ≤2
+  // priceToCoordinate calls (pure math, no layout read) and ≤2 memoized
+  // transform writes per frame — and syncPositionOverlay cancels the loop
+  // the moment the charted position loses its triggers.
+  function tpslFrameTick(): void {
+    tpslFrame = requestAnimationFrame(tpslFrameTick);
+    placeTpSlHandle("tp", tpHandleEl, tpHandlePrice);
+    placeTpSlHandle("sl", slHandleEl, slHandlePrice);
+  }
+
+  function placeTpSlHandle(
+    kind: TpSlKind,
+    el: HTMLButtonElement | null,
+    price: number | null,
+  ): void {
+    if (tpslHandleCache[kind].el !== el) {
+      // Fresh (re)mount: forget cached geometry so the new element gets
+      // positioned before its CSS visibility:hidden lifts.
+      tpslHandleCache[kind] = { el, y: null, right: null };
+    }
+    if (!el || price === null || !candleSeries || !lwChart) return;
+    const cache = tpslHandleCache[kind];
+    const y = candleSeries.priceToCoordinate(price);
+    // Null = scale not ready; out-of-pane coordinates (the library returns
+    // them for prices beyond the visible range, it does NOT null them) would
+    // float the handle over the chart header — hide in both cases.
+    if (y === null || y < 0 || y > lwChart.paneSize().height) {
+      if (cache.y !== null) {
+        el.style.visibility = "hidden";
+        cache.y = null;
+      }
+      return;
+    }
+    const snapped = Math.round(y * 2) / 2;
+    if (cache.y !== snapped) {
+      // Transform-only write — translates, never triggers layout.
+      el.style.transform = `translate(0, ${snapped}px) translateY(-50%)`;
+      el.style.visibility = "visible";
+      cache.y = snapped;
+    }
+    const right = Math.round(lwChart.priceScale("right").width()) + 4;
+    if (right !== cache.right) {
+      // `right` is a layout write, but the price-scale width changes only
+      // when the axis re-measures — effectively never per frame.
+      el.style.right = `${right}px`;
+      cache.right = right;
+    }
+  }
+
+  function tpslBusyKey(position: PhoenixPosition): string {
+    return `tpsl:${position.symbol}:${position.subaccountIndex}`;
+  }
+
+  function onTpSlHandleDown(event: PointerEvent, kind: TpSlKind): void {
+    const position = selectedPosition;
+    if (!position || !chartContainer || tpslDrag || tpslPending) return;
+    if (phoenixBusyKeys.has(tpslBusyKey(position))) return;
+    const trigger =
+      kind === "tp" ? position.takeProfitPrice : position.stopLossPrice;
+    if (trigger === null) return;
+    event.preventDefault();
+    (kind === "tp" ? tpHandleEl : slHandleEl)?.setPointerCapture(
+      event.pointerId,
+    );
+    tpslDrag = {
+      kind,
+      pointerId: event.pointerId,
+      startPrice: trigger,
+      price: trigger,
+      // Cached once — the chart doesn't move mid-drag, so pointermove
+      // never needs a layout read.
+      chartTop: chartContainer.getBoundingClientRect().top,
+      moved: false,
+    };
+  }
+
+  function onTpSlHandleMove(event: PointerEvent): void {
+    if (!tpslDrag || event.pointerId !== tpslDrag.pointerId || !candleSeries) {
+      return;
+    }
+    const price = Number(
+      candleSeries.coordinateToPrice(event.clientY - tpslDrag.chartTop),
+    );
+    if (!Number.isFinite(price) || price <= 0) return;
+    // Reassign, never mutate: line price and handle label derive from this.
+    tpslDrag = { ...tpslDrag, price, moved: true };
+  }
+
+  // ESC mid-drag and pointercancel land here: dropping the drag state
+  // snaps line + label back to the position's real trigger.
+  function cancelTpSlDrag(): void {
+    tpslDrag = null;
+  }
+
+  function onTpSlHandleUp(event: PointerEvent): void {
+    const drag = tpslDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    tpslDrag = null;
+    const position = selectedPosition;
+    if (!drag.moved || !position) return;
+    const current =
+      drag.kind === "tp" ? position.takeProfitPrice : position.stopLossPrice;
+    if (current === null) return; // trigger vanished mid-drag
+    // Unchanged at the trigger dialect's own precision → a grab, not an edit.
+    if (fmtTriggerPrice(drag.price) === fmtTriggerPrice(current)) return;
+    // Same side-validity the ticket enforces at order time, against the
+    // mark: a wrong-side trigger would fire the moment it lands on-chain.
+    const mark =
+      marketMids[position.symbol] ??
+      (position.symbol === selectedSymbol ? latestPrice : null);
+    const long = position.size > 0;
+    if (mark !== null) {
+      const valid =
+        drag.kind === "tp"
+          ? long
+            ? drag.price > mark
+            : drag.price < mark
+          : long
+            ? drag.price < mark
+            : drag.price > mark;
+      if (!valid) {
+        phoenixActionError =
+          drag.kind === "tp"
+            ? `Take profit must be ${long ? "above" : "below"} the mark — trigger unchanged`
+            : `Stop loss must be ${long ? "below" : "above"} the mark — trigger unchanged`;
+        phoenixActionErrorDetail = "";
+        phoenixActionRetry = null;
+        return; // snap back — the drag state is already cleared
+      }
+    }
+    void submitTpSlDrag(position, drag.kind, drag.price, current);
+  }
+
+  // Release path: the position row has NO TP/SL editor today —
+  // buildSetPositionTpSlIxs (phoenix-trade.ts) is the app's only TP/SL
+  // edit machinery, and simulate→auto-sign (ratified 2026-07-02) its only
+  // confirmation posture, exactly how Close/Margin+ submit from the row.
+  // A completed drag therefore submits through that same existing pipeline
+  // (no new transaction code, no new confirm UI). The drag is pointer-only
+  // by design: keyboard/AT users keep the position row as the accessible
+  // TP/SL surface (read-only there today — a follow-up row editor should
+  // reuse submitTpSlDrag's body).
+  async function submitTpSlDrag(
+    position: PhoenixPosition,
+    kind: TpSlKind,
+    price: number,
+    fromPrice: number,
+  ): Promise<void> {
+    const busyKey = tpslBusyKey(position);
+    if (!phoenixAuthority || phoenixBusyKeys.has(busyKey)) return;
+    setPhoenixBusy(busyKey, true);
+    phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
+    // Hold the line at the dragged price while the tx flies and the lagging
+    // indexer catches up; the position ROW keeps rendering chain state the
+    // whole time — only the chart line previews.
+    tpslPending = { kind, price, from: fromPrice, until: Date.now() + 25_000 };
+    const preFingerprint = snapshotFingerprint();
+    const label = kind === "tp" ? "take profit" : "stop loss";
+    try {
+      const instructions = await (await tradeModule()).buildSetPositionTpSlIxs(
+        phoenixAuthority,
+        position,
+        kind === "tp" ? { takeProfitPrice: price } : { stopLossPrice: price },
+      );
+      lastTradeSignature = await signAndSendPhoenixIxs(
+        instructions,
+        {
+          title: `Move ${label} · ${position.symbol}-PERP`,
+          details: [
+            "Venue: Phoenix Perps",
+            `${kind === "tp" ? "Take profit" : "Stop loss"}: ${formatPrice(fromPrice)} → ${formatPrice(price)}`,
+          ],
+        },
+        busyKey,
+      );
+      track("tpsl_dragged", {
+        ...marketContext(),
+        trigger: kind,
+        fromPrice,
+        toPrice: price,
+        signature: lastTradeSignature,
+      });
+      void burstRefreshPhoenix(preFingerprint);
+    } catch (error) {
+      tpslPending = null; // snap back to the position's real trigger
+      const human = humanizeTradeError(error);
+      phoenixActionError = human.text;
+      phoenixActionErrorDetail = human.detail;
+      phoenixActionRetry = null; // re-dragging is the natural retry gesture
+      if (human.confirmUncertain) void burstRefreshPhoenix(preFingerprint);
+      markLastTxFailed(busyKey);
+    } finally {
+      setPhoenixBusy(busyKey, false);
+      clearTxStage(busyKey);
+    }
+  }
+
   // ── Journal ────────────────────────────────────────────────────────
   function noteTrade(entry: JournalEntry): void {
     journalEntries = recordTrade(entry);
@@ -3909,6 +4705,8 @@
     if (prefs.tradeLeverage !== undefined) $tradeLeverage = prefs.tradeLeverage;
     if (prefs.dockTab !== undefined) dockTab = prefs.dockTab;
     if (prefs.macroOpen !== undefined) macroOpen = prefs.macroOpen;
+    if (prefs.showLevels !== undefined) showLevels = prefs.showLevels;
+    if (prefs.rays !== undefined) rays = prefs.rays;
   }
 
   function loadOpenBetaBanner(): void {
@@ -3995,6 +4793,34 @@
   }
 
   function onGlobalKeydown(event: KeyboardEvent): void {
+    // A live TP/SL drag owns Escape ahead of everything: cancel the drag
+    // (snap back) and swallow — one Escape never doubles as anything else.
+    if (event.key === "Escape" && tpslDrag) {
+      event.stopPropagation();
+      cancelTpSlDrag();
+      return;
+    }
+    // Armed click-to-trade owns Escape: disarm only, swallowed before the
+    // modal-close block below so one Escape never doubles as modal-close
+    // (same key-swallowing posture as the funding wizard).
+    if (event.key === "Escape" && clickTradeArmed) {
+      event.stopPropagation();
+      disarmClickTrade();
+      return;
+    }
+    // Armed measure (mid-drag or lingering chip) owns Escape the same way:
+    // cancel the measurement and disarm, swallowed before modal-close.
+    if (event.key === "Escape" && (measureArmed || measure !== null)) {
+      event.stopPropagation();
+      disarmMeasure();
+      return;
+    }
+    // Armed ray placement owns Escape: disarm without placing.
+    if (event.key === "Escape" && rayArmed) {
+      event.stopPropagation();
+      disarmRay();
+      return;
+    }
     if (event.key === "Escape") {
       if (tradeOpen) tradeOpen = false;
       if (authOpen) authOpen = false;
@@ -4350,6 +5176,67 @@
           {/if}
 
           <div class="chart-canvas" bind:this={chartContainer}></div>
+
+          {#if clickTradeArmed && clickTradeHover}
+            <div
+              class="click-trade-pill"
+              style="top: {clickTradeHover.y}px; right: {clickTradeHover.right}px;"
+            >
+              {clickTradeHover.label}
+            </div>
+          {/if}
+
+          {#if measure && measureChip}
+            <div
+              class="measure-chip"
+              style="left: {measure.x + 14}px; top: {measure.y + 14}px;"
+            >
+              {measureChip.delta} ·
+              <span
+                class:up={measureChip.direction === "up"}
+                class:down={measureChip.direction === "down"}
+              >{measureChip.pct}</span>
+              · {measureChip.bars}
+            </div>
+          {/if}
+
+          <!-- Draggable TP/SL grab handles. Geometry (transform/right) is
+               written imperatively by the rAF loop — never through Svelte
+               attributes, so a re-render can't clobber a mid-drag position.
+               Pointer-only affordance: the accessible TP/SL surface stays
+               the position row, not these handles. -->
+          {#if tpHandlePrice !== null}
+            <button
+              class="tpsl-handle tpsl-handle-tp"
+              class:pending={tpslPending?.kind === "tp"}
+              type="button"
+              aria-label="Drag to move the take-profit trigger"
+              bind:this={tpHandleEl}
+              onpointerdown={(event) => onTpSlHandleDown(event, "tp")}
+              onpointermove={onTpSlHandleMove}
+              onpointerup={onTpSlHandleUp}
+              onpointercancel={cancelTpSlDrag}
+            >
+              <span>TP {fmtTriggerPrice(tpHandlePrice)}</span>
+              <i aria-hidden="true">⋮⋮</i>
+            </button>
+          {/if}
+          {#if slHandlePrice !== null}
+            <button
+              class="tpsl-handle tpsl-handle-sl"
+              class:pending={tpslPending?.kind === "sl"}
+              type="button"
+              aria-label="Drag to move the stop-loss trigger"
+              bind:this={slHandleEl}
+              onpointerdown={(event) => onTpSlHandleDown(event, "sl")}
+              onpointermove={onTpSlHandleMove}
+              onpointerup={onTpSlHandleUp}
+              onpointercancel={cancelTpSlDrag}
+            >
+              <span>SL {fmtTriggerPrice(slHandlePrice)}</span>
+              <i aria-hidden="true">⋮⋮</i>
+            </button>
+          {/if}
         </div>
       </div>
 
@@ -4423,6 +5310,53 @@
           }}
         >
           log
+        </button>
+        <button
+          class:active={showLevels}
+          type="button"
+          aria-pressed={showLevels}
+          title="Toggle structure levels (PDH/PDL, swings)"
+          onclick={() => {
+            showLevels = !showLevels;
+            // OFF removes every structure line immediately; ON recomputes
+            // fresh from the candles currently on the chart.
+            recomputeStructureLevels(
+              tradeMode === "spot" ? spotChartPoints : chartPoints,
+            );
+          }}
+        >
+          levels
+        </button>
+        <button
+          class:active={clickTradeArmed}
+          type="button"
+          aria-pressed={clickTradeArmed}
+          disabled={tradeMode === "spot"}
+          title={tradeMode === "spot"
+            ? "perps only for now"
+            : "Arm click-to-trade — click the chart to stage a limit order"}
+          onclick={() => (clickTradeArmed ? disarmClickTrade() : armClickTrade())}
+        >
+          trade
+        </button>
+        <button
+          class:active={rayArmed}
+          type="button"
+          aria-pressed={rayArmed}
+          disabled={chartedRaySymbol === null}
+          title="Arm ray — click the chart to place a horizontal ray (or click an existing ray to remove it)"
+          onclick={() => (rayArmed ? disarmRay() : armRay())}
+        >
+          ray
+        </button>
+        <button
+          class:active={measureArmed}
+          type="button"
+          aria-pressed={measureArmed}
+          title="Arm measure — drag on the chart to read Δ / % / bars"
+          onclick={() => (measureArmed ? disarmMeasure() : armMeasure())}
+        >
+          measure
         </button>
         <button
           class:active={autoFollow}
@@ -5287,6 +6221,14 @@
     border-color: rgba(255, 77, 151, 0.7);
   }
 
+  /* Honest gating: the trade toggle stays visible but inert on Spot. */
+  .chart-footer button:disabled {
+    color: var(--faint);
+    cursor: not-allowed;
+    transform: none;
+    border-color: transparent;
+  }
+
   .chart-market-tools {
     flex: 1;
     justify-content: center;
@@ -5461,6 +6403,90 @@
   .chart-canvas {
     position: absolute;
     inset: 0;
+  }
+
+  /* Draggable TP/SL grab handles: bordered pills riding their price lines
+     at the plot's right edge (just left of the price scale). Vertical
+     position + right offset are written imperatively by the rAF loop —
+     keep transforms out of this rule. Hidden until first placement so a
+     fresh mount never flashes at the top-left corner. */
+  .tpsl-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 24px;
+    height: 14px;
+    margin: 0;
+    padding: 0 0.3rem;
+    border: 1px solid var(--up);
+    background: var(--surface);
+    color: var(--up);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: ns-resize;
+    touch-action: none;
+    visibility: hidden;
+  }
+
+  .tpsl-handle-sl {
+    border-color: var(--down);
+    color: var(--down);
+  }
+
+  /* In-flight edit: inert until the chain answers. */
+  .tpsl-handle.pending {
+    cursor: progress;
+    opacity: 0.6;
+  }
+
+  .tpsl-handle i {
+    font-style: normal;
+    letter-spacing: -2px;
+  }
+
+  /* Armed click-to-trade: side/price preview pill riding the crosshair
+     line at the right edge of the plot (just left of the price scale). */
+  .click-trade-pill {
+    position: absolute;
+    z-index: 4;
+    transform: translateY(-50%);
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* Armed measure: Δ/%/bars readout chip trailing the drag cursor. Only
+     the % segment carries direction color — the sign already says it. */
+  .measure-chip {
+    position: absolute;
+    z-index: 4;
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .measure-chip .up {
+    color: var(--up);
+  }
+
+  .measure-chip .down {
+    color: var(--down);
   }
 
   .chart-empty {

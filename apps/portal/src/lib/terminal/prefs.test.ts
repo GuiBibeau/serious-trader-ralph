@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_PANEL_ORDER, mergeLayout, parsePrefs } from "./prefs";
+import {
+  DEFAULT_PANEL_ORDER,
+  mergeLayout,
+  parsePrefs,
+  parseRays,
+  RAYS_PER_SYMBOL_CAP,
+} from "./prefs";
 
 describe("parsePrefs", () => {
   test("null/malformed/non-object → empty", () => {
@@ -132,5 +138,62 @@ describe("dock + drawer prefs", () => {
     expect(
       parsePrefs(JSON.stringify({ macroOpen: "yes" })).macroOpen,
     ).toBeUndefined();
+  });
+});
+
+describe("structure levels pref", () => {
+  test("showLevels round-trips both booleans", () => {
+    expect(parsePrefs(JSON.stringify({ showLevels: false })).showLevels).toBe(
+      false,
+    );
+    expect(parsePrefs(JSON.stringify({ showLevels: true })).showLevels).toBe(
+      true,
+    );
+  });
+
+  test("showLevels rejects non-booleans — absent keeps the ON default", () => {
+    expect(
+      parsePrefs(JSON.stringify({ showLevels: "on" })).showLevels,
+    ).toBeUndefined();
+    expect(parsePrefs(JSON.stringify({})).showLevels).toBeUndefined();
+  });
+});
+
+describe("rays pref", () => {
+  test("valid payload round-trips per symbol", () => {
+    const prefs = parsePrefs(
+      JSON.stringify({ rays: { SOL: [150.5, 148.2], BTC: [65000] } }),
+    );
+    expect(prefs.rays).toEqual({ SOL: [150.5, 148.2], BTC: [65000] });
+  });
+
+  test("absent key stays undefined — page default {} applies", () => {
+    expect(parsePrefs(JSON.stringify({})).rays).toBeUndefined();
+  });
+
+  test("garbage payloads collapse to {}", () => {
+    expect(parseRays("junk")).toEqual({});
+    expect(parseRays(42)).toEqual({});
+    expect(parseRays(null)).toEqual({});
+    expect(parseRays([150, 160])).toEqual({});
+    expect(parsePrefs(JSON.stringify({ rays: "junk" })).rays).toEqual({});
+  });
+
+  test("filters non-finite/non-positive/non-number prices, drops emptied symbols", () => {
+    expect(
+      parseRays({
+        SOL: [150, "160", Number.NaN, -5, 0, 149.9],
+        BTC: [null, false],
+        ETH: "not-an-array",
+      }),
+    ).toEqual({ SOL: [150, 149.9] });
+  });
+
+  test("caps at 12 per symbol keeping the newest tail (FIFO)", () => {
+    const prices = Array.from({ length: 15 }, (_, i) => i + 1);
+    const parsed = parseRays({ SOL: prices });
+    expect(parsed.SOL).toHaveLength(RAYS_PER_SYMBOL_CAP);
+    expect(parsed.SOL[0]).toBe(4); // oldest three evicted
+    expect(parsed.SOL.at(-1)).toBe(15);
   });
 });
