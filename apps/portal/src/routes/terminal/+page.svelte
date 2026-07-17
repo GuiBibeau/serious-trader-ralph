@@ -58,6 +58,8 @@
   import {
     buildChartLineSpecs,
     buildStructureLineSpecs,
+    clickTradeLabel,
+    clickTradeSide,
     type PriceLineSpec,
   } from "$lib/terminal/chart-lines";
   import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
@@ -567,6 +569,15 @@
   };
   let structureLines: IPriceLine[] = [];
   let structureTimer: ReturnType<typeof setTimeout> | null = null;
+  // Click-to-trade: armed per-session only (never persisted — arming is an
+  // intent, not a preference; defaults OFF every load). While armed, ONE
+  // reusable price line follows the crosshair and a click prefills the perp
+  // ticket then disarms. Zero overhead when off: the crosshair/click
+  // subscriptions exist only while armed.
+  let clickTradeArmed = false;
+  let clickTradeLine: IPriceLine | null = null;
+  let clickTradeHover: { y: number; right: number; label: string } | null =
+    null;
 
   // Intel feeds (Crucix-inspired): event radar, news ticker, sanctions, ideas.
   let news: NewsItem[] = [];
@@ -2090,6 +2101,9 @@
     }
     if (mode === "spot") {
       bookTab = "trade";
+      // Click-to-trade is perp-only — the armed crosshair must not survive
+      // onto the spot surface.
+      disarmClickTrade();
       // Take ownership of the chart surface immediately — never leave the
       // perp series sitting under a spot label while candles load.
       spotChartPoints = [];
@@ -3334,7 +3348,8 @@
     // FIT or a double-click on the price axis re-arms auto-fit.
     let pressPoint: { x: number; y: number } | null = null;
     container.addEventListener("mousedown", (event) => {
-      container.style.cursor = "grabbing";
+      // While click-to-trade is armed the crosshair cursor wins throughout.
+      container.style.cursor = clickTradeArmed ? "crosshair" : "grabbing";
       pressPoint = { x: event.clientX, y: event.clientY };
     });
     container.addEventListener("mousemove", (event) => {
@@ -3347,11 +3362,11 @@
       }
     });
     container.addEventListener("mouseup", () => {
-      container.style.cursor = "grab";
+      container.style.cursor = clickTradeArmed ? "crosshair" : "grab";
       pressPoint = null;
     });
     container.addEventListener("mouseleave", () => {
-      container.style.cursor = "grab";
+      container.style.cursor = clickTradeArmed ? "crosshair" : "grab";
       pressPoint = null;
     });
     // Alt+click sets a price alert at the cursor — drag infra's cousin.
@@ -3787,6 +3802,86 @@
     }
   }
 
+  // ── Click-to-trade: armed crosshair → one-shot limit prefill ────────
+  // Perp-only. Subscribe on arm, unsubscribe on disarm — the unarmed path
+  // registers nothing. The follow line is ONE reusable price-line handle
+  // (created on first hover, applyOptions per move, removed on disarm) —
+  // never created/removed per crosshair move.
+  function armClickTrade(): void {
+    if (clickTradeArmed || tradeMode !== "perps" || !lwChart) return;
+    clickTradeArmed = true;
+    lwChart.subscribeCrosshairMove(onClickTradeCrosshair);
+    lwChart.subscribeClick(onClickTradeClick);
+    if (chartContainer) chartContainer.style.cursor = "crosshair";
+  }
+
+  function disarmClickTrade(): void {
+    if (!clickTradeArmed) return;
+    clickTradeArmed = false;
+    lwChart?.unsubscribeCrosshairMove(onClickTradeCrosshair);
+    lwChart?.unsubscribeClick(onClickTradeClick);
+    removeClickTradeLine();
+    if (chartContainer) chartContainer.style.cursor = "grab";
+  }
+
+  function removeClickTradeLine(): void {
+    if (clickTradeLine && candleSeries) {
+      candleSeries.removePriceLine(clickTradeLine);
+    }
+    clickTradeLine = null;
+    clickTradeHover = null;
+  }
+
+  // Hovered PRICE from the crosshair's y coordinate — valid only over the
+  // plot area with a live mark to preview the side against.
+  function clickTradeHoverPrice(param: MouseEventParams): number | null {
+    if (!param.point || !candleSeries || latestPrice === null) return null;
+    const price = Number(candleSeries.coordinateToPrice(param.point.y));
+    return Number.isFinite(price) && price > 0 ? price : null;
+  }
+
+  function onClickTradeCrosshair(param: MouseEventParams): void {
+    const price = clickTradeHoverPrice(param);
+    if (price === null || latestPrice === null || !param.point) {
+      // Left the plot (or no mark yet): hide the preview, keep armed.
+      removeClickTradeLine();
+      return;
+    }
+    if (clickTradeLine) {
+      clickTradeLine.applyOptions({ price });
+    } else if (candleSeries) {
+      clickTradeLine = candleSeries.createPriceLine({
+        price,
+        color: colors.muted,
+        lineWidth: 1,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: "",
+      });
+    }
+    clickTradeHover = {
+      y: param.point.y,
+      right: (lwChart?.priceScale("right").width() ?? 0) + 6,
+      label: clickTradeLabel(price, latestPrice),
+    };
+  }
+
+  function onClickTradeClick(param: MouseEventParams): void {
+    // Alt+click stays the set-alert gesture even while armed.
+    if (param.sourceEvent?.altKey) return;
+    const mark = latestPrice;
+    const price = clickTradeHoverPrice(param);
+    if (price === null || mark === null || tradeMode !== "perps") return;
+    // One-shot fill: limit ticket at the hovered price, side per the
+    // long-at-or-below / short-above rule. NOTHING submits — the trader
+    // lands on the size input with the order staged.
+    $tradeType = "limit";
+    $tradeLimitPrice = fmtTriggerPrice(price);
+    $tradeSide = clickTradeSide(price, mark) === "long" ? "buy" : "sell";
+    disarmClickTrade();
+    focusTicketSize();
+  }
+
   // ── Journal ────────────────────────────────────────────────────────
   function noteTrade(entry: JournalEntry): void {
     journalEntries = recordTrade(entry);
@@ -4062,6 +4157,14 @@
   }
 
   function onGlobalKeydown(event: KeyboardEvent): void {
+    // Armed click-to-trade owns Escape: disarm only, swallowed before the
+    // modal-close block below so one Escape never doubles as modal-close
+    // (same key-swallowing posture as the funding wizard).
+    if (event.key === "Escape" && clickTradeArmed) {
+      event.stopPropagation();
+      disarmClickTrade();
+      return;
+    }
     if (event.key === "Escape") {
       if (tradeOpen) tradeOpen = false;
       if (authOpen) authOpen = false;
@@ -4417,6 +4520,15 @@
           {/if}
 
           <div class="chart-canvas" bind:this={chartContainer}></div>
+
+          {#if clickTradeArmed && clickTradeHover}
+            <div
+              class="click-trade-pill"
+              style="top: {clickTradeHover.y}px; right: {clickTradeHover.right}px;"
+            >
+              {clickTradeHover.label}
+            </div>
+          {/if}
         </div>
       </div>
 
@@ -4506,6 +4618,18 @@
           }}
         >
           levels
+        </button>
+        <button
+          class:active={clickTradeArmed}
+          type="button"
+          aria-pressed={clickTradeArmed}
+          disabled={tradeMode === "spot"}
+          title={tradeMode === "spot"
+            ? "perps only for now"
+            : "Arm click-to-trade — click the chart to stage a limit order"}
+          onclick={() => (clickTradeArmed ? disarmClickTrade() : armClickTrade())}
+        >
+          trade
         </button>
         <button
           class:active={autoFollow}
@@ -5370,6 +5494,14 @@
     border-color: rgba(255, 77, 151, 0.7);
   }
 
+  /* Honest gating: the trade toggle stays visible but inert on Spot. */
+  .chart-footer button:disabled {
+    color: var(--faint);
+    cursor: not-allowed;
+    transform: none;
+    border-color: transparent;
+  }
+
   .chart-market-tools {
     flex: 1;
     justify-content: center;
@@ -5544,6 +5676,22 @@
   .chart-canvas {
     position: absolute;
     inset: 0;
+  }
+
+  /* Armed click-to-trade: side/price preview pill riding the crosshair
+     line at the right edge of the plot (just left of the price scale). */
+  .click-trade-pill {
+    position: absolute;
+    z-index: 4;
+    transform: translateY(-50%);
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   .chart-empty {

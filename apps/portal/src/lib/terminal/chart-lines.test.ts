@@ -3,7 +3,12 @@ import { colors } from "@trader-ralph/ui/tokens";
 import type { PhoenixOpenOrder, PhoenixPosition } from "$lib/phoenix-trade";
 import type { Alert } from "./alerts";
 import type { SwingPoint } from "./autocomplete";
-import { buildChartLineSpecs, buildStructureLineSpecs } from "./chart-lines";
+import {
+  buildChartLineSpecs,
+  buildStructureLineSpecs,
+  clickTradeLabel,
+  clickTradeSide,
+} from "./chart-lines";
 
 const PREFS_ALL = { pos: true, tpsl: true, orders: true, alerts: true };
 
@@ -284,5 +289,36 @@ describe("buildStructureLineSpecs", () => {
       "swing",
     ]);
     expect(specs.map((spec) => spec.price)).toEqual([160, 140, 155, 145]);
+  });
+});
+
+describe("clickTradeSide", () => {
+  test("hover below mark → long", () => {
+    expect(clickTradeSide(75, 77.2)).toBe("long");
+  });
+
+  test("hover above mark → short", () => {
+    expect(clickTradeSide(80, 77.2)).toBe("short");
+  });
+
+  test("boundary: exactly at mark counts as long (buying at mark)", () => {
+    expect(clickTradeSide(77.2, 77.2)).toBe("long");
+  });
+});
+
+describe("clickTradeLabel", () => {
+  test("formats with the limit field's precision: two decimals ≥10", () => {
+    expect(clickTradeLabel(77.2, 100)).toBe("77.20 · limit long");
+  });
+
+  test("short side above mark", () => {
+    expect(clickTradeLabel(120.456, 100)).toBe("120.46 · limit short");
+  });
+
+  test("sub-cent meme price keeps significant digits", () => {
+    // fmtTriggerPrice keeps 4 significant digits for sub-cent prices.
+    expect(clickTradeLabel(0.00004821, 0.00005)).toBe(
+      "0.00004821 · limit long",
+    );
   });
 });

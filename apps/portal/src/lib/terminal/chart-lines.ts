@@ -10,6 +10,7 @@ import type { PhoenixOpenOrder, PhoenixPosition } from "$lib/phoenix-trade";
 import { formatNumber, formatPrice } from "$lib/utils";
 import type { Alert } from "./alerts";
 import type { StructureLevels } from "./autocomplete";
+import { fmtTriggerPrice } from "./trade-math";
 
 export type PriceLineSpec = {
   price: number;
@@ -180,4 +181,25 @@ export function buildStructureLineSpecs(
     }
   }
   return specs;
+}
+
+/**
+ * Click-to-trade side preview: hovering below the mark reads as a resting
+ * long (buying under the market), above as a resting short. Exactly-at-mark
+ * counts as long — a limit buy at mark is the natural "buy here" intent.
+ */
+export function clickTradeSide(
+  hoverPrice: number,
+  markPrice: number,
+): "long" | "short" {
+  return hoverPrice <= markPrice ? "long" : "short";
+}
+
+/**
+ * Pill label for the armed crosshair line: "77.20 · limit long". Price is
+ * rendered with fmtTriggerPrice — the same precision dialect the ticket's
+ * limit field uses, so what the pill shows is exactly what a click fills.
+ */
+export function clickTradeLabel(hoverPrice: number, markPrice: number): string {
+  return `${fmtTriggerPrice(hoverPrice)} · limit ${clickTradeSide(hoverPrice, markPrice)}`;
 }
