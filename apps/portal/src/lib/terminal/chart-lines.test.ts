@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { colors } from "@trader-ralph/ui/tokens";
 import type { PhoenixOpenOrder, PhoenixPosition } from "$lib/phoenix-trade";
 import type { Alert } from "./alerts";
-import { buildChartLineSpecs } from "./chart-lines";
+import type { SwingPoint } from "./autocomplete";
+import { buildChartLineSpecs, buildStructureLineSpecs } from "./chart-lines";
 
 const PREFS_ALL = { pos: true, tpsl: true, orders: true, alerts: true };
 
@@ -167,5 +168,121 @@ describe("buildChartLineSpecs", () => {
       "perps",
     );
     expect(specs[0].title).toBe("ASK");
+  });
+});
+
+function swing(ts: number, price: number, kind: "high" | "low"): SwingPoint {
+  return { ts, price, kind };
+}
+
+describe("buildStructureLineSpecs", () => {
+  test("empty levels → no lines at all", () => {
+    expect(
+      buildStructureLineSpecs({
+        prevDayHigh: null,
+        prevDayLow: null,
+        swings: [],
+      }),
+    ).toEqual([]);
+  });
+
+  test("PDH/PDL render as dashed faint axis-labeled lines, exact fields", () => {
+    expect(
+      buildStructureLineSpecs({
+        prevDayHigh: 152.4,
+        prevDayLow: 147.1,
+        swings: [],
+      }),
+    ).toEqual([
+      {
+        price: 152.4,
+        color: colors.faint,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "PDH",
+      },
+      {
+        price: 147.1,
+        color: colors.faint,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "PDL",
+      },
+    ]);
+  });
+
+  test("null PDH with present PDL renders only the PDL line", () => {
+    const specs = buildStructureLineSpecs({
+      prevDayHigh: null,
+      prevDayLow: 147.1,
+      swings: [],
+    });
+    expect(specs.map((spec) => spec.title)).toEqual(["PDL"]);
+  });
+
+  test("swings render dotted faint specs without axis labels", () => {
+    expect(
+      buildStructureLineSpecs({
+        prevDayHigh: null,
+        prevDayLow: null,
+        swings: [swing(1_000, 150, "high"), swing(2_000, 140, "low")],
+      }),
+    ).toEqual([
+      {
+        price: 150,
+        color: colors.faint,
+        lineWidth: 1,
+        lineStyle: 1,
+        axisLabelVisible: false,
+        title: "swing",
+      },
+      {
+        price: 140,
+        color: colors.faint,
+        lineWidth: 1,
+        lineStyle: 1,
+        axisLabelVisible: false,
+        title: "swing",
+      },
+    ]);
+  });
+
+  test("caps at the 3 MOST RECENT swings per kind (chronological tail)", () => {
+    const specs = buildStructureLineSpecs({
+      prevDayHigh: null,
+      prevDayLow: null,
+      swings: [
+        swing(1_000, 101, "high"),
+        swing(2_000, 102, "high"),
+        swing(3_000, 103, "high"),
+        swing(4_000, 104, "high"),
+        swing(5_000, 91, "low"),
+        swing(6_000, 92, "low"),
+        swing(7_000, 93, "low"),
+        swing(8_000, 94, "low"),
+      ],
+    });
+    // 3 highs then 3 lows — the oldest of each kind (101, 91) dropped.
+    expect(specs.map((spec) => spec.price)).toEqual([
+      102, 103, 104, 92, 93, 94,
+    ]);
+    expect(specs.every((spec) => spec.title === "swing")).toBe(true);
+  });
+
+  test("PDH/PDL and swings compose in order: PDH, PDL, highs, lows", () => {
+    const specs = buildStructureLineSpecs({
+      prevDayHigh: 160,
+      prevDayLow: 140,
+      swings: [swing(1_000, 155, "high"), swing(2_000, 145, "low")],
+    });
+    expect(specs.map((spec) => spec.title)).toEqual([
+      "PDH",
+      "PDL",
+      "swing",
+      "swing",
+    ]);
+    expect(specs.map((spec) => spec.price)).toEqual([160, 140, 155, 145]);
   });
 });

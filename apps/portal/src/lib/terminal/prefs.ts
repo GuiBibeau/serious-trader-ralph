@@ -62,6 +62,8 @@ export type TerminalPrefs = {
   tradeLeverage: number;
   dockTab: "desk" | "journal" | "alerts";
   macroOpen: boolean;
+  /** Structure-level chart lines (PDH/PDL + swing pivots) — default ON. */
+  showLevels: boolean;
 };
 
 /**
@@ -145,6 +147,7 @@ export function parsePrefs(raw: string | null): Partial<TerminalPrefs> {
     prefs.dockTab = data.dockTab;
   }
   if (typeof data.macroOpen === "boolean") prefs.macroOpen = data.macroOpen;
+  if (typeof data.showLevels === "boolean") prefs.showLevels = data.showLevels;
   return prefs;
 }
 
@@ -180,6 +183,7 @@ export function persistPrefs(
   _tradeLeverage: number,
   _dockTab: "desk" | "journal" | "alerts",
   _macroOpen: boolean,
+  _showLevels: boolean,
 ): void {
   if (typeof window === "undefined") return;
   try {
@@ -203,6 +207,7 @@ export function persistPrefs(
         tradeLeverage: _tradeLeverage,
         dockTab: _dockTab,
         macroOpen: _macroOpen,
+        showLevels: _showLevels,
       }),
     );
   } catch {

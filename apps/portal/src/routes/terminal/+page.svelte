@@ -51,7 +51,13 @@
   } from "$lib/terminal/welcome";
   import { type Alert, alertsStore } from "$lib/terminal/alerts";
   import {
+    GHOST_DEFAULTS,
+    type StructureLevels,
+    structureLevels,
+  } from "$lib/terminal/autocomplete";
+  import {
     buildChartLineSpecs,
+    buildStructureLineSpecs,
     type PriceLineSpec,
   } from "$lib/terminal/chart-lines";
   import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
@@ -550,6 +556,17 @@
   let chartLineFullSig: string | null = null;
   let chartLineStructSig: string | null = null;
   let chartLineTick = -1;
+  // Structure levels (PDH/PDL + swing pivots) drawn quietly on the chart.
+  // Full data loads recompute immediately (renderChartSeries); websocket
+  // candle ticks only arm the trailing 2 s debounce — never per tick.
+  let showLevels = true;
+  let structLevels: StructureLevels = {
+    prevDayHigh: null,
+    prevDayLow: null,
+    swings: [],
+  };
+  let structureLines: IPriceLine[] = [];
+  let structureTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Intel feeds (Crucix-inspired): event radar, news ticker, sanctions, ideas.
   let news: NewsItem[] = [];
@@ -1137,6 +1154,7 @@
       $tradeLeverage,
       dockTab,
       macroOpen,
+      showLevels,
     );
 
   onMount(() => {
@@ -1232,6 +1250,7 @@
       if (copyResetTimer) clearTimeout(copyResetTimer);
       spotTicket.dispose();
       if (spotChartTimer) clearInterval(spotChartTimer);
+      if (structureTimer !== null) clearTimeout(structureTimer);
       lwChart?.remove();
       lwChart = null;
       candleSeries = null;
@@ -1387,6 +1406,8 @@
     if (tradeMode === "perps") {
       candleSeries?.setData([]);
       volumeSeries?.setData([]);
+      // No candles → no levels; the old market's lines must not linger.
+      recomputeStructureLevels([]);
     }
     legendCandle = null;
     bids = [];
@@ -3376,6 +3397,9 @@
     if (!candleSeries || !volumeSeries) return;
     candleSeries.setData(points.map((point) => toCandle(point, priceMode)));
     volumeSeries.setData(points.map(toVolume));
+    // Full loads are the immediate structure path — every symbol/timeframe
+    // switch, boot paint, gap heal, and spot swap funnels through here.
+    recomputeStructureLevels(points);
   }
 
   function setChartData(): void {
@@ -3391,6 +3415,8 @@
     if (!candleSeries || !volumeSeries) return;
     candleSeries.update(toCandle(point, priceMode));
     volumeSeries.update(toVolume(point));
+    // Debounced — this is the per-tick hot path; see the scheduler.
+    scheduleStructureRecompute();
   }
 
   function applyPriceScaleMode(mode: PriceScaleMode): void {
@@ -3721,6 +3747,46 @@
     return sig;
   }
 
+  // ── Structure levels: PDH/PDL + swing pivots, drawn quietly ─────────
+  const STRUCTURE_DEBOUNCE_MS = 2_000;
+
+  // Immediate path: full data loads only (symbol/timeframe switch, boot,
+  // gap heal, spot swaps) plus the footer toggle — infrequent by nature.
+  function recomputeStructureLevels(points: MarketPoint[]): void {
+    structLevels = structureLevels(
+      points,
+      GHOST_DEFAULTS.swingWindow,
+      Date.now(),
+    );
+    applyStructureLines();
+  }
+
+  // Tick path: the websocket can update the live candle many times a
+  // second, but swing pivots and PDH/PDL barely move within a bar — arm a
+  // single trailing 2 s timer and recompute once when it fires. Never
+  // recompute per tick.
+  function scheduleStructureRecompute(): void {
+    if (structureTimer !== null) return; // already armed — coalesce
+    structureTimer = setTimeout(() => {
+      structureTimer = null;
+      recomputeStructureLevels(
+        tradeMode === "spot" ? spotChartPoints : chartPoints,
+      );
+    }, STRUCTURE_DEBOUNCE_MS);
+  }
+
+  function applyStructureLines(): void {
+    const series = candleSeries;
+    if (!series) return;
+    // Remove before re-adding — stale handles must never leak duplicates.
+    for (const line of structureLines) series.removePriceLine(line);
+    structureLines = [];
+    if (!showLevels) return;
+    for (const spec of buildStructureLineSpecs(structLevels)) {
+      structureLines.push(series.createPriceLine(spec));
+    }
+  }
+
   // ── Journal ────────────────────────────────────────────────────────
   function noteTrade(entry: JournalEntry): void {
     journalEntries = recordTrade(entry);
@@ -3909,6 +3975,7 @@
     if (prefs.tradeLeverage !== undefined) $tradeLeverage = prefs.tradeLeverage;
     if (prefs.dockTab !== undefined) dockTab = prefs.dockTab;
     if (prefs.macroOpen !== undefined) macroOpen = prefs.macroOpen;
+    if (prefs.showLevels !== undefined) showLevels = prefs.showLevels;
   }
 
   function loadOpenBetaBanner(): void {
@@ -4423,6 +4490,22 @@
           }}
         >
           log
+        </button>
+        <button
+          class:active={showLevels}
+          type="button"
+          aria-pressed={showLevels}
+          title="Toggle structure levels (PDH/PDL, swings)"
+          onclick={() => {
+            showLevels = !showLevels;
+            // OFF removes every structure line immediately; ON recomputes
+            // fresh from the candles currently on the chart.
+            recomputeStructureLevels(
+              tradeMode === "spot" ? spotChartPoints : chartPoints,
+            );
+          }}
+        >
+          levels
         </button>
         <button
           class:active={autoFollow}

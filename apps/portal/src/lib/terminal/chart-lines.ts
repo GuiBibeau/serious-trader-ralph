@@ -9,6 +9,7 @@ import type { ChartLinePrefs } from "$lib/phoenix-cache";
 import type { PhoenixOpenOrder, PhoenixPosition } from "$lib/phoenix-trade";
 import { formatNumber, formatPrice } from "$lib/utils";
 import type { Alert } from "./alerts";
+import type { StructureLevels } from "./autocomplete";
 
 export type PriceLineSpec = {
   price: number;
@@ -117,6 +118,64 @@ export function buildChartLineSpecs(
         lineStyle: 1,
         axisLabelVisible: true,
         title: `ALERT ${alert.op === "above" ? "↑" : "↓"}`,
+      });
+    }
+  }
+  return specs;
+}
+
+/** How many of the most recent swing highs — and, separately, lows — get a
+ * line each. */
+export const STRUCTURE_SWING_CAP = 3;
+
+/**
+ * Structure-level lines: previous-day high/low as dashed `--faint` lines
+ * with axis labels, plus the STRUCTURE_SWING_CAP most recent swing highs
+ * and lows as dotted whispers. Swings also use `--faint` — `--line`
+ * (#272b34) was tried first and is indistinguishable from the chart grid
+ * on the real canvas — so their subordination comes from style instead:
+ * dotted (lighter per pixel than the PDH/PDL dashes) and no axis label
+ * (six identical "swing" tags would clutter the scale; the pane title
+ * still names the line). Null PDH/PDL and missing swings simply don't
+ * render: honest absence, never a placeholder line.
+ */
+export function buildStructureLineSpecs(
+  levels: StructureLevels,
+): PriceLineSpec[] {
+  const specs: PriceLineSpec[] = [];
+  if (levels.prevDayHigh !== null) {
+    specs.push({
+      price: levels.prevDayHigh,
+      color: colors.faint,
+      lineWidth: 1,
+      lineStyle: 2, // dashed
+      axisLabelVisible: true,
+      title: "PDH",
+    });
+  }
+  if (levels.prevDayLow !== null) {
+    specs.push({
+      price: levels.prevDayLow,
+      color: colors.faint,
+      lineWidth: 1,
+      lineStyle: 2, // dashed
+      axisLabelVisible: true,
+      title: "PDL",
+    });
+  }
+  for (const kind of ["high", "low"] as const) {
+    // detectSwings returns chronological order — the tail is most recent.
+    const recent = levels.swings
+      .filter((swing) => swing.kind === kind)
+      .slice(-STRUCTURE_SWING_CAP);
+    for (const swing of recent) {
+      specs.push({
+        price: swing.price,
+        color: colors.faint,
+        lineWidth: 1,
+        lineStyle: 1, // dotted
+        axisLabelVisible: false,
+        title: "swing",
       });
     }
   }

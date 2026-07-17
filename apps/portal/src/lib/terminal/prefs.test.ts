@@ -134,3 +134,21 @@ describe("dock + drawer prefs", () => {
     ).toBeUndefined();
   });
 });
+
+describe("structure levels pref", () => {
+  test("showLevels round-trips both booleans", () => {
+    expect(parsePrefs(JSON.stringify({ showLevels: false })).showLevels).toBe(
+      false,
+    );
+    expect(parsePrefs(JSON.stringify({ showLevels: true })).showLevels).toBe(
+      true,
+    );
+  });
+
+  test("showLevels rejects non-booleans — absent keeps the ON default", () => {
+    expect(
+      parsePrefs(JSON.stringify({ showLevels: "on" })).showLevels,
+    ).toBeUndefined();
+    expect(parsePrefs(JSON.stringify({})).showLevels).toBeUndefined();
+  });
+});
