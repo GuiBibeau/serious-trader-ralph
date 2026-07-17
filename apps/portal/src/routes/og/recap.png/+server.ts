@@ -1,8 +1,9 @@
 // Daily market recap OG card (/og/recap.png): the day's tape in one frame —
-// SOL as the hero with its 24h move, beside the five biggest absolute 24h
-// movers across every hub. Attached to the daily post, so composition is
-// marketing-grade. Every number is live tokens.xyz data; catalog failure or
-// a missing SOL print is a 503, never a placeholder.
+// SOL as the hero with its 24h move (plus day range and volume when their
+// sources answer), beside the five biggest absolute 24h movers across every
+// hub. Attached to the daily post, so composition is marketing-grade. Every
+// number is live tokens.xyz data; catalog failure or a missing SOL print
+// (price OR 24h change) is a 503, never a placeholder.
 
 import { error } from "@sveltejs/kit";
 import {
@@ -16,7 +17,11 @@ import {
   text,
   utcStamp,
 } from "$lib/server/og";
-import { type CatalogAsset, getCatalog } from "$lib/server/tokensxyz";
+import {
+  type CatalogAsset,
+  getCatalog,
+  getSpotlightBundle,
+} from "$lib/server/tokensxyz";
 import type { RequestHandler } from "./$types";
 
 /** "JUL 17 2026" — sliced from toUTCString ("Fri, 17 Jul 2026 …"). */
@@ -31,6 +36,14 @@ function shortName(name: string): string {
   const cut = name.slice(0, 16);
   const space = cut.lastIndexOf(" ");
   return space > 3 ? cut.slice(0, space) : cut;
+}
+
+/** "$42.3M" — compact USD for the volume cell. */
+function fmtUsdCompact(value: number): string {
+  if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
+  if (value >= 1e3) return `$${(value / 1e3).toFixed(1)}K`;
+  return `$${value.toFixed(0)}`;
 }
 
 function moverRow(asset: CatalogAsset, last: boolean): Record<string, unknown> {
@@ -70,8 +83,14 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
     error(503, "Catalog unavailable");
   });
 
+  // Price AND 24h change are load-bearing: the hero renders both, and a null
+  // change would show a "—" badge tinted green — a placeholder this route
+  // promises never to cache. Missing either → 503, same as the movers filter.
   const sol = assets.find(
-    (asset) => asset.symbol.toUpperCase() === "SOL" && asset.price !== null,
+    (asset) =>
+      asset.symbol.toUpperCase() === "SOL" &&
+      asset.price !== null &&
+      asset.change24hPct !== null,
   );
   if (!sol) error(503, "SOL market data unavailable");
 
@@ -92,6 +111,44 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
 
   const solUp = (sol.change24hPct ?? 0) >= 0;
   const solTrend = solUp ? C.up : C.down;
+
+  // Secondary hero metrics — honest-or-absent hierarchy: price/change above
+  // are load-bearing (503 when missing); range and volume each render only
+  // when their source answers, and when BOTH are unavailable the card still
+  // ships with the movers table as the body. Never a fake cell.
+  //
+  // Day range rides the same candle path as the terminal card (15m SOL
+  // candles); the bundle is best-effort here, so its failure drops the strip
+  // instead of 503ing a card that can stand without it.
+  //
+  // Range comes from candle CLOSES, not wicks: the tokens.xyz 15m high/low
+  // channel carries corrupt prints (observed highs of ~306 and >1.2M against
+  // SOL closes of ~74–76), and any outlier threshold would be an invented
+  // number. Min/max of 96 15m closes is a real, slightly conservative day
+  // range; corrupted wicks on the card would be fake data.
+  const bundle = await getSpotlightBundle(sol).catch(() => null);
+  const dayCandles = (bundle?.candles ?? []).filter(
+    (candle) => candle.ts >= Date.now() - 86_400_000,
+  );
+
+  const metrics: string[] = [];
+  if (dayCandles.length >= 2) {
+    const closes = dayCandles.map((candle) => candle.close);
+    metrics.push(
+      `RANGE ${Math.min(...closes).toFixed(2)} – ${Math.max(...closes).toFixed(2)}`,
+    );
+  }
+  // Volume: catalog 24h USD volume first; else the summed 24h candle volume
+  // (also USD, but scoped to the primary variant so it reads lower than the
+  // all-venue catalog stat); else omitted.
+  const candleVol = dayCandles.reduce((sum, candle) => sum + candle.volume, 0);
+  const volume =
+    sol.volume24hUsd !== null && sol.volume24hUsd > 0
+      ? sol.volume24hUsd
+      : candleVol > 0
+        ? candleVol
+        : null;
+  if (volume !== null) metrics.push(`VOL ${fmtUsdCompact(volume)}`);
 
   const tree = frame([
     brandRow(`LIVE ${utcStamp()}`),
@@ -161,6 +218,17 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
                 color: C.muted,
               }),
             ]),
+            // Slim metrics strip: only the cells whose sources answered.
+            ...(metrics.length > 0
+              ? [
+                  text(metrics.join("  ·  "), {
+                    fontSize: "17px",
+                    letterSpacing: "1px",
+                    color: C.faint,
+                    marginTop: "2px",
+                  }),
+                ]
+              : []),
           ],
         ),
 
