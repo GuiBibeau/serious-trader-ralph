@@ -60,9 +60,13 @@
     buildStructureLineSpecs,
     clickTradeLabel,
     clickTradeSide,
+    measureParts,
+    nearestRay,
     type PositionLineKind,
     positionLineSpecs,
     type PriceLineSpec,
+    RAY_TOLERANCE_PCT,
+    rayLineSpec,
   } from "$lib/terminal/chart-lines";
   import { parseTerminalDeepLink } from "$lib/terminal/deep-link";
   import {
@@ -97,6 +101,7 @@
     parsePrefs,
     persistPrefs,
     PREFS_STORAGE_KEY,
+    RAYS_PER_SYMBOL_CAP,
   } from "$lib/terminal/prefs";
   import {
     disconnectedPanel,
@@ -580,6 +585,31 @@
   let clickTradeLine: IPriceLine | null = null;
   let clickTradeHover: { y: number; right: number; label: string } | null =
     null;
+  // Horizontal rays — user-drawn price lines persisted per symbol in prefs
+  // (max 12, FIFO eviction). Arming is one-shot like click-to-trade: the
+  // armed click places a ray, or removes the nearest existing ray within
+  // ±0.5% instead. Zero overhead unarmed with no rays for the symbol: no
+  // subscriptions, no lines.
+  let rays: Record<string, number[]> = {};
+  let rayArmed = false;
+  let rayLines: IPriceLine[] = [];
+  // Measure tool — armed pointer drag between two points shows a Δ/%/bars
+  // chip near the cursor; ephemeral by design (never persisted). The chip
+  // lingers 2 s after release; ESC cancels. Pointer listeners exist only
+  // while armed.
+  let measureArmed = false;
+  let measure: {
+    pointerId: number;
+    p1: number;
+    p2: number;
+    startLogical: number;
+    bars: number;
+    x: number;
+    y: number;
+    moved: boolean;
+    done: boolean;
+  } | null = null;
+  let measureLingerTimer: ReturnType<typeof setTimeout> | null = null;
   // Draggable TP/SL overlay: the charted position's entry/TP/SL price lines
   // plus DOM grab handles on the TP/SL lines. Line handles are reusable
   // (applyOptions on change, guarded by a price memo — never re-created per
@@ -1210,6 +1240,7 @@
       dockTab,
       macroOpen,
       showLevels,
+      rays,
     );
 
   onMount(() => {
@@ -1306,6 +1337,7 @@
       spotTicket.dispose();
       if (spotChartTimer) clearInterval(spotChartTimer);
       if (structureTimer !== null) clearTimeout(structureTimer);
+      if (measureLingerTimer !== null) clearTimeout(measureLingerTimer);
       if (tpslFrame !== null) cancelAnimationFrame(tpslFrame);
       tpslFrame = null;
       posOverlayLines = { entry: null, tp: null, sl: null };
@@ -3396,9 +3428,12 @@
     // FIT or a double-click on the price axis re-arms auto-fit.
     let pressPoint: { x: number; y: number } | null = null;
     container.addEventListener("mousedown", (event) => {
-      // While click-to-trade is armed the crosshair cursor wins throughout.
-      container.style.cursor = clickTradeArmed ? "crosshair" : "grabbing";
-      pressPoint = { x: event.clientX, y: event.clientY };
+      // While an armed chart tool owns the pointer the crosshair cursor
+      // wins throughout (click-to-trade, ray placement, measure).
+      container.style.cursor = chartToolArmed() ? "crosshair" : "grabbing";
+      // An armed measure drag must never double as the vertical-pan
+      // autoscale-off gesture.
+      pressPoint = measureArmed ? null : { x: event.clientX, y: event.clientY };
     });
     container.addEventListener("mousemove", (event) => {
       if (!pressPoint || event.buttons !== 1) return;
@@ -3410,11 +3445,11 @@
       }
     });
     container.addEventListener("mouseup", () => {
-      container.style.cursor = clickTradeArmed ? "crosshair" : "grab";
+      container.style.cursor = chartToolArmed() ? "crosshair" : "grab";
       pressPoint = null;
     });
     container.addEventListener("mouseleave", () => {
-      container.style.cursor = clickTradeArmed ? "crosshair" : "grab";
+      container.style.cursor = chartToolArmed() ? "crosshair" : "grab";
       pressPoint = null;
     });
     // Alt+click sets a price alert at the cursor — drag infra's cousin.
@@ -3445,6 +3480,9 @@
     liqLines = [];
     chartLineFullSig = null;
     chartLineStructSig = null;
+    // Ray line handles died with the old series too — redraw from prefs.
+    rayLines = [];
+    applyRayLines(chartedRaySymbol, rays);
     // The draggable TP/SL overlay's lines died with the old series too —
     // drop the stale handles and redraw against the fresh series.
     posOverlayLines = { entry: null, tp: null, sl: null };
@@ -3939,6 +3977,191 @@
     $tradeSide = clickTradeSide(price, mark) === "long" ? "buy" : "sell";
     disarmClickTrade();
     focusTicketSize();
+  }
+
+  // Any armed chart tool → the crosshair cursor owns the plot.
+  function chartToolArmed(): boolean {
+    return clickTradeArmed || rayArmed || measureArmed;
+  }
+
+  // ── Horizontal rays: armed click places/removes a persisted line ────
+  // Venue-agnostic drawings keyed by the CHARTED symbol (perp market or
+  // spot asset). One-shot arming; the click subscription exists only while
+  // armed, and the line set is empty for symbols without rays.
+  $: chartedRaySymbol =
+    tradeMode === "spot"
+      ? (spotAsset?.symbol.toUpperCase() ?? null)
+      : selectedSymbol;
+  // Reapply on symbol/mode switches and every rays mutation. Timeframe
+  // switches setData on the same series, so the lines simply survive.
+  $: applyRayLines(chartedRaySymbol, rays);
+
+  function applyRayLines(
+    symbol: string | null,
+    bySymbol: Record<string, number[]>,
+  ): void {
+    const series = candleSeries;
+    if (!series) return;
+    // Remove before re-adding — stale handles must never leak duplicates.
+    for (const line of rayLines) series.removePriceLine(line);
+    rayLines = [];
+    const prices = symbol ? (bySymbol[symbol] ?? []) : [];
+    for (const price of prices) {
+      rayLines.push(series.createPriceLine(rayLineSpec(price)));
+    }
+  }
+
+  function armRay(): void {
+    if (rayArmed || !lwChart || !chartedRaySymbol) return;
+    // Armed chart tools are mutually exclusive — one crosshair, one intent.
+    disarmClickTrade();
+    disarmMeasure();
+    rayArmed = true;
+    lwChart.subscribeClick(onRayClick);
+    if (chartContainer) chartContainer.style.cursor = "crosshair";
+  }
+
+  function disarmRay(): void {
+    if (!rayArmed) return;
+    rayArmed = false;
+    lwChart?.unsubscribeClick(onRayClick);
+    if (chartContainer) chartContainer.style.cursor = "grab";
+  }
+
+  function onRayClick(param: MouseEventParams): void {
+    // Alt+click stays the set-alert gesture even while armed.
+    if (param.sourceEvent?.altKey) return;
+    const symbol = chartedRaySymbol;
+    if (!param.point || !candleSeries || !symbol) return;
+    const price = Number(candleSeries.coordinateToPrice(param.point.y));
+    if (!Number.isFinite(price) || price <= 0) return;
+    const existing = rays[symbol] ?? [];
+    const hit = nearestRay(existing, price, RAY_TOLERANCE_PCT);
+    const next = { ...rays };
+    if (hit !== null) {
+      // Click landed on an existing ray (nearest within ±0.5%): remove
+      // that one occurrence instead of stacking a near-duplicate.
+      const index = existing.indexOf(hit);
+      const remaining = existing.filter((_, i) => i !== index);
+      if (remaining.length > 0) next[symbol] = remaining;
+      else delete next[symbol];
+    } else {
+      // Append newest-last; the slice evicts the oldest at the cap (FIFO).
+      next[symbol] = [...existing, price].slice(-RAYS_PER_SYMBOL_CAP);
+    }
+    rays = next; // reactive: reapplies lines + persists via prefs
+    disarmRay(); // one-shot — place/remove, then back to normal
+  }
+
+  // ── Measure tool: armed drag → Δ/%/bars chip near the cursor ────────
+  // Chart scroll is suspended while armed so the drag measures instead of
+  // panning; bars come from the time scale's logical indices
+  // (coordinateToLogical), so the delta IS the bar count.
+  const MEASURE_LINGER_MS = 2_000;
+
+  $: measureChip = measure
+    ? measureParts(measure.p1, measure.p2, measure.bars)
+    : null;
+
+  function armMeasure(): void {
+    if (measureArmed || !lwChart || !chartContainer) return;
+    disarmClickTrade();
+    disarmRay();
+    measureArmed = true;
+    lwChart.applyOptions({ handleScroll: false });
+    chartContainer.addEventListener("pointerdown", onMeasureDown);
+    chartContainer.addEventListener("pointermove", onMeasureMove);
+    chartContainer.addEventListener("pointerup", onMeasureUp);
+    chartContainer.addEventListener("pointercancel", onMeasureCancel);
+    chartContainer.style.cursor = "crosshair";
+  }
+
+  function disarmMeasure(): void {
+    clearMeasure();
+    if (!measureArmed) return;
+    measureArmed = false;
+    lwChart?.applyOptions({ handleScroll: true });
+    if (chartContainer) {
+      chartContainer.removeEventListener("pointerdown", onMeasureDown);
+      chartContainer.removeEventListener("pointermove", onMeasureMove);
+      chartContainer.removeEventListener("pointerup", onMeasureUp);
+      chartContainer.removeEventListener("pointercancel", onMeasureCancel);
+      chartContainer.style.cursor = "grab";
+    }
+  }
+
+  function clearMeasure(): void {
+    if (measureLingerTimer !== null) {
+      clearTimeout(measureLingerTimer);
+      measureLingerTimer = null;
+    }
+    measure = null;
+  }
+
+  function onMeasureDown(event: PointerEvent): void {
+    // Alt+click stays the set-alert gesture even while armed.
+    if (event.altKey || !candleSeries || !lwChart || !chartContainer) return;
+    const rect = chartContainer.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const price = Number(candleSeries.coordinateToPrice(y));
+    const logical = lwChart.timeScale().coordinateToLogical(x);
+    if (!Number.isFinite(price) || price <= 0 || logical === null) return;
+    clearMeasure(); // a fresh press replaces any lingering chip
+    event.preventDefault();
+    chartContainer.setPointerCapture(event.pointerId);
+    measure = {
+      pointerId: event.pointerId,
+      p1: price,
+      p2: price,
+      startLogical: logical,
+      bars: 0,
+      x,
+      y,
+      moved: false,
+      done: false,
+    };
+  }
+
+  function onMeasureMove(event: PointerEvent): void {
+    const active = measure;
+    if (!active || active.done || event.pointerId !== active.pointerId) return;
+    if (!candleSeries || !lwChart || !chartContainer) return;
+    const rect = chartContainer.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const price = Number(candleSeries.coordinateToPrice(y));
+    const logical = lwChart.timeScale().coordinateToLogical(x);
+    if (!Number.isFinite(price) || price <= 0 || logical === null) return;
+    // Reassign, never mutate: the chip derives from this state.
+    measure = {
+      ...active,
+      p2: price,
+      bars: Math.abs(Math.round(logical - active.startLogical)),
+      x,
+      y,
+      moved: true,
+    };
+  }
+
+  function onMeasureUp(event: PointerEvent): void {
+    const active = measure;
+    if (!active || active.done || event.pointerId !== active.pointerId) return;
+    if (!active.moved) {
+      clearMeasure(); // a click, not a drag — nothing measured, no chip
+      return;
+    }
+    measure = { ...active, done: true };
+    measureLingerTimer = setTimeout(() => {
+      measureLingerTimer = null;
+      measure = null;
+    }, MEASURE_LINGER_MS);
+  }
+
+  function onMeasureCancel(event: PointerEvent): void {
+    if (measure && !measure.done && event.pointerId === measure.pointerId) {
+      clearMeasure();
+    }
   }
 
   // ── Draggable TP/SL overlay: the open position drawn on the chart ───
@@ -4471,6 +4694,7 @@
     if (prefs.dockTab !== undefined) dockTab = prefs.dockTab;
     if (prefs.macroOpen !== undefined) macroOpen = prefs.macroOpen;
     if (prefs.showLevels !== undefined) showLevels = prefs.showLevels;
+    if (prefs.rays !== undefined) rays = prefs.rays;
   }
 
   function loadOpenBetaBanner(): void {
@@ -4570,6 +4794,19 @@
     if (event.key === "Escape" && clickTradeArmed) {
       event.stopPropagation();
       disarmClickTrade();
+      return;
+    }
+    // Armed measure (mid-drag or lingering chip) owns Escape the same way:
+    // cancel the measurement and disarm, swallowed before modal-close.
+    if (event.key === "Escape" && (measureArmed || measure !== null)) {
+      event.stopPropagation();
+      disarmMeasure();
+      return;
+    }
+    // Armed ray placement owns Escape: disarm without placing.
+    if (event.key === "Escape" && rayArmed) {
+      event.stopPropagation();
+      disarmRay();
       return;
     }
     if (event.key === "Escape") {
@@ -4937,6 +5174,20 @@
             </div>
           {/if}
 
+          {#if measure && measureChip}
+            <div
+              class="measure-chip"
+              style="left: {measure.x + 14}px; top: {measure.y + 14}px;"
+            >
+              {measureChip.delta} ·
+              <span
+                class:up={measureChip.direction === "up"}
+                class:down={measureChip.direction === "down"}
+              >{measureChip.pct}</span>
+              · {measureChip.bars}
+            </div>
+          {/if}
+
           <!-- Draggable TP/SL grab handles. Geometry (transform/right) is
                written imperatively by the rAF loop — never through Svelte
                attributes, so a re-render can't clobber a mid-drag position.
@@ -5075,6 +5326,25 @@
           onclick={() => (clickTradeArmed ? disarmClickTrade() : armClickTrade())}
         >
           trade
+        </button>
+        <button
+          class:active={rayArmed}
+          type="button"
+          aria-pressed={rayArmed}
+          disabled={chartedRaySymbol === null}
+          title="Arm ray — click the chart to place a horizontal ray (or click an existing ray to remove it)"
+          onclick={() => (rayArmed ? disarmRay() : armRay())}
+        >
+          ray
+        </button>
+        <button
+          class:active={measureArmed}
+          type="button"
+          aria-pressed={measureArmed}
+          title="Arm measure — drag on the chart to read Δ / % / bars"
+          onclick={() => (measureArmed ? disarmMeasure() : armMeasure())}
+        >
+          measure
         </button>
         <button
           class:active={autoFollow}
@@ -6182,6 +6452,29 @@
     font-size: 11px;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  /* Armed measure: Δ/%/bars readout chip trailing the drag cursor. Only
+     the % segment carries direction color — the sign already says it. */
+  .measure-chip {
+    position: absolute;
+    z-index: 4;
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .measure-chip .up {
+    color: var(--up);
+  }
+
+  .measure-chip .down {
+    color: var(--down);
   }
 
   .chart-empty {

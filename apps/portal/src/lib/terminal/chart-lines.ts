@@ -7,7 +7,7 @@
 import { colors } from "@trader-ralph/ui/tokens";
 import type { ChartLinePrefs } from "$lib/phoenix-cache";
 import type { PhoenixOpenOrder, PhoenixPosition } from "$lib/phoenix-trade";
-import { formatNumber } from "$lib/utils";
+import { formatNumber, formatPercent, formatPrice } from "$lib/utils";
 import type { Alert } from "./alerts";
 import type { StructureLevels } from "./autocomplete";
 import { fmtTriggerPrice } from "./trade-math";
@@ -211,4 +211,85 @@ export function clickTradeSide(
  */
 export function clickTradeLabel(hoverPrice: number, markPrice: number): string {
   return `${fmtTriggerPrice(hoverPrice)} · limit ${clickTradeSide(hoverPrice, markPrice)}`;
+}
+
+/** Armed-ray removal: a click lands "on" a ray within this % of the
+ * clicked price. */
+export const RAY_TOLERANCE_PCT = 0.5;
+
+/**
+ * A user-placed horizontal ray: solid 1px in `--muted` at 60% alpha
+ * (lightweight-charts feeds colors straight to canvas strokeStyle, which
+ * takes 8-digit hex — 0x99 ≈ 60%; the string stays derived from the token
+ * so the palette drift guard still owns the base hex). No pane title; axis
+ * label on, so the level reads off the scale.
+ */
+export function rayLineSpec(price: number): PriceLineSpec {
+  return {
+    price,
+    color: `${colors.muted}99`,
+    lineWidth: 1,
+    lineStyle: 0, // solid
+    axisLabelVisible: true,
+    title: "",
+  };
+}
+
+/**
+ * The ray an armed click should remove: nearest to the clicked price within
+ * ±tolerancePct (percent of the CLICKED price). Null when none qualifies —
+ * the click places a new ray instead. Exact distance ties keep the
+ * earliest-placed ray (stable FIFO order).
+ */
+export function nearestRay(
+  prices: number[],
+  clickPrice: number,
+  tolerancePct: number,
+): number | null {
+  const tolerance = Math.abs(clickPrice) * (tolerancePct / 100);
+  let best: number | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const price of prices) {
+    const distance = Math.abs(price - clickPrice);
+    if (distance <= tolerance && distance < bestDistance) {
+      best = price;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+export type MeasureParts = {
+  delta: string; // "Δ $1.45"
+  pct: string; // "+1.45%" — sign carries the direction
+  bars: string; // "14 bars"
+  direction: "up" | "down";
+};
+
+/**
+ * Measure-chip pieces: Δ is the absolute price move in the terminal price
+ * dialect, % is signed at 2dp (formatPercent — the app has no other pct
+ * convention; chart-format.ts checked), bars is the |logical-index| delta.
+ * Split so the page can color the % segment by direction without
+ * re-deriving any string.
+ */
+export function measureParts(
+  p1: number,
+  p2: number,
+  bars: number,
+): MeasureParts {
+  const pct = p1 > 0 ? ((p2 - p1) / p1) * 100 : null; // p1 ≤ 0 → honest "--"
+  const count = Math.abs(Math.round(bars));
+  return {
+    delta: `Δ $${formatPrice(Math.abs(p2 - p1))}`,
+    pct: formatPercent(pct),
+    bars: `${count} bar${count === 1 ? "" : "s"}`,
+    direction: p2 >= p1 ? "up" : "down",
+  };
+}
+
+/** The exact chip string: "Δ $1.45 · +1.45% · 14 bars". */
+export function measureReadout(p1: number, p2: number, bars: number): string {
+  const parts = measureParts(p1, p2, bars);
+  return `${parts.delta} · ${parts.pct} · ${parts.bars}`;
 }

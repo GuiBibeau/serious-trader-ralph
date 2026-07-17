@@ -8,7 +8,12 @@ import {
   buildStructureLineSpecs,
   clickTradeLabel,
   clickTradeSide,
+  measureParts,
+  measureReadout,
+  nearestRay,
   positionLineSpecs,
+  RAY_TOLERANCE_PCT,
+  rayLineSpec,
 } from "./chart-lines";
 
 const PREFS_ALL = { pos: true, tpsl: true, orders: true, alerts: true };
@@ -378,5 +383,77 @@ describe("clickTradeLabel", () => {
     expect(clickTradeLabel(0.00004821, 0.00005)).toBe(
       "0.00004821 · limit long",
     );
+  });
+});
+
+describe("rayLineSpec", () => {
+  test("solid 1px muted@60% line, no title, axis label on — exact fields", () => {
+    expect(rayLineSpec(150.25)).toEqual({
+      price: 150.25,
+      color: `${colors.muted}99`, // #8c95a499 — 0x99 ≈ 60% alpha
+      lineWidth: 1,
+      lineStyle: 0,
+      axisLabelVisible: true,
+      title: "",
+    });
+  });
+});
+
+describe("nearestRay", () => {
+  test("none within tolerance → null", () => {
+    expect(nearestRay([100, 110], 105, RAY_TOLERANCE_PCT)).toBeNull();
+    expect(nearestRay([], 105, RAY_TOLERANCE_PCT)).toBeNull();
+  });
+
+  test("exact hit and boundary: tolerance is a % of the clicked price", () => {
+    // ±0.5% of 100 = ±0.5 — 100.5 is exactly on the boundary (inclusive).
+    expect(nearestRay([100.5], 100, RAY_TOLERANCE_PCT)).toBe(100.5);
+    expect(nearestRay([100.51], 100, RAY_TOLERANCE_PCT)).toBeNull();
+    expect(nearestRay([100], 100, RAY_TOLERANCE_PCT)).toBe(100);
+  });
+
+  test("nearest wins when several qualify", () => {
+    expect(nearestRay([100.4, 99.9, 100.3], 100, RAY_TOLERANCE_PCT)).toBe(99.9);
+  });
+
+  test("exact distance ties keep the earliest-placed ray", () => {
+    expect(nearestRay([100.2, 99.8], 100, RAY_TOLERANCE_PCT)).toBe(100.2);
+  });
+});
+
+describe("measureReadout", () => {
+  test("upward drag: exact chip string with signed % and bar count", () => {
+    expect(measureReadout(100, 101.45, 14)).toBe("Δ $1.45 · +1.45% · 14 bars");
+  });
+
+  test("downward drag: Δ stays absolute, % carries the minus sign", () => {
+    expect(measureReadout(100, 98.55, 6)).toBe("Δ $1.45 · -1.45% · 6 bars");
+  });
+
+  test("single bar reads singular", () => {
+    expect(measureReadout(200, 201, 1)).toBe("Δ $1.00 · +0.50% · 1 bar");
+  });
+
+  test("no movement is honest zeros, not a fake reading", () => {
+    expect(measureReadout(100, 100, 0)).toBe("Δ $0 · 0.00% · 0 bars");
+  });
+
+  test("negative bar delta counts as bars (drag direction agnostic)", () => {
+    expect(measureReadout(100, 101.45, -14)).toBe("Δ $1.45 · +1.45% · 14 bars");
+  });
+});
+
+describe("measureParts", () => {
+  test("direction follows the drag; parts compose the readout exactly", () => {
+    const up = measureParts(100, 101.45, 14);
+    expect(up.direction).toBe("up");
+    expect(`${up.delta} · ${up.pct} · ${up.bars}`).toBe(
+      measureReadout(100, 101.45, 14),
+    );
+    expect(measureParts(100, 98.55, 6).direction).toBe("down");
+  });
+
+  test("start-at-or-below-zero renders an honest -- percent", () => {
+    expect(measureParts(0, 5, 2).pct).toBe("--");
   });
 });
