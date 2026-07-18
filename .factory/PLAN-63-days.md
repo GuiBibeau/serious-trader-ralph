@@ -159,6 +159,32 @@ touch and a heavier AI surface both solve the problem, ship the touch.
 
 ---
 
+## GTM Engine — the Narrative Machine (fully automated, no human in the loop)
+
+Brand X account posting real-market narratives with zero approvals, safe by
+construction rather than by supervision:
+
+- **Templates are the backbone** — facts slotted into fixed shapes (move +
+  tagged headline + deep link; pre-IPO news + our live mark; funding/OI data
+  narratives; question-form interest posts). Hallucination-impossible.
+- **LLM garnish is optional and guilty until proven**: one DeepSeek flavor
+  line per post, dropped (never softened) unless it passes `advisoryLint()` —
+  a pure, unit-tested blocklist/pattern gate (no imperatives-near-tickers, no
+  target-price shapes, no should/could-reach). Never financial advice;
+  descriptive verbs and questions only.
+- **Discipline in blob state**: per-format daily caps, per-asset cooldowns,
+  monthly budget vs the X free tier (500 writes/mo — $0).
+- **Passive observability**: every published post mirrors to a private
+  #published Discord channel — a dashboard, not a gate. Fixes happen in the
+  template/lint via retro, exactly like the factory.
+- **Kill switch**: POSTING_PAUSED blob flag checked before any write — the
+  money-PAUSE pattern for the brand's mouth.
+- Build: v1 is an M (reuses market-moves cron triggers, tokensxyz news
+  tagging, deep-link slugs, blob dedup wholesale) — slot right after Day 6's
+  recap card lands. Later engines per the GTM discussion: automated shorts
+  (Playwright chart replays), Ralph-the-agent account (Week 8+), programmatic
+  SEO expansions.
+
 ## Flex Bench (swap in when a day slips or prod interrupts)
 
 - Opt-in public trader profiles (win rate, best trade, OG card)
