@@ -51,7 +51,7 @@ export async function fetchSolanaLamports(address: string): Promise<string> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: "trader-ralph-wallet-balance",
+      id: "harness-wallet-balance",
       method: "getBalance",
       // "processed" over the default "finalized": received SOL shows in
       // about a slot instead of ~12s. Display-only, so the tiny rollback
@@ -97,7 +97,7 @@ export async function fetchMintSafety(mint: string): Promise<MintSafety> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: "trader-ralph-mint-safety",
+      id: "harness-mint-safety",
       method: "getAccountInfo",
       params: [mint, { encoding: "base64" }],
     }),

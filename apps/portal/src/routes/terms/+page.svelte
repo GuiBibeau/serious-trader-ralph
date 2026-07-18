@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { SiteFooter, SiteNav } from "@harness-trade/ui";
 </script>
 
 <svelte:head>
-  <title>Terms of Service — Trader Ralph</title>
+  <title>Terms of Service — Harness</title>
   <meta
     name="description"
-    content="The terms that govern your use of Trader Ralph, a self-custodial trading interface for spot and perpetual futures on Solana."
+    content="The terms that govern your use of Harness, a self-custodial trading interface for spot and perpetual futures on Solana."
   />
 </svelte:head>
 
@@ -18,9 +18,9 @@
     <p class="updated">Last updated: July 6, 2026</p>
 
     <section class="doc">
-      <h2>1. What Trader Ralph is</h2>
+      <h2>1. What Harness is</h2>
       <p>
-        Trader Ralph ("the Service") is a self-custodial trading interface. It
+        Harness ("the Service") is a self-custodial trading interface. It
         displays market data and lets you construct transactions — spot swaps
         and perpetual futures orders — that you sign with your own wallet and
         that execute on public Solana protocols (Phoenix, Jupiter). We do not

@@ -4,7 +4,7 @@
 
 - This repo is frontend-only.
 - The retained app is the SvelteKit dashboard UI in `apps/portal`.
-- The app uses read-only public market data plus the configured Trader Ralph
+- The app uses read-only public market data plus the configured Harness
   edge API where available. Public read routes should use plain
   `/api/read/<routeKey>` APIs; auth-gated routes must be shown as gated rather
   than replaced with fake rows.
@@ -15,14 +15,14 @@
 
 ## Design System (packages/ui)
 
-- `@trader-ralph/ui` is a bun-workspace package consumed source-direct: the
+- `@harness-trade/ui` is a bun-workspace package consumed source-direct: the
   `"svelte"` export condition points at `src/index.ts` and there is no build
-  step. Portal's `vite.config.ts` sets `ssr: { noExternal: ["@trader-ralph/ui"] }`
+  step. Portal's `vite.config.ts` sets `ssr: { noExternal: ["@harness-trade/ui"] }`
   so the `.svelte` files are compiled by the app's Vite/Svelte pipeline.
 - Entry-point invariant: server-side code (`apps/portal/src/lib/server/`,
-  `routes/og/`) imports ONLY `@trader-ralph/ui/tokens` or
-  `@trader-ralph/ui/format` (pure TS, no `.svelte`). The component barrel
-  `@trader-ralph/ui` and `tokens.css` are client/SSR-component territory.
+  `routes/og/`) imports ONLY `@harness-trade/ui/tokens` or
+  `@harness-trade/ui/format` (pure TS, no `.svelte`). The component barrel
+  `@harness-trade/ui` and `tokens.css` are client/SSR-component territory.
 - Palette single source of truth: `packages/ui/src/tokens/colors.ts` (TS,
   canonical) mirrored by hand in `packages/ui/src/tokens.css`; `colors.test.ts`
   is the drift guard (`bun run --cwd packages/ui test`).
@@ -37,7 +37,7 @@
   translate, 3px offset shadow; TabNav 3px underline) are marketing-surface
   only. The terminal stays flat and dense with its own hard-coded metrics
   (its radii are squared in place; circles stay 50%).
-- Two formatter dialects by design: `@trader-ralph/ui/format` renders "—"
+- Two formatter dialects by design: `@harness-trade/ui/format` renders "—"
   for null (marketing/OG); `apps/portal/src/lib/utils.ts` renders "--"
   (terminal). Different null/digit semantics — do not merge them.
 - Scoped-style pitfall: when extracting or moving a component, move the
@@ -56,10 +56,11 @@
 ## Environment and Domains
 
 - Production branch: `main`.
-- Production domain: `traderralph.com`; `trader-ralph.com` and
-  `www.trader-ralph.com` redirect to it.
-- Lower environment: `dev` branch -> `dev.trader-ralph.com`.
-- There is no frontend requirement for `api.trader-ralph.com` in the current
+- Production domain: `harness.trade`; the legacy `traderralph.com`,
+  `trader-ralph.com`, and `www.trader-ralph.com` redirect to it.
+- Lower environment: `dev` branch -> `dev.trader-ralph.com` (legacy alias,
+  still live — migrates with the domain cutover).
+- There is no frontend requirement for an `api.` subdomain in the current
   repo shape.
 
 ## Promotion Guardrails

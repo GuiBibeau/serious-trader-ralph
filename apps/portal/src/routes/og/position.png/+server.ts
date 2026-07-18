@@ -83,7 +83,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
                       type: "span",
                       props: {
                         style: { marginLeft: "14px" },
-                        children: "RALPH",
+                        children: "HARNESS",
                       },
                     },
                     {
@@ -104,7 +104,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
                     fontSize: "22px",
                     color: C.muted,
                   },
-                  children: "traderralph.com",
+                  children: "harness.trade",
                 },
               },
             ],

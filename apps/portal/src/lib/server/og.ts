@@ -3,8 +3,8 @@
 // 1200×630 satori trees rendered to PNG via resvg with bundled Inter — no
 // network fonts, no client involvement.
 
+import { colors } from "@harness-trade/ui/tokens";
 import { Resvg } from "@resvg/resvg-js";
-import { colors } from "@trader-ralph/ui/tokens";
 import satori from "satori";
 import { read } from "$app/server";
 import interBold from "$lib/server/fonts/Inter-Bold.ttf";
@@ -123,7 +123,7 @@ export function brandRow(right: string): Record<string, unknown> {
       el("div", { alignItems: "center", gap: "14px" }, [
         brandMark(34),
         el("div", { fontSize: "26px", fontWeight: 700, letterSpacing: "4px" }, [
-          text("RALPH", { color: C.ink }),
+          text("HARNESS", { color: C.ink }),
           text("·TERMINAL", { color: C.accent }),
         ]),
       ]),

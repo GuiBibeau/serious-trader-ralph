@@ -4,7 +4,7 @@
 // literals); the page keeps a ~10-line applier that clears and re-adds.
 // This split is the prerequisite for memoizing line churn off the tick path.
 
-import { colors } from "@trader-ralph/ui/tokens";
+import { colors } from "@harness-trade/ui/tokens";
 import type { ChartLinePrefs } from "$lib/phoenix-cache";
 import type { PhoenixOpenOrder, PhoenixPosition } from "$lib/phoenix-trade";
 import { formatNumber, formatPercent, formatPrice } from "$lib/utils";

@@ -2,6 +2,8 @@
 // deterministic facts the terminal already computed — no server, no sync.
 // Numbers recorded here are what the user saw at submission, not fills.
 
+// Legacy key name kept across the Harness rebrand — renaming would wipe
+// every user's saved journal.
 const STORAGE_KEY = "trader-ralph-terminal/journal/v1";
 const MAX_ENTRIES = 400;
 

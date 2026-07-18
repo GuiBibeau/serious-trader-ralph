@@ -2,7 +2,7 @@ import { error } from "@sveltejs/kit";
 import { getCatalog } from "$lib/server/tokensxyz";
 import type { RequestHandler } from "./$types";
 
-const SITE = "https://traderralph.com";
+const SITE = "https://harness.trade";
 
 export const GET: RequestHandler = async ({ setHeaders }) => {
   // Fail rather than cache an asset-less llms.txt at the CDN for an hour.
@@ -21,7 +21,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
           .join("\n")}\n`
       : "";
 
-  const body = `# Trader Ralph
+  const body = `# Harness
 
 > A Solana trading terminal for crypto, tokenized equities and pre-IPO names.
 > Spot trading is routed by Jupiter; perps run on Phoenix. Accounts settle in

@@ -2,6 +2,8 @@
 // stored locally like the trade-ack key. storage is injectable so tests
 // never touch the real localStorage.
 
+// Legacy key names kept across the Harness rebrand — renaming would re-show
+// dismissed strips and re-fire the wizard auto-open.
 const WELCOME_KEY = "trader-ralph-terminal/welcome-dismissed/v1";
 
 // Wizard auto-open (PRD #510): the funding wizard auto-opens once per wallet

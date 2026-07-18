@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AssetTable, SiteFooter, SiteNav, TabNav } from "@trader-ralph/ui";
+  import { AssetTable, SiteFooter, SiteNav, TabNav } from "@harness-trade/ui";
 
   let { data } = $props();
 
@@ -16,12 +16,12 @@
 </script>
 
 <svelte:head>
-  <title>{data.title} — trade on Solana | Trader Ralph</title>
+  <title>{data.title} — trade on Solana | Harness</title>
   <meta name="description" content={data.blurb} />
-  <link rel="canonical" href={`https://traderralph.com/${data.hub}`} />
-  <meta property="og:title" content={`${data.title} — trade on Solana | Trader Ralph`} />
+  <link rel="canonical" href={`https://harness.trade/${data.hub}`} />
+  <meta property="og:title" content={`${data.title} — trade on Solana | Harness`} />
   <meta property="og:description" content={data.blurb} />
-  <meta property="og:image" content={`https://traderralph.com/og/${data.hub}.png`} />
+  <meta property="og:image" content={`https://harness.trade/og/${data.hub}.png`} />
   <meta name="twitter:card" content="summary_large_image" />
 </svelte:head>
 

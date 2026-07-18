@@ -173,8 +173,8 @@
     getJupiterSwapTransaction,
     type JupiterQuote,
   } from "$lib/funding";
-  import { OpenBetaBanner } from "@trader-ralph/ui";
-  import { colors } from "@trader-ralph/ui/tokens";
+  import { OpenBetaBanner } from "@harness-trade/ui";
+  import { colors } from "@harness-trade/ui/tokens";
   import {
     clearJournal,
     entriesToday,
@@ -337,7 +337,7 @@
 
   // Perp soft gate (PRD #493 / #498): a definitive not-whitelisted answer
   // swaps the ticket submit for an inline activation state. Activation is
-  // self-serve — the app re-runs the referral onboarding with Ralph's
+  // self-serve — the app re-runs the referral onboarding with the Harness
   // invite code (one signature), same flow every new wallet gets on
   // connect. Unknown (null) fails open — the venue's own error is the
   // honest signal then.
@@ -684,6 +684,7 @@
     onPanelDrop,
   } = layout;
 
+  // Legacy key name kept across the Harness rebrand.
   const OPEN_BETA_BANNER_STORAGE_KEY =
     "trader-ralph-terminal/open-beta-banner/v1";
   let showOpenBetaBanner = false;
@@ -879,12 +880,12 @@
   $: docTitle = (() => {
     if (tradeMode === "spot" && spotAsset) {
       return spotAsset.price !== null
-        ? `${formatPrice(spotAsset.price)} ${spotAsset.symbol} · Trader Ralph`
-        : `${spotAsset.symbol} · Trader Ralph`;
+        ? `${formatPrice(spotAsset.price)} ${spotAsset.symbol} · Harness`
+        : `${spotAsset.symbol} · Harness`;
     }
     return latestPrice !== null
-      ? `${formatPrice(latestPrice)} ${selectedSymbol}-PERP · Trader Ralph`
-      : "Trader Ralph";
+      ? `${formatPrice(latestPrice)} ${selectedSymbol}-PERP · Harness`
+      : "Harness";
   })();
   $: statsLoading = marketStats === null;
   $: bookLoading = asks.length === 0 || bids.length === 0;
@@ -2859,7 +2860,7 @@
     const mark = mids[position.symbol];
     if (mark) params.set("mark", String(mark));
     const shareUrl = `${window.location.origin}/share?${params.toString()}`;
-    const text = `${position.size > 0 ? "Long" : "Short"} ${position.symbol} on Ralph Terminal`;
+    const text = `${position.size > 0 ? "Long" : "Short"} ${position.symbol} on Harness`;
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareUrl)}`,
       "_blank",
@@ -4954,7 +4955,7 @@
   <title>{docTitle}</title>
   <meta
     name="description"
-    content="Frontend-only Trader Ralph SvelteKit terminal."
+    content="Frontend-only Harness SvelteKit terminal."
   />
 </svelte:head>
 

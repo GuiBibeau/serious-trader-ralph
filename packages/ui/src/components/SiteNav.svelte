@@ -9,7 +9,7 @@
   <div class="nav">
     <a class="brand" href="/">
       <span class="brand-mark"><BrandMark /></span>
-      RALPH<span>·TERMINAL</span>
+      HARNESS<span>·TERMINAL</span>
     </a>
     <nav>
       <a href="/news">News</a>

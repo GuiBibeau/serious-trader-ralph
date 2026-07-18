@@ -1,4 +1,4 @@
-# Trader Ralph — Groomed Issues, The Cursor Path (63 days)
+# Harness — Groomed Issues, The Cursor Path (63 days)
 
 *Companion to `.factory/PLAN-63-days.md` (published as issue #528). Weeks 1–3
 are fully groomed and dispatch-ready; Weeks 4–9 are stubs to be groomed when

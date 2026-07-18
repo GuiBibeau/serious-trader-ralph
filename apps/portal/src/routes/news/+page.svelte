@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Button, SiteFooter, SiteNav } from "@trader-ralph/ui";
-  import { fmtPct, fmtPrice } from "@trader-ralph/ui/format";
+  import { Button, SiteFooter, SiteNav } from "@harness-trade/ui";
+  import { fmtPct, fmtPrice } from "@harness-trade/ui/format";
 
   let { data } = $props();
 
@@ -16,18 +16,18 @@
 </script>
 
 <svelte:head>
-  <title>Market news — crypto & tokenized stocks | Trader Ralph</title>
+  <title>Market news — crypto & tokenized stocks | Harness</title>
   <meta
     name="description"
     content="The wire: live headlines across crypto, tokenized equities and pre-IPO names, tagged to tradable markets."
   />
-  <link rel="canonical" href="https://traderralph.com/news" />
-  <meta property="og:title" content="Market news — crypto & tokenized stocks | Trader Ralph" />
+  <link rel="canonical" href="https://harness.trade/news" />
+  <meta property="og:title" content="Market news — crypto & tokenized stocks | Harness" />
   <meta
     property="og:description"
     content="The wire: live headlines across crypto, tokenized equities and pre-IPO names, tagged to tradable markets."
   />
-  <meta property="og:image" content="https://traderralph.com/og/news.png" />
+  <meta property="og:image" content="https://harness.trade/og/news.png" />
   <meta name="twitter:card" content="summary_large_image" />
 </svelte:head>
 

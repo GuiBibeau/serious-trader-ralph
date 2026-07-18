@@ -86,7 +86,7 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
   const sparkColor = up ? C.up : C.down;
 
   const tree = frame([
-    brandRow(`traderralph.com/${asset.slug} · LIVE ${utcStamp()}`),
+    brandRow(`harness.trade/${asset.slug} · LIVE ${utcStamp()}`),
 
     // Identity + price block
     el(

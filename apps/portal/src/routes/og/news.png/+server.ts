@@ -38,7 +38,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
     .slice(0, 4);
 
   const tree = frame([
-    brandRow(`traderralph.com/news · ${utcStamp()}`),
+    brandRow(`harness.trade/news · ${utcStamp()}`),
 
     el("div", { alignItems: "baseline", gap: "20px", marginTop: "40px" }, [
       text("ON THE WIRE", {

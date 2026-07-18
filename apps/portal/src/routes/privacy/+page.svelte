@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { SiteFooter, SiteNav } from "@harness-trade/ui";
 </script>
 
 <svelte:head>
-  <title>Privacy Policy — Trader Ralph</title>
+  <title>Privacy Policy — Harness</title>
   <meta
     name="description"
-    content="What Trader Ralph collects — email, wallet address, usage telemetry, approximate region — and the third parties it relies on."
+    content="What Harness collects — email, wallet address, usage telemetry, approximate region — and the third parties it relies on."
   />
 </svelte:head>
 

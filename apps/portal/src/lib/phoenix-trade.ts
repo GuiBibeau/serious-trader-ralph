@@ -44,7 +44,7 @@ import { isRecord } from "./utils";
 const PHOENIX_API = "https://perp-api.phoenix.trade";
 const USDC_DECIMALS = 6;
 
-// Trader Ralph's Phoenix referral code — new signups are attributed to it
+// The Harness Phoenix referral code — new signups are attributed to it
 // (20% fee share accrues to the referrer per Phoenix's rewards program).
 export const PHOENIX_REFERRAL_CODE = "NW4598VT";
 
@@ -466,7 +466,7 @@ export async function checkPhoenixAccess(
   };
 }
 
-// Activate the Ralph referral via Phoenix's current delegated onboarding flow.
+// Activate the Harness referral via Phoenix's current delegated onboarding flow.
 // The wallet signs locally; Phoenix validates, adds the onboarder signature,
 // and submits. No deprecated invite/referral endpoint or wallet-login JWT.
 export async function activatePhoenixReferral(

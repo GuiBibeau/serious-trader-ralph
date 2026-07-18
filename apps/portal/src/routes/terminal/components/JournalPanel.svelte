@@ -37,7 +37,7 @@
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "trader-ralph-journal.csv";
+    anchor.download = "harness-journal.csv";
     anchor.click();
     URL.revokeObjectURL(url);
   }
