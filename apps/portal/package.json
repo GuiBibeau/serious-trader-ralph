@@ -1,5 +1,5 @@
 {
-  "name": "trader-ralph-portal",
+  "name": "harness-portal",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
     "@privy-io/js-sdk-core": "^0.67.0",
     "@resvg/resvg-js": "^2.6.2",
     "@solana/web3.js": "^1.98.4",
-    "@trader-ralph/ui": "workspace:*",
+    "@harness-trade/ui": "workspace:*",
     "@vercel/analytics": "^2.0.1",
     "@vercel/blob": "^2.5.0",
     "buffer": "^6.0.3",

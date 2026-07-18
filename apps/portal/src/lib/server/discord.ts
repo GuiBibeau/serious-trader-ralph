@@ -39,7 +39,7 @@ const OAUTH_SCOPES = "identify guilds.join";
 // Cloudflare front 1010-blocks requests with default fetch user agents
 // (confirmed empirically from local probes). Every Discord API fetch in
 // this module must send this.
-const DISCORD_USER_AGENT = "DiscordBot (https://traderralph.com, 1.0)";
+const DISCORD_USER_AGENT = "DiscordBot (https://harness.trade, 1.0)";
 
 type DiscordConfig = {
   clientId: string;

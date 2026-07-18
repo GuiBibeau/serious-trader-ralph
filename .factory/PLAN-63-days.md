@@ -1,4 +1,4 @@
-# Trader Ralph — The Cursor Path: 63 Days of Daily Ships
+# Harness — The Cursor Path: 63 Days of Daily Ships
 
 *Proposal — 2026-07-15 (rev 2). One feature or one post per day. Charts get
 great first; then AI inserts itself the way Cursor's tab did — autocomplete →

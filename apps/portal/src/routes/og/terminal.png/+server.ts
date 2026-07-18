@@ -65,7 +65,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
       [
         el("div", { alignItems: "center", gap: "14px" }, [
           brandMark(30),
-          text("TRADER RALPH — TERMINAL", {
+          text("HARNESS — TERMINAL", {
             fontSize: "22px",
             fontWeight: 700,
             letterSpacing: "4px",
@@ -202,7 +202,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
           fontSize: "22px",
           color: C.muted,
         }),
-        text("traderralph.com/terminal", {
+        text("harness.trade/terminal", {
           fontSize: "22px",
           fontWeight: 700,
           color: C.ink,

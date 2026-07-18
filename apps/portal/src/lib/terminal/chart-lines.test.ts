@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { colors } from "@trader-ralph/ui/tokens";
+import { colors } from "@harness-trade/ui/tokens";
 import type { PhoenixOpenOrder, PhoenixPosition } from "$lib/phoenix-trade";
 import type { Alert } from "./alerts";
 import type { SwingPoint } from "./autocomplete";

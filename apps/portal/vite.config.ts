@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
   return {
     envPrefix: ["VITE_", "PUBLIC_", "NEXT_PUBLIC_"],
     plugins: [sveltekit()],
-    ssr: { noExternal: ["@trader-ralph/ui"] },
+    ssr: { noExternal: ["@harness-trade/ui"] },
     server: {
       proxy: {
         // DeepSeek — key injected server-side, never in the client bundle.

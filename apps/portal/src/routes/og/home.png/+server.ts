@@ -98,7 +98,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
       movers.map((asset) => moverCell(asset)),
     ),
 
-    text("Spot and perps on Solana — settled in USDC · traderralph.com", {
+    text("Spot and perps on Solana — settled in USDC · harness.trade", {
       marginTop: "auto",
       fontSize: "24px",
       color: C.muted,

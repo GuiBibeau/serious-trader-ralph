@@ -1,7 +1,11 @@
 <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <rect x="170" y="74" width="20" height="54" fill="#ff4d97" />
-  <rect x="170" y="384" width="20" height="54" fill="#ff4d97" />
-  <rect x="152" y="126" width="56" height="260" fill="currentColor" />
-  <path d="M 206 126 H 284 A 78 78 0 0 1 284 282 H 206 V 226 H 284 A 22 22 0 0 0 284 182 H 206 Z" fill="currentColor" />
-  <path d="M 240 280 L 296 280 L 360 386 L 304 386 Z" fill="currentColor" />
+  <rect x="158" y="74" width="20" height="54" fill="#ff4d97" />
+  <rect x="158" y="384" width="20" height="54" fill="#ff4d97" />
+  <rect x="334" y="74" width="20" height="66" fill="#ff4d97" />
+  <rect x="334" y="376" width="20" height="62" fill="#ff4d97" />
+  <rect x="246" y="190" width="20" height="28" fill="#ff4d97" />
+  <rect x="246" y="262" width="20" height="28" fill="#ff4d97" />
+  <rect x="140" y="126" width="56" height="260" fill="currentColor" />
+  <rect x="316" y="138" width="56" height="240" fill="currentColor" />
+  <rect x="186" y="216" width="140" height="48" fill="currentColor" />
 </svg>

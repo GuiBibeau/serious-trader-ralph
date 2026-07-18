@@ -11,6 +11,8 @@ export type TraderSnapshot = { at: number; state: PhoenixTraderState };
 const SNAPSHOT_TTL_MS = 24 * 3_600_000;
 const MAX_WALLETS = 4;
 
+// Legacy "trader-ralph-*" key names kept across the Harness rebrand —
+// renaming them would drop snapshots, equity history, and Day P&L baselines.
 export const traderSnapshots = persisted<Record<string, TraderSnapshot>>(
   "trader-ralph-phoenix-snapshots",
   {},
@@ -133,6 +135,7 @@ export type ChartLinePrefs = {
 };
 
 export const chartLinePrefs = persisted<ChartLinePrefs>(
+  // Legacy key name kept across the Harness rebrand.
   "trader-ralph-chart-lines",
   { pos: true, tpsl: true, orders: true, alerts: true },
 );

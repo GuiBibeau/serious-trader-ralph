@@ -6,10 +6,10 @@
 import type { Handle } from "@sveltejs/kit";
 
 const TERMINAL_HEAD = [
-  "<title>Trader Ralph Terminal — perps &amp; spot on Solana</title>",
-  '<meta property="og:title" content="Trader Ralph Terminal — perps &amp; spot on Solana" />',
+  "<title>Harness Terminal — perps &amp; spot on Solana</title>",
+  '<meta property="og:title" content="Harness Terminal — perps &amp; spot on Solana" />',
   '<meta property="og:description" content="Phoenix perps and Jupiter spot from one USDC account. Email login, no seed phrase." />',
-  '<meta property="og:image" content="https://traderralph.com/og/terminal.png" />',
+  '<meta property="og:image" content="https://harness.trade/og/terminal.png" />',
   '<meta name="twitter:card" content="summary_large_image" />',
 ].join("\n    ");
 

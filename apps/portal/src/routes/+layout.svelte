@@ -1,6 +1,6 @@
 <script lang="ts">
   import "$lib/polyfills";
-  import "@trader-ralph/ui/tokens.css";
+  import "@harness-trade/ui/tokens.css";
   import "../styles.css";
   import { injectAnalytics } from "@vercel/analytics/sveltekit";
   import { onMount } from "svelte";

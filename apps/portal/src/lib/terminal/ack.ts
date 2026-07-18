@@ -2,6 +2,8 @@
 // stored locally like the Phoenix referral onboarding key. storage is
 // injectable so tests never touch the real localStorage.
 
+// Legacy key name kept across the Harness rebrand — renaming would re-prompt
+// every acked wallet.
 const ACK_KEY = "trader-ralph-terminal/trade-ack/v1";
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;

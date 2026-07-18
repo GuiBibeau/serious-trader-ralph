@@ -13,6 +13,7 @@ const candleCache = new Map<string, CandleCacheEntry>();
 
 // Bounded reload seed: one most-recent fetched snapshot persisted to disk so
 // the chart paints instantly after a reload, then the live stream takes over.
+// Legacy key name kept across the Harness rebrand.
 const CANDLE_STORE_KEY = "trader-ralph-terminal/candles/v1";
 const CANDLE_STORE_MAX_AGE_MS = 60 * 60_000;
 

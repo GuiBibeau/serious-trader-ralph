@@ -47,7 +47,7 @@ export const GET: RequestHandler = async ({ params, setHeaders }) => {
   const count = assets.filter((asset) => asset.hub === params.hub).length;
 
   const tree = frame([
-    brandRow(`traderralph.com/${params.hub} · ${utcStamp()}`),
+    brandRow(`harness.trade/${params.hub} · ${utcStamp()}`),
 
     el("div", { alignItems: "baseline", gap: "20px", marginTop: "36px" }, [
       text(copy.title, {

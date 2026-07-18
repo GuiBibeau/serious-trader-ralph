@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { BrandMark, Button } from "@trader-ralph/ui";
+  import { BrandMark, Button } from "@harness-trade/ui";
   import { page } from "$app/state";
   import {
     getPrivyAccessToken,
@@ -117,18 +117,18 @@
 </script>
 
 <svelte:head>
-  <title>Trader Ralph Discord — verified active traders</title>
+  <title>Harness Discord — verified active traders</title>
   <meta
     name="description"
-    content="Join the Trader Ralph Discord as a verified active trader: confirm your email and hold at least $10 of USDC + SOL in your trading wallet or Phoenix margin balance."
+    content="Join the Harness Discord as a verified active trader: confirm your email and hold at least $10 of USDC + SOL in your trading wallet or Phoenix margin balance."
   />
-  <link rel="canonical" href="https://traderralph.com/discord" />
-  <meta property="og:title" content="Trader Ralph Discord — verified active traders" />
+  <link rel="canonical" href="https://harness.trade/discord" />
+  <meta property="og:title" content="Harness Discord — verified active traders" />
   <meta
     property="og:description"
     content="A Discord role for traders with skin in the game: email-confirmed account, at least $10 of USDC + SOL on the platform."
   />
-  <meta property="og:image" content="https://traderralph.com/og/home.png" />
+  <meta property="og:image" content="https://harness.trade/og/home.png" />
   <meta name="twitter:card" content="summary_large_image" />
 </svelte:head>
 
@@ -137,7 +137,7 @@
     <div class="nav">
       <a class="brand" href="/">
         <span class="brand-mark"><BrandMark /></span>
-        RALPH<span>·TERMINAL</span>
+        HARNESS<span>·TERMINAL</span>
       </a>
       <Button href="/terminal">Open terminal</Button>
     </div>
@@ -147,7 +147,7 @@
     <p class="eyebrow">DISCORD_COMMUNITY</p>
     <h1>Discord community for active members.</h1>
     <p class="lead">
-      The Trader Ralph Discord grants the <b>Active Trader</b> role to
+      The Harness Discord grants the <b>Active Trader</b> role to
       accounts with skin in the game. Two requirements, checked on-chain:
     </p>
 

@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { Button, SiteFooter, SiteNav } from "@trader-ralph/ui";
+  import { Button, SiteFooter, SiteNav } from "@harness-trade/ui";
 
   let { data } = $props();
 
   const share = $derived(data.share);
-  const imageUrl = $derived(`https://traderralph.com/og/position.png?${data.query}`);
+  const imageUrl = $derived(`https://harness.trade/og/position.png?${data.query}`);
   const up = $derived(share.pnl >= 0);
   const pnlText = $derived(
     `${up ? "+" : "-"}$${Math.abs(share.pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
@@ -12,9 +12,9 @@
 </script>
 
 <svelte:head>
-  <title>{share.side.toUpperCase()} {share.symbol} {pnlText} | Trader Ralph</title>
+  <title>{share.side.toUpperCase()} {share.symbol} {pnlText} | Harness</title>
   <meta name="robots" content="noindex" />
-  <meta property="og:title" content={`${share.side.toUpperCase()} ${share.symbol} ${pnlText} on Trader Ralph`} />
+  <meta property="og:title" content={`${share.side.toUpperCase()} ${share.symbol} ${pnlText} on Harness`} />
   <meta property="og:description" content="Perps on Phoenix, spot by Jupiter — one USDC account on Solana." />
   <meta property="og:image" content={imageUrl} />
   <meta name="twitter:card" content="summary_large_image" />

@@ -1,6 +1,6 @@
 <script lang="ts">
   let {
-    title = "Trader Ralph Terminal is in open beta",
+    title = "Harness Terminal is in open beta",
     body = "Market data, account access, and trading tools may change while we harden the experience.",
     dismissLabel = "Dismiss open beta banner",
     ondismiss,

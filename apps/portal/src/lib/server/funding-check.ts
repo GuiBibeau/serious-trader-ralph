@@ -83,7 +83,7 @@ async function fetchLamports(url: string, owner: string): Promise<number> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: "trader-ralph-discord-funding",
+      id: "harness-discord-funding",
       method: "getBalance",
       // "confirmed" over "processed": this gates a role grant, so a
       // rolled-back slot briefly overstating the balance is not worth the
@@ -125,7 +125,7 @@ async function fetchUsdcUsd(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         jsonrpc: "2.0",
-        id: "trader-ralph-discord-usdc",
+        id: "harness-discord-usdc",
         method: "getTokenAccountsByOwner",
         // "confirmed" for the same reason as fetchLamports above.
         params: [
@@ -228,7 +228,7 @@ async function fetchAccountData(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: "trader-ralph-discord-phoenix",
+      id: "harness-discord-phoenix",
       method: "getAccountInfo",
       // "confirmed" for the same reason as fetchLamports above.
       params: [address, { commitment: "confirmed", encoding: "base64" }],

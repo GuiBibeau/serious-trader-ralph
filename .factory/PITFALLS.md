@@ -33,7 +33,7 @@ gate.
     build success is the bar.
 11. **Never touch** `static/`, `.svelte-kit/`, `node_modules/`, `bun.lock`
     (except via `bun install`), or any generated directory.
-12. **Two formatter dialects by design**: `@trader-ralph/ui/format` renders
+12. **Two formatter dialects by design**: `@harness-trade/ui/format` renders
     "—" (marketing/OG); `apps/portal/src/lib/utils.ts` renders "--"
     (terminal). Never merge or cross-use them. `formatSubZeroPrice` output is
     display-only — never feed it to `Number()`.

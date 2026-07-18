@@ -16,7 +16,7 @@ export async function fetchUsdcBalance(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: "trader-ralph-usdc-balance",
+      id: "harness-usdc-balance",
       method: "getTokenAccountsByOwner",
       // "processed" surfaces incoming funds about a slot after they land
       // instead of waiting ~12s for finality — the right trade-off for a

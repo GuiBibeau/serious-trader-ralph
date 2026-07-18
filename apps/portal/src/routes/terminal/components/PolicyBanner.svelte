@@ -1,4 +1,5 @@
 <script lang="ts">
+  // Legacy key name kept across the Harness rebrand.
   const DISMISS_KEY = "trader-ralph-terminal/policy-dismiss/v1";
 
   let { gateKey, message }: { gateKey: string; message: string } = $props();

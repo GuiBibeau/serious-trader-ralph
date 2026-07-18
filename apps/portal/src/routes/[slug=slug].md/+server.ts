@@ -10,7 +10,7 @@ import {
 } from "$lib/server/tokensxyz";
 import type { RequestHandler } from "./$types";
 
-const SITE = "https://traderralph.com";
+const SITE = "https://harness.trade";
 
 export const GET: RequestHandler = async ({ params, setHeaders }) => {
   const asset = await findBySlug(params.slug);

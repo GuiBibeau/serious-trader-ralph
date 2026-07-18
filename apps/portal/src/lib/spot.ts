@@ -336,7 +336,7 @@ export async function fetchAllTokenBalances(
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           jsonrpc: "2.0",
-          id: `trader-ralph-token-balances-${index}`,
+          id: `harness-token-balances-${index}`,
           method: "getTokenAccountsByOwner",
           params: [owner, { programId }, { encoding: "jsonParsed" }],
         }),

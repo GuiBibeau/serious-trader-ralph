@@ -466,7 +466,7 @@
     </button>
   {:else if perpGate.show}
     <div class="perp-gate" role="status">
-      <p>One step left: activate perp access with Ralph's invite — a single signature, then deposit and trade.</p>
+      <p>One step left: activate perp access with the Harness invite — a single signature, then deposit and trade.</p>
       <button
         class="primary wide"
         type="button"

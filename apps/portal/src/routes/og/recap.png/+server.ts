@@ -268,7 +268,7 @@ export const GET: RequestHandler = async ({ setHeaders }) => {
       ],
     ),
 
-    text("traderralph.com · live Solana markets — spot & perps", {
+    text("harness.trade · live Solana markets — spot & perps", {
       marginTop: "auto",
       fontSize: "22px",
       color: C.muted,

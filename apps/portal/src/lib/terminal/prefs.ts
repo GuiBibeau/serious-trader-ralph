@@ -8,6 +8,8 @@ import {
   type PhoenixTimeframe,
 } from "$lib/phoenix-market-data";
 
+// Legacy "trader-ralph-terminal" key names kept across the Harness rebrand —
+// renaming them would silently wipe every user's saved prefs and layout.
 export const PREFS_STORAGE_KEY = "trader-ralph-terminal/prefs/v1";
 export const ALERTS_STORAGE_KEY = "trader-ralph-terminal/alerts/v1";
 export const LAYOUT_STORAGE_KEY = "trader-ralph-terminal/layout/v1";

@@ -7,7 +7,7 @@
   } from "$lib/terminal/account-format";
   import { alertsStore } from "$lib/terminal/alerts";
   import { formatNumber } from "$lib/utils";
-  import { BrandMark } from "@trader-ralph/ui";
+  import { BrandMark } from "@harness-trade/ui";
 
   const { alerts } = alertsStore;
 
@@ -107,10 +107,11 @@
 />
 
 <header class="topbar" bind:clientHeight={height}>
-  <a class="brand" href="/terminal" aria-label="Trader Ralph terminal">
+  <a class="brand" href="/terminal" aria-label="Harness terminal">
     <span class="brand-mark"><BrandMark /></span>
-    <span>Trader Ralph</span>
-    <strong>Terminal</strong>
+    <!-- Wordmark per docs/BRAND.md: HARNESS·TERMINAL -->
+    <span>HARNESS</span>
+    <strong>·TERMINAL</strong>
   </a>
   <div class="topbar-actions">
     {#if layoutCustomized}

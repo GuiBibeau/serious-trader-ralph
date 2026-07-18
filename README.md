@@ -1,16 +1,15 @@
-# Trader Ralph
+# Harness
 
-[![CI](https://github.com/GuiBibeau/serious-trader-ralph/actions/workflows/ci.yml/badge.svg)](https://github.com/GuiBibeau/serious-trader-ralph/actions/workflows/ci.yml)
+[![CI](https://github.com/GuiBibeau/harness-trade/actions/workflows/ci.yml/badge.svg)](https://github.com/GuiBibeau/harness-trade/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/V4zuVbDVFf)
 
-Open-source Solana trading terminal: Phoenix perps and Jupiter spot from one
-USDC account. Email login, embedded wallet, no seed phrase. Every number on
-screen comes from a live feed or the chain — nothing is ever faked.
+Harness is an open-source trading terminal for Solana — perps and spot from
+one account, with AI you hold the reins on.
 
-Live at [traderralph.com](https://traderralph.com).
+Live at [harness.trade](https://harness.trade).
 
-![Trader Ralph terminal](https://traderralph.com/og/terminal.png)
+![Harness terminal](https://harness.trade/og/terminal.png)
 
 ## Features
 
@@ -19,10 +18,10 @@ Live at [traderralph.com](https://traderralph.com).
   rays + measure
 - Jupiter spot swaps from the same account
 - TP/SL orders, risk-based sizing, journal, alerts
-- Funding wizard, daily [recap card](https://traderralph.com/og/recap.png),
-  [verified-trader Discord](https://traderralph.com/discord)
+- Funding wizard, daily [recap card](https://harness.trade/og/recap.png),
+  [verified-trader Discord](https://harness.trade/discord)
 
-What's coming: [the roadmap](https://github.com/GuiBibeau/serious-trader-ralph/issues/528).
+What's coming: [the roadmap](https://github.com/GuiBibeau/harness-trade/issues/528).
 
 ## Quick Start
 
@@ -50,8 +49,8 @@ bun run build
 ## Community
 
 [Discord](https://discord.gg/V4zuVbDVFf) ·
-[Issues](https://github.com/GuiBibeau/serious-trader-ralph/issues) ·
-[Roadmap](https://github.com/GuiBibeau/serious-trader-ralph/issues/528)
+[Issues](https://github.com/GuiBibeau/harness-trade/issues) ·
+[Roadmap](https://github.com/GuiBibeau/harness-trade/issues/528)
 
 Open beta. Not financial advice — perps carry real risk of loss.
 Licensed under [Apache-2.0](LICENSE).

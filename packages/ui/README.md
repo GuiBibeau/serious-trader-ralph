@@ -1,10 +1,10 @@
-# @trader-ralph/ui
+# @harness-trade/ui
 
-Design tokens, format helpers, and Svelte 5 components for the Trader Ralph
+Design tokens, format helpers, and Svelte 5 components for the Harness
 marketing and portal surfaces. Consumed source-direct via bun workspaces;
 there is no build step — the portal's Vite/Svelte pipeline compiles the
 `.svelte` files directly (`vite.config.ts` sets
-`ssr: { noExternal: ["@trader-ralph/ui"] }`).
+`ssr: { noExternal: ["@harness-trade/ui"] }`).
 
 ## Entry points
 
