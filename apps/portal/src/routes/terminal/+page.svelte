@@ -2931,8 +2931,10 @@
         orderSequenceNumber: order.orderSequenceNumber,
         isStopLoss: order.isStopLoss,
         isStopLossDirection: order.isStopLossDirection,
-        traderPdaIndex: owner?.traderPdaIndex,
-        subaccountIndex: owner?.subaccountIndex,
+        // The order's own subaccount wins: isolated resting orders live on
+        // child accounts the owning-position lookup can't see.
+        traderPdaIndex: order.traderPdaIndex ?? owner?.traderPdaIndex,
+        subaccountIndex: order.subaccountIndex ?? owner?.subaccountIndex,
       });
       lastTradeSignature = await signAndSendPhoenixIxs(
         instructions,

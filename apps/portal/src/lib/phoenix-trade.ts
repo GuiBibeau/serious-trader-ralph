@@ -80,6 +80,11 @@ export type PhoenixOpenOrder = {
    * above the trigger, per the SDK's StopLosses decoder) — picks which
    * StopLosses slot a single-order cancel targets. */
   isStopLossDirection: boolean;
+  /** Which subaccount the order rests under (isolated limit orders rest on
+   * the child trader account, not the parent) — cancels must target it.
+   * Optional so pre-existing fixtures/rows default to the parent (0/0). */
+  traderPdaIndex?: number;
+  subaccountIndex?: number;
 };
 
 export type PhoenixTraderState = {
@@ -186,48 +191,60 @@ function triggerPriceUsd(list: unknown): number | null {
   return null;
 }
 
-export async function fetchPhoenixTraderState(
-  authority: string,
-): Promise<PhoenixTraderState> {
-  const empty: PhoenixTraderState = {
-    registered: false,
-    apiSlot: null,
-    collateralUsd: null,
-    totalCollateralUsd: null,
-    effectiveCollateralUsd: null,
-    unrealizedPnlUsd: null,
-    riskTier: null,
-    positions: [],
-    orders: [],
-  };
-  const response = await fetch(
-    `${PHOENIX_API}/v1/trader/state/${encodeURIComponent(authority)}`,
-  );
-  if (response.status === 404) return empty;
-  if (!response.ok) throw new Error(`phoenix-trader-${response.status}`);
-  // Live schema (2026-07-03): { traderPdaIndex, snapshot: { subaccounts:
-  // [{ subaccountIndex, collateral: "<quote lots>", positions?: [{ symbol,
-  // basePositionLots, entryPriceUsd, virtualQuotePositionLots,
-  // takeProfitTriggers, stopLossTriggers }] }] } }. The previous
-  // { traders: [...] } shape is gone — parsing it silently reported every
-  // wallet as unregistered with no positions.
-  const data = (await response.json()) as Record<string, unknown>;
+const EMPTY_TRADER_STATE: PhoenixTraderState = {
+  registered: false,
+  apiSlot: null,
+  collateralUsd: null,
+  totalCollateralUsd: null,
+  effectiveCollateralUsd: null,
+  unrealizedPnlUsd: null,
+  riskTier: null,
+  positions: [],
+  orders: [],
+};
+
+export type ParsedTraderSnapshot = {
+  state: PhoenixTraderState;
+  traderPdaIndex: number;
+  /** Every registered subaccount in the snapshot (positions or not) — the
+   * view merge queries each one, since resting orders can sit on an
+   * isolated child that has no open position yet. */
+  subaccountIndexes: number[];
+};
+
+// Pure parser for the /v1/trader/state payload — exported so tests can feed
+// it fixture payloads (isolated-subaccount positions included) without
+// network. Live schema (2026-07-03): { traderPdaIndex, snapshot:
+// { subaccounts: [{ subaccountIndex, collateral: "<quote lots>",
+// positions?: [{ symbol, basePositionLots, entryPriceUsd,
+// virtualQuotePositionLots, takeProfitTriggers, stopLossTriggers }] }] } }.
+// The previous { traders: [...] } shape is gone — parsing it silently
+// reported every wallet as unregistered with no positions. Isolated
+// positions live on child subaccounts (subaccountIndex >= 1) of the same
+// PDA, one position per child, margin = the child's collateral.
+export function parseTraderStatePayload(
+  data: Record<string, unknown>,
+  lotDecimalsFor: (symbol: string) => number,
+): ParsedTraderSnapshot | null {
   const snapshot = isRecord(data.snapshot) ? data.snapshot : null;
-  if (!snapshot) return empty;
+  if (!snapshot) return null;
   const subaccounts = Array.isArray(snapshot.subaccounts)
     ? snapshot.subaccounts.filter(isRecord)
     : [];
   const pdaIndex = Number(data.traderPdaIndex ?? 0);
-  const markets =
-    (await fetchExchangeConfig().catch(() => null))?.markets ?? [];
-  const lotDecimalsFor = (symbol: string): number =>
-    markets.find((market) => market.symbol === symbol)?.baseLotsDecimals ?? 0;
 
-  const state: PhoenixTraderState = { ...empty, registered: true };
+  const state: PhoenixTraderState = {
+    ...EMPTY_TRADER_STATE,
+    registered: true,
+    positions: [],
+    orders: [],
+  };
   state.apiSlot = Number.isFinite(Number(data.slot)) ? Number(data.slot) : null;
+  const subaccountIndexes: number[] = [];
   let totalUsd = 0;
   for (const sub of subaccounts) {
     const subIndex = Number(sub.subaccountIndex ?? 0);
+    subaccountIndexes.push(subIndex);
     const collateral = lotsToUsd(sub.collateral);
     if (collateral !== null) totalUsd += collateral;
     // Parent (0/0) holds the free cross collateral that gates new orders.
@@ -261,54 +278,126 @@ export async function fetchPhoenixTraderState(
     }
   }
   state.totalCollateralUsd = totalUsd;
+  return { state, traderPdaIndex: pdaIndex, subaccountIndexes };
+}
+
+// Merges one subaccount's TraderView (open orders, risk tier, trigger/PnL
+// enrichment) into the parsed state. Orders are tagged with the owning
+// subaccount so cancels target the right trader account, and position
+// enrichment matches within the same subaccount only — the same symbol can
+// hold a cross position on the parent AND an isolated one on a child.
+// Exported for tests.
+export function mergeTraderView(
+  state: PhoenixTraderState,
+  view: Record<string, unknown>,
+  traderPdaIndex: number,
+  subaccountIndex: number,
+): void {
+  // Risk tier is an account-level readout — take the parent's.
+  if (
+    traderPdaIndex === 0 &&
+    subaccountIndex === 0 &&
+    typeof view.riskTier === "string"
+  ) {
+    state.riskTier = view.riskTier;
+  }
+  const orderMap = isRecord(view.limitOrders) ? view.limitOrders : {};
+  for (const [symbol, list] of Object.entries(orderMap)) {
+    if (!Array.isArray(list)) continue;
+    for (const order of list.filter(isRecord)) {
+      state.orders.push({
+        symbol,
+        side: Number(order.side) === 1 || order.side === "ask" ? "ask" : "bid",
+        price: tokenAmount(order.price),
+        remaining: tokenAmount(order.tradeSizeRemaining),
+        orderSequenceNumber: String(order.orderSequenceNumber ?? ""),
+        isStopLoss: order.isStopLoss === true,
+        isStopLossDirection: order.isStopLossDirection === true,
+        traderPdaIndex,
+        subaccountIndex,
+      });
+    }
+  }
+  // Trigger prices for open positions when the raw snapshot had none.
+  const viewPositions = Array.isArray(view.positions)
+    ? view.positions.filter(isRecord)
+    : [];
+  for (const viewPosition of viewPositions) {
+    const symbol = String(viewPosition.symbol ?? "");
+    const target = state.positions.find(
+      (position) =>
+        position.symbol === symbol &&
+        position.traderPdaIndex === traderPdaIndex &&
+        position.subaccountIndex === subaccountIndex,
+    );
+    if (!target) continue;
+    target.takeProfitPrice ??= tokenAmount(viewPosition.takeProfitPrice);
+    target.stopLossPrice ??= tokenAmount(viewPosition.stopLossPrice);
+    target.unrealizedPnl ??= tokenAmount(viewPosition.unrealizedPnl);
+    target.liquidationPrice ??= tokenAmount(viewPosition.liquidationPrice);
+  }
+}
+
+export async function fetchPhoenixTraderState(
+  authority: string,
+): Promise<PhoenixTraderState> {
+  const empty: PhoenixTraderState = {
+    ...EMPTY_TRADER_STATE,
+    positions: [],
+    orders: [],
+  };
+  const response = await fetch(
+    `${PHOENIX_API}/v1/trader/state/${encodeURIComponent(authority)}`,
+  );
+  if (response.status === 404) return empty;
+  if (!response.ok) throw new Error(`phoenix-trader-${response.status}`);
+  const data = (await response.json()) as Record<string, unknown>;
+  const exchange = await fetchExchangeConfig().catch(() => null);
+  const markets = exchange?.markets ?? [];
+  const lotDecimalsFor = (symbol: string): number =>
+    markets.find((market) => market.symbol === symbol)?.baseLotsDecimals ?? 0;
+  const parsed = parseTraderStatePayload(data, lotDecimalsFor);
+  if (!parsed) return empty;
+  const { state, traderPdaIndex, subaccountIndexes } = parsed;
 
   // The raw REST snapshot no longer carries open orders, but the SDK
-  // client's TraderView still does — merge orders (plus risk tier and any
-  // trigger prices the raw schema omitted) from it, fail-soft.
-  try {
-    const client = createPhoenixClient();
-    let view: unknown;
+  // client's TraderView still does. The view endpoint keys on the trader
+  // ACCOUNT pubkey (passing the authority 404s — schema drift, again), and
+  // each subaccount is its own trader account, so derive every key and
+  // query them in parallel. Fail-soft per subaccount and overall —
+  // positions/collateral above still stand without the merge.
+  if (exchange) {
     try {
-      view = await client.api.traders().getTrader(authority);
-    } finally {
-      client.dispose();
-    }
-    if (isRecord(view)) {
-      if (typeof view.riskTier === "string") state.riskTier = view.riskTier;
-      const orderMap = isRecord(view.limitOrders) ? view.limitOrders : {};
-      for (const [symbol, list] of Object.entries(orderMap)) {
-        if (!Array.isArray(list)) continue;
-        for (const order of list.filter(isRecord)) {
-          state.orders.push({
-            symbol,
-            side:
-              Number(order.side) === 1 || order.side === "ask" ? "ask" : "bid",
-            price: tokenAmount(order.price),
-            remaining: tokenAmount(order.tradeSizeRemaining),
-            orderSequenceNumber: String(order.orderSequenceNumber ?? ""),
-            isStopLoss: order.isStopLoss === true,
-            isStopLossDirection: order.isStopLossDirection === true,
-          });
-        }
-      }
-      // Trigger prices for open positions when the raw snapshot had none.
-      const viewPositions = Array.isArray(view.positions)
-        ? view.positions.filter(isRecord)
-        : [];
-      for (const viewPosition of viewPositions) {
-        const symbol = String(viewPosition.symbol ?? "");
-        const target = state.positions.find(
-          (position) => position.symbol === symbol,
+      const client = createPhoenixClient();
+      try {
+        const views = await Promise.all(
+          subaccountIndexes.map(async (subIndex) => {
+            try {
+              const addresses = await getTraderAddresses(
+                authority as never,
+                exchange.keys.canonicalMint as never,
+                traderPdaIndex,
+                subIndex,
+              );
+              const view: unknown = await client.api
+                .traders()
+                .getTrader(String(addresses.traderAccount));
+              return isRecord(view) ? { subIndex, view } : null;
+            } catch {
+              return null;
+            }
+          }),
         );
-        if (!target) continue;
-        target.takeProfitPrice ??= tokenAmount(viewPosition.takeProfitPrice);
-        target.stopLossPrice ??= tokenAmount(viewPosition.stopLossPrice);
-        target.unrealizedPnl ??= tokenAmount(viewPosition.unrealizedPnl);
-        target.liquidationPrice ??= tokenAmount(viewPosition.liquidationPrice);
+        for (const entry of views) {
+          if (!entry) continue;
+          mergeTraderView(state, entry.view, traderPdaIndex, entry.subIndex);
+        }
+      } finally {
+        client.dispose();
       }
+    } catch {
+      // view unavailable — positions/collateral above still stand
     }
-  } catch {
-    // view unavailable — positions/collateral above still stand
   }
   return state;
 }
