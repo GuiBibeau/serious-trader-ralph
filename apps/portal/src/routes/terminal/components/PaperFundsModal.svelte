@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy, tick } from "svelte";
   import { formatNumber } from "$lib/utils";
 
   let {
@@ -21,21 +22,114 @@
     onreset: () => void;
   } = $props();
 
-  function swallowKeysExceptEscape(event: KeyboardEvent): void {
-    if (event.key !== "Escape") event.stopPropagation();
+  let panel = $state<HTMLDivElement>();
+  let previousFocus: HTMLElement | null = null;
+  let wasOpen = false;
+
+  const focusableSelector = [
+    "a[href]",
+    "button:not([disabled])",
+    "input:not([disabled])",
+    "select:not([disabled])",
+    "textarea:not([disabled])",
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(", ");
+
+  function focusableControls(): HTMLElement[] {
+    if (!panel) return [];
+    return Array.from(panel.querySelectorAll<HTMLElement>(focusableSelector));
+  }
+
+  function restorePreviousFocus(): void {
+    const target = previousFocus;
+    previousFocus = null;
+    if (target?.isConnected) target.focus();
+  }
+
+  $effect(() => {
+    if (open && !wasOpen) {
+      wasOpen = true;
+      previousFocus =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      void tick().then(() => {
+        if (open) panel?.focus();
+      });
+    } else if (!open && wasOpen) {
+      wasOpen = false;
+      void tick().then(restorePreviousFocus);
+    }
+  });
+
+  onDestroy(() => {
+    if (wasOpen) restorePreviousFocus();
+  });
+
+  function trapTab(event: KeyboardEvent): void {
+    if (!panel) return;
+    const focusables = focusableControls();
+    if (focusables.length === 0) {
+      event.preventDefault();
+      panel.focus();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (!panel.contains(active)) {
+      event.preventDefault();
+      first.focus();
+      return;
+    }
+    if (event.shiftKey && (active === first || active === panel)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function onWindowKeydown(event: KeyboardEvent): void {
+    if (!open) return;
+    event.stopImmediatePropagation();
+    if (event.key === "Escape") {
+      onclose();
+      return;
+    }
+    if (event.key === "Tab") trapTab(event);
+  }
+
+  function onPanelKeydown(event: KeyboardEvent): void {
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      onclose();
+      return;
+    }
+    if (event.key === "Tab") trapTab(event);
+  }
+
+  function pullFocusInside(event: FocusEvent): void {
+    if (!open || !panel || panel.contains(event.target as Node)) return;
+    const [first] = focusableControls();
+    (first ?? panel).focus();
   }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} onfocusin={pullFocusInside} />
 
 {#if open}
   <div class="modal-backdrop" role="presentation" onclick={() => onclose()}>
     <div
+      bind:this={panel}
       class="modal"
       role="dialog"
       aria-modal="true"
       aria-label="Paper funds"
       tabindex="-1"
       onclick={(event) => event.stopPropagation()}
-      onkeydown={swallowKeysExceptEscape}
+      onkeydown={onPanelKeydown}
     >
       <div class="panel-head">
         <div>

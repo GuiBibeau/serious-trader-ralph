@@ -7,6 +7,7 @@ import {
   enrichPosition,
   fmtTriggerPrice,
   liqDistancePct,
+  liquidationPriceEstimate,
   orderCancelKey,
   riskNotional,
   SL_CHIP_PCTS,
@@ -424,5 +425,45 @@ describe("fmtTriggerPrice sub-cent precision", () => {
   test("a cent and above keep the original tiers", () => {
     expect(fmtTriggerPrice(0.5)).toBe("0.50000");
     expect(fmtTriggerPrice(150.234)).toBe("150.23");
+  });
+});
+
+describe("liquidationPriceEstimate", () => {
+  test("long lands below entry, short lands above entry (shared formula)", () => {
+    // mmr 0.025; long: (100·10 − 100) / (10 − 0.025·10) = 900 / 9.75
+    expect(liquidationPriceEstimate(100, 10, 100, 0.025)).toBeCloseTo(
+      900 / 9.75,
+      10,
+    );
+    // short: (100·(−10) − 100) / (−10 − 0.025·10) = −1100 / −10.25
+    expect(liquidationPriceEstimate(100, -10, 100, 0.025)).toBeCloseTo(
+      -1_100 / -10.25,
+      10,
+    );
+    expect(liquidationPriceEstimate(100, -10, 100, 0.025) ?? 0).toBeGreaterThan(
+      100,
+    );
+  });
+
+  test("default 0.005 mmr matches the paper ledger's crude curve", () => {
+    // 10x long: 900 / (10 − 0.005·10) = 900 / 9.95
+    expect(liquidationPriceEstimate(100, 10, 100, 0.005)).toBeCloseTo(
+      900 / 9.95,
+      10,
+    );
+  });
+
+  test("over-collateralized past zero returns null", () => {
+    // (100·1 − 200) / (1 − 0.025) = −100 / 0.975 < 0 → null
+    expect(liquidationPriceEstimate(100, 1, 200, 0.025)).toBeNull();
+  });
+
+  test("degenerate and non-finite inputs return null", () => {
+    expect(liquidationPriceEstimate(100, 0, 100, 0.025)).toBeNull();
+    expect(liquidationPriceEstimate(0, 10, 100, 0.025)).toBeNull();
+    expect(liquidationPriceEstimate(Number.NaN, 10, 100, 0.025)).toBeNull();
+    expect(
+      liquidationPriceEstimate(100, 10, Number.POSITIVE_INFINITY, 0.025),
+    ).toBeNull();
   });
 });

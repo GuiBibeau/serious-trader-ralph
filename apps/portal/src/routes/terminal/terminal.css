@@ -329,7 +329,7 @@ label {
 @media (prefers-reduced-motion: reduce) {
   .modal-backdrop,
   .modal {
-    animation: none !important;
+    animation: none;
   }
 }
 

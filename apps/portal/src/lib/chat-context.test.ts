@@ -7,6 +7,7 @@ function baseInput(
   return {
     symbol: "SOL",
     timeframe: "1h",
+    accountMode: "live",
     positions: [],
     openOrders: [],
     dayPnlUsd: null,
@@ -26,6 +27,7 @@ describe("buildDeskContext", () => {
     expect(output).toEqual({
       symbol: "SOL",
       timeframe: "1h",
+      accountMode: "live",
       positions: [],
       openOrders: [],
       dayPnlUsd: null,
@@ -37,7 +39,7 @@ describe("buildDeskContext", () => {
       truncated: false,
     });
     expect(JSON.stringify(output)).toBe(
-      '{"symbol":"SOL","timeframe":"1h","positions":[],"openOrders":[],"dayPnlUsd":null,"equityUsd":null,"monitorRows":[],"watchlist":[],"headlines":[],"nowMs":1752936120000,"truncated":false}',
+      '{"symbol":"SOL","timeframe":"1h","accountMode":"live","positions":[],"openOrders":[],"dayPnlUsd":null,"equityUsd":null,"monitorRows":[],"watchlist":[],"headlines":[],"nowMs":1752936120000,"truncated":false}',
     );
   });
 
@@ -46,6 +48,12 @@ describe("buildDeskContext", () => {
       baseInput({ positions: [{ id: 1 }], dayPnlUsd: 12.5 }),
     );
     expect(output.truncated).toBe(false);
+  });
+
+  test("serializes paper mode as an explicit desk fact", () => {
+    expect(
+      buildDeskContext(baseInput({ accountMode: "paper" })).accountMode,
+    ).toBe("paper");
   });
 });
 

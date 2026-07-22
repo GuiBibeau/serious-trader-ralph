@@ -261,6 +261,7 @@ describe("ghostSizing", () => {
   function entry(overrides: Partial<JournalEntry> = {}): JournalEntry {
     return {
       ts: 1,
+      mode: "live",
       venue: "perp",
       symbol: "SOL",
       action: "long",

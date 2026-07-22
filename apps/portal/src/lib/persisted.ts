@@ -5,12 +5,16 @@
 
 import { type Writable, writable } from "svelte/store";
 
-export function persisted<T>(key: string, initial: T): Writable<T> {
+export function persisted<T>(
+  key: string,
+  initial: T,
+  parse: (value: unknown) => T = (value) => value as T,
+): Writable<T> {
   let start = initial;
   if (typeof window !== "undefined") {
     try {
       const raw = window.localStorage.getItem(key);
-      if (raw !== null) start = JSON.parse(raw) as T;
+      if (raw !== null) start = parse(JSON.parse(raw));
     } catch {
       // corrupted or unavailable storage — fall back to the initial value
     }
@@ -27,14 +31,16 @@ export function persisted<T>(key: string, initial: T): Writable<T> {
       }
       writingSelf = false;
     });
-    window.addEventListener("storage", (event) => {
-      if (writingSelf || event.key !== key || event.newValue === null) return;
-      try {
-        store.set(JSON.parse(event.newValue) as T);
-      } catch {
-        // another tab wrote something unparseable — ignore
-      }
-    });
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("storage", (event) => {
+        if (writingSelf || event.key !== key || event.newValue === null) return;
+        try {
+          store.set(parse(JSON.parse(event.newValue)));
+        } catch {
+          // another tab wrote something unparseable — ignore
+        }
+      });
+    }
   }
   return store;
 }

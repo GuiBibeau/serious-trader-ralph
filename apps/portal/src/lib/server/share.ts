@@ -6,6 +6,10 @@ export type PositionShare = {
   side: "long" | "short";
   pnl: number;
   prices: { entry: number; mark: number } | null;
+  /** true when the shared result came from the simulated paper account —
+   * every rendered surface must then label it as paper, never as a real
+   * on-chain trade. */
+  paper: boolean;
 };
 
 export function parsePositionParams(
@@ -23,5 +27,11 @@ export function parsePositionParams(
     Number.isFinite(entry) && Number.isFinite(mark) && entry > 0 && mark > 0
       ? { entry, mark }
       : null;
-  return { symbol, side, pnl, prices };
+  return {
+    symbol,
+    side,
+    pnl,
+    prices,
+    paper: searchParams.get("mode") === "paper",
+  };
 }

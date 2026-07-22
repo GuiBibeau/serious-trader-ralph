@@ -17,6 +17,7 @@ const CAP_HEADLINES = 8;
 export type DeskSnapshotInput = {
   symbol: string;
   timeframe: string;
+  accountMode: "live" | "paper";
   positions: unknown[];
   openOrders: unknown[];
   dayPnlUsd: number | null;
@@ -39,6 +40,7 @@ export function buildDeskContext(
   const output: Record<string, unknown> = {
     symbol: input.symbol,
     timeframe: input.timeframe,
+    accountMode: input.accountMode,
     positions: input.positions.slice(0, CAP_POSITIONS),
     openOrders: input.openOrders.slice(0, CAP_OPEN_ORDERS),
     dayPnlUsd: input.dayPnlUsd,

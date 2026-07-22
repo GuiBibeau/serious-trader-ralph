@@ -17,6 +17,14 @@ import {
 
 const NOW = Date.UTC(2026, 6, 19, 14, 2, 0);
 
+describe("CHAT_SYSTEM_PROMPT", () => {
+  test("requires explicit simulation language and forbids live confirmation claims in paper mode", () => {
+    expect(CHAT_SYSTEM_PROMPT).toContain(
+      "When accountMode is paper, all positions, orders, balance, equity, PnL, and fills are local simulation; always call them paper or simulated; never claim on-chain, Phoenix, or Jupiter confirmation, and never provide a Solscan transaction.",
+    );
+  });
+});
+
 describe("burstAllowed", () => {
   test("allows the 10th message and blocks the 11th inside the window", () => {
     const nineRecent = Array.from(

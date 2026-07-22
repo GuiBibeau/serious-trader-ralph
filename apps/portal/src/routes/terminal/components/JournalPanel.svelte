@@ -93,15 +93,20 @@
           class:positive={entry.action === "buy" || entry.action === "long" || entry.action === "limit-buy"}
           class:negative={entry.action === "sell" || entry.action === "short" || entry.action === "limit-sell"}
         >{entry.action.toUpperCase()}</span>
+        <span class="journal-mode" class:live={entry.mode === "live"} class:paper={entry.mode === "paper"}>
+          {entry.mode === "live" ? "LIVE" : entry.mode === "paper" ? "PAPER" : "LEGACY"}
+        </span>
         <span class="journal-sym">{entry.symbol}</span>
         <b>{entry.notionalUsd !== null ? `$${formatNumber(entry.notionalUsd, 0)}` : "--"}{entry.leverage ? ` · ${entry.leverage}x` : ""}</b>
-        {#if entry.signature}
+        {#if entry.mode === "live" && entry.signature}
           <a
             class="journal-tx"
             href={`https://solscan.io/tx/${entry.signature}`}
             target="_blank"
             rel="noopener noreferrer"
           >tx</a>
+        {:else if entry.signature}
+          <span class="journal-ref" title={entry.signature}>ref</span>
         {/if}
       </div>
     {:else}
@@ -128,7 +133,7 @@
   .journal-list { display: grid; }
   .journal-row {
     display: grid;
-    grid-template-columns: 2.6rem 3.6rem minmax(0, 1fr) auto auto;
+    grid-template-columns: 2.6rem 3.6rem auto minmax(0, 1fr) auto auto;
     gap: 0.5rem;
     align-items: baseline;
     padding: 0.32rem 0;
@@ -140,7 +145,16 @@
   .journal-row:last-child { border-bottom: 0; }
   .journal-time { color: var(--faint); }
   .journal-action { font-weight: 700; }
+  .journal-mode {
+    color: var(--faint);
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+  .journal-mode.live { color: var(--up); }
+  .journal-mode.paper { color: var(--amber); }
   .journal-sym { color: var(--ink); }
   .journal-row b { font-weight: 500; color: var(--muted); }
   .journal-tx { color: var(--accent); font-size: 0.66rem; text-decoration: none; }
+  .journal-ref { color: var(--faint); font-size: 0.66rem; }
 </style>

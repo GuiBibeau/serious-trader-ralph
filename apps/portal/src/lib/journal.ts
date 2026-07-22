@@ -7,6 +7,8 @@
 const STORAGE_KEY = "trader-ralph-terminal/journal/v1";
 const MAX_ENTRIES = 400;
 
+export type JournalMode = "live" | "paper" | "unknown";
+
 export type JournalEntry = {
   ts: number;
   venue: "perp" | "spot";
@@ -16,6 +18,7 @@ export type JournalEntry = {
   notionalUsd: number | null;
   price: number | null;
   leverage: number | null;
+  mode: JournalMode;
   signature: string;
 };
 
@@ -26,13 +29,22 @@ export function loadJournal(): JournalEntry[] {
     if (!raw) return [];
     const data = JSON.parse(raw) as unknown;
     if (!Array.isArray(data)) return [];
-    return data.filter(
-      (entry): entry is JournalEntry =>
-        Boolean(entry) &&
-        typeof entry === "object" &&
-        typeof (entry as JournalEntry).ts === "number" &&
-        typeof (entry as JournalEntry).symbol === "string",
-    );
+    return data.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const candidate = entry as Partial<JournalEntry> &
+        Record<string, unknown>;
+      if (
+        typeof candidate.ts !== "number" ||
+        typeof candidate.symbol !== "string"
+      ) {
+        return [];
+      }
+      const mode: JournalMode =
+        candidate.mode === "live" || candidate.mode === "paper"
+          ? candidate.mode
+          : "unknown";
+      return [{ ...candidate, mode } as JournalEntry];
+    });
   } catch {
     return [];
   }
@@ -67,7 +79,7 @@ export function entriesToday(
 
 export function journalToCsv(entries: JournalEntry[]): string {
   const header =
-    "time_utc,venue,symbol,action,notional_usd,price,leverage,signature";
+    "time_utc,venue,symbol,action,notional_usd,price,leverage,mode,signature";
   const rows = entries.map((entry) =>
     [
       new Date(entry.ts).toISOString(),
@@ -77,6 +89,7 @@ export function journalToCsv(entries: JournalEntry[]): string {
       entry.notionalUsd ?? "",
       entry.price ?? "",
       entry.leverage ?? "",
+      entry.mode,
       entry.signature,
     ].join(","),
   );

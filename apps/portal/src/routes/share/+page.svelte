@@ -12,10 +12,21 @@
 </script>
 
 <svelte:head>
-  <title>{share.side.toUpperCase()} {share.symbol} {pnlText} | Harness</title>
+  <title
+    >{share.paper ? "PAPER " : ""}{share.side.toUpperCase()} {share.symbol}
+    {pnlText} | Harness</title
+  >
   <meta name="robots" content="noindex" />
-  <meta property="og:title" content={`${share.side.toUpperCase()} ${share.symbol} ${pnlText} on Harness`} />
-  <meta property="og:description" content="Perps on Phoenix, spot by Jupiter — one USDC account on Solana." />
+  <meta
+    property="og:title"
+    content={`${share.paper ? "Paper trade: " : ""}${share.side.toUpperCase()} ${share.symbol} ${pnlText} on Harness`}
+  />
+  <meta
+    property="og:description"
+    content={share.paper
+      ? "Simulated paper trade on live prices — not real funds."
+      : "Perps on Phoenix, spot by Jupiter — one USDC account on Solana."}
+  />
   <meta property="og:image" content={imageUrl} />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:image" content={imageUrl} />

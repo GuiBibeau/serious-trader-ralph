@@ -23,6 +23,7 @@
     phoenixAuthority,
     spotBusy,
     spotSignature,
+    paperMode,
     canSubmit,
     limitArmed,
     limitBlocked,
@@ -45,6 +46,7 @@
     phoenixAuthority: string;
     spotBusy: boolean;
     spotSignature: string;
+    paperMode: boolean;
     canSubmit: boolean;
     limitArmed: boolean;
     limitBlocked: boolean;
@@ -273,7 +275,11 @@
       {/if}
     </p>
 
-    {#if !phoenixAuthority}
+    {#if paperMode}
+      <button class="primary wide" type="button" disabled>
+        Spot trading unavailable in PAPER
+      </button>
+    {:else if !phoenixAuthority}
       <button class="primary wide" type="button" onclick={onopenauth}>
         Connect account to trade
       </button>
@@ -325,7 +331,7 @@
           <button
             class="row-action"
             type="button"
-            disabled={triggerBusy}
+            disabled={triggerBusy || paperMode}
             onclick={() => oncancelorder(order.orderKey)}
           >
             Cancel

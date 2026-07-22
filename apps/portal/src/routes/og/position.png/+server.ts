@@ -110,6 +110,28 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
             ],
           },
         },
+        params.paper
+          ? {
+              type: "div",
+              props: {
+                style: {
+                  display: "flex",
+                  alignSelf: "flex-start",
+                  marginTop: "72px",
+                  padding: "6px 16px",
+                  fontSize: "24px",
+                  fontWeight: 700,
+                  letterSpacing: "2px",
+                  color: C.accent,
+                  border: `2px solid ${C.accent}`,
+                },
+                children: "PAPER · SIMULATED",
+              },
+            }
+          : {
+              type: "div",
+              props: { style: { display: "flex" }, children: "" },
+            },
         {
           type: "div",
           props: {
@@ -117,7 +139,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
               display: "flex",
               fontSize: "34px",
               fontWeight: 700,
-              marginTop: "84px",
+              marginTop: params.paper ? "16px" : "84px",
               color: up ? C.up : C.down,
             },
             children: `${params.side.toUpperCase()} ${params.symbol}`,
@@ -162,7 +184,9 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
               fontSize: "24px",
               color: C.muted,
             },
-            children: "Perps on Phoenix · spot by Jupiter · settled in USDC",
+            children: params.paper
+              ? "Paper trading — simulated balance on live prices"
+              : "Perps on Phoenix · spot by Jupiter · settled in USDC",
           },
         },
       ],

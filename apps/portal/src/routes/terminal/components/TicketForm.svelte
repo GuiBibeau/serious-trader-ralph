@@ -435,11 +435,20 @@
     class="ticket-status"
     class:error={Boolean(actionError)}
     title={actionErrorDetail || undefined}
+    role="status"
+    aria-live="polite"
   >
     {#if actionError}
       {actionError}
       {#if actionRetry}
         <button class="row-action" type="button" onclick={actionRetry}>Retry</button>
+      {/if}
+    {:else if paperMode}
+      {#if lastTradeSignature}
+        {$tradeType === "market" || limitCrossesBook ? "Paper order filled" : "Paper order placed"}
+        · ref {lastTradeSignature}
+      {:else}
+        &nbsp;
       {/if}
     {:else if orderStageEntry}
       {txStageText(orderStageEntry, nowMs)}

@@ -105,22 +105,34 @@ export async function aiMacroRead(snapshot: unknown): Promise<string> {
   });
 }
 
-export async function aiPositionBrief(snapshot: unknown): Promise<string> {
+export async function aiPositionBrief(
+  snapshot: unknown,
+  paper = false,
+): Promise<string> {
   const user = JSON.stringify(snapshot);
+  const book = paper
+    ? "The trader's SIMULATED paper book (not real funds; never call it a real or on-chain position)"
+    : "The trader's open book";
   return complete({
     system: ANALYST_SYSTEM,
-    user: `The trader's open book. Brief them like a morning note: what they're carrying, what the funding/basis costs them, and the one thing to watch. Address them as "you".\n\n${user}`,
-    cacheKey: `brief:${hash(user)}`,
+    user: `${book}. Brief them like a morning note: what they're carrying, what the funding/basis costs them, and the one thing to watch. Address them as "you".\n\n${user}`,
+    cacheKey: `brief:${paper ? "paper:" : ""}${hash(user)}`,
     maxTokens: 120,
   });
 }
 
-export async function aiSessionRecap(snapshot: unknown): Promise<string> {
+export async function aiSessionRecap(
+  snapshot: unknown,
+  paper = false,
+): Promise<string> {
   const user = JSON.stringify(snapshot);
+  const log = paper
+    ? "Today's SIMULATED paper trade log (not real funds; recap it as paper trading)"
+    : "Today's trade log for one trader";
   return complete({
     system: ANALYST_SYSTEM,
-    user: `Today's trade log for one trader. Recap the session in plain desk language: activity, concentration, and anything notable about the pattern. No advice.\n\n${user}`,
-    cacheKey: `recap:${hash(user)}`,
+    user: `${log}. Recap the session in plain desk language: activity, concentration, and anything notable about the pattern. No advice.\n\n${user}`,
+    cacheKey: `recap:${paper ? "paper:" : ""}${hash(user)}`,
     maxTokens: 110,
   });
 }

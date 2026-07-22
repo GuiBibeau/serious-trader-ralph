@@ -93,6 +93,35 @@ export function fmtTriggerPrice(value: number): string {
   return value.toFixed(Math.min(12, zeros + 4)).replace(/0+$/, "");
 }
 
+// Shared isolated-margin liquidation price estimate. Pure: given a signed
+// size, entry, margin, and maintenance margin ratio, returns the price at
+// which the subaccount's equity hits the maintenance floor — or null when
+// the inputs are degenerate (flat, non-finite, zero entry, zeroed
+// denominator) or the position is over-collateralized past zero (estimate
+// ≤ 0). Extracted verbatim from enrichPosition's formula so the live
+// position card and the paper ledger's tick agree on a single liq curve.
+export function liquidationPriceEstimate(
+  entry: number,
+  size: number,
+  margin: number,
+  maintenanceMarginRatio: number,
+): number | null {
+  if (
+    !Number.isFinite(entry) ||
+    !Number.isFinite(size) ||
+    !Number.isFinite(margin) ||
+    !Number.isFinite(maintenanceMarginRatio) ||
+    entry === 0 ||
+    size === 0
+  ) {
+    return null;
+  }
+  const denom = size - maintenanceMarginRatio * Math.abs(size);
+  if (denom === 0) return null;
+  const estimate = (entry * size - margin) / denom;
+  return Number.isFinite(estimate) && estimate > 0 ? estimate : null;
+}
+
 // The trader API stopped shipping uPnL/liq per position; reconstruct
 // client-side: uPnL from live mids, liq from the isolated subaccount's
 // margin with an estimated maintenance ratio (half the initial margin at
@@ -113,11 +142,9 @@ export function enrichPosition(
   const margin = position.marginUsd;
   let liq: number | null = position.liquidationPrice;
   if (entry !== null && margin !== null && position.size !== 0) {
-    const denom = position.size - mmr * Math.abs(position.size);
-    if (denom !== 0) {
-      const estimate = (entry * position.size - margin) / denom;
-      liq = Number.isFinite(estimate) && estimate > 0 ? estimate : null;
-    }
+    // Recomputed estimate replaces the input liq — including null when the
+    // position is over-collateralized past zero (no finite positive liq).
+    liq = liquidationPriceEstimate(entry, position.size, margin, mmr);
   }
   return { ...position, unrealizedPnl: upnl, liquidationPrice: liq };
 }

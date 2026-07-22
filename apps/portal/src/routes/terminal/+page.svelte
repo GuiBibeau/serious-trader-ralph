@@ -118,7 +118,9 @@
     setPaperTpSl,
     tickPaperLedger,
     topUpPaperCash,
+    PAPER_MARK_TTL_MS,
     type PaperEvent,
+    type PaperMark,
   } from "$lib/terminal/paper-ledger";
   import {
     disconnectedPanel,
@@ -290,6 +292,7 @@
   let autoFollow = true;
   let markets: PhoenixMarketConfig[] = [];
   let marketMids: Record<string, number> = {};
+  let paperExecutableMarks: Record<string, PaperMark> = {};
   let selectedMarket: PhoenixMarketConfig | null = null;
   let marketStats: PhoenixMarketStats | null = null;
   let hoveredCandle: MarketPoint | null = null;
@@ -338,6 +341,82 @@
     if (tradeMode !== "perps") setTradeMode("perps", false);
     if (symbol !== selectedSymbol) void switchPhoenixMarket(symbol);
   }
+
+  function paperMaintenanceMarginRatio(symbol: string): number {
+    const maxLeverage = markets.find(
+      (market) => market.symbol === symbol,
+    )?.maxLeverage;
+    return maxLeverage && Number.isFinite(maxLeverage) && maxLeverage > 0
+      ? 0.5 / maxLeverage
+      : 0.005;
+  }
+
+  function stampPaperExecutableMark(
+    symbol: string,
+    price: number | null | undefined,
+    asOfMs = Date.now(),
+  ): void {
+    if (price == null || !Number.isFinite(price) || price <= 0) return;
+    paperExecutableMarks = {
+      ...paperExecutableMarks,
+      [symbol]: {
+        price,
+        asOfMs,
+        maintenanceMarginRatio: paperMaintenanceMarginRatio(symbol),
+      },
+    };
+  }
+
+  function stampPaperExecutableMids(mids: Record<string, number>): void {
+    // Every symbol present in this live payload was freshly observed even if
+    // its numeric price did not move. Refresh only those symbols; omitted
+    // symbols keep their old timestamp and age out independently.
+    const asOfMs = Date.now();
+    const next = { ...paperExecutableMarks };
+    let observed = false;
+    for (const [symbol, price] of Object.entries(mids)) {
+      if (!Number.isFinite(price) || price <= 0) continue;
+      next[symbol] = {
+        price,
+        asOfMs,
+        maintenanceMarginRatio: paperMaintenanceMarginRatio(symbol),
+      };
+      observed = true;
+    }
+    if (observed) paperExecutableMarks = next;
+  }
+
+  function freshPaperMark(symbol: string): PaperMark | null {
+    const mark = paperExecutableMarks[symbol];
+    if (!mark) return null;
+    const age = Date.now() - mark.asOfMs;
+    if (
+      !Number.isFinite(mark.price) ||
+      mark.price <= 0 ||
+      !Number.isFinite(mark.asOfMs) ||
+      !Number.isFinite(age) ||
+      age < 0 ||
+      age > PAPER_MARK_TTL_MS ||
+      !Number.isFinite(mark.maintenanceMarginRatio) ||
+      mark.maintenanceMarginRatio < 0
+    ) {
+      return null;
+    }
+    return mark;
+  }
+
+  function showPaperFreshPriceUnavailable(): void {
+    phoenixActionError =
+      "Fresh live price unavailable — paper order not executed.";
+    phoenixActionErrorDetail = "";
+    phoenixActionRetry = null;
+    alertsStore.pushToast({
+      ts: Date.now(),
+      title: "Paper order not executed",
+      body: "Fresh live price unavailable — paper order not executed.",
+    });
+  }
+
   let bookVersion = 0;
   let marketSourceLabel = "loading";
   let marketVolume24h: number | null = null;
@@ -370,6 +449,13 @@
 
   async function activatePerpAccess(): Promise<void> {
     const wallet = $privyAuth.walletAddress;
+    if (paperMode) {
+      phoenixActionError = "Perp access activation is LIVE-only; switch out of PAPER first.";
+      phoenixActionErrorDetail = "";
+      phoenixActionRetry = null;
+      return;
+    }
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     if (!wallet || perpAccessBusy) return;
     perpAccessBusy = true;
     // A stale failure from a previous attempt must not outlive a retry
@@ -387,7 +473,7 @@
         JSON.stringify(done.filter((a) => a !== wallet)),
       );
       onboardedAddress = "";
-      await ensurePhoenixOnboarding(wallet);
+      await ensurePhoenixOnboarding(wallet, expectedLiveExecutionEpoch);
       track("perp_access_activation", {
         wallet,
         ok: phoenixWhitelisted === true,
@@ -395,8 +481,11 @@
       if (phoenixWhitelisted !== true) {
         phoenixActionError = "Activation didn't complete — try again.";
       }
-    } catch {
-      phoenixActionError = "Activation didn't complete — try again.";
+    } catch (error) {
+      phoenixActionError =
+        error instanceof Error && error.message === LIVE_MODE_ABORT_ERROR
+          ? LIVE_MODE_ABORT_ERROR
+          : "Activation didn't complete — try again.";
     } finally {
       perpAccessBusy = false;
     }
@@ -449,6 +538,78 @@
   // Default to paper when Privy isn't set up locally — live trading needs
   // PUBLIC_PRIVY_APP_ID; paper does not. Saved prefs still win on load.
   let paperMode = !readPrivyConfig().appId;
+  let liveExecutionEpoch = 0;
+  let liveSignerInFlight = false;
+  let liveSignerInvocationCount = 0;
+  const LIVE_MODE_ABORT_ERROR =
+    "Live transaction canceled — switched mode before wallet signing.";
+
+  function assertLiveExecutionEpoch(expectedLiveExecutionEpoch: number): void {
+    if (paperMode || expectedLiveExecutionEpoch !== liveExecutionEpoch) {
+      throw new Error(LIVE_MODE_ABORT_ERROR);
+    }
+  }
+
+  function captureLiveExecutionEpoch(): number {
+    const expectedLiveExecutionEpoch = liveExecutionEpoch;
+    assertLiveExecutionEpoch(expectedLiveExecutionEpoch);
+    return expectedLiveExecutionEpoch;
+  }
+
+  function beginLiveSignerInvocation(): void {
+    liveSignerInvocationCount += 1;
+    liveSignerInFlight = true;
+  }
+
+  function endLiveSignerInvocation(): void {
+    liveSignerInvocationCount = Math.max(0, liveSignerInvocationCount - 1);
+    liveSignerInFlight = liveSignerInvocationCount > 0;
+  }
+
+  function clearCrossModeTransactionPresentation(): void {
+    pendingAckAction = null;
+    ackOpen = false;
+    phoenixActionRetry = null;
+    phoenixActionError = "";
+    phoenixActionErrorDetail = "";
+    txStages = {};
+    lastTx = null;
+    lastTradeSignature = "";
+    collateralSignature = "";
+    collateralError = "";
+    spotSignature = "";
+    $spotQuoteError = "";
+    pendingOrder = null;
+    perpAccessBusy = false;
+    collateralBusy = false;
+    spotBusy = false;
+    triggerBusy = false;
+    phoenixBusyKeys = new Set();
+    closingKeys = new Set();
+    tpslPending = null;
+    tpslDrag = null;
+    limitArmedUntil = 0;
+    spotLimitArmedUntil = 0;
+    flattenArmedUntil = 0;
+    armedHotkey = null;
+    perpGateNotice = false;
+    spotTicket.invalidateQuote();
+  }
+
+  function enterPaperSafetyBoundary(): void {
+    liveExecutionEpoch += 1;
+    clearCrossModeTransactionPresentation();
+    fundsOpen = false;
+    pendingTradeMode = null;
+    pendingSpotAssetId = null;
+    if (tradeMode !== "perps") setTradeMode("perps", false);
+  }
+
+  function exitPaperSafetyBoundary(): void {
+    liveExecutionEpoch += 1;
+    clearCrossModeTransactionPresentation();
+  }
+
   $: livePhoenixTrader = phoenixAuthority
     ? freshSnapshot($traderSnapshots, phoenixAuthority)
     : null;
@@ -866,7 +1027,8 @@
   } else if (!phoenixAuthority) {
     refreshedAuthority = null;
   }
-  $: if (phoenixAuthority) void ensurePhoenixOnboarding(phoenixAuthority);
+  $: if (!paperMode && phoenixAuthority)
+    void ensurePhoenixOnboarding(phoenixAuthority, liveExecutionEpoch);
   $: if (phoenixAuthority) void refreshTokenBalances(phoenixAuthority);
   $: spotHolding = spotAsset ? tokenBalances[spotAsset.mint] ?? 0 : 0;
   $: alertsStore.check(latestPrice, selectedSymbol);
@@ -993,13 +1155,19 @@
   // ── Day P&L (device-local equity history) ──────────────────────────
   // Sampled on the trader refresh; baseline = first sample of the UTC day,
   // shifted by in-app deposits/withdrawals at their confirm sites.
-  $: equityPoints = phoenixAuthority
-    ? $equityHistory[phoenixAuthority] ?? []
-    : [];
+  // PAPER has no flow-adjusted daily baseline yet: suppress the live wallet's
+  // equity history entirely rather than subtracting the simulated ledger's
+  // equity from a live baseline (a dishonest mixed number). A dedicated paper
+  // daily baseline is a deferred follow-up.
+  $: equityPoints =
+    !paperMode && phoenixAuthority
+      ? $equityHistory[phoenixAuthority] ?? []
+      : [];
   $: equityValues = equityPoints.map((point) => point.equity);
-  $: equityBaseline = phoenixAuthority
-    ? $equityBaselines[phoenixAuthority] ?? null
-    : null;
+  $: equityBaseline =
+    !paperMode && phoenixAuthority
+      ? $equityBaselines[phoenixAuthority] ?? null
+      : null;
   $: sessionPnlUsd = equityBaseline
     ? accountEquityUsd - equityBaseline.equity
     : null;
@@ -1028,11 +1196,14 @@
   // desk. The panel never imports page state — it only calls this closure.
   function buildDeskContextClosure(): Record<string, unknown> {
     return buildDeskContext({
+      accountMode: paperMode ? "paper" : "live",
       symbol: selectedSymbol,
       timeframe: selectedTimeframe,
       positions: enrichedPositions,
       openOrders: perpOpenOrders,
-      dayPnlUsd: sessionPnlUsd,
+      // Paper has no flow-adjusted daily baseline yet — null is honest;
+      // mixing the simulator with a live wallet baseline is not.
+      dayPnlUsd: paperMode ? null : sessionPnlUsd,
       equityUsd: accountEquityUsd,
       monitorRows: markets.map((market) => ({
         symbol: market.symbol,
@@ -1122,6 +1293,7 @@
     Boolean($tradePreview) &&
     (paperMode || !walletScreen.flagged);
   $: canSubmitSpot =
+    !paperMode &&
     Boolean(phoenixAuthority) &&
     !spotBusy &&
     !walletScreen.flagged &&
@@ -1245,7 +1417,12 @@
       : null;
 
   // ── Journal-derived views + AI notes (facts computed, AI narrates) ──
-  $: journalToday = entriesToday(journalEntries, Date.now());
+  // Session stats/recap are mode-scoped: simulated and live activity never
+  // add together. Legacy entries stay visible in the journal but are omitted
+  // from mode-specific aggregates because their provenance is unknown.
+  $: journalToday = entriesToday(journalEntries, Date.now()).filter(
+    (entry) => entry.mode === (paperMode ? "paper" : "live"),
+  );
   $: positionBriefKey = (phoenixTrader?.positions ?? [])
     .map((position) => `${position.symbol}:${position.size.toFixed(4)}`)
     .join("|");
@@ -1292,8 +1469,8 @@
       visibleCandleCount,
       // Carry unapplied pendings through so a boot-time persist can't clobber
       // restored spot prefs before loadSpotAssets applies them.
-      pendingTradeMode ?? tradeMode,
-      spotAsset?.assetId ?? pendingSpotAssetId,
+      paperMode ? "perps" : pendingTradeMode ?? tradeMode,
+      paperMode ? null : spotAsset?.assetId ?? pendingSpotAssetId,
       watchlist,
       screenSort,
       screenHub,
@@ -1590,14 +1767,17 @@
         }
       },
       onCandle: (point) => {
+        const livePrice = point.markClose ?? point.close;
+        stampPaperExecutableMark(symbol, livePrice);
         chartPoints = upsertLiveCandle(chartPoints, point);
         updateChartPoint(point);
         cacheCandles(symbol, selectedTimeframe, chartPoints);
-        latestPrice = marketStats?.markPx ?? point.markClose ?? point.close;
+        latestPrice = marketStats?.markPx ?? livePrice;
         lastMarketUpdate = Date.now();
         streamHealth = "live";
       },
       onOrderbook: (payload) => {
+        stampPaperExecutableMark(symbol, payload.mid);
         pendingBook = payload;
         if (bookFrame) return;
         bookFrame = window.requestAnimationFrame(() => {
@@ -1614,8 +1794,10 @@
         });
       },
       onMarket: (stats) => {
+        const livePrice = stats.markPx ?? stats.midPx;
+        stampPaperExecutableMark(symbol, livePrice);
         marketStats = stats;
-        latestPrice = stats.markPx ?? stats.midPx ?? latestPrice;
+        latestPrice = livePrice ?? latestPrice;
         marketVolume24h = stats.dayNtlVlm;
         lastMarketUpdate = Date.now();
         streamHealth = "live";
@@ -1631,6 +1813,7 @@
         };
       },
       onAllMids: (mids) => {
+        stampPaperExecutableMids(mids);
         marketMids = mids;
         latestPrice = mids[symbol] ?? latestPrice;
       },
@@ -2115,12 +2298,14 @@
     transaction: VersionedTransaction,
     connection: Connection,
     summary: TransactionSummary,
+    expectedLiveExecutionEpoch: number,
     latestBlockhash?: {
       blockhash: string;
       lastValidBlockHeight: number;
     },
     stageKey?: string,
   ): Promise<string> {
+    assertLiveExecutionEpoch(expectedLiveExecutionEpoch);
     if (stageKey) setTxStage(stageKey, "simulating");
     const simulation = await connection.simulateTransaction(transaction, {
       sigVerify: false,
@@ -2153,21 +2338,27 @@
     );
 
     if (stageKey) setTxStage(stageKey, "signing");
-    const signature = await signAndSendSolanaTransaction(
-      transaction,
-      connection,
-    );
-    if (stageKey) setTxStage(stageKey, "confirming");
-    if (latestBlockhash) {
-      await connection.confirmTransaction(
-        { signature, ...latestBlockhash },
-        "confirmed",
+    assertLiveExecutionEpoch(expectedLiveExecutionEpoch);
+    beginLiveSignerInvocation();
+    try {
+      const signature = await signAndSendSolanaTransaction(
+        transaction,
+        connection,
       );
-    } else {
-      await connection.confirmTransaction(signature, "confirmed");
+      if (stageKey) setTxStage(stageKey, "confirming");
+      if (latestBlockhash) {
+        await connection.confirmTransaction(
+          { signature, ...latestBlockhash },
+          "confirmed",
+        );
+      } else {
+        await connection.confirmTransaction(signature, "confirmed");
+      }
+      if (stageKey) setTxStage(stageKey, "confirmed");
+      return signature;
+    } finally {
+      endLiveSignerInvocation();
     }
-    if (stageKey) setTxStage(stageKey, "confirmed");
-    return signature;
   }
 
   // ── Add funds (receive + Jupiter swap) ────────────────────────────
@@ -2184,6 +2375,7 @@
   }
 
   async function performSwap(quote: JupiterQuote): Promise<string> {
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     const address = $privyAuth.walletAddress;
     if (!address) throw new Error("wallet-not-connected");
     const amount = quote.inSol;
@@ -2199,7 +2391,7 @@
         `Price impact: ${(quote.priceImpactPct * 100).toFixed(2)}%`,
       ],
       feePayer: address,
-    });
+    }, expectedLiveExecutionEpoch);
     track("swap_confirmed", { ...marketContext(), inSol: amount, outUsdc: quote.outUsdc ?? null });
     void refreshWalletBalance(address);
     return signature;
@@ -2230,8 +2422,12 @@
       }
       if (pendingTradeMode === "spot") {
         pendingTradeMode = null;
-        // Restored pref/deep-link — keep the restored asset, don't remap.
-        setTradeMode("spot", false);
+        if (paperMode) {
+          pendingSpotAssetId = null;
+        } else {
+          // Restored pref/deep-link — keep the restored asset, don't remap.
+          setTradeMode("spot", false);
+        }
       }
     } catch {
       // catalog hiccup — keep last list
@@ -2239,6 +2435,14 @@
   }
 
   function setTradeMode(mode: "perps" | "spot", followAsset = true): void {
+    if (mode === "spot" && paperMode) {
+      pendingTradeMode = null;
+      pendingSpotAssetId = null;
+      spotSignature = "";
+      $spotQuoteStatus = "error";
+      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
+      return;
+    }
     if (tradeMode === mode) return;
     track("venue_switched", { from: tradeMode, to: mode });
     // An explicit user choice overrides any not-yet-applied restored pref.
@@ -2297,6 +2501,14 @@
   }
 
   function selectSpotAsset(asset: SpotAsset): void {
+    if (paperMode) {
+      pendingTradeMode = null;
+      pendingSpotAssetId = null;
+      spotSignature = "";
+      $spotQuoteStatus = "error";
+      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
+      return;
+    }
     const changed = spotAsset?.assetId !== asset.assetId;
     spotAsset = asset;
     $spotQuote = null;
@@ -2371,6 +2583,12 @@
   }
 
   async function executeSpotSwap(): Promise<void> {
+    if (paperMode) {
+      $spotQuoteStatus = "error";
+      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
+      return;
+    }
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     const address = $privyAuth.walletAddress;
     const asset = spotAsset;
     if (!asset || !$spotQuote || !address || spotBusy || walletScreen.flagged) return;
@@ -2395,9 +2613,10 @@
           `Price impact: ${($spotQuote.priceImpactPct * 100).toFixed(2)}%`,
         ],
         feePayer: address,
-      });
+      }, expectedLiveExecutionEpoch);
       noteTrade({
         ts: Date.now(),
+        mode: "live",
         venue: "spot",
         symbol: asset.symbol,
         action: $spotSide,
@@ -2428,7 +2647,12 @@
 
   // ── Phoenix onboarding ────────────────────────────────────────────
 
-  async function ensurePhoenixOnboarding(authority: string): Promise<void> {
+  async function ensurePhoenixOnboarding(
+    authority: string,
+    expectedLiveExecutionEpoch = liveExecutionEpoch,
+  ): Promise<void> {
+    if (paperMode) throw new Error("Phoenix onboarding is LIVE-only; PAPER never signs.");
+    assertLiveExecutionEpoch(expectedLiveExecutionEpoch);
     if (!authority || onboardedAddress === authority) return;
     onboardedAddress = authority;
     try {
@@ -2437,17 +2661,37 @@
     } catch {
       phoenixWhitelisted = null;
     }
+    assertLiveExecutionEpoch(expectedLiveExecutionEpoch);
     // Referral onboarding: once per wallet, best-effort, never blocks market reads.
     try {
       const done = JSON.parse(
         window.localStorage.getItem(ONBOARD_KEY) ?? "[]",
       ) as string[];
       if (done.includes(authority)) return;
-      const result = await (await tradeModule()).activatePhoenixReferral(
-        authority,
-        solanaRpcUrl(),
-        signSolanaTransaction,
-      );
+      const signLiveReferralTransaction: typeof signSolanaTransaction = async (
+        transaction,
+      ) => {
+        assertLiveExecutionEpoch(expectedLiveExecutionEpoch);
+        return await signSolanaTransaction(transaction);
+      };
+      // Hold the in-flight flag across the WHOLE referral flow, not just the
+      // sign step: Phoenix submits the delegated transaction AFTER the local
+      // signature returns, so the mode switch must stay blocked until that
+      // submission resolves — otherwise a switch-to-PAPER could land between
+      // sign and send while a real transaction is still in flight.
+      beginLiveSignerInvocation();
+      let result: Awaited<
+        ReturnType<Awaited<ReturnType<typeof tradeModule>>["activatePhoenixReferral"]>
+      >;
+      try {
+        result = await (await tradeModule()).activatePhoenixReferral(
+          authority,
+          solanaRpcUrl(),
+          signLiveReferralTransaction,
+        );
+      } finally {
+        endLiveSignerInvocation();
+      }
       if (
         result.ok ||
         /already|exist|self/i.test(result.message)
@@ -2458,9 +2702,12 @@
         );
         if (result.ok) phoenixWhitelisted = true;
       }
-    } catch {
+    } catch (error) {
       // wallet declined the signature or transient failure — retry next visit
       onboardedAddress = "";
+      if (error instanceof Error && error.message === LIVE_MODE_ABORT_ERROR) {
+        throw error;
+      }
     }
   }
 
@@ -2492,7 +2739,10 @@
       // shows it (collateral + live uPnL), no extra RPC. Wait a tick so
       // the snapshot-derived reactives have settled first.
       await tick();
-      if (authority === phoenixAuthority) {
+      // Never sample equity in PAPER: accountEquityUsd is then the simulated
+      // ledger's equity, and recording it under the real wallet authority
+      // would poison the live Day P&L baseline/history (persisted per wallet).
+      if (!paperMode && authority === phoenixAuthority) {
         recordEquitySample(authority, accountEquityUsd);
       }
     } catch {
@@ -2503,8 +2753,10 @@
   async function signAndSendPhoenixIxs(
     instructions: import("@solana/web3.js").TransactionInstruction[],
     summary: TransactionSummary,
+    expectedLiveExecutionEpoch: number,
     stageKey?: string,
   ): Promise<string> {
+    assertLiveExecutionEpoch(expectedLiveExecutionEpoch);
     const { transaction, connection, latestBlockhash } =
       await (await tradeModule()).buildSignableTransaction(
         solanaRpcUrl(),
@@ -2523,6 +2775,7 @@
           ),
         ],
       },
+      expectedLiveExecutionEpoch,
       latestBlockhash,
       stageKey,
     );
@@ -2544,6 +2797,9 @@
     detail: string;
   } {
     const raw = err instanceof Error ? err.message : String(err);
+    if (raw === LIVE_MODE_ABORT_ERROR) {
+      return { text: raw, retriable: false, confirmUncertain: false, detail: "" };
+    }
     // Deliberately-human throws (TP/SL side checks, the rent shortfall in
     // phoenix-trade.ts) pass through untouched.
     if (
@@ -2607,6 +2863,7 @@
     for (const event of events) {
       noteTrade({
         ts: Date.now(),
+        mode: "paper",
         venue: "perp",
         symbol: event.symbol,
         action:
@@ -2637,27 +2894,35 @@
 
   function applyPaperMids(): void {
     if (!paperMode) return;
-    const mids: Record<string, number> = { ...marketMids };
-    if (latestPrice != null) mids[selectedSymbol] = latestPrice;
-    const ticked = tickPaperLedger($paperLedger, mids);
+    const ticked = tickPaperLedger($paperLedger, paperExecutableMarks, nowMs);
     if (ticked.events.length === 0 && ticked.ledger === $paperLedger) return;
     paperLedger.set(ticked.ledger);
     notePaperEvents(ticked.events);
   }
 
   $: if (paperMode) {
-    marketMids;
-    latestPrice;
+    paperExecutableMarks;
+    nowMs;
     applyPaperMids();
   }
 
   function togglePaperMode(): void {
+    if (liveSignerInFlight) {
+      phoenixActionError =
+        "Wallet signing is already in progress — finish or reject it before switching PAPER/LIVE.";
+      phoenixActionErrorDetail = "";
+      phoenixActionRetry = null;
+      alertsStore.pushToast({
+        ts: Date.now(),
+        title: "Mode switch blocked",
+        body: "Finish or reject the wallet signature first.",
+      });
+      return;
+    }
     paperMode = !paperMode;
-    phoenixActionError = "";
-    phoenixActionErrorDetail = "";
-    pendingOrder = null;
+    if (paperMode) enterPaperSafetyBoundary();
+    else exitPaperSafetyBoundary();
     track("paper_mode_toggled", { paperMode });
-    if (paperMode && tradeMode !== "perps") setTradeMode("perps", false);
   }
 
   function resetPaperAccount(): void {
@@ -2680,20 +2945,29 @@
   }
 
   function flattenPaperPositions(): void {
+    const marks = new Map<string, PaperMark>();
+    for (const position of $paperLedger.positions) {
+      const mark = freshPaperMark(position.symbol);
+      if (!mark) {
+        showPaperFreshPriceUnavailable();
+        return;
+      }
+      marks.set(position.symbol, mark);
+    }
     let next = $paperLedger;
     const events: PaperEvent[] = [];
     for (const position of [...next.positions]) {
-      const mark =
-        marketMids[position.symbol] ??
-        (position.symbol === selectedSymbol ? latestPrice : null) ??
-        position.entryPrice;
-      if (!mark) continue;
+      const mark = marks.get(position.symbol);
+      if (!mark) {
+        showPaperFreshPriceUnavailable();
+        return;
+      }
       const closed = closePaperPosition(
         next,
         position.symbol,
         position.subaccountIndex,
         1,
-        mark,
+        mark.price,
         "close",
       );
       next = closed.ledger;
@@ -2711,19 +2985,30 @@
     const orderType = $tradeType;
     const leverage = $tradeLeverage;
     const reduceOnly = $tradeReduceOnly && selectedPosition !== null;
-    const entry = preview.entry ?? latestPrice;
-    if (!entry || entry <= 0) return;
+    const limitPrice = Number($tradeLimitPrice);
+    let refPrice: number;
+    if (orderType === "limit") {
+      if (!Number.isFinite(limitPrice) || limitPrice <= 0) {
+        phoenixActionError = "Enter a valid paper limit price.";
+        phoenixActionErrorDetail = "";
+        phoenixActionRetry = null;
+        return;
+      }
+      refPrice = limitPrice;
+    } else {
+      const mark = freshPaperMark(symbol);
+      if (!mark) {
+        showPaperFreshPriceUnavailable();
+        return;
+      }
+      refPrice = mark.price;
+    }
     setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
     phoenixActionErrorDetail = "";
     phoenixActionRetry = null;
     try {
       const side: PhoenixSide = $tradeSide === "buy" ? "bid" : "ask";
-      const limitPrice = Number($tradeLimitPrice);
-      const refPrice =
-        orderType === "limit" && Number.isFinite(limitPrice) && limitPrice > 0
-          ? limitPrice
-          : entry;
       const tp = Number($tradeTakeProfit);
       const sl = Number($tradeStopLoss);
       const takeProfitPrice = Number.isFinite(tp) && tp > 0 ? tp : null;
@@ -2751,7 +3036,10 @@
         tp: $tradeTakeProfit,
         sl: $tradeStopLoss,
       };
-      lastTradeSignature = result.events[0]?.signature ?? `paper-limit-${Date.now()}`;
+      lastTradeSignature =
+        result.events[0]?.signature ??
+        result.ledger.orders.at(-1)?.orderSequenceNumber ??
+        "paper-order";
       tradeOpen = false;
       if (orderType === "limit" && result.events.length === 0) {
         alertsStore.pushToast({
@@ -2817,7 +3105,8 @@
       tp: $tradeTakeProfit,
       sl: $tradeStopLoss,
     };
-    if (!phoenixAuthority || phoenixBusyKeys.has(busyKey) || !$tradePreview) return;
+    if (paperMode || !phoenixAuthority || phoenixBusyKeys.has(busyKey) || !$tradePreview) return;
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     // Freeze the ticket state before the first await — inputs stay editable
     // while the tx confirms, so a live read after an await could describe a
     // different order than the one submitted (or throw once the $:-derived
@@ -2906,6 +3195,7 @@
             ...(stopLossPrice ? [`Stop loss: ${formatPrice(stopLossPrice)}`] : []),
           ],
         },
+        expectedLiveExecutionEpoch,
         busyKey,
       );
       track("order_confirmed", {
@@ -2916,6 +3206,7 @@
       lastOrderIntent = intentSnapshot;
       noteTrade({
         ts: Date.now(),
+        mode: "live",
         venue: "perp",
         symbol,
         action: side === "bid" ? "long" : "short",
@@ -2960,16 +3251,17 @@
     fraction = 1,
   ): Promise<void> {
     if (paperMode) {
-      const mark =
-        marketMids[symbol] ??
-        (symbol === selectedSymbol ? latestPrice : null);
-      if (!mark) return;
+      const mark = freshPaperMark(symbol);
+      if (!mark) {
+        showPaperFreshPriceUnavailable();
+        return;
+      }
       const closed = closePaperPosition(
         $paperLedger,
         symbol,
         subaccountIndex,
         fraction,
-        mark,
+        mark.price,
         "close",
       );
       paperLedger.set(closed.ledger);
@@ -2978,6 +3270,7 @@
     }
     const busyKey = `close:${symbol}:${subaccountIndex}`;
     if (!phoenixAuthority || phoenixBusyKeys.has(busyKey) || size === 0) return;
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     const partial = fraction < 1;
     setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
@@ -3005,6 +3298,7 @@
             `Size: ${formatNumber(Math.abs(size), 6)} ${symbol}`,
           ],
         },
+        expectedLiveExecutionEpoch,
         busyKey,
       );
       {
@@ -3028,6 +3322,7 @@
       }
       noteTrade({
         ts: Date.now(),
+        mode: "live",
         venue: "perp",
         symbol,
         action: "close",
@@ -3117,8 +3412,14 @@
     if (position.entryPrice) params.set("entry", String(position.entryPrice));
     const mark = mids[position.symbol];
     if (mark) params.set("mark", String(mark));
+    // Provenance rides the share URL so the /share page and OG card label a
+    // simulated result as paper — never present it as a real on-chain trade.
+    if (paperMode) params.set("mode", "paper");
     const shareUrl = `${window.location.origin}/share?${params.toString()}`;
-    const text = `${position.size > 0 ? "Long" : "Short"} ${position.symbol} on Harness`;
+    const dir = position.size > 0 ? "Long" : "Short";
+    const text = paperMode
+      ? `Paper trade: ${dir} ${position.symbol} on Harness (simulated — not real funds)`
+      : `${dir} ${position.symbol} on Harness`;
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareUrl)}`,
       "_blank",
@@ -3133,6 +3434,7 @@
     }
     const busyKey = `cancel:${symbol}:${side}`;
     if (!phoenixAuthority || phoenixBusyKeys.has(busyKey)) return;
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
     phoenixActionErrorDetail = "";
@@ -3149,6 +3451,7 @@
             `Side: ${side === "bid" ? "bids" : "asks"}`,
           ],
         },
+        expectedLiveExecutionEpoch,
         busyKey,
       );
       track("orders_cancelled", { ...marketContext(), cancelSymbol: symbol, cancelSide: side, scope: "side" });
@@ -3177,6 +3480,7 @@
     }
     const busyKey = orderCancelKey(order);
     if (!phoenixAuthority || phoenixBusyKeys.has(busyKey)) return;
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
     phoenixActionErrorDetail = "";
@@ -3212,6 +3516,7 @@
             `Order: #${order.orderSequenceNumber.slice(0, 8)}`,
           ],
         },
+        expectedLiveExecutionEpoch,
         busyKey,
       );
       track("orders_cancelled", {
@@ -3346,6 +3651,7 @@
     ) {
       return;
     }
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
     phoenixActionErrorDetail = "";
@@ -3368,6 +3674,7 @@
             `From free cross collateral into the isolated position`,
           ],
         },
+        expectedLiveExecutionEpoch,
         busyKey,
       );
       track("margin_added", {
@@ -3453,6 +3760,10 @@
   }
 
   async function closeAllPhoenixPositions(): Promise<void> {
+    if (paperMode) {
+      flattenPaperPositions();
+      return;
+    }
     const positions = enrichedPositions.filter(
       (position) => position.size !== 0,
     );
@@ -3460,6 +3771,7 @@
     if (!phoenixAuthority || phoenixBusyKeys.has(busyKey) || positions.length === 0) {
       return;
     }
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
     phoenixActionErrorDetail = "";
@@ -3503,12 +3815,14 @@
               ),
             ],
           },
+          expectedLiveExecutionEpoch,
           busyKey,
         );
         confirmedChunks += 1;
         for (const position of chunk) {
           noteTrade({
             ts: Date.now(),
+            mode: "live",
             venue: "perp",
             symbol: position.symbol,
             action: "close",
@@ -3581,6 +3895,7 @@
     if (!phoenixAuthority || collateralBusy || !Number.isFinite(amount) || amount <= 0) {
       return;
     }
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     collateralBusy = true;
     collateralError = "";
     collateralSignature = "";
@@ -3607,6 +3922,7 @@
               : "Funds move from wallet USDC into Phoenix margin",
           ],
         },
+        expectedLiveExecutionEpoch,
       );
       track(`${direction}_confirmed`, {
         ...marketContext(),
@@ -4003,7 +4319,10 @@
     // Local clones without PUBLIC_PRIVY_APP_ID can't sign in — never open
     // the broken auth modal. Drop into paper instead.
     if (!readPrivyConfig().appId) {
-      if (!paperMode) paperMode = true;
+      if (!paperMode) {
+        paperMode = true;
+        enterPaperSafetyBoundary();
+      }
       alertsStore.pushToast({
         ts: Date.now(),
         title: "Paper mode",
@@ -4067,7 +4386,7 @@
       }
       if (intent.takeProfit !== null) $tradeTakeProfit = String(intent.takeProfit);
       if (intent.stopLoss !== null) $tradeStopLoss = String(intent.stopLoss);
-    } else if (intent.venue === "spot") {
+    } else if (intent.venue === "spot" && !paperMode) {
       pendingTradeMode = "spot";
       if (intent.spotAssetId) pendingSpotAssetId = intent.spotAssetId;
       if (intent.side) $spotSide = intent.side;
@@ -4816,6 +5135,7 @@
     }
     const busyKey = tpslBusyKey(position);
     if (!phoenixAuthority || phoenixBusyKeys.has(busyKey)) return;
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     setPhoenixBusy(busyKey, true);
     phoenixActionError = "";
     phoenixActionErrorDetail = "";
@@ -4841,6 +5161,7 @@
             `${kind === "tp" ? "Take profit" : "Stop loss"}: ${formatPrice(fromPrice)} → ${formatPrice(price)}`,
           ],
         },
+        expectedLiveExecutionEpoch,
         busyKey,
       );
       track("tpsl_dragged", {
@@ -4895,7 +5216,7 @@
     };
     briefRead = { phase: "loading", text: briefRead.text };
     try {
-      briefRead = { phase: "ready", asOf: Date.now(), text: await aiPositionBrief(snapshot) };
+      briefRead = { phase: "ready", asOf: Date.now(), text: await aiPositionBrief(snapshot, paperMode) };
     } catch (error) {
       briefRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -4915,7 +5236,7 @@
     };
     recapRead = { phase: "loading", text: recapRead.text };
     try {
-      recapRead = { phase: "ready", asOf: Date.now(), text: await aiSessionRecap(snapshot) };
+      recapRead = { phase: "ready", asOf: Date.now(), text: await aiSessionRecap(snapshot, paperMode) };
     } catch (error) {
       recapRead = { phase: "error", text: "", error: aiErr(error) };
     }
@@ -4939,6 +5260,12 @@
   }
 
   async function submitSpotLimitOrder(): Promise<void> {
+    if (paperMode) {
+      $spotQuoteStatus = "error";
+      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
+      return;
+    }
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     const address = $privyAuth.walletAddress;
     if (!spotAsset || !address || spotBusy || walletScreen.flagged) return;
     const limit = Number($spotLimitPrice);
@@ -4979,9 +5306,11 @@
           ],
           feePayer: address,
         },
+        expectedLiveExecutionEpoch,
       );
       noteTrade({
         ts: Date.now(),
+        mode: "live",
         venue: "spot",
         symbol: spotAsset.symbol,
         action: `limit-${$spotSide}`,
@@ -5000,6 +5329,12 @@
   }
 
   async function cancelSpotLimitOrder(orderKey: string): Promise<void> {
+    if (paperMode) {
+      $spotQuoteStatus = "error";
+      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
+      return;
+    }
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     const address = $privyAuth.walletAddress;
     if (!address || triggerBusy) return;
     triggerBusy = true;
@@ -5015,6 +5350,7 @@
           details: [`Venue: Jupiter Trigger`, `Order: ${shortAddress(orderKey)}`],
           feePayer: address,
         },
+        expectedLiveExecutionEpoch,
       );
       triggerOrders = triggerOrders.filter((order) => order.orderKey !== orderKey);
       void refreshTriggerOrders();
@@ -5042,8 +5378,8 @@
     if (prefs.visibleCandleCount !== undefined) {
       visibleCandleCount = prefs.visibleCandleCount;
     }
-    if (prefs.tradeMode === "spot") pendingTradeMode = "spot";
-    if (prefs.spotAssetId !== undefined) pendingSpotAssetId = prefs.spotAssetId;
+    if (prefs.tradeMode === "spot" && prefs.paperMode !== true) pendingTradeMode = "spot";
+    if (prefs.spotAssetId !== undefined && prefs.paperMode !== true) pendingSpotAssetId = prefs.spotAssetId;
     if (prefs.watchlist !== undefined) watchlist = prefs.watchlist;
     if (prefs.screenSort !== undefined) screenSort = prefs.screenSort;
     if (prefs.screenHub !== undefined) screenHub = prefs.screenHub;
@@ -5059,6 +5395,11 @@
     // Without Privy, live trading is impossible — stay in paper regardless
     // of a previously saved LIVE preference.
     if (!readPrivyConfig().appId) paperMode = true;
+    if (paperMode) {
+      pendingTradeMode = null;
+      pendingSpotAssetId = null;
+      tradeMode = "perps";
+    }
   }
 
   function loadOpenBetaBanner(): void {
@@ -6181,7 +6522,7 @@
         position.subaccountIndex,
       )}
     oncancelorders={(symbol) => void cancelSymbolBookOrders(symbol)}
-    onflatten={() => void closeAllPhoenixPositions()}
+    onflatten={onFlattenClick}
     repeatLast={lastOrderIntent
       ? {
           label: `Repeat last · ${lastOrderIntent.side === "buy" ? "LONG" : "SHORT"} $${lastOrderIntent.amount} ${lastOrderIntent.symbol} ${lastOrderIntent.leverage}x`,
@@ -6247,6 +6588,7 @@
     {phoenixAuthority}
     {spotBusy}
     {spotSignature}
+    {paperMode}
     canSubmit={canSubmitSpot}
     limitArmed={spotLimitArmed}
     limitBlocked={spotLimitBlocked}

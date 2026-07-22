@@ -130,6 +130,7 @@
       <button
         type="button"
         class:active={!paperMode}
+        aria-pressed={!paperMode}
         onclick={() => paperMode && ontogglepaper()}
         title="Live trading with real funds"
       >
@@ -139,6 +140,7 @@
         type="button"
         class:active={paperMode}
         class:paper={paperMode}
+        aria-pressed={paperMode}
         onclick={() => !paperMode && ontogglepaper()}
         title="Paper trading — simulated balance on live prices"
       >
@@ -359,7 +361,7 @@
     justify-content: flex-end;
     min-width: 0;
     min-height: 2.3rem;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
   }
 
   .mode-toggle {
@@ -508,7 +510,7 @@
     .mode-toggle button,
     .alerts-btn,
     .connect-btn {
-      transition: none !important;
+      transition: none;
     }
   }
 
@@ -687,6 +689,40 @@
   @media (max-width: 720px) {
     .account-trigger-text small {
       max-width: 9rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .topbar {
+      gap: 0.65rem;
+    }
+
+    .mode-toggle {
+      order: 0;
+    }
+
+    .account-bay {
+      order: 1;
+      width: 11rem;
+      min-width: 0;
+      flex: 0 0 11rem;
+    }
+
+    .paper-funds-btn {
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .topbar-actions > button {
+      order: 2;
+      flex: 1 1 auto;
+    }
+
+    .account-dropdown {
+      right: 0;
+      left: auto;
+      width: calc(100vw - 1.5rem);
     }
   }
 </style>
