@@ -13,32 +13,55 @@
 
 import { get, type Writable, writable } from "svelte/store";
 import type { ChatMessage } from "./chat-core";
+import type { ChatModelChoice } from "./chat-models";
 import { getPrivyAccessToken } from "./privy-auth";
 
 const CHAT_OPEN_KEY = "harness.chat.v1";
 const CHAT_ENDPOINT = "/api/chat";
 const UNGROUNDED_FALLBACK = "I can't ground that answer in the data I have.";
 
+export type ChatUiMessage = ChatMessage & {
+  model?: string;
+  proLabel?: boolean;
+};
+
 export type ChatState = {
   open: boolean;
   phase: "idle" | "waiting" | "error" | "limit" | "auth";
-  messages: ChatMessage[]; // user/assistant turns only
+  messages: ChatUiMessage[]; // user/assistant turns only
   error: string | null;
+  modelChoice: ChatModelChoice;
+  lastReplyModel: string | null;
+  lastReplyProLabel: boolean;
 };
 
+type PersistedChatState = {
+  open: boolean;
+  modelChoice: ChatModelChoice;
+};
+
+const persisted = readPersistedChatState();
+
 export const chatState: Writable<ChatState> = writable<ChatState>({
-  open: readPersistedOpen(),
+  open: persisted.open,
   phase: "idle",
   messages: [],
   error: null,
+  modelChoice: persisted.modelChoice,
+  lastReplyModel: null,
+  lastReplyProLabel: false,
 });
 
-// Persist ONLY the open/closed flag, lazily and SSR-safe. Best-effort: a
-// blocked quota / private mode is non-fatal — the store keeps working.
+// Persist ONLY the open/closed flag and model choice, lazily and SSR-safe.
+// Best-effort: a blocked quota / private mode is non-fatal — the store keeps
+// working. Legacy "1"/"0" payloads remain readable.
 if (typeof localStorage !== "undefined") {
   chatState.subscribe((state) => {
     try {
-      localStorage.setItem(CHAT_OPEN_KEY, state.open ? "1" : "0");
+      localStorage.setItem(
+        CHAT_OPEN_KEY,
+        JSON.stringify({ open: state.open, modelChoice: state.modelChoice }),
+      );
     } catch {
       // localStorage unavailable — persistence is best-effort.
     }
@@ -51,6 +74,10 @@ export function toggleChat(): void {
 
 export function closeChat(): void {
   chatState.update((state) => ({ ...state, open: false }));
+}
+
+export function setModelChoice(modelChoice: ChatModelChoice): void {
+  chatState.update((state) => ({ ...state, modelChoice }));
 }
 
 /** POST /api/chat. Attaches Authorization from getPrivyAccessToken() and the
@@ -76,10 +103,13 @@ export async function sendChatMessage(
 
   let response: Response;
   try {
+    const state = get(chatState);
     response = await fetch(CHAT_ENDPOINT, {
       method: "POST",
       headers: buildHeaders(token),
-      body: JSON.stringify(buildBody(token, get(chatState).messages, context)),
+      body: JSON.stringify(
+        buildBody(token, state.messages, context, state.modelChoice),
+      ),
     });
   } catch (error) {
     setError(networkErrorMessage(error));
@@ -99,26 +129,44 @@ export async function sendChatMessage(
     return;
   }
 
-  let payload: { reply?: string | null } = {};
+  let payload: { reply?: string | null; model?: unknown; proLabel?: unknown } =
+    {};
   try {
-    payload = (await response.json()) as { reply?: string | null };
+    payload = (await response.json()) as {
+      reply?: string | null;
+      model?: unknown;
+      proLabel?: unknown;
+    };
   } catch {
     setError("chat-bad-response");
     return;
   }
 
   const reply = typeof payload.reply === "string" ? payload.reply.trim() : "";
+  const model = typeof payload.model === "string" ? payload.model : null;
+  const proLabel = payload.proLabel === true;
   pushMessage({
     role: "assistant",
     content: reply.length > 0 ? reply : UNGROUNDED_FALLBACK,
+    ...(model ? { model } : {}),
+    proLabel,
   });
+  recordReplyMetadata(model, proLabel);
   setPhase("idle");
 }
 
-function pushMessage(message: ChatMessage): void {
+function pushMessage(message: ChatUiMessage): void {
   chatState.update((state) => ({
     ...state,
     messages: [...state.messages, message],
+  }));
+}
+
+function recordReplyMetadata(model: string | null, proLabel: boolean): void {
+  chatState.update((state) => ({
+    ...state,
+    lastReplyModel: model,
+    lastReplyProLabel: proLabel,
   }));
 }
 
@@ -142,10 +190,18 @@ function buildHeaders(token: string | null): Record<string, string> {
 
 function buildBody(
   token: string | null,
-  history: ChatMessage[],
+  history: ChatUiMessage[],
   context: Record<string, unknown>,
+  modelChoice: ChatModelChoice,
 ): Record<string, unknown> {
-  const body: Record<string, unknown> = { history, context };
+  const body: Record<string, unknown> = {
+    history: history.map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+    context,
+    modelChoice,
+  };
   if (token) {
     body.edgeToken = token;
   }
@@ -159,11 +215,30 @@ function networkErrorMessage(error: unknown): string {
   return "chat-network-error";
 }
 
-function readPersistedOpen(): boolean {
-  if (typeof localStorage === "undefined") return false;
+function readPersistedChatState(): PersistedChatState {
+  const fallback: PersistedChatState = { open: false, modelChoice: "auto" };
+  if (typeof localStorage === "undefined") return fallback;
   try {
-    return localStorage.getItem(CHAT_OPEN_KEY) === "1";
+    const raw = localStorage.getItem(CHAT_OPEN_KEY);
+    if (raw === "1") return { ...fallback, open: true };
+    if (raw === "0" || raw === null) return fallback;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)) return fallback;
+    return {
+      open: typeof parsed.open === "boolean" ? parsed.open : fallback.open,
+      modelChoice: isChatModelChoice(parsed.modelChoice)
+        ? parsed.modelChoice
+        : fallback.modelChoice,
+    };
   } catch {
-    return false;
+    return fallback;
   }
+}
+
+function isChatModelChoice(value: unknown): value is ChatModelChoice {
+  return value === "auto" || value === "free" || value === "pro";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -8,6 +8,7 @@ import {
   CHAT_TOOLS,
   type ChatMessage,
   capHistory,
+  classifyTaskClass,
   DAILY_MESSAGE_CAP,
   dailyAllowed,
   groundedOrNull,
@@ -16,6 +17,24 @@ import {
 } from "./chat-core";
 
 const NOW = Date.UTC(2026, 6, 19, 14, 2, 0);
+
+describe("classifyTaskClass", () => {
+  test("classifies analysis asks by deterministic lower-cased keyword match", () => {
+    expect(classifyTaskClass("WHY did risk regime change?")).toBe("analysis");
+    expect(classifyTaskClass("Can you analyse my portfolio scenario?")).toBe(
+      "analysis",
+    );
+    expect(classifyTaskClass("compare BTC and SOL funding")).toBe("analysis");
+    expect(classifyTaskClass("explain-in-depth what happened")).toBe(
+      "analysis",
+    );
+  });
+
+  test("classifies ordinary desk chat without analysis keywords as chat", () => {
+    expect(classifyTaskClass("show latest BTC price")).toBe("chat");
+    expect(classifyTaskClass("hello desk")).toBe("chat");
+  });
+});
 
 describe("CHAT_SYSTEM_PROMPT", () => {
   test("requires explicit simulation language and forbids live confirmation claims in paper mode", () => {
