@@ -42,28 +42,25 @@ describe("migrateLayout", () => {
     ]);
   });
 
-  test("legacy default payload migrates to the new default order", () => {
-    // The duplicate collapsed exactly onto the fixed DEFAULT_PANEL_ORDER.
+  test("legacy default payload migrates to the slim (empty) default order", () => {
+    // Slim terminal retires every former grid panel — merge drops them all.
     const merged = mergeLayout(
       migrateLayout(LEGACY_DEFAULT_ORDER),
       DEFAULT_PANEL_ORDER,
     );
+    expect(merged).toEqual([]);
     expect(merged).toEqual(DEFAULT_PANEL_ORDER);
   });
 
-  test('single leftover "markets" becomes the monitor; dock-era retired ids drop', () => {
-    // Dragging either "markets" panel collapsed the duplicate to ONE entry
-    // (the drop handler filters every occurrence of the dragged id). The
-    // day-trading grid then retires "perp" (lives in the dock) and the
-    // Phoenix "markets" list (merged into the monitor) from the defaults —
-    // mergeLayout drops them from old saves and appends what's missing.
-    const saved = ["perp", "markets", "watch"];
+  test("retired grid panel ids drop when merging against the slim default", () => {
+    // Watch / monitor / spot / screener / events / markets / perp no longer
+    // live in DEFAULT_PANEL_ORDER — mergeLayout clears them from old saves.
+    const saved = ["perp", "markets", "watch", "screener", "events", "spot"];
     const merged = mergeLayout(migrateLayout(saved), DEFAULT_PANEL_ORDER);
-    expect(merged[0]).toBe("monitor");
-    expect(merged[1]).toBe("watch");
-    expect(merged).not.toContain("perp");
+    expect(merged).toEqual([]);
+    expect(merged).not.toContain("monitor");
     expect(merged).not.toContain("markets");
-    expect(merged.toSorted()).toEqual([...DEFAULT_PANEL_ORDER].toSorted());
+    expect(merged).not.toContain("watch");
   });
 
   test('post-migration payloads (containing "monitor") pass through untouched', () => {

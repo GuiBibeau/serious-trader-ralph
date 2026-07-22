@@ -3,23 +3,16 @@
 
   import { onMount, tick } from "svelte";
   import AckModal from "./components/AckModal.svelte";
-  import AiReadLine from "./components/AiReadLine.svelte";
   import AlertsModal from "./components/AlertsModal.svelte";
   import AuthModal from "./components/AuthModal.svelte";
   import BookLadder from "./components/BookLadder.svelte";
   import CheatSheetModal from "./components/CheatSheetModal.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
-  import DragHead from "./components/DragHead.svelte";
-  import EventsPanel from "./components/EventsPanel.svelte";
   import FundingWizard from "./components/FundingWizard.svelte";
   import FundsModal from "./components/FundsModal.svelte";
   import PaperFundsModal from "./components/PaperFundsModal.svelte";
   import JournalPanel from "./components/JournalPanel.svelte";
-  import MacroPanel from "./components/MacroPanel.svelte";
-  import MonitorPanel from "./components/MonitorPanel.svelte";
   import PerpDeskPanel from "./components/PerpDeskPanel.svelte";
-  import ScreenerPanel from "./components/ScreenerPanel.svelte";
-  import SpotMarketsPanel from "./components/SpotMarketsPanel.svelte";
   import SpotTicketForm from "./components/SpotTicketForm.svelte";
   import StatusLine from "./components/StatusLine.svelte";
   import Tape from "./components/Tape.svelte";
@@ -35,10 +28,8 @@
     aiFundingRead,
     aiPositionBrief,
     aiSessionRecap,
-    aiMacroRead,
     aiParseCommand,
     aiScannerSetups,
-    aiTradeIdeas,
     IDLE_READ,
     type AiRead,
   } from "$lib/ai";
@@ -73,7 +64,6 @@
   import {
     createPanelLayout,
     migrateLayout,
-    panelStyle,
     providePanelLayout,
   } from "$lib/terminal/layout";
   import {
@@ -92,7 +82,6 @@
     CACHE_MARKETS,
     CACHE_MAX_AGE,
     CACHE_NEWS,
-    CACHE_PANELS,
     CACHE_READS,
     DEFAULT_PANEL_ORDER,
     LAYOUT_STORAGE_KEY,
@@ -130,11 +119,9 @@
     type PaperMark,
   } from "$lib/terminal/paper-ledger";
   import {
-    disconnectedPanel,
     disconnectedRows,
     emptyMarketStats,
     selectedMarketTableRows,
-    summarizeEdgeStatus,
   } from "$lib/terminal/panels";
   import {
     chartLinePrefs,
@@ -148,8 +135,6 @@
   } from "$lib/phoenix-cache";
   import {
     fetchNews,
-    fetchOilPanel,
-    fetchRatesPanel,
     screenSolanaAddress,
     type NewsItem,
   } from "$lib/intel";
@@ -157,14 +142,6 @@
   import { buildDeskContext } from "$lib/chat-context";
   import { fetchMintSafety, fetchSolanaLamports, solanaRpcUrl } from "$lib/solana-rpc";
   import { swrRead, swrWrite } from "$lib/swr";
-  import {
-    edgeApiBase,
-    fetchEtfRows,
-    fetchMacroSignalsRows,
-    fetchStablecoinRows,
-    type DataPanel,
-    type DataRow,
-  } from "$lib/edge-data";
   import {
     cacheCandles,
     connectPhoenixMarketStream,
@@ -277,7 +254,6 @@
     type UTCTimestamp,
   } from "lightweight-charts";
 
-  type SignalRow = DataRow;
   type ChartScale = "price" | "percent";
   type ChartAxisMode = "linear" | "log";
 
@@ -428,15 +404,6 @@
   let marketSourceLabel = "loading";
   let marketVolume24h: number | null = null;
   let nowMs = Date.now();
-  let edgeStatus = "loading";
-  let edgeSource = edgeApiBase() || "not configured";
-  let macroPanel: DataPanel = disconnectedPanel("Edge macro source required");
-  let fredPanel: DataPanel = disconnectedPanel("Edge FRED source required");
-  let etfPanel: DataPanel = disconnectedPanel("Edge ETF flow source required");
-  let stablecoinPanel: DataPanel = disconnectedPanel(
-    "Edge stablecoin source required",
-  );
-  let oilPanel: DataPanel = disconnectedPanel("Edge energy source required");
   let authOpen = false;
   let ackOpen = false;
   let pendingAckAction: (() => void) | null = null;
@@ -662,7 +629,6 @@
   let activeSection = "chart";
 
   // AI co-pilot reads (DeepSeek). Interpretation only — never computes numbers.
-  let macroRead: AiRead = IDLE_READ;
   let fundingRead: AiRead = IDLE_READ;
   let scannerRead: AiRead = IDLE_READ;
   // Perp ticket state (side/size/risk/leverage/type/limit/TP/SL/sizing +
@@ -695,6 +661,12 @@
   // breakpoint where the grid collapses, so markup and CSS agree. The tape
   // shares the ladder slot up top (all three don't fit vertically).
   let stackedBook = false;
+  // Chart footer density: measured against the chart panel width so shrinking
+  // the window (or the book eating space) swaps the long date range out
+  // before it crushes the controls.
+  let chartFooterEl: HTMLElement | null = null;
+  let chartFooterCompact = true;
+  let chartFooterTight = false;
   let bookFeed: "ladder" | "tape" = "ladder";
   // Measured sticky-chrome heights: the market rail pins below the topbar
   // and jump-to-section targets land below both.
@@ -740,8 +712,9 @@
   let pendingSpotAssetId: string | null = null;
 
   // Watchlist: starred symbols (uppercase), persisted in prefs.
+  // Lives in the bottom dock (Desk / Journal / Alerts / Watch).
   let watchlist: string[] = [];
-  // Screener controls (persisted).
+  // Screener controls (persisted; screener panel retired but prefs kept).
   let screenSort: "movers" | "volume" | "cap" = "movers";
   let screenHub: "all" | "crypto" | "equities" | "pre-ipo" = "all";
   // Local-first trade journal + AI desk notes over it.
@@ -850,10 +823,9 @@
   } | null = null;
   let tpslFrame: number | null = null;
 
-  // Intel feeds (Crucix-inspired): event radar, news ticker, sanctions, ideas.
+  // Intel feeds: news ticker + sanctions screening.
   let news: NewsItem[] = [];
   let eventRead: AiRead = IDLE_READ;
-  let ideasRead: AiRead = IDLE_READ;
   let walletScreen: { flagged: boolean; checked: boolean } = {
     flagged: false,
     checked: false,
@@ -873,12 +845,7 @@
   );
   const {
     panelOrder,
-    draggedPanel,
-    dragOverPanel,
     reset: resetLayout,
-    onPanelDragOver,
-    onPanelDragLeave,
-    onPanelDrop,
   } = layout;
 
   // Legacy key name kept across the Harness rebrand.
@@ -951,9 +918,8 @@
       wizardPollTimer = null;
     }
   }
-  // Bottom dock (desk / journal / alerts) + macro drawer — day-trading grid.
-  let dockTab: "desk" | "journal" | "alerts" = "desk";
-  let macroOpen = false;
+  // Bottom dock (desk / journal / alerts / watch).
+  let dockTab: "desk" | "journal" | "alerts" | "watch" = "desk";
   const { alertLog } = alertsStore;
   // Meme safety rails: SPL authority checks per selected mint (cached —
   // authorities effectively never un-revoke).
@@ -1508,7 +1474,7 @@
       $tradeRiskUsd,
       $tradeLeverage,
       dockTab,
-      macroOpen,
+      false,
       showLevels,
       rays,
       paperMode,
@@ -1596,11 +1562,44 @@
       stackedBook = !event.matches;
     };
     stackMq.addEventListener("change", onStackMq);
+
+    // Footer layout follows the chart column itself (ResizeObserver), not
+    // viewport media queries — the book rail can leave a tight chart even
+    // on a wide desktop, and CSS container queries were not reliably
+    // applied through HMR for this page.
+    let footerRo: ResizeObserver | null = null;
+    const syncFooterDensity = (width: number): void => {
+      chartFooterCompact = width < 1080;
+      chartFooterTight = width < 760;
+    };
+    const watchFooter = (): void => {
+      footerRo?.disconnect();
+      footerRo = null;
+      const panel = chartFooterEl?.closest(".chart-panel");
+      if (!(panel instanceof HTMLElement)) return;
+      syncFooterDensity(panel.getBoundingClientRect().width);
+      footerRo = new ResizeObserver((entries) => {
+        const width = entries[0]?.contentRect.width ?? 0;
+        syncFooterDensity(width);
+      });
+      footerRo.observe(panel);
+    };
+    // Bind may land after mount — poll once next frame then watch.
+    requestAnimationFrame(watchFooter);
+    const footerWatchTimer = window.setInterval(() => {
+      if (chartFooterEl) {
+        watchFooter();
+        window.clearInterval(footerWatchTimer);
+      }
+    }, 200);
+
     return () => {
       phoenixStream?.close();
       window.cancelAnimationFrame(bookFrame);
       document.removeEventListener("visibilitychange", onVisible);
       stackMq.removeEventListener("change", onStackMq);
+      footerRo?.disconnect();
+      window.clearInterval(footerWatchTimer);
       for (const timer of timers) window.clearInterval(timer);
       if (fundsPollTimer !== null) window.clearInterval(fundsPollTimer);
       if (wizardPollTimer !== null) window.clearInterval(wizardPollTimer);
@@ -1898,25 +1897,10 @@
   }
 
   async function refreshEdgeModules(): Promise<void> {
-    edgeSource = edgeApiBase() || "not configured";
-    edgeStatus = "loading";
-    const accessToken = await activePrivyAccessToken();
-    lastEdgeRunToken = accessToken ?? null;
+    // Stamp the auth token so boot dedupe still works after Privy connects
+    // (macro desk retired — this path refreshes news + remaining AI reads).
+    lastEdgeRunToken = (await activePrivyAccessToken()) ?? null;
     const now = Date.now();
-    const [macro, etf, stablecoin, rates, oil] = await Promise.all([
-      fetchMacroSignalsRows(accessToken),
-      fetchEtfRows(accessToken),
-      fetchStablecoinRows(accessToken),
-      fetchRatesPanel(now),
-      fetchOilPanel(now),
-    ]);
-    macroPanel = macro;
-    etfPanel = etf;
-    stablecoinPanel = stablecoin;
-    fredPanel = rates;
-    oilPanel = oil;
-    edgeStatus = summarizeEdgeStatus([macro, etf, stablecoin]);
-    persistPanelCache();
     void refreshAiReads();
     void refreshIntel(now);
   }
@@ -1929,7 +1913,7 @@
       // feed hiccup — keep last headlines
     }
     if (aiDisabled()) return;
-    await Promise.allSettled([runEventRead(), runIdeas()]);
+    await runEventRead();
     persistReadCache();
   }
 
@@ -1947,33 +1931,12 @@
     }
   }
 
-  async function runIdeas(): Promise<void> {
-    if (markets.length === 0) return;
-    const snapshot = {
-      regime: fredPanel.summary?.label ?? null,
-      macroVerdict: macroPanel.summary?.label ?? null,
-      selected: selectedSymbol,
-      fundingPct8h: fundingPercent,
-      change24hPct: change24h,
-      markets: markets.slice(0, 12).map((market) => ({
-        symbol: market.symbol,
-        mid: marketMids[market.symbol] ?? null,
-      })),
-    };
-    ideasRead = { phase: "loading", text: ideasRead.text };
-    try {
-      ideasRead = { phase: "ready", asOf: Date.now(), text: await aiTradeIdeas(snapshot) };
-    } catch (error) {
-      ideasRead = { phase: "error", text: "", error: aiErr(error) };
-    }
-  }
-
   async function refreshAiReads(): Promise<void> {
     if (markets.length) {
       swrWrite(CACHE_MARKETS, { markets, mids: marketMids });
     }
     if (aiDisabled()) return;
-    await Promise.allSettled([runMacroRead(), runFundingRead(), runScannerRead()]);
+    await Promise.allSettled([runFundingRead(), runScannerRead()]);
     persistReadCache();
   }
 
@@ -2012,31 +1975,14 @@
 
   // ── Stale-while-revalidate widget cache ───────────────────────────
   type ReadCache = {
-    macro?: string;
     funding?: string;
     scanner?: string;
     event?: string;
-    ideas?: string;
   };
 
-  /** Restores cached widgets; returns true when fresh panels were painted. */
+  /** Restores cached widgets; returns true when markets cache was warm. */
   function hydrateWidgetCache(): boolean {
-    let panelsWarm = false;
-    const panels = swrRead<{
-      macro: DataPanel;
-      fred: DataPanel;
-      etf: DataPanel;
-      stablecoin: DataPanel;
-      oil: DataPanel;
-    }>(CACHE_PANELS, CACHE_MAX_AGE);
-    if (panels) {
-      panelsWarm = true;
-      macroPanel = panels.macro ?? macroPanel;
-      fredPanel = panels.fred ?? fredPanel;
-      etfPanel = panels.etf ?? etfPanel;
-      stablecoinPanel = panels.stablecoin ?? stablecoinPanel;
-      oilPanel = panels.oil ?? oilPanel;
-    }
+    let marketsWarm = false;
     const cachedNews = swrRead<NewsItem[]>(CACHE_NEWS, CACHE_MAX_AGE);
     if (cachedNews) news = cachedNews;
     const cachedMarkets = swrRead<{
@@ -2044,63 +1990,29 @@
       mids: Record<string, number>;
     }>(CACHE_MARKETS, MARKETS_MAX_AGE);
     if (cachedMarkets) {
+      marketsWarm = true;
       markets = cachedMarkets.markets ?? markets;
       marketMids = cachedMarkets.mids ?? marketMids;
     }
     const reads = swrRead<ReadCache>(CACHE_READS, CACHE_MAX_AGE);
     if (reads) {
-      if (reads.macro) macroRead = { phase: "ready", text: reads.macro };
       if (reads.funding) fundingRead = { phase: "ready", text: reads.funding };
       if (reads.scanner) scannerRead = { phase: "ready", text: reads.scanner };
       if (reads.event) eventRead = { phase: "ready", text: reads.event };
-      if (reads.ideas) ideasRead = { phase: "ready", text: reads.ideas };
     }
-    return panelsWarm;
-  }
-
-  function persistPanelCache(): void {
-    swrWrite(CACHE_PANELS, {
-      macro: macroPanel,
-      fred: fredPanel,
-      etf: etfPanel,
-      stablecoin: stablecoinPanel,
-      oil: oilPanel,
-    });
+    return marketsWarm;
   }
 
   function persistReadCache(): void {
     const reads: ReadCache = {};
-    if (macroRead.phase === "ready") reads.macro = macroRead.text;
     if (fundingRead.phase === "ready") reads.funding = fundingRead.text;
     if (scannerRead.phase === "ready") reads.scanner = scannerRead.text;
     if (eventRead.phase === "ready") reads.event = eventRead.text;
-    if (ideasRead.phase === "ready") reads.ideas = ideasRead.text;
     swrWrite(CACHE_READS, reads);
   }
 
   $: layoutCustomized =
     $panelOrder.join(",") !== DEFAULT_PANEL_ORDER.join(",");
-
-  async function runMacroRead(): Promise<void> {
-    const meaningful = macroPanel.rows.filter(
-      (row) => row.value && row.value !== "--" && row.value !== "Not connected",
-    );
-    if (macroPanel.status !== "ready" || meaningful.length === 0) return;
-    const snapshot = {
-      verdict: macroPanel.summary?.label ?? null,
-      signals: macroPanel.rows.map((row) => ({
-        signal: row.label,
-        value: row.value,
-        status: row.status,
-      })),
-    };
-    macroRead = { phase: "loading", text: macroRead.text };
-    try {
-      macroRead = { phase: "ready", asOf: Date.now(), text: await aiMacroRead(snapshot) };
-    } catch (error) {
-      macroRead = { phase: "error", text: "", error: aiErr(error) };
-    }
-  }
 
   async function runFundingRead(): Promise<void> {
     if (!marketStats || marketStats.funding == null) return;
@@ -5515,7 +5427,6 @@
     if (prefs.tradeRiskUsd !== undefined) $tradeRiskUsd = prefs.tradeRiskUsd;
     if (prefs.tradeLeverage !== undefined) $tradeLeverage = prefs.tradeLeverage;
     if (prefs.dockTab !== undefined) dockTab = prefs.dockTab;
-    if (prefs.macroOpen !== undefined) macroOpen = prefs.macroOpen;
     if (prefs.showLevels !== undefined) showLevels = prefs.showLevels;
     if (prefs.rays !== undefined) rays = prefs.rays;
     if (prefs.paperMode !== undefined) paperMode = prefs.paperMode;
@@ -6073,135 +5984,155 @@
         </div>
       </div>
 
-      <div class="chart-footer">
-        <button
-          class:active={visibleCandleCount === 30}
-          type="button"
-          onclick={() => setVisibleCandleRange(30)}
+      <div
+        class="chart-footer"
+        class:is-compact={chartFooterCompact}
+        class:is-tight={chartFooterTight}
+        bind:this={chartFooterEl}
+      >
+        <div class="chart-footer-left">
+          <button
+            class:active={visibleCandleCount === 30}
+            type="button"
+            onclick={() => setVisibleCandleRange(30)}
+          >
+            30
+          </button>
+          <button
+            class:active={visibleCandleCount === 60}
+            type="button"
+            onclick={() => setVisibleCandleRange(60)}
+          >
+            60
+          </button>
+          <button
+            class:active={visibleCandleCount === 120}
+            type="button"
+            onclick={() => setVisibleCandleRange(120)}
+          >
+            120
+          </button>
+          <button
+            class:active={visibleCandleCount === MAX_VISIBLE_CANDLES}
+            type="button"
+            onclick={() => setVisibleCandleRange(MAX_VISIBLE_CANDLES)}
+          >
+            180
+          </button>
+          {#if tradeMode === "perps" && !chartFooterTight}
+            <span class="line-toggle-group" role="group" aria-label="Chart lines">
+              {#each [["pos", "POS"], ["tpsl", "TP/SL"], ["orders", "ORD"], ["alerts", "ALRT"]] as [key, label] (key)}
+                <button
+                  class="line-toggle"
+                  class:active={$chartLinePrefs[key as keyof typeof $chartLinePrefs]}
+                  type="button"
+                  title={`Toggle ${label} lines`}
+                  onclick={() =>
+                    chartLinePrefs.update((prefs) => ({
+                      ...prefs,
+                      [key]: !prefs[key as keyof typeof prefs],
+                    }))}
+                >
+                  {label}
+                </button>
+              {/each}
+            </span>
+          {/if}
+        </div>
+
+        <strong
+          class="chart-range"
+          title={`${chartRangeLabel} · UTC · ${candleCountdown}`}
         >
-          30
-        </button>
-        <button
-          class:active={visibleCandleCount === 60}
-          type="button"
-          onclick={() => setVisibleCandleRange(60)}
-        >
-          60
-        </button>
-        <button
-          class:active={visibleCandleCount === 120}
-          type="button"
-          onclick={() => setVisibleCandleRange(120)}
-        >
-          120
-        </button>
-        <button
-          class:active={visibleCandleCount === MAX_VISIBLE_CANDLES}
-          type="button"
-          onclick={() => setVisibleCandleRange(MAX_VISIBLE_CANDLES)}
-        >
-          180
-        </button>
-        {#if tradeMode === "perps"}
-          <span class="line-toggle-group" role="group" aria-label="Chart lines">
-            {#each [["pos", "POS"], ["tpsl", "TP/SL"], ["orders", "ORD"], ["alerts", "ALRT"]] as [key, label] (key)}
-              <button
-                class="line-toggle"
-                class:active={$chartLinePrefs[key as keyof typeof $chartLinePrefs]}
-                type="button"
-                title={`Toggle ${label} lines`}
-                onclick={() =>
-                  chartLinePrefs.update((prefs) => ({
-                    ...prefs,
-                    [key]: !prefs[key as keyof typeof prefs],
-                  }))}
-              >
-                {label}
-              </button>
-            {/each}
-          </span>
-        {/if}
-        <strong>{chartRangeLabel} · UTC · {candleCountdown}</strong>
-        <button
-          class:active={chartScale === "percent"}
-          type="button"
-          aria-pressed={chartScale === "percent"}
-          onclick={() => {
-            chartScale = chartScale === "percent" ? "price" : "percent";
-            if (chartScale === "percent") chartAxisMode = "linear";
-          }}
-        >
-          %
-        </button>
-        <button
-          class:active={chartAxisMode === "log"}
-          type="button"
-          aria-pressed={chartAxisMode === "log"}
-          onclick={() => {
-            chartAxisMode = chartAxisMode === "log" ? "linear" : "log";
-            if (chartAxisMode === "log") chartScale = "price";
-          }}
-        >
-          log
-        </button>
-        <button
-          class:active={showLevels}
-          type="button"
-          aria-pressed={showLevels}
-          title="Toggle structure levels (PDH/PDL, swings)"
-          onclick={() => {
-            showLevels = !showLevels;
-            // OFF removes every structure line immediately; ON recomputes
-            // fresh from the candles currently on the chart.
-            recomputeStructureLevels(
-              tradeMode === "spot" ? spotChartPoints : chartPoints,
-            );
-          }}
-        >
-          levels
-        </button>
-        <button
-          class:active={clickTradeArmed}
-          type="button"
-          aria-pressed={clickTradeArmed}
-          disabled={tradeMode === "spot"}
-          title={tradeMode === "spot"
-            ? "perps only for now"
-            : "Arm click-to-trade — click the chart to stage a limit order"}
-          onclick={() => (clickTradeArmed ? disarmClickTrade() : armClickTrade())}
-        >
-          trade
-        </button>
-        <button
-          class:active={rayArmed}
-          type="button"
-          aria-pressed={rayArmed}
-          disabled={chartedRaySymbol === null}
-          title="Arm ray — click the chart to place a horizontal ray (or click an existing ray to remove it)"
-          onclick={() => (rayArmed ? disarmRay() : armRay())}
-        >
-          ray
-        </button>
-        <button
-          class:active={measureArmed}
-          type="button"
-          aria-pressed={measureArmed}
-          title="Arm measure — drag on the chart to read Δ / % / bars"
-          onclick={() => (measureArmed ? disarmMeasure() : armMeasure())}
-        >
-          measure
-        </button>
-        <button
-          class:active={autoFollow}
-          type="button"
-          onclick={scrollToRealtime}
-        >
-          auto
-        </button>
+          {#if chartFooterCompact}
+            {candleCountdown} UTC
+          {:else}
+            {chartRangeLabel} · UTC · {candleCountdown}
+          {/if}
+        </strong>
+
+        <div class="chart-footer-right">
+          <button
+            class:active={chartScale === "percent"}
+            type="button"
+            aria-pressed={chartScale === "percent"}
+            onclick={() => {
+              chartScale = chartScale === "percent" ? "price" : "percent";
+              if (chartScale === "percent") chartAxisMode = "linear";
+            }}
+          >
+            %
+          </button>
+          <button
+            class:active={chartAxisMode === "log"}
+            type="button"
+            aria-pressed={chartAxisMode === "log"}
+            onclick={() => {
+              chartAxisMode = chartAxisMode === "log" ? "linear" : "log";
+              if (chartAxisMode === "log") chartScale = "price";
+            }}
+          >
+            log
+          </button>
+          <button
+            class:active={showLevels}
+            type="button"
+            aria-pressed={showLevels}
+            title="Toggle structure levels (PDH/PDL, swings)"
+            onclick={() => {
+              showLevels = !showLevels;
+              // OFF removes every structure line immediately; ON recomputes
+              // fresh from the candles currently on the chart.
+              recomputeStructureLevels(
+                tradeMode === "spot" ? spotChartPoints : chartPoints,
+              );
+            }}
+          >
+            levels
+          </button>
+          <button
+            class:active={clickTradeArmed}
+            type="button"
+            aria-pressed={clickTradeArmed}
+            disabled={tradeMode === "spot"}
+            title={tradeMode === "spot"
+              ? "perps only for now"
+              : "Arm click-to-trade — click the chart to stage a limit order"}
+            onclick={() => (clickTradeArmed ? disarmClickTrade() : armClickTrade())}
+          >
+            trade
+          </button>
+          <button
+            class:active={rayArmed}
+            type="button"
+            aria-pressed={rayArmed}
+            disabled={chartedRaySymbol === null}
+            title="Arm ray — click the chart to place a horizontal ray (or click an existing ray to remove it)"
+            onclick={() => (rayArmed ? disarmRay() : armRay())}
+          >
+            ray
+          </button>
+          <button
+            class:active={measureArmed}
+            type="button"
+            aria-pressed={measureArmed}
+            title="Arm measure — drag on the chart to read Δ / % / bars"
+            onclick={() => (measureArmed ? disarmMeasure() : armMeasure())}
+          >
+            measure
+          </button>
+          <button
+            class:active={autoFollow}
+            type="button"
+            onclick={scrollToRealtime}
+          >
+            auto
+          </button>
+        </div>
       </div>
     </section>
 
-    <!-- Bottom dock: risk never leaves the screen — desk/journal/alerts
+    <!-- Bottom dock: risk never leaves the screen — desk/journal/alerts/watch
          tabs span the full width directly under the chart row. -->
     <section class="panel dock" aria-label="Trading desk dock">
       <div class="dock-tabs" role="tablist" aria-label="Dock views">
@@ -6233,6 +6164,16 @@
           Alerts{#if $alertLog.length > 0}
             <span class="dock-count">{$alertLog.length}</span>{/if}
         </button>
+        <button
+          role="tab"
+          aria-selected={dockTab === "watch"}
+          class:active={dockTab === "watch"}
+          type="button"
+          onclick={() => (dockTab = "watch")}
+        >
+          Watch{#if watchlist.length > 0}
+            <span class="dock-count">{watchlist.length}</span>{/if}
+        </button>
       </div>
       <div class="dock-body">
         {#if dockTab === "journal"}
@@ -6257,6 +6198,14 @@
               <p class="dock-empty">No alerts fired this session.</p>
             {/each}
           </div>
+        {:else if dockTab === "watch"}
+          <WatchlistPanel
+            {watchlist}
+            {spotAssets}
+            {marketMids}
+            {markets}
+            onopenrow={openWatchRow}
+          />
         {:else}
           {@render perpDeskPanel()}
         {/if}
@@ -6395,16 +6344,6 @@
     </section>
 
 
-    <MonitorPanel
-      {markets}
-      {marketMids}
-      {dailyStats}
-      {selectedSymbol}
-      {tradeMode}
-      {scannerRead}
-      onselect={chooseMonitorRow}
-    />
-
 {#snippet perpDeskPanel()}
     <PerpDeskPanel
       authority={tradeAuthority}
@@ -6461,92 +6400,6 @@
       onresetpaper={resetPaperAccount}
     />
 {/snippet}
-
-    <!-- Macro drawer: the research desk folds away — day traders open it
-         when they want regime context; the chip carries edge status. -->
-    <section class="panel macro-drawer" id="section-macro">
-      <button
-        class="drawer-head"
-        type="button"
-        aria-expanded={macroOpen}
-        onclick={() => (macroOpen = !macroOpen)}
-      >
-        <span class="drawer-kicker">MACRO_DESK</span>
-        <span class="drawer-status">{edgeStatus}</span>
-        <span class="drawer-caret" aria-hidden="true">{macroOpen ? "▾" : "▸"}</span>
-      </button>
-      {#if macroOpen}
-        <div class="drawer-grid">
-    <MacroPanel
-      title="MACRO_RADAR"
-      subtitle="Signal blend"
-      panel={macroPanel}
-      panelId="macro"
-      id="section-macro"
-      read={macroRead}
-    />
-    <MacroPanel title="FRED_NOWCAST" subtitle="Rates + liquidity" panel={fredPanel} panelId="fred" />
-    <MacroPanel title="ETF_FLOWS" subtitle="Spot flow tape" panel={etfPanel} panelId="etf" />
-    <MacroPanel
-      title="STABLECOINS"
-      subtitle="Dollar rail watch"
-      panel={stablecoinPanel}
-      panelId="stablecoins"
-    />
-    <MacroPanel title="OIL_MACRO" subtitle="Energy regime" panel={oilPanel} panelId="oil" />
-
-    <section
-      class="panel macro-panel"
-      role="group"
-      data-panel="ideas"
-      style={panelStyle("ideas", $panelOrder)}
-      class:dragging={$draggedPanel === "ideas"}
-      class:drag-over={$dragOverPanel === "ideas"}
-      ondragover={(event) => onPanelDragOver(event, "ideas")}
-      ondragleave={() => onPanelDragLeave("ideas")}
-      ondrop={(event) => onPanelDrop(event, "ideas")}
-    >
-      <div class="panel-head">
-        <DragHead panelId="ideas" kicker="DESK_IDEAS" title="Cross-signal synthesis" />
-      </div>
-      <AiReadLine read={ideasRead} />
-    </section>
-        </div>
-      {/if}
-    </section>
-
-    <EventsPanel
-      {news}
-      {selectedSymbol}
-      spotSymbol={spotAsset?.symbol ?? null}
-      {tradeMode}
-      {eventRead}
-    />
-
-    <WatchlistPanel
-      {watchlist}
-      {spotAssets}
-      {marketMids}
-      {markets}
-      onopenrow={openWatchRow}
-    />
-
-    <ScreenerPanel
-      {spotAssets}
-      {tradeMode}
-      {spotAsset}
-      bind:sort={screenSort}
-      bind:hub={screenHub}
-      onselect={selectSpotAsset}
-    />
-
-    <SpotMarketsPanel
-      {spotAssets}
-      {tokenBalances}
-      {tradeMode}
-      {spotAsset}
-      onselect={selectSpotAsset}
-    />
 
     {#if $chatState.open}
       {#await SidePanelLazy()}
@@ -6805,7 +6658,9 @@
   .timeframe-tabs,
   .chart-market-tools,
   .price-mode-toggle,
-  .chart-footer {
+  .chart-footer,
+  .chart-footer-left,
+  .chart-footer-right {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -6858,9 +6713,10 @@
   /* ── Chart footer line toggles ───────────────────────────────────── */
   .line-toggle-group {
     display: inline-flex;
+    flex: 0 0 auto;
     gap: 0.15rem;
-    margin-left: 0.6rem;
-    padding-left: 0.6rem;
+    margin-left: 0.35rem;
+    padding-left: 0.55rem;
     border-left: 1px solid var(--line-soft);
   }
 
@@ -6962,49 +6818,6 @@
   .dock-empty {
     color: var(--faint);
     margin: 0;
-  }
-
-  /* Macro drawer: research desk folds away below the trading panels. */
-  .macro-drawer {
-    grid-column: 1 / -1;
-    order: 80;
-    padding: 0;
-  }
-  .drawer-head {
-    appearance: none;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    background: none;
-    border: 0;
-    color: var(--muted);
-    font: inherit;
-    padding: 0.55rem 0.7rem;
-    cursor: pointer;
-  }
-  .drawer-kicker {
-    color: var(--ink);
-    font-size: 0.7rem;
-    letter-spacing: 0.08em;
-  }
-  .drawer-status {
-    font-size: 0.66rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .drawer-caret {
-    margin-left: auto;
-  }
-  .drawer-grid {
-    display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: 0.75rem;
-    padding: 0 0.7rem 0.7rem;
-    border-top: 1px solid var(--line-soft);
-  }
-  .drawer-grid :global(.drag-grip) {
-    display: none;
   }
 
   .dashboard {
@@ -7377,18 +7190,55 @@
     position: relative;
     z-index: 5;
     min-height: 2.55rem;
-    justify-content: flex-end;
-    gap: 0.65rem;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 0.55rem;
     padding: 0.4rem 0.65rem;
     border-top: 1px solid var(--line-soft);
     color: var(--muted);
     background: rgba(18, 20, 25, 0.96);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
   }
 
-  .chart-footer strong {
-    margin-left: auto;
+  .chart-footer-left,
+  .chart-footer-right {
+    flex: 0 0 auto;
+    gap: 0.4rem;
+    min-width: max-content;
+  }
+
+  .chart-range {
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
     color: var(--muted);
     font-weight: 500;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .chart-footer.is-compact {
+    gap: 0.35rem;
+  }
+
+  .chart-footer.is-compact button {
+    min-height: 1.8rem;
+    padding: 0.25rem 0.45rem;
+    font-size: 0.7rem;
+  }
+
+  .chart-footer.is-compact .line-toggle {
+    min-height: 1.45rem;
+    padding-inline: 0.25rem;
+    font-size: 0.55rem;
+  }
+
+  .chart-footer.is-tight {
+    gap: 0.28rem;
+    padding-inline: 0.45rem;
   }
 
   /* Right-rail tabs: Order Book | Trade (underline indicator). */
@@ -7744,10 +7594,49 @@
 
     .chart-toolbar {
       align-items: center;
+      gap: 0.45rem;
     }
 
     .chart-market-tools {
       justify-content: flex-start;
+    }
+
+    .chart-footer {
+      gap: 0.4rem;
+    }
+
+    .chart-footer-left,
+    .chart-footer-right {
+      gap: 0.3rem;
+    }
+
+    .chart-footer button {
+      min-height: 1.85rem;
+      padding: 0.28rem 0.5rem;
+      font-size: 0.72rem;
+    }
+
+    .chart-footer .line-toggle {
+      min-height: 1.5rem;
+      padding-inline: 0.28rem;
+    }
+  }
+
+  /* Laptop / tablet landscape: tighten the top chart chrome when the
+     window itself is mid-size (book still sits beside the chart). */
+  @media (max-width: 1280px) and (min-width: 721px) {
+    .market-select {
+      min-width: 10rem;
+      max-width: 14rem;
+    }
+
+    .chart-toolbar {
+      gap: 0.4rem;
+    }
+
+    .price-mode-toggle button {
+      padding-inline: 0.45rem;
+      font-size: 0.72rem;
     }
   }
 
@@ -7820,11 +7709,15 @@
     .chart-footer {
       overflow-x: auto;
       justify-content: flex-start;
+      gap: 0.45rem;
     }
 
-    .chart-footer strong {
-      margin-left: 0;
-      white-space: nowrap;
+    .chart-range {
+      margin-left: 0.35rem;
+    }
+
+    .chart-footer-right {
+      margin-left: auto;
     }
   }
 

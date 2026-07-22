@@ -1,10 +1,8 @@
 <script lang="ts">
   import type { PhoenixMarketConfig } from "$lib/phoenix-market-data";
   import type { SpotAsset } from "$lib/spot";
-  import { panelStyle, usePanelLayout } from "$lib/terminal/layout";
   import { buildWatchRows, type WatchRow } from "$lib/terminal/panels";
   import { formatNumber, formatPercent, formatPrice } from "$lib/utils";
-  import DragHead from "./DragHead.svelte";
 
   let {
     watchlist,
@@ -20,35 +18,13 @@
     onopenrow: (row: WatchRow) => void;
   } = $props();
 
-  const {
-    panelOrder,
-    draggedPanel,
-    dragOverPanel,
-    onPanelDragOver,
-    onPanelDragLeave,
-    onPanelDrop,
-  } = usePanelLayout();
-
   // Watchlist rows: price from spot, fall back to perp mid; basis when both.
   const watchRows = $derived(
     buildWatchRows(watchlist, spotAssets, marketMids, markets),
   );
 </script>
 
-<section
-  class="panel watchlist-panel"
-  role="group"
-  data-panel="watch"
-  style={panelStyle("watch", $panelOrder)}
-  class:dragging={$draggedPanel === "watch"}
-  class:drag-over={$dragOverPanel === "watch"}
-  ondragover={(event) => onPanelDragOver(event, "watch")}
-  ondragleave={() => onPanelDragLeave("watch")}
-  ondrop={(event) => onPanelDrop(event, "watch")}
->
-  <div class="panel-head">
-    <DragHead panelId="watch" kicker="WATCHLIST" title={`${watchlist.length} starred`} />
-  </div>
+<div class="watch-dock" aria-label="Watchlist">
   <div class="markets-list">
     {#each watchRows as row (row.sym)}
       <button type="button" onclick={() => onopenrow(row)}>
@@ -72,13 +48,24 @@
       <div class="empty">Star a market (☆ in the ticker) to track it here.</div>
     {/each}
   </div>
-</section>
+</div>
 
 <style>
+  .watch-dock {
+    min-height: 0;
+  }
+
   .basis-tag {
     font-size: 0.6rem;
     font-weight: 600;
     margin-left: 0.3rem;
     opacity: 0.9;
+  }
+
+  .empty {
+    padding: 0.65rem 0.35rem;
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.4;
   }
 </style>

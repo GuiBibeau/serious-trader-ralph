@@ -22,28 +22,18 @@ export const MARKETS_MAX_AGE = 24 * 60 * 60_000;
 export const ALERT_LOG_KEY = "trader-ralph-alert-log";
 export const ONBOARD_KEY = "trader-ralph-terminal/phx-referral/v2";
 
-// Draggable dashboard: reorderable info panels (chart + book stay anchored).
-// "monitor" is the markets-monitor panel; "markets" is the Phoenix markets
-// list. Old payloads persisted both as "markets" — migrateLayout in
-// $lib/terminal/layout maps the first occurrence to "monitor".
-// Day-trading grid: the desk/journal live in the bottom dock (always
-// visible, not draggable), the five macro panels + ideas fold into the
-// macro drawer, and the Phoenix markets list merged into the monitor —
-// mergeLayout drops the retired ids from old saves automatically.
-export const DEFAULT_PANEL_ORDER = [
-  "watch",
-  "monitor",
-  "spot",
-  "screener",
-  "events",
-];
+// Draggable dashboard: chart + book stay anchored; desk/journal live in
+// the bottom dock. Markets / spot / screener / events / watch panels are
+// retired from the grid (watchlist is a topbar drawer). Macro research
+// still folds into the macro drawer. mergeLayout drops retired ids from
+// old saves automatically. migrateLayout still remaps legacy duplicate
+// "markets" → "monitor" before the merge filter drops it.
+export const DEFAULT_PANEL_ORDER: string[] = [];
 
 export const SECTION_LINKS: { id: string; label: string }[] = [
   { id: "section-chart", label: "Chart" },
   { id: "section-book", label: "Book" },
   { id: "section-perp", label: "Perp" },
-  { id: "section-markets", label: "Markets" },
-  { id: "section-macro", label: "Macro" },
 ];
 
 export type TerminalPrefs = {
@@ -62,7 +52,7 @@ export type TerminalPrefs = {
   tradeAmount: string;
   tradeRiskUsd: string;
   tradeLeverage: number;
-  dockTab: "desk" | "journal" | "alerts";
+  dockTab: "desk" | "journal" | "alerts" | "watch";
   macroOpen: boolean;
   /** Structure-level chart lines (PDH/PDL + swing pivots) — default ON. */
   showLevels: boolean;
@@ -174,7 +164,8 @@ export function parsePrefs(raw: string | null): Partial<TerminalPrefs> {
   if (
     data.dockTab === "desk" ||
     data.dockTab === "journal" ||
-    data.dockTab === "alerts"
+    data.dockTab === "alerts" ||
+    data.dockTab === "watch"
   ) {
     prefs.dockTab = data.dockTab;
   }
@@ -215,7 +206,7 @@ export function persistPrefs(
   _tradeAmount: string,
   _tradeRiskUsd: string,
   _tradeLeverage: number,
-  _dockTab: "desk" | "journal" | "alerts",
+  _dockTab: "desk" | "journal" | "alerts" | "watch",
   _macroOpen: boolean,
   _showLevels: boolean,
   _rays: Record<string, number[]>,
