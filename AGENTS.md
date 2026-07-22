@@ -13,7 +13,8 @@
 - Do not add or restore Cloudflare Worker, x402, database, payment, React/Next,
   or live Solana execution behavior without another explicit scope change.
 - Paper trading is an allowed frontend-only simulation: local ledger on live
-  market data, no signing. Keep PAPER labeling obvious so it never looks live.
+  market data (perps + spot), no signing. Keep PAPER labeling obvious so it
+  never looks live.
 
 ## Design System (packages/ui)
 

@@ -1,6 +1,7 @@
-// Paper trading ledger — local simulated Phoenix account on live mids.
-// Frontend-only: no signing, no chain. Desk UI consumes the same
-// PhoenixTraderState shape via ledgerToTraderState().
+// Paper trading ledger — local simulated Phoenix account on live mids,
+// plus spot token balances / resting spot limits. Frontend-only: no
+// signing, no chain. Desk UI consumes the same PhoenixTraderState shape
+// via ledgerToTraderState(); spot ticket reads holdings + spotOrders.
 //
 // This module is PURE: every mutator returns a fresh next ledger + events
 // or throws WITHOUT touching the input ledger. No Date.now()/Math.random()
@@ -14,6 +15,12 @@ import type {
   PhoenixSide,
   PhoenixTraderState,
 } from "../phoenix-trade";
+import {
+  tokenToAtoms,
+  USDC_MINT,
+  usdcToAtoms,
+  type TriggerOrder,
+} from "../spot";
 import { liquidationPriceEstimate } from "./trade-math";
 
 export const PAPER_AUTHORITY = "paper";
@@ -27,6 +34,8 @@ const QTY_EPS = 1e-9;
 // Tolerance for the free-cash funding check so a sub-cent rounding gap on
 // an exact-fit order can't bounce a fundable fill.
 const CASH_EPS = 1e-9;
+// Spot Max-chip floor can leave up to ~1e-5 dust on sub-1 sizes.
+const SPOT_DUST_EPS = 1e-5;
 
 export type PaperMark = {
   price: number;
@@ -43,11 +52,32 @@ export type PaperRestingOrder = PhoenixOpenOrder & {
   reduceOnly: boolean;
 };
 
+export type PaperSpotHolding = {
+  mint: string;
+  symbol: string;
+  amount: number;
+  decimals: number;
+};
+
+/** Resting spot limit — buy reserves USDC from cash; sell reserves tokens. */
+export type PaperSpotLimitOrder = {
+  orderKey: string;
+  mint: string;
+  symbol: string;
+  decimals: number;
+  side: "buy" | "sell";
+  limitPrice: number;
+  /** Buy: USDC spend reserved. Sell: token qty reserved. */
+  amount: number;
+};
+
 export type PaperLedger = {
   version: 1;
   cashUsd: number;
   positions: PhoenixPosition[];
   orders: PaperRestingOrder[];
+  spotHoldings: PaperSpotHolding[];
+  spotOrders: PaperSpotLimitOrder[];
   nextOrderId: number;
   nextSubaccount: number;
   /** Monotonic source for deterministic paper-event-N event signatures. */
@@ -68,7 +98,16 @@ export type PaperPlaceOrderInput = {
 };
 
 export type PaperEvent = {
-  kind: "open" | "close" | "tp" | "sl" | "liq" | "limit_fill";
+  kind:
+    | "open"
+    | "close"
+    | "tp"
+    | "sl"
+    | "liq"
+    | "limit_fill"
+    | "spot_buy"
+    | "spot_sell"
+    | "spot_limit_fill";
   symbol: string;
   side: PhoenixSide;
   notionalUsd: number;
@@ -76,6 +115,29 @@ export type PaperEvent = {
   leverage: number | null;
   realizedPnlUsd: number;
   signature: string;
+};
+
+export type PaperSpotMarketInput = {
+  mint: string;
+  symbol: string;
+  decimals: number;
+  side: "buy" | "sell";
+  /** Buy: USDC to spend. Sell: tokens to sell. */
+  amount: number;
+  /** Fill price (token USD). */
+  price: number;
+  /** Optional quote out — preferred over amount/price math when set. */
+  outUi?: number;
+};
+
+export type PaperSpotLimitInput = {
+  mint: string;
+  symbol: string;
+  decimals: number;
+  side: "buy" | "sell";
+  limitPrice: number;
+  /** Buy: USDC to spend. Sell: tokens to sell. */
+  amount: number;
 };
 
 /** Event before its deterministic signature is stamped on. */
@@ -89,6 +151,8 @@ export function createEmptyLedger(
     cashUsd,
     positions: [],
     orders: [],
+    spotHoldings: [],
+    spotOrders: [],
     nextOrderId: 1,
     nextSubaccount: 1,
     nextEventId: 1,
@@ -105,6 +169,321 @@ export function topUpPaperCash(
 ): PaperLedger {
   if (!Number.isFinite(amount) || amount <= 0) return ledger;
   return { ...ledger, cashUsd: ledger.cashUsd + amount };
+}
+
+function ensureSpotFields(ledger: PaperLedger): PaperLedger {
+  if (Array.isArray(ledger.spotHoldings) && Array.isArray(ledger.spotOrders)) {
+    return ledger;
+  }
+  return {
+    ...ledger,
+    spotHoldings: Array.isArray(ledger.spotHoldings) ? ledger.spotHoldings : [],
+    spotOrders: Array.isArray(ledger.spotOrders) ? ledger.spotOrders : [],
+  };
+}
+
+function spotHoldingAmount(ledger: PaperLedger, mint: string): number {
+  return (
+    (ledger.spotHoldings ?? []).find((row) => row.mint === mint)?.amount ?? 0
+  );
+}
+
+function setSpotHolding(
+  ledger: PaperLedger,
+  mint: string,
+  symbol: string,
+  decimals: number,
+  amount: number,
+): PaperLedger {
+  const base = ensureSpotFields(ledger);
+  const holdings = base.spotHoldings.filter((row) => row.mint !== mint);
+  if (amount > SPOT_DUST_EPS) {
+    holdings.push({ mint, symbol, decimals, amount });
+  }
+  return { ...base, spotHoldings: holdings };
+}
+
+/** Mint → available token qty for the spot ticket balance chip. */
+export function paperTokenBalances(ledger: PaperLedger): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const row of ledger.spotHoldings ?? []) out[row.mint] = row.amount;
+  return out;
+}
+
+/** Mark-to-market value of free holdings + reserved sell tokens + reserved buy USDC. */
+export function paperSpotMarkUsd(
+  ledger: PaperLedger,
+  pricesByMint: Record<string, number>,
+): number {
+  let total = 0;
+  for (const row of ledger.spotHoldings ?? []) {
+    const px = pricesByMint[row.mint];
+    if (px && px > 0) total += row.amount * px;
+  }
+  for (const order of ledger.spotOrders ?? []) {
+    if (order.side === "buy") total += order.amount;
+    else {
+      const px = pricesByMint[order.mint];
+      if (px && px > 0) total += order.amount * px;
+    }
+  }
+  return total;
+}
+
+/** Shape paper resting spot limits like Jupiter TriggerOrder for the ticket list. */
+export function paperSpotOrdersToTriggers(ledger: PaperLedger): TriggerOrder[] {
+  return (ledger.spotOrders ?? []).map((order) => {
+    if (order.side === "buy") {
+      const tokens = order.limitPrice > 0 ? order.amount / order.limitPrice : 0;
+      return {
+        orderKey: order.orderKey,
+        inputMint: USDC_MINT,
+        outputMint: order.mint,
+        makingAmountAtoms: usdcToAtoms(order.amount),
+        takingAmountAtoms: tokenToAtoms(tokens, order.decimals),
+        createdAt: null,
+      };
+    }
+    return {
+      orderKey: order.orderKey,
+      inputMint: order.mint,
+      outputMint: USDC_MINT,
+      makingAmountAtoms: tokenToAtoms(order.amount, order.decimals),
+      takingAmountAtoms: usdcToAtoms(order.amount * order.limitPrice),
+      createdAt: null,
+    };
+  });
+}
+
+export function executePaperSpotMarket(
+  ledger: PaperLedger,
+  input: PaperSpotMarketInput,
+): { ledger: PaperLedger; event: PaperEvent } {
+  ledger = ensureSpotFields(ledger);
+  const amount = input.amount;
+  const price = input.price;
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid spot amount");
+  }
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("Invalid spot price");
+  }
+
+  if (input.side === "buy") {
+    const usdcIn = amount;
+    if (ledger.cashUsd + CASH_EPS < usdcIn) {
+      throw new Error(
+        `Insufficient paper USDC — need $${usdcIn.toFixed(2)}, have $${ledger.cashUsd.toFixed(2)}`,
+      );
+    }
+    const tokenOut =
+      input.outUi != null && Number.isFinite(input.outUi) && input.outUi > 0
+        ? input.outUi
+        : usdcIn / price;
+    const nextLedger = setSpotHolding(
+      { ...ledger, cashUsd: ledger.cashUsd - usdcIn },
+      input.mint,
+      input.symbol,
+      input.decimals,
+      spotHoldingAmount(ledger, input.mint) + tokenOut,
+    );
+    const seed: PaperEventSeed = {
+      kind: "spot_buy",
+      symbol: input.symbol,
+      side: "bid",
+      notionalUsd: usdcIn,
+      price: tokenOut > 0 ? usdcIn / tokenOut : price,
+      leverage: null,
+      realizedPnlUsd: 0,
+    };
+    const { events, nextEventId } = stampEvents(ledger, [seed]);
+    return {
+      ledger: { ...nextLedger, nextEventId },
+      event: events[0]!,
+    };
+  }
+
+  const have = spotHoldingAmount(ledger, input.mint);
+  let sellAmount = amount;
+  if (have > 0 && have - sellAmount <= SPOT_DUST_EPS) sellAmount = have;
+  if (have + QTY_EPS < sellAmount) {
+    throw new Error(
+      `Insufficient paper ${input.symbol} — need ${amount}, have ${have}`,
+    );
+  }
+  const usdcOut =
+    input.outUi != null && Number.isFinite(input.outUi) && input.outUi > 0
+      ? input.outUi * (sellAmount / amount)
+      : sellAmount * price;
+  const nextLedger = setSpotHolding(
+    { ...ledger, cashUsd: ledger.cashUsd + usdcOut },
+    input.mint,
+    input.symbol,
+    input.decimals,
+    have - sellAmount,
+  );
+  const seed: PaperEventSeed = {
+    kind: "spot_sell",
+    symbol: input.symbol,
+    side: "ask",
+    notionalUsd: usdcOut,
+    price: sellAmount > 0 ? usdcOut / sellAmount : price,
+    leverage: null,
+    realizedPnlUsd: 0,
+  };
+  const { events, nextEventId } = stampEvents(ledger, [seed]);
+  return {
+    ledger: { ...nextLedger, nextEventId },
+    event: events[0]!,
+  };
+}
+
+export function placePaperSpotLimit(
+  ledger: PaperLedger,
+  input: PaperSpotLimitInput,
+): { ledger: PaperLedger; order: PaperSpotLimitOrder } {
+  ledger = ensureSpotFields(ledger);
+  const amount = input.amount;
+  const limitPrice = input.limitPrice;
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid spot amount");
+  }
+  if (!Number.isFinite(limitPrice) || limitPrice <= 0) {
+    throw new Error("Invalid limit price");
+  }
+
+  const orderKey = `paper-spot-${ledger.nextOrderId}`;
+  const order: PaperSpotLimitOrder = {
+    orderKey,
+    mint: input.mint,
+    symbol: input.symbol,
+    decimals: input.decimals,
+    side: input.side,
+    limitPrice,
+    amount,
+  };
+
+  if (input.side === "buy") {
+    if (ledger.cashUsd + CASH_EPS < amount) {
+      throw new Error(
+        `Insufficient paper USDC — need $${amount.toFixed(2)}, have $${ledger.cashUsd.toFixed(2)}`,
+      );
+    }
+    return {
+      ledger: {
+        ...ledger,
+        cashUsd: ledger.cashUsd - amount,
+        spotOrders: [...ledger.spotOrders, order],
+        nextOrderId: ledger.nextOrderId + 1,
+      },
+      order,
+    };
+  }
+
+  const have = spotHoldingAmount(ledger, input.mint);
+  if (have + QTY_EPS < amount) {
+    throw new Error(
+      `Insufficient paper ${input.symbol} — need ${amount}, have ${have}`,
+    );
+  }
+  return {
+    ledger: {
+      ...setSpotHolding(
+        ledger,
+        input.mint,
+        input.symbol,
+        input.decimals,
+        have - amount,
+      ),
+      spotOrders: [...ledger.spotOrders, order],
+      nextOrderId: ledger.nextOrderId + 1,
+    },
+    order,
+  };
+}
+
+export function cancelPaperSpotLimit(
+  ledger: PaperLedger,
+  orderKey: string,
+): PaperLedger {
+  ledger = ensureSpotFields(ledger);
+  const order = ledger.spotOrders.find((row) => row.orderKey === orderKey);
+  if (!order) return ledger;
+  const without = {
+    ...ledger,
+    spotOrders: ledger.spotOrders.filter((row) => row.orderKey !== orderKey),
+  };
+  if (order.side === "buy") {
+    return { ...without, cashUsd: without.cashUsd + order.amount };
+  }
+  return setSpotHolding(
+    without,
+    order.mint,
+    order.symbol,
+    order.decimals,
+    spotHoldingAmount(without, order.mint) + order.amount,
+  );
+}
+
+/**
+ * Fill resting spot limits when catalog prices cross the limit.
+ * `pricesByMint` is mint → USD mark (no TTL — catalog mid).
+ */
+export function tickPaperSpotOrders(
+  ledger: PaperLedger,
+  pricesByMint: Record<string, number>,
+): { ledger: PaperLedger; events: PaperEvent[] } {
+  let next = ensureSpotFields(ledger);
+  const seeds: PaperEventSeed[] = [];
+
+  for (const order of [...next.spotOrders]) {
+    const mid = pricesByMint[order.mint];
+    if (!mid || mid <= 0) continue;
+    const crossed =
+      order.side === "buy" ? mid <= order.limitPrice : mid >= order.limitPrice;
+    if (!crossed) continue;
+
+    next = {
+      ...next,
+      spotOrders: next.spotOrders.filter((row) => row.orderKey !== order.orderKey),
+    };
+
+    if (order.side === "buy") {
+      const tokens = order.amount / order.limitPrice;
+      next = setSpotHolding(
+        next,
+        order.mint,
+        order.symbol,
+        order.decimals,
+        spotHoldingAmount(next, order.mint) + tokens,
+      );
+      seeds.push({
+        kind: "spot_limit_fill",
+        symbol: order.symbol,
+        side: "bid",
+        notionalUsd: order.amount,
+        price: order.limitPrice,
+        leverage: null,
+        realizedPnlUsd: 0,
+      });
+    } else {
+      const usdcOut = order.amount * order.limitPrice;
+      next = { ...next, cashUsd: next.cashUsd + usdcOut };
+      seeds.push({
+        kind: "spot_limit_fill",
+        symbol: order.symbol,
+        side: "ask",
+        notionalUsd: usdcOut,
+        price: order.limitPrice,
+        leverage: null,
+        realizedPnlUsd: 0,
+      });
+    }
+  }
+
+  if (seeds.length === 0) return { ledger: next, events: [] };
+  const { events, nextEventId } = stampEvents(ledger, seeds);
+  return { ledger: { ...next, nextEventId }, events };
 }
 
 export function ledgerToTraderState(ledger: PaperLedger): PhoenixTraderState {
@@ -1219,15 +1598,103 @@ export function parsePaperLedger(value: unknown): PaperLedger {
     return createEmptyLedger();
   }
 
+  // Spot fields are optional for pre-spot ledgers — default empty arrays.
+  // Present-but-invalid spot payloads reset wholesale (same honesty bar).
+  let spotHoldings: PaperSpotHolding[] = [];
+  let spotOrders: PaperSpotLimitOrder[] = [];
+  if (value.spotHoldings !== undefined || value.spotOrders !== undefined) {
+    if (!Array.isArray(value.spotHoldings) || !Array.isArray(value.spotOrders)) {
+      return createEmptyLedger();
+    }
+    const parsedHoldings: PaperSpotHolding[] = [];
+    const holdingMints = new Set<string>();
+    for (const item of value.spotHoldings) {
+      const holding = parsePaperSpotHolding(item);
+      if (!holding) return createEmptyLedger();
+      if (holdingMints.has(holding.mint)) return createEmptyLedger();
+      holdingMints.add(holding.mint);
+      parsedHoldings.push(holding);
+    }
+    const parsedOrders: PaperSpotLimitOrder[] = [];
+    const orderKeys = new Set<string>();
+    let maxSpotOrderId = 0;
+    for (const item of value.spotOrders) {
+      const order = parsePaperSpotOrder(item);
+      if (!order) return createEmptyLedger();
+      if (orderKeys.has(order.orderKey)) return createEmptyLedger();
+      orderKeys.add(order.orderKey);
+      const id = paperSpotOrderIdNumber(order.orderKey);
+      if (id !== null) maxSpotOrderId = Math.max(maxSpotOrderId, id);
+      parsedOrders.push(order);
+    }
+    if (value.nextOrderId <= maxSpotOrderId) return createEmptyLedger();
+    spotHoldings = parsedHoldings;
+    spotOrders = parsedOrders;
+  }
+
   return {
     version: 1,
     cashUsd: value.cashUsd,
     positions,
     orders,
+    spotHoldings,
+    spotOrders,
     nextOrderId: value.nextOrderId,
     nextSubaccount: value.nextSubaccount,
     nextEventId: value.nextEventId,
   };
+}
+
+function paperSpotOrderIdNumber(orderKey: string): number | null {
+  const match = /^paper-spot-(\d+)$/.exec(orderKey);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function parsePaperSpotHolding(value: unknown): PaperSpotHolding | null {
+  if (!isRecord(value)) return null;
+  const mint = value.mint;
+  const symbol = value.symbol;
+  const amount = value.amount;
+  const decimals = value.decimals;
+  if (
+    typeof mint !== "string" ||
+    mint.length === 0 ||
+    typeof symbol !== "string" ||
+    !isPaperSymbol(symbol) ||
+    !isPositiveNumber(amount) ||
+    !isNonNegativeSafeInteger(decimals)
+  ) {
+    return null;
+  }
+  return { mint, symbol, amount, decimals };
+}
+
+function parsePaperSpotOrder(value: unknown): PaperSpotLimitOrder | null {
+  if (!isRecord(value)) return null;
+  const orderKey = value.orderKey;
+  const mint = value.mint;
+  const symbol = value.symbol;
+  const decimals = value.decimals;
+  const side = value.side;
+  const limitPrice = value.limitPrice;
+  const amount = value.amount;
+  if (
+    typeof orderKey !== "string" ||
+    paperSpotOrderIdNumber(orderKey) === null ||
+    typeof mint !== "string" ||
+    mint.length === 0 ||
+    typeof symbol !== "string" ||
+    !isPaperSymbol(symbol) ||
+    !isNonNegativeSafeInteger(decimals) ||
+    (side !== "buy" && side !== "sell") ||
+    !isPositiveNumber(limitPrice) ||
+    !isPositiveNumber(amount)
+  ) {
+    return null;
+  }
+  return { orderKey, mint, symbol, decimals, side, limitPrice, amount };
 }
 
 export const paperLedger = persisted<PaperLedger>(
