@@ -1,5 +1,6 @@
 import { json } from "@sveltejs/kit";
-import { env } from "$env/dynamic/private";
+import { env as privateEnv } from "$env/dynamic/private";
+import { env as publicEnv } from "$env/dynamic/public";
 import {
   BURST_WINDOW_MS,
   buildMessages,
@@ -8,17 +9,30 @@ import {
   type ChatMessage,
   type ChatRole,
   capHistory,
+  classifyTaskClass,
   dailyAllowed,
   groundedOrNull,
   toolToEdgePath,
 } from "$lib/chat-core";
+import {
+  type ChatModelChoice,
+  FREE_MODEL,
+  type ResolvedModel,
+  resolveModel,
+} from "$lib/chat-models";
 import { verifyPrivyAccessToken } from "$lib/server/privy";
 import type { RequestHandler } from "./$types";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
+const AI_GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions";
 const TOOL_RESULT_CAP = 4_000;
 const MAX_TOOL_ROUNDS = 3;
 const TOOL_TIMEOUT_MS = 5_000;
+const FREE_RESOLVED_MODEL: ResolvedModel = {
+  tier: "free",
+  model: FREE_MODEL,
+  proLabel: false,
+};
 
 // V1 rate caps are intentionally in-memory and approximate across instances.
 // Fluid reuses instances enough for this side-panel chat guardrail.
@@ -29,6 +43,13 @@ type ChatRequestBody = {
   history: ChatMessage[];
   context: unknown;
   edgeToken?: string;
+  modelChoice: ChatModelChoice;
+};
+
+type ChatModelConfig = {
+  url: string;
+  apiKey: string;
+  model: string;
 };
 
 type DeepSeekMessage =
@@ -52,6 +73,12 @@ type DeepSeekResponse = {
 };
 
 type ToolResult = { message: DeepSeekMessage; facts: string };
+
+type GeneratedReply = {
+  reply: string | null;
+  toolFacts: string[];
+  resolved: ResolvedModel;
+};
 
 export const POST: RequestHandler = async ({ request, fetch, setHeaders }) => {
   setHeaders({ "cache-control": "no-store" });
@@ -89,14 +116,28 @@ export const POST: RequestHandler = async ({ request, fetch, setHeaders }) => {
   }
   burstByUser.set(userId, [...recent, nowMs]);
 
+  const taskClass = classifyTaskClass(latestUserContent(history));
+  const resolvedModel = resolveModel(
+    body.modelChoice,
+    taskClass,
+    publicEnv.PUBLIC_CHAT_PRO_OPEN === "1",
+  );
   const generated = await generateReply({
     context: body.context,
     edgeFetch: fetch,
     edgeToken: body.edgeToken,
     history,
     nowMs,
+    resolvedModel,
   });
-  if (!generated) return json({ reply: null, reason: "unavailable" });
+  if (!generated.reply) {
+    return json({
+      reply: null,
+      reason: "unavailable",
+      model: generated.resolved.model,
+      proLabel: generated.resolved.proLabel,
+    });
+  }
 
   // Grounding facts include the conversation itself: a number the user
   // typed is a given fact — echoing it back is not invention.
@@ -108,9 +149,21 @@ export const POST: RequestHandler = async ({ request, fetch, setHeaders }) => {
       ...generated.toolFacts,
     ].join("\n"),
   );
-  if (reply === null) return json({ reply: null, reason: "ungrounded" });
+  if (reply === null) {
+    return json({
+      reply: null,
+      reason: "ungrounded",
+      model: generated.resolved.model,
+      proLabel: generated.resolved.proLabel,
+    });
+  }
 
-  return json({ reply, asOf: Date.now() });
+  return json({
+    reply,
+    asOf: Date.now(),
+    model: generated.resolved.model,
+    proLabel: generated.resolved.proLabel,
+  });
 };
 
 async function readChatBody(request: Request): Promise<ChatRequestBody | null> {
@@ -126,10 +179,13 @@ async function readChatBody(request: Request): Promise<ChatRequestBody | null> {
   const history = parseHistory(body.history);
   if (!history) return null;
   if ("edgeToken" in body && typeof body.edgeToken !== "string") return null;
+  const modelChoice = parseModelChoice(body.modelChoice);
+  if (!modelChoice) return null;
   return {
     history,
     context: body.context,
     edgeToken: typeof body.edgeToken === "string" ? body.edgeToken : undefined,
+    modelChoice,
   };
 }
 
@@ -147,16 +203,60 @@ function isChatRole(value: unknown): value is ChatRole {
   return value === "user" || value === "assistant" || value === "tool";
 }
 
+function parseModelChoice(value: unknown): ChatModelChoice | null {
+  if (value === undefined) return "auto";
+  if (value === "auto" || value === "free" || value === "pro") return value;
+  return null;
+}
+
+function latestUserContent(history: ChatMessage[]): string {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message?.role === "user") return message.content;
+  }
+  return "";
+}
+
 async function generateReply(input: {
   context: unknown;
   edgeFetch: typeof fetch;
   edgeToken?: string;
   history: ChatMessage[];
   nowMs: number;
-}): Promise<{ reply: string; toolFacts: string[] } | null> {
-  const apiKey = env.DEEPSEEK_API_KEY;
-  if (!apiKey) return null;
+  resolvedModel: ResolvedModel;
+}): Promise<GeneratedReply> {
+  if (input.resolvedModel.tier === "pro") {
+    const proConfig = readProModelConfig(input.resolvedModel.model);
+    if (proConfig) {
+      try {
+        const proReply = await runToolLoop(input, proConfig);
+        if (proReply.reply) {
+          return { ...proReply, resolved: input.resolvedModel };
+        }
+      } catch {
+        // Pro routing failures fall back to the raw DeepSeek free lane.
+      }
+    }
+  }
 
+  const freeConfig = readFreeModelConfig();
+  if (!freeConfig) {
+    return { reply: null, toolFacts: [], resolved: FREE_RESOLVED_MODEL };
+  }
+  const freeReply = await runToolLoop(input, freeConfig);
+  return { ...freeReply, resolved: FREE_RESOLVED_MODEL };
+}
+
+async function runToolLoop(
+  input: {
+    context: unknown;
+    edgeFetch: typeof fetch;
+    edgeToken?: string;
+    history: ChatMessage[];
+    nowMs: number;
+  },
+  config: ChatModelConfig,
+): Promise<{ reply: string | null; toolFacts: string[] }> {
   const messages: DeepSeekMessage[] = buildMessages(
     input.context,
     input.history,
@@ -165,14 +265,20 @@ async function generateReply(input: {
   const toolFacts: string[] = [];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-    const response = await callDeepSeek(apiKey, messages);
-    if (!response) return null;
+    const response = await callChatModel({
+      url: config.url,
+      apiKey: config.apiKey,
+      model: config.model,
+      messages,
+      tools: CHAT_TOOLS,
+    });
+    if (!response) return { reply: null, toolFacts };
 
     const toolCalls = parseToolCalls(response.tool_calls);
     if (toolCalls.length === 0) {
       return response.content.trim()
         ? { reply: response.content.trim(), toolFacts }
-        : null;
+        : { reply: null, toolFacts };
     }
 
     messages.push({
@@ -191,25 +297,28 @@ async function generateReply(input: {
     }
   }
 
-  return null;
+  return { reply: null, toolFacts };
 }
 
-async function callDeepSeek(
-  apiKey: string,
-  messages: DeepSeekMessage[],
-): Promise<{ content: string; tool_calls: unknown } | null> {
-  const response = await globalThis.fetch(DEEPSEEK_URL, {
+async function callChatModel(input: {
+  url: string;
+  apiKey: string;
+  model: string;
+  messages: DeepSeekMessage[];
+  tools: typeof CHAT_TOOLS;
+}): Promise<{ content: string; tool_calls: unknown } | null> {
+  const response = await globalThis.fetch(input.url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
+      authorization: `Bearer ${input.apiKey}`,
     },
     body: JSON.stringify({
-      model: "deepseek-chat",
+      model: input.model,
       temperature: 0.2,
       max_tokens: 400,
-      messages,
-      tools: CHAT_TOOLS.map((tool) => ({
+      messages: input.messages,
+      tools: input.tools.map((tool) => ({
         type: "function",
         function: {
           name: tool.name,
@@ -228,6 +337,18 @@ async function callDeepSeek(
     content: typeof message.content === "string" ? message.content : "",
     tool_calls: message.tool_calls,
   };
+}
+
+function readFreeModelConfig(): ChatModelConfig | null {
+  const apiKey = privateEnv.DEEPSEEK_API_KEY;
+  if (!apiKey) return null;
+  return { url: DEEPSEEK_URL, apiKey, model: FREE_MODEL };
+}
+
+function readProModelConfig(model: string): ChatModelConfig | null {
+  const apiKey = privateEnv.AI_GATEWAY_API_KEY;
+  if (!apiKey) return null;
+  return { url: AI_GATEWAY_URL, apiKey, model };
 }
 
 function parseToolCalls(value: unknown): ToolCall[] {
@@ -269,10 +390,13 @@ async function resolveToolCall(
     const headers: HeadersInit = edgeToken
       ? { authorization: `Bearer ${edgeToken}` }
       : {};
-    const response = await edgeFetch(`${env.EDGE_API_BASE ?? ""}${path}`, {
-      headers,
-      signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
-    });
+    const response = await edgeFetch(
+      `${privateEnv.EDGE_API_BASE ?? ""}${path}`,
+      {
+        headers,
+        signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
+      },
+    );
     if (!response.ok) return unavailable();
     const content = (await response.text()).slice(0, TOOL_RESULT_CAP);
     return {

@@ -1,3 +1,5 @@
+import type { TaskClass } from "./chat-models";
+
 export type ChatRole = "user" | "assistant" | "tool";
 export type ChatMessage = { role: ChatRole; content: string };
 export type DeskContext = unknown;
@@ -15,12 +17,34 @@ export const DAILY_MESSAGE_CAP = 200;
 export const BURST_WINDOW_MS = 60_000;
 export const BURST_CAP = 10;
 
+const ANALYSIS_KEYWORDS = [
+  "why",
+  "analy",
+  "compare",
+  "should",
+  "risk",
+  "regime",
+  "scenario",
+  "explain-in-depth",
+];
+
 const HISTORY_MESSAGE_CAP = 12;
 const HISTORY_CONTENT_CAP = 2_000;
 const CONTEXT_CONTENT_CAP = 12_000;
 const CONTEXT_TRUNCATED_SUFFIX = "\n[context truncated]";
 const NUMBER_RE = /\d[\d,]*\.?\d*/g;
 const ALLOWED_UNGROUNDED_NUMBERS = new Set(["24", "7", "30"]);
+
+/** Cheap keyword classifier for Auto routing. "analysis" for asks that want
+ * reasoning over the book/macro/portfolio (why/analy[sz]e/compare/should/
+ * risk/regime/scenario/explain-in-depth); "chat" otherwise. Deterministic,
+ * lower-cased substring match — no model call. */
+export function classifyTaskClass(latestUserMessage: string): TaskClass {
+  const normalized = latestUserMessage.toLowerCase();
+  return ANALYSIS_KEYWORDS.some((keyword) => normalized.includes(keyword))
+    ? "analysis"
+    : "chat";
+}
 
 /** Pure burst decision over injected timestamps (endpoint keeps the array). */
 export function burstAllowed(

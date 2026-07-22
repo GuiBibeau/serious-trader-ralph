@@ -8,7 +8,13 @@
   // state live in $lib/chat (WP2); this component is presentation only.
   //
   // Svelte 5 runes only (pitfall 5): $props/$state/$effect, no export let / $:.
-  import { chatState, closeChat, sendChatMessage } from "$lib/chat";
+  import {
+    chatState,
+    closeChat,
+    sendChatMessage,
+    setModelChoice,
+  } from "$lib/chat";
+  import { PRO_LABEL, type ChatModelChoice } from "$lib/chat-models";
 
   let {
     buildContext,
@@ -20,6 +26,12 @@
 
   let draft = $state("");
   let scrollEl: HTMLDivElement | null = $state(null);
+
+  const modelChoices: { value: ChatModelChoice; label: string }[] = [
+    { value: "auto", label: "Auto" },
+    { value: "free", label: "Free" },
+    { value: "pro", label: "Pro" },
+  ];
 
   // Pin the conversation to its newest turn whenever the list grows or the
   // phase flips to the waiting skeleton.
@@ -40,7 +52,21 @@
 
 <div class="desk-dock" role="complementary" aria-label="Desk chat">
   <header class="desk-head">
-    <span class="desk-title">Desk</span>
+    <div class="desk-title-row">
+      <span class="desk-title">Desk</span>
+      <div class="desk-model-picker" role="radiogroup" aria-label="Chat model">
+        {#each modelChoices as choice (choice.value)}
+          <button
+            class:active={$chatState.modelChoice === choice.value}
+            type="button"
+            aria-pressed={$chatState.modelChoice === choice.value}
+            onclick={() => setModelChoice(choice.value)}
+          >
+            {choice.label}
+          </button>
+        {/each}
+      </div>
+    </div>
     <button class="ghost" type="button" onclick={closeChat}>Close</button>
   </header>
 
@@ -50,7 +76,7 @@
     {/if}
 
     {#each $chatState.messages as message, index (index)}
-      <div class="desk-msg {message.role}">{message.content}</div>
+      <div class="desk-msg {message.role}">{#if message.role === "assistant" && message.proLabel}<span class="desk-pro-tag">{PRO_LABEL}</span>{/if}{message.content}</div>
     {/each}
 
     {#if $chatState.phase === "waiting"}
@@ -132,12 +158,48 @@
     border-bottom: 1px solid var(--line-soft);
   }
 
+  .desk-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+  }
+
   .desk-title {
     color: var(--accent);
     font-size: 0.6rem;
     font-weight: 800;
     letter-spacing: 0.09em;
     text-transform: uppercase;
+  }
+
+  .desk-model-picker {
+    display: inline-flex;
+    border: 1px solid var(--line-soft);
+    background: var(--surface-2);
+  }
+
+  .desk-model-picker button {
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.22rem 0.35rem;
+    border: 0;
+    border-right: 1px solid var(--line-soft);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .desk-model-picker button:last-child {
+    border-right: 0;
+  }
+
+  .desk-model-picker button.active {
+    color: var(--accent);
+    background: var(--surface);
   }
 
   .desk-scroll {
@@ -165,6 +227,17 @@
     line-height: 1.45;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+
+  .desk-pro-tag {
+    display: block;
+    width: fit-content;
+    margin-bottom: 0.25rem;
+    color: var(--accent);
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .desk-msg.user {
