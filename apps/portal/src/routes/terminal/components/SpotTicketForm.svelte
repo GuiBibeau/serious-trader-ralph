@@ -268,18 +268,18 @@
       {#if $spotQuoteStatus === "error"}
         {$spotQuoteError}
       {:else if spotSignature}
-        Swap submitted ·
-        <a class="news-domain" href={`https://solscan.io/tx/${spotSignature}`} target="_blank" rel="noopener noreferrer">view tx</a>
+        {#if paperMode}
+          Paper · simulated
+        {:else}
+          Swap submitted ·
+          <a class="news-domain" href={`https://solscan.io/tx/${spotSignature}`} target="_blank" rel="noopener noreferrer">view tx</a>
+        {/if}
       {:else}
         &nbsp;
       {/if}
     </p>
 
-    {#if paperMode}
-      <button class="primary wide" type="button" disabled>
-        Spot trading unavailable in PAPER
-      </button>
-    {:else if !phoenixAuthority}
+    {#if !phoenixAuthority}
       <button class="primary wide" type="button" onclick={onopenauth}>
         Connect account to trade
       </button>
@@ -293,12 +293,14 @@
       >
         {#if spotBusy}<span class="spinner" aria-hidden="true"></span>{/if}
         {spotBusy
-          ? "Signing…"
+          ? paperMode
+            ? "Filling…"
+            : "Signing…"
           : limitBlocked
             ? `Price ${formatNumber(Math.abs(limitDeviationPct ?? 0), 1)}% from mark — check decimals`
             : limitArmed
               ? `Confirm limit ${formatNumber(Math.abs(limitDeviationPct ?? 0), 1)}% from mark`
-              : `Limit ${$spotSide} ${spotAsset.symbol} @ ${$spotLimitPrice || "—"}`}
+              : `${paperMode ? "PAPER · " : ""}Limit ${$spotSide} ${spotAsset.symbol} @ ${$spotLimitPrice || "—"}`}
       </button>
     {:else}
       <button
@@ -309,8 +311,10 @@
       >
         {#if spotBusy}<span class="spinner" aria-hidden="true"></span>{/if}
         {spotBusy
-          ? "Signing…"
-          : `${$spotSide === "buy" ? "Buy" : "Sell"} ${spotAsset.symbol} · spot`}
+          ? paperMode
+            ? "Filling…"
+            : "Signing…"
+          : `${paperMode ? "PAPER · " : ""}${$spotSide === "buy" ? "Buy" : "Sell"} ${spotAsset.symbol} · spot`}
       </button>
     {/if}
   </div>
@@ -331,7 +335,7 @@
           <button
             class="row-action"
             type="button"
-            disabled={triggerBusy || paperMode}
+            disabled={triggerBusy}
             onclick={() => oncancelorder(order.orderKey)}
           >
             Cancel

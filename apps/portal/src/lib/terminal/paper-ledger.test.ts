@@ -3,23 +3,30 @@ import type { PhoenixSide } from "../phoenix-trade";
 import {
   addPaperMargin,
   cancelPaperOrder,
+  cancelPaperSpotLimit,
   closePaperPosition,
   createEmptyLedger,
+  executePaperSpotMarket,
   ledgerToTraderState,
   PAPER_MARK_TTL_MS,
   PAPER_STARTING_BALANCE,
   type PaperLedger,
   type PaperMark,
   type PaperPlaceOrderInput,
+  paperSpotMarkUsd,
+  paperTokenBalances,
   parsePaperLedger,
   placePaperOrder,
+  placePaperSpotLimit,
   resetPaperLedger,
   setPaperTpSl,
   tickPaperLedger,
+  tickPaperSpotOrders,
   topUpPaperCash,
 } from "./paper-ledger";
 
 const NOW_MS = 1_000_000;
+const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 function firstSubaccount(ledger: PaperLedger): number {
   const index = ledger.positions[0]?.subaccountIndex;
@@ -945,5 +952,114 @@ describe("paper-ledger executable mark freshness", () => {
       expect(ticked.ledger).toBe(ledger);
       expect(ticked.ledger.positions).toHaveLength(1);
     }
+  });
+});
+
+describe("paper-ledger spot", () => {
+  test("spot market buy spends USDC and credits tokens", () => {
+    const { ledger, event } = executePaperSpotMarket(createEmptyLedger(), {
+      mint: SOL_MINT,
+      symbol: "SOL",
+      decimals: 9,
+      side: "buy",
+      amount: 100,
+      price: 50,
+    });
+    expect(event.kind).toBe("spot_buy");
+    expect(event.signature).toBe("paper-event-1");
+    expect(ledger.cashUsd).toBe(PAPER_STARTING_BALANCE - 100);
+    expect(paperTokenBalances(ledger)[SOL_MINT]).toBeCloseTo(2);
+    expect(paperSpotMarkUsd(ledger, { [SOL_MINT]: 50 })).toBeCloseTo(100);
+  });
+
+  test("spot market sell returns USDC", () => {
+    const bought = executePaperSpotMarket(createEmptyLedger(), {
+      mint: SOL_MINT,
+      symbol: "SOL",
+      decimals: 9,
+      side: "buy",
+      amount: 100,
+      price: 50,
+    }).ledger;
+    const { ledger } = executePaperSpotMarket(bought, {
+      mint: SOL_MINT,
+      symbol: "SOL",
+      decimals: 9,
+      side: "sell",
+      amount: 2,
+      price: 55,
+    });
+    expect(ledger.cashUsd).toBe(PAPER_STARTING_BALANCE + 10);
+    expect(paperTokenBalances(ledger)[SOL_MINT] ?? 0).toBe(0);
+  });
+
+  test("spot limit buy rests then fills below limit", () => {
+    const placed = placePaperSpotLimit(createEmptyLedger(), {
+      mint: SOL_MINT,
+      symbol: "SOL",
+      decimals: 9,
+      side: "buy",
+      limitPrice: 40,
+      amount: 80,
+    });
+    expect(placed.ledger.cashUsd).toBe(PAPER_STARTING_BALANCE - 80);
+    expect(placed.ledger.spotOrders).toHaveLength(1);
+    const filled = tickPaperSpotOrders(placed.ledger, { [SOL_MINT]: 39 });
+    expect(filled.events[0]?.kind).toBe("spot_limit_fill");
+    expect(filled.ledger.spotOrders).toHaveLength(0);
+    expect(paperTokenBalances(filled.ledger)[SOL_MINT]).toBeCloseTo(2);
+  });
+
+  test("cancel spot limit restores reserved USDC", () => {
+    const placed = placePaperSpotLimit(createEmptyLedger(), {
+      mint: SOL_MINT,
+      symbol: "SOL",
+      decimals: 9,
+      side: "buy",
+      limitPrice: 40,
+      amount: 80,
+    }).ledger;
+    const restingOrder = placed.spotOrders[0];
+    if (!restingOrder) throw new Error("expected a resting paper spot order");
+    const cancelled = cancelPaperSpotLimit(placed, restingOrder.orderKey);
+    expect(cancelled.cashUsd).toBe(PAPER_STARTING_BALANCE);
+    expect(cancelled.spotOrders).toHaveLength(0);
+  });
+
+  test("parsePaperLedger migrates missing spot arrays", () => {
+    const parsed = parsePaperLedger({
+      version: 1,
+      cashUsd: PAPER_STARTING_BALANCE,
+      positions: [],
+      orders: [],
+      nextOrderId: 1,
+      nextSubaccount: 1,
+      nextEventId: 1,
+    });
+    expect(parsed.spotHoldings).toEqual([]);
+    expect(parsed.spotOrders).toEqual([]);
+  });
+
+  test("spot Max sell clears floored dust remainder", () => {
+    const bought = executePaperSpotMarket(createEmptyLedger(), {
+      mint: SOL_MINT,
+      symbol: "SOL",
+      decimals: 9,
+      side: "buy",
+      amount: 25,
+      price: 78.34,
+    }).ledger;
+    const have = paperTokenBalances(bought)[SOL_MINT] ?? 0;
+    const floored = Math.floor(have * 1e5) / 1e5;
+    expect(floored).toBeLessThan(have);
+    const { ledger } = executePaperSpotMarket(bought, {
+      mint: SOL_MINT,
+      symbol: "SOL",
+      decimals: 9,
+      side: "sell",
+      amount: floored,
+      price: 78.34,
+    });
+    expect(paperTokenBalances(ledger)[SOL_MINT] ?? 0).toBe(0);
   });
 });

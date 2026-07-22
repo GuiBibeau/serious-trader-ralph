@@ -110,13 +110,20 @@
     addPaperMargin,
     cancelPaperOrder,
     cancelPaperOrdersOnSide,
+    cancelPaperSpotLimit,
     closePaperPosition,
+    executePaperSpotMarket,
     ledgerToTraderState,
     paperLedger,
+    paperSpotMarkUsd,
+    paperSpotOrdersToTriggers,
+    paperTokenBalances,
     placePaperOrder,
+    placePaperSpotLimit,
     resetPaperLedger,
     setPaperTpSl,
     tickPaperLedger,
+    tickPaperSpotOrders,
     topUpPaperCash,
     PAPER_MARK_TTL_MS,
     type PaperEvent,
@@ -602,7 +609,6 @@
     fundsOpen = false;
     pendingTradeMode = null;
     pendingSpotAssetId = null;
-    if (tradeMode !== "perps") setTradeMode("perps", false);
   }
 
   function exitPaperSafetyBoundary(): void {
@@ -1029,8 +1035,29 @@
   }
   $: if (!paperMode && phoenixAuthority)
     void ensurePhoenixOnboarding(phoenixAuthority, liveExecutionEpoch);
-  $: if (phoenixAuthority) void refreshTokenBalances(phoenixAuthority);
-  $: spotHolding = spotAsset ? tokenBalances[spotAsset.mint] ?? 0 : 0;
+  $: if (phoenixAuthority && !paperMode) void refreshTokenBalances(phoenixAuthority);
+  $: effectiveTokenBalances = paperMode
+    ? paperTokenBalances($paperLedger)
+    : tokenBalances;
+  $: spotHolding = spotAsset ? effectiveTokenBalances[spotAsset.mint] ?? 0 : 0;
+  $: spotUsdcBalanceValue = paperMode ? $paperLedger.cashUsd : usdcBalanceValue;
+  $: spotUsdcBalanceText = paperMode
+    ? `${$paperLedger.cashUsd.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })} USDC`
+    : usdcBalanceText;
+  $: spotTriggerOrders = paperMode
+    ? paperSpotOrdersToTriggers($paperLedger)
+    : triggerOrders;
+  $: paperSpotPricesByMint = Object.fromEntries(
+    spotAssets
+      .filter((asset) => Number.isFinite(asset.price) && (asset.price ?? 0) > 0)
+      .map((asset) => [asset.mint, asset.price as number]),
+  );
+  $: paperSpotEquityUsd = paperMode
+    ? paperSpotMarkUsd($paperLedger, paperSpotPricesByMint)
+    : 0;
   $: alertsStore.check(latestPrice, selectedSymbol);
   $: spread = asks[0] && bids[0] ? asks[0].price - bids[0].price : 0;
   $: spreadBps = latestPrice && latestPrice > 0 ? (spread / latestPrice) * 10_000 : 0;
@@ -1143,7 +1170,8 @@
     (sum, position) => sum + (position.unrealizedPnl ?? 0),
     0,
   );
-  $: accountEquityUsd = phoenixTotalCollateral + accountUpnlUsd;
+  $: accountEquityUsd =
+    phoenixTotalCollateral + accountUpnlUsd + (paperMode ? paperSpotEquityUsd : 0);
   $: marginInUseUsd = enrichedPositions.reduce(
     (sum, position) => sum + (position.marginUsd ?? 0),
     0,
@@ -1293,13 +1321,14 @@
     Boolean($tradePreview) &&
     (paperMode || !walletScreen.flagged);
   $: canSubmitSpot =
-    !paperMode &&
-    Boolean(phoenixAuthority) &&
+    (paperMode || Boolean(phoenixAuthority)) &&
     !spotBusy &&
-    !walletScreen.flagged &&
+    (paperMode || !walletScreen.flagged) &&
     ($spotOrderType === "limit"
       ? Number($spotLimitPrice) > 0 && Number($spotAmount) > 0
-      : $spotQuote !== null && $spotQuoteStatus === "quoted");
+      : paperMode
+        ? Number($spotAmount) > 0 && Boolean(spotAsset?.price)
+        : $spotQuote !== null && $spotQuoteStatus === "quoted");
 
   // ── Limit deviation gate ───────────────────────────────────────────
   // A dropped decimal (2450 instead of 245.0) would otherwise execute in
@@ -1469,8 +1498,8 @@
       visibleCandleCount,
       // Carry unapplied pendings through so a boot-time persist can't clobber
       // restored spot prefs before loadSpotAssets applies them.
-      paperMode ? "perps" : pendingTradeMode ?? tradeMode,
-      paperMode ? null : spotAsset?.assetId ?? pendingSpotAssetId,
+      pendingTradeMode ?? tradeMode,
+      spotAsset?.assetId ?? pendingSpotAssetId,
       watchlist,
       screenSort,
       screenHub,
@@ -2422,12 +2451,8 @@
       }
       if (pendingTradeMode === "spot") {
         pendingTradeMode = null;
-        if (paperMode) {
-          pendingSpotAssetId = null;
-        } else {
-          // Restored pref/deep-link — keep the restored asset, don't remap.
-          setTradeMode("spot", false);
-        }
+        // Restored pref/deep-link — keep the restored asset, don't remap.
+        setTradeMode("spot", false);
       }
     } catch {
       // catalog hiccup — keep last list
@@ -2435,14 +2460,6 @@
   }
 
   function setTradeMode(mode: "perps" | "spot", followAsset = true): void {
-    if (mode === "spot" && paperMode) {
-      pendingTradeMode = null;
-      pendingSpotAssetId = null;
-      spotSignature = "";
-      $spotQuoteStatus = "error";
-      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
-      return;
-    }
     if (tradeMode === mode) return;
     track("venue_switched", { from: tradeMode, to: mode });
     // An explicit user choice overrides any not-yet-applied restored pref.
@@ -2501,14 +2518,6 @@
   }
 
   function selectSpotAsset(asset: SpotAsset): void {
-    if (paperMode) {
-      pendingTradeMode = null;
-      pendingSpotAssetId = null;
-      spotSignature = "";
-      $spotQuoteStatus = "error";
-      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
-      return;
-    }
     const changed = spotAsset?.assetId !== asset.assetId;
     spotAsset = asset;
     $spotQuote = null;
@@ -2557,7 +2566,7 @@
   // balances that power the ticket preview. Max buy keeps the $0.01 dust
   // buffer the perp Max chip leaves. (The offered percentages live in
   // SpotTicketForm.svelte; the chip math stays here with the balances.)
-  $: spotChipBalance = $spotSide === "buy" ? (usdcBalanceValue ?? 0) : spotHolding;
+  $: spotChipBalance = $spotSide === "buy" ? (spotUsdcBalanceValue ?? 0) : spotHolding;
 
   function setSpotAmountChip(pct: number | "max"): void {
     const amount =
@@ -2583,15 +2592,62 @@
   }
 
   async function executeSpotSwap(): Promise<void> {
+    const asset = spotAsset;
+    if (!asset || spotBusy || (!paperMode && walletScreen.flagged)) return;
+
     if (paperMode) {
-      $spotQuoteStatus = "error";
-      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
+      const amount = Number($spotAmount);
+      const price = asset.price;
+      if (!Number.isFinite(amount) || amount <= 0) return;
+      if (price === null || !Number.isFinite(price) || price <= 0) {
+        $spotQuoteStatus = "error";
+        $spotQuoteError = "No mark price for this asset";
+        return;
+      }
+      spotBusy = true;
+      $spotQuoteError = "";
+      try {
+        const filled = executePaperSpotMarket($paperLedger, {
+          mint: asset.mint,
+          symbol: asset.symbol,
+          decimals: asset.decimals,
+          side: $spotSide,
+          amount,
+          price,
+          outUi: $spotQuote?.outUi,
+        });
+        paperLedger.set(filled.ledger);
+        spotSignature = filled.event.signature;
+        noteTrade({
+          ts: Date.now(),
+          mode: "paper",
+          venue: "spot",
+          symbol: asset.symbol,
+          action: $spotSide,
+          notionalUsd:
+            $spotSide === "buy" ? amount : filled.event.notionalUsd,
+          price: filled.event.price,
+          leverage: null,
+          signature: filled.event.signature,
+        });
+        alertsStore.pushToast({
+          ts: Date.now(),
+          title: `Paper spot ${$spotSide}`,
+          body: `${asset.symbol} @ ${formatPrice(filled.event.price)}`,
+        });
+        spotTicket.invalidateQuote();
+      } catch (error) {
+        $spotQuoteStatus = "error";
+        $spotQuoteError = error instanceof Error ? error.message : "swap-failed";
+      } finally {
+        spotBusy = false;
+      }
       return;
     }
+
     const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     const address = $privyAuth.walletAddress;
-    const asset = spotAsset;
-    if (!asset || !$spotQuote || !address || spotBusy || walletScreen.flagged) return;
+    if (!$spotQuote || !address) return;
     // Freshness gate: never execute a quote older than 30s — re-quote instead.
     if (Date.now() - spotTicket.quotedAtMs() > 30_000) {
       scheduleSpotQuote();
@@ -2861,13 +2917,27 @@
 
   function notePaperEvents(events: PaperEvent[]): void {
     for (const event of events) {
+      const isSpot =
+        event.kind === "spot_buy" ||
+        event.kind === "spot_sell" ||
+        event.kind === "spot_limit_fill";
       noteTrade({
         ts: Date.now(),
         mode: "paper",
-        venue: "perp",
+        venue: isSpot ? "spot" : "perp",
         symbol: event.symbol,
-        action:
-          event.kind === "close" || event.kind === "tp" || event.kind === "sl" || event.kind === "liq"
+        action: isSpot
+          ? event.side === "bid"
+            ? event.kind === "spot_limit_fill"
+              ? "limit-buy"
+              : "buy"
+            : event.kind === "spot_limit_fill"
+              ? "limit-sell"
+              : "sell"
+          : event.kind === "close" ||
+              event.kind === "tp" ||
+              event.kind === "sl" ||
+              event.kind === "liq"
             ? "close"
             : event.side === "bid"
               ? "long"
@@ -2888,20 +2958,34 @@
                 : "Paper liquidation",
           body: `${event.symbol} @ ${formatPrice(event.price)}`,
         });
+      } else if (event.kind === "spot_limit_fill") {
+        alertsStore.pushToast({
+          ts: Date.now(),
+          title: "Paper spot limit filled",
+          body: `${event.symbol} @ ${formatPrice(event.price)}`,
+        });
       }
     }
   }
 
   function applyPaperMids(): void {
     if (!paperMode) return;
-    const ticked = tickPaperLedger($paperLedger, paperExecutableMarks, nowMs);
-    if (ticked.events.length === 0 && ticked.ledger === $paperLedger) return;
-    paperLedger.set(ticked.ledger);
-    notePaperEvents(ticked.events);
+    let next = $paperLedger;
+    const events: PaperEvent[] = [];
+    const perpTick = tickPaperLedger(next, paperExecutableMarks, nowMs);
+    next = perpTick.ledger;
+    events.push(...perpTick.events);
+    const spotTick = tickPaperSpotOrders(next, paperSpotPricesByMint);
+    next = spotTick.ledger;
+    events.push(...spotTick.events);
+    if (events.length === 0 && next === $paperLedger) return;
+    paperLedger.set(next);
+    notePaperEvents(events);
   }
 
   $: if (paperMode) {
     paperExecutableMarks;
+    paperSpotPricesByMint;
     nowMs;
     applyPaperMids();
   }
@@ -5260,18 +5344,54 @@
   }
 
   async function submitSpotLimitOrder(): Promise<void> {
-    if (paperMode) {
-      $spotQuoteStatus = "error";
-      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
-      return;
-    }
-    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
-    const address = $privyAuth.walletAddress;
-    if (!spotAsset || !address || spotBusy || walletScreen.flagged) return;
+    if (!spotAsset || spotBusy || (!paperMode && walletScreen.flagged)) return;
     const limit = Number($spotLimitPrice);
     const amount = Number($spotAmount);
     if (!Number.isFinite(limit) || limit <= 0) return;
     if (!Number.isFinite(amount) || amount <= 0) return;
+
+    if (paperMode) {
+      spotBusy = true;
+      $spotQuoteError = "";
+      try {
+        const placed = placePaperSpotLimit($paperLedger, {
+          mint: spotAsset.mint,
+          symbol: spotAsset.symbol,
+          decimals: spotAsset.decimals,
+          side: $spotSide,
+          limitPrice: limit,
+          amount,
+        });
+        paperLedger.set(placed.ledger);
+        spotSignature = placed.order.orderKey;
+        noteTrade({
+          ts: Date.now(),
+          mode: "paper",
+          venue: "spot",
+          symbol: spotAsset.symbol,
+          action: `limit-${$spotSide}`,
+          notionalUsd: $spotSide === "buy" ? amount : amount * limit,
+          price: limit,
+          leverage: null,
+          signature: placed.order.orderKey,
+        });
+        alertsStore.pushToast({
+          ts: Date.now(),
+          title: "Paper spot limit placed",
+          body: `${$spotSide} ${spotAsset.symbol} @ ${formatPrice(limit)}`,
+        });
+      } catch (error) {
+        $spotQuoteStatus = "error";
+        $spotQuoteError = error instanceof Error ? error.message : "limit-failed";
+      } finally {
+        spotBusy = false;
+      }
+      return;
+    }
+
+    const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
+    const address = $privyAuth.walletAddress;
+    if (!address) return;
     spotBusy = true;
     $spotQuoteError = "";
     try {
@@ -5329,14 +5449,21 @@
   }
 
   async function cancelSpotLimitOrder(orderKey: string): Promise<void> {
+    if (triggerBusy) return;
+
     if (paperMode) {
-      $spotQuoteStatus = "error";
-      $spotQuoteError = "Spot trading is disabled in PAPER mode.";
+      triggerBusy = true;
+      try {
+        paperLedger.set(cancelPaperSpotLimit($paperLedger, orderKey));
+      } finally {
+        triggerBusy = false;
+      }
       return;
     }
+
     const expectedLiveExecutionEpoch = captureLiveExecutionEpoch();
     const address = $privyAuth.walletAddress;
-    if (!address || triggerBusy) return;
+    if (!address) return;
     triggerBusy = true;
     try {
       const transaction = await cancelTriggerOrder(address, orderKey);
@@ -5378,8 +5505,8 @@
     if (prefs.visibleCandleCount !== undefined) {
       visibleCandleCount = prefs.visibleCandleCount;
     }
-    if (prefs.tradeMode === "spot" && prefs.paperMode !== true) pendingTradeMode = "spot";
-    if (prefs.spotAssetId !== undefined && prefs.paperMode !== true) pendingSpotAssetId = prefs.spotAssetId;
+    if (prefs.tradeMode === "spot") pendingTradeMode = "spot";
+    if (prefs.spotAssetId !== undefined) pendingSpotAssetId = prefs.spotAssetId;
     if (prefs.watchlist !== undefined) watchlist = prefs.watchlist;
     if (prefs.screenSort !== undefined) screenSort = prefs.screenSort;
     if (prefs.screenHub !== undefined) screenHub = prefs.screenHub;
@@ -5395,11 +5522,6 @@
     // Without Privy, live trading is impossible — stay in paper regardless
     // of a previously saved LIVE preference.
     if (!readPrivyConfig().appId) paperMode = true;
-    if (paperMode) {
-      pendingTradeMode = null;
-      pendingSpotAssetId = null;
-      tradeMode = "perps";
-    }
   }
 
   function loadOpenBetaBanner(): void {
@@ -6583,17 +6705,17 @@
     {spotAsset}
     {spotAssets}
     {spotChipBalance}
-    {usdcBalanceText}
+    usdcBalanceText={spotUsdcBalanceText}
     {spotHolding}
-    {phoenixAuthority}
+    phoenixAuthority={paperMode ? PAPER_AUTHORITY : phoenixAuthority}
+    {paperMode}
     {spotBusy}
     {spotSignature}
-    {paperMode}
     canSubmit={canSubmitSpot}
     limitArmed={spotLimitArmed}
     limitBlocked={spotLimitBlocked}
     limitDeviationPct={spotLimitDeviationPct}
-    {triggerOrders}
+    triggerOrders={spotTriggerOrders}
     {triggerBusy}
     mintSafety={spotAsset ? (mintSafetyCache[spotAsset.mint] ?? null) : null}
     onswap={() => requireTradeAck(() => void executeSpotSwap())}

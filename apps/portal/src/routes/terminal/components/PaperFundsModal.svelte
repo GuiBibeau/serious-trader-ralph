@@ -140,7 +140,7 @@
       </div>
       <div class="modal-body">
         <p class="auth-lead">
-          Simulated USDC on live market data — nothing here is real money.
+          Simulated USDC on live market data (perps + spot) — nothing here is real money.
         </p>
         <div class="ticket-preview">
           <div class="preview-row">
