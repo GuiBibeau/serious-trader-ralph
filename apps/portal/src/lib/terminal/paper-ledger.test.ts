@@ -13,9 +13,9 @@ import {
   type PaperLedger,
   type PaperMark,
   type PaperPlaceOrderInput,
-  parsePaperLedger,
   paperSpotMarkUsd,
   paperTokenBalances,
+  parsePaperLedger,
   placePaperOrder,
   placePaperSpotLimit,
   resetPaperLedger,
@@ -1019,10 +1019,9 @@ describe("paper-ledger spot", () => {
       limitPrice: 40,
       amount: 80,
     }).ledger;
-    const cancelled = cancelPaperSpotLimit(
-      placed,
-      placed.spotOrders[0]!.orderKey,
-    );
+    const restingOrder = placed.spotOrders[0];
+    if (!restingOrder) throw new Error("expected a resting paper spot order");
+    const cancelled = cancelPaperSpotLimit(placed, restingOrder.orderKey);
     expect(cancelled.cashUsd).toBe(PAPER_STARTING_BALANCE);
     expect(cancelled.spotOrders).toHaveLength(0);
   });
@@ -1050,7 +1049,7 @@ describe("paper-ledger spot", () => {
       amount: 25,
       price: 78.34,
     }).ledger;
-    const have = paperTokenBalances(bought)[SOL_MINT]!;
+    const have = paperTokenBalances(bought)[SOL_MINT] ?? 0;
     const floored = Math.floor(have * 1e5) / 1e5;
     expect(floored).toBeLessThan(have);
     const { ledger } = executePaperSpotMarket(bought, {

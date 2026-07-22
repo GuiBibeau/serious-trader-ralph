@@ -2599,7 +2599,7 @@
       const amount = Number($spotAmount);
       const price = asset.price;
       if (!Number.isFinite(amount) || amount <= 0) return;
-      if (!Number.isFinite(price) || price <= 0) {
+      if (price === null || !Number.isFinite(price) || price <= 0) {
         $spotQuoteStatus = "error";
         $spotQuoteError = "No mark price for this asset";
         return;

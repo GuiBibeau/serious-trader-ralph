@@ -16,10 +16,10 @@ import type {
   PhoenixTraderState,
 } from "../phoenix-trade";
 import {
+  type TriggerOrder,
   tokenToAtoms,
   USDC_MINT,
   usdcToAtoms,
-  type TriggerOrder,
 } from "../spot";
 import { liquidationPriceEstimate } from "./trade-math";
 
@@ -204,7 +204,9 @@ function setSpotHolding(
 }
 
 /** Mint → available token qty for the spot ticket balance chip. */
-export function paperTokenBalances(ledger: PaperLedger): Record<string, number> {
+export function paperTokenBalances(
+  ledger: PaperLedger,
+): Record<string, number> {
   const out: Record<string, number> = {};
   for (const row of ledger.spotHoldings ?? []) out[row.mint] = row.amount;
   return out;
@@ -296,10 +298,10 @@ export function executePaperSpotMarket(
       leverage: null,
       realizedPnlUsd: 0,
     };
-    const { events, nextEventId } = stampEvents(ledger, [seed]);
+    const { event, nextEventId } = stampOne(ledger, seed);
     return {
       ledger: { ...nextLedger, nextEventId },
-      event: events[0]!,
+      event,
     };
   }
 
@@ -331,10 +333,10 @@ export function executePaperSpotMarket(
     leverage: null,
     realizedPnlUsd: 0,
   };
-  const { events, nextEventId } = stampEvents(ledger, [seed]);
+  const { event, nextEventId } = stampOne(ledger, seed);
   return {
     ledger: { ...nextLedger, nextEventId },
-    event: events[0]!,
+    event,
   };
 }
 
@@ -445,7 +447,9 @@ export function tickPaperSpotOrders(
 
     next = {
       ...next,
-      spotOrders: next.spotOrders.filter((row) => row.orderKey !== order.orderKey),
+      spotOrders: next.spotOrders.filter(
+        (row) => row.orderKey !== order.orderKey,
+      ),
     };
 
     if (order.side === "buy") {
@@ -535,6 +539,19 @@ function stampEvents(
     return { ...seed, signature };
   });
   return { events, nextEventId };
+}
+
+// Single-seed convenience: stamps exactly one event and hands back both the
+// event and the advanced counter — avoids `events[0]!` at the call sites.
+function stampOne(
+  ledger: PaperLedger,
+  seed: PaperEventSeed,
+): { event: PaperEvent; nextEventId: number } {
+  const nextEventId = ledger.nextEventId + 1;
+  return {
+    event: { ...seed, signature: `paper-event-${ledger.nextEventId}` },
+    nextEventId,
+  };
 }
 
 function signedSize(side: PhoenixSide, baseQty: number): number {
@@ -1603,7 +1620,10 @@ export function parsePaperLedger(value: unknown): PaperLedger {
   let spotHoldings: PaperSpotHolding[] = [];
   let spotOrders: PaperSpotLimitOrder[] = [];
   if (value.spotHoldings !== undefined || value.spotOrders !== undefined) {
-    if (!Array.isArray(value.spotHoldings) || !Array.isArray(value.spotOrders)) {
+    if (
+      !Array.isArray(value.spotHoldings) ||
+      !Array.isArray(value.spotOrders)
+    ) {
       return createEmptyLedger();
     }
     const parsedHoldings: PaperSpotHolding[] = [];
