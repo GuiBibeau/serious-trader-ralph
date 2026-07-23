@@ -8,6 +8,7 @@
     equityUsd,
     marginUsd,
     openPositions,
+    requiredMarginUsd = 0,
     onclose,
     ontopup,
     onreset,
@@ -17,10 +18,18 @@
     equityUsd: number;
     marginUsd: number;
     openPositions: number;
+    /** Margin the open ticket needs — shown when free cash is short. */
+    requiredMarginUsd?: number;
     onclose: () => void;
     ontopup: (amount: number) => void;
     onreset: () => void;
   } = $props();
+
+  const shortfallUsd = $derived(
+    requiredMarginUsd > 0 ? Math.max(0, requiredMarginUsd - freeUsd) : 0,
+  );
+  const hasTicketNeed = $derived(requiredMarginUsd > 0.01);
+  const canFundTicket = $derived(hasTicketNeed && shortfallUsd <= 0.01);
 
   let panel = $state<HTMLDivElement>();
   let previousFocus: HTMLElement | null = null;
@@ -159,7 +168,22 @@
             <span>Open positions</span>
             <b>{openPositions}</b>
           </div>
+          {#if hasTicketNeed}
+            <div class="preview-row">
+              <span>This ticket needs</span>
+              <b>${formatNumber(requiredMarginUsd, 2)}</b>
+            </div>
+          {/if}
         </div>
+        {#if hasTicketNeed && shortfallUsd > 0.01}
+          <p class="fund-note short">
+            Not enough free cash — short ${formatNumber(shortfallUsd, 2)}. Equity can look high while margin is locked in open positions.
+          </p>
+        {:else if canFundTicket}
+          <p class="fund-note ok">
+            Free cash covers this ticket — close this and press Long/Short.
+          </p>
+        {/if}
         <div class="ticket-grid-2">
           <button class="primary" type="button" onclick={() => ontopup(1_000)}>
             Top up +$1,000
@@ -175,3 +199,26 @@
     </div>
   </div>
 {/if}
+
+<style>
+  .fund-note {
+    margin: 0.65rem 0 0.85rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--line-soft);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+
+  .fund-note.short {
+    border-color: rgba(255, 77, 151, 0.45);
+    color: var(--ink);
+    background: rgba(255, 77, 151, 0.08);
+  }
+
+  .fund-note.ok {
+    border-color: rgba(141, 236, 195, 0.35);
+    color: var(--muted);
+    background: rgba(141, 236, 195, 0.06);
+  }
+</style>

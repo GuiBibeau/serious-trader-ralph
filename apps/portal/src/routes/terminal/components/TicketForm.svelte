@@ -473,7 +473,7 @@
     </button>
   {:else if $needsPhoenixFunding}
     <button class="primary wide" type="button" onclick={onopenfunds}>
-      {paperMode ? "Top up paper" : "Deposit first"} · ${formatNumber(Math.max(0, $requiredMarginUsd - phoenixCollateral), 2)}
+      {paperMode ? "Top up needed" : "Deposit first"}
     </button>
   {:else if perpGate.show && !paperMode}
     <div class="perp-gate" role="status">
