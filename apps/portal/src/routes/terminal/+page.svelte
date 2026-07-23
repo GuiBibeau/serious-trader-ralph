@@ -6543,6 +6543,7 @@
       $paperLedger.orders.reduce((sum, o) => sum + o.marginUsd, 0)),
   )}
   openPositions={$paperLedger.positions.length}
+  requiredMarginUsd={$requiredMarginUsd}
   onclose={() => (paperFundsOpen = false)}
   ontopup={(amount) => {
     topUpPaperAccount(amount);
