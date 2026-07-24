@@ -2,6 +2,7 @@
   import "./terminal.css";
 
   import { onMount, tick } from "svelte";
+  import { browser, dev } from "$app/environment";
   import AckModal from "./components/AckModal.svelte";
   import AlertsModal from "./components/AlertsModal.svelte";
   import AuthModal from "./components/AuthModal.svelte";
@@ -118,6 +119,11 @@
     type PaperEvent,
     type PaperMark,
   } from "$lib/terminal/paper-ledger";
+  import {
+    postPaperPnlSnapshot,
+    startPaperPnlLogger,
+    type PaperPnlSnapRef,
+  } from "$lib/terminal/paper-pnl-log";
   import {
     disconnectedRows,
     emptyMarketStats,
@@ -1138,6 +1144,44 @@
   );
   $: accountEquityUsd =
     phoenixTotalCollateral + accountUpnlUsd + (paperMode ? paperSpotEquityUsd : 0);
+  // Live ref for the 30m PAPER uPNL logger (dev only).
+  const paperPnlSnapRef: PaperPnlSnapRef = {
+    paperMode: false,
+    upnlUsd: 0,
+    equityUsd: 0,
+    freeCollateralUsd: 0,
+    positions: [],
+  };
+  $: {
+    paperPnlSnapRef.paperMode = paperMode;
+    paperPnlSnapRef.upnlUsd = accountUpnlUsd;
+    paperPnlSnapRef.equityUsd = accountEquityUsd;
+    paperPnlSnapRef.freeCollateralUsd = phoenixCollateral;
+    paperPnlSnapRef.positions = enrichedPositions.map((position) => ({
+      symbol: position.symbol,
+      size: position.size,
+      entry: position.entryPrice ?? null,
+      upnl: position.unrealizedPnl ?? null,
+      marginUsd: position.marginUsd ?? null,
+    }));
+  }
+  // Catch PAPER turning on after mount (prefs hydrate) so the first sample
+  // is not delayed a full 30 minutes. Depend only on `paperMode` so mark
+  // ticks do not re-fire the baseline.
+  let paperPnlSawOn = false;
+  $: if (browser && dev && paperMode && !paperPnlSawOn) {
+    paperPnlSawOn = true;
+    const snap = paperPnlSnapRef;
+    void postPaperPnlSnapshot({
+      ts: Date.now(),
+      reason: "paper-on",
+      upnlUsd: snap.upnlUsd,
+      equityUsd: snap.equityUsd,
+      freeCollateralUsd: snap.freeCollateralUsd,
+      positions: snap.positions,
+    });
+  }
+  $: if (!paperMode) paperPnlSawOn = false;
   $: marginInUseUsd = enrichedPositions.reduce(
     (sum, position) => sum + (position.marginUsd ?? 0),
     0,
@@ -1554,6 +1598,9 @@
       }
     };
     document.addEventListener("visibilitychange", onVisible);
+    // Dev PAPER: snapshot uPNL immediately, then every 30 minutes → .logs/paper-upnl.jsonl
+    const stopPaperPnlLog =
+      browser && dev ? startPaperPnlLogger(paperPnlSnapRef) : () => {};
     // Same breakpoint as the grid collapse: desktop stacks ladder + ticket,
     // narrow keeps the tab UI (matches railTicketUsable()).
     const stackMq = window.matchMedia("(max-width: 1100px)");
@@ -1597,6 +1644,7 @@
       phoenixStream?.close();
       window.cancelAnimationFrame(bookFrame);
       document.removeEventListener("visibilitychange", onVisible);
+      stopPaperPnlLog();
       stackMq.removeEventListener("change", onStackMq);
       footerRo?.disconnect();
       window.clearInterval(footerWatchTimer);
