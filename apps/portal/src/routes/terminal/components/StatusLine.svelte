@@ -1,5 +1,14 @@
 <script lang="ts">
   import { shortAddress } from "$lib/terminal/account-format";
+  import {
+    formatDisplayMoney,
+    formatDisplayMoneySigned,
+    type DisplayCurrencyCode,
+  } from "$lib/terminal/display-currency";
+  import {
+    formatClockInZone,
+    type DisplayTimezoneId,
+  } from "$lib/terminal/display-timezone";
   import { formatNumber } from "$lib/utils";
 
   // Fixed footer — one already-derived model object per tick from the page.
@@ -22,6 +31,9 @@
     freeCollateralUsd: number;
     fundingPercent: number | null;
     walletAddress: string;
+    displayCurrency: DisplayCurrencyCode;
+    fxRate: number;
+    displayTimezone: DisplayTimezoneId;
   };
 
   let {
@@ -36,7 +48,9 @@
 </script>
 
 <footer class="status-line" aria-label="Terminal status">
-  <span class="mono">{new Date(status.clockMs).toISOString().slice(11, 19)} UTC</span>
+  <span class="mono"
+    >{formatClockInZone(status.clockMs, status.displayTimezone)}</span
+  >
   <span class="sl-sep" aria-hidden="true"></span>
   <span>{status.symbol} · {status.sessionNote}</span>
   <span class="sl-sep" aria-hidden="true"></span>
@@ -78,11 +92,30 @@
       >
         PAPER
       </span>
-      <span>EQ ${formatNumber(status.equityUsd, 0)}</span>
+      <span
+        >EQ {formatDisplayMoney(
+          status.equityUsd,
+          status.displayCurrency,
+          status.fxRate,
+          0,
+        )}</span
+      >
       <span class:positive={status.upnlUsd >= 0} class:negative={status.upnlUsd < 0}>
-        uPNL {status.upnlUsd >= 0 ? "+" : "-"}${formatNumber(Math.abs(status.upnlUsd), 2)}
+        uPNL {formatDisplayMoneySigned(
+          status.upnlUsd,
+          status.displayCurrency,
+          status.fxRate,
+          2,
+        )}
       </span>
-      <span>FREE ${formatNumber(status.freeCollateralUsd, 0)}</span>
+      <span
+        >FREE {formatDisplayMoney(
+          status.freeCollateralUsd,
+          status.displayCurrency,
+          status.fxRate,
+          0,
+        )}</span
+      >
       {#if status.fundingPercent !== null}
         <span>FUND {status.fundingPercent >= 0 ? "+" : ""}{formatNumber(status.fundingPercent, 3)}%/8h</span>
       {/if}

@@ -2,6 +2,10 @@
   import { onDestroy } from "svelte";
   import { getJupiterQuote, type JupiterQuote } from "$lib/funding";
   import { formatNumber } from "$lib/utils";
+  import {
+    formatDisplayMoney,
+    type DisplayCurrencyCode,
+  } from "$lib/terminal/display-currency";
 
   // Money movement stays page-side (signing plumbing): deposits/withdrawals
   // fire `ondeposit`/`onwithdraw` into `submitCollateral`, and the swap
@@ -18,6 +22,8 @@
     solBalanceValue,
     gasText,
     phoenixCollateralUsd,
+    displayCurrency = "USD",
+    fxRate = 1,
     collateral,
     onclose,
     ondeposit,
@@ -35,6 +41,8 @@
     solBalanceValue: number | null;
     gasText: string;
     phoenixCollateralUsd: number | null;
+    displayCurrency?: DisplayCurrencyCode;
+    fxRate?: number;
     collateral: { busy: boolean; error: string; signature: string };
     onclose: () => void;
     ondeposit: () => void;
@@ -42,6 +50,9 @@
     oncopyaddress: () => void | Promise<void>;
     onswap: (quote: JupiterQuote) => Promise<string>;
   } = $props();
+
+  const money = (usd: number, digits = 2) =>
+    formatDisplayMoney(usd, displayCurrency, fxRate, digits);
 
   // Aliases keep the moved markup verbatim against the page's names.
   const usdcBalanceText = $derived(usdcBalance.text);
@@ -230,7 +241,7 @@
         {:else}
           <p class="auth-lead">Move <b>USDC</b> between your wallet and your <b>Phoenix margin account</b>.</p>
           <div class="ticket-preview">
-            <div class="preview-row"><span>Phoenix collateral</span><b>{phoenixCollateralUsd !== null ? `$${formatNumber(phoenixCollateralUsd, 2)}` : "--"}</b></div>
+            <div class="preview-row"><span>Phoenix collateral</span><b>{phoenixCollateralUsd !== null ? money(phoenixCollateralUsd, 2) : "--"}</b></div>
             <div class="preview-row"><span>Wallet USDC</span><b>{usdcBalanceText}</b></div>
             <div class="preview-row"><span>SOL (gas)</span><b>{walletBalanceText}</b></div>
           </div>

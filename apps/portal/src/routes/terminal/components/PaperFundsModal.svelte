@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onDestroy, tick } from "svelte";
-  import { formatNumber } from "$lib/utils";
+  import {
+    formatDisplayMoney,
+    type DisplayCurrencyCode,
+  } from "$lib/terminal/display-currency";
 
   let {
     open,
@@ -9,6 +12,8 @@
     marginUsd,
     openPositions,
     requiredMarginUsd = 0,
+    displayCurrency = "USD",
+    fxRate = 1,
     onclose,
     ontopup,
     onreset,
@@ -20,10 +25,15 @@
     openPositions: number;
     /** Margin the open ticket needs — shown when free cash is short. */
     requiredMarginUsd?: number;
+    displayCurrency?: DisplayCurrencyCode;
+    fxRate?: number;
     onclose: () => void;
     ontopup: (amount: number) => void;
     onreset: () => void;
   } = $props();
+
+  const money = (usd: number, digits = 2) =>
+    formatDisplayMoney(usd, displayCurrency, fxRate, digits);
 
   const shortfallUsd = $derived(
     requiredMarginUsd > 0 ? Math.max(0, requiredMarginUsd - freeUsd) : 0,
@@ -143,26 +153,29 @@
       <div class="panel-head">
         <div>
           <p>PAPER_FUNDS</p>
-          <h2>${formatNumber(equityUsd, 2)}</h2>
+          <h2>{money(equityUsd, 2)}</h2>
         </div>
         <button class="modal-close" type="button" aria-label="Close" onclick={() => onclose()}>×</button>
       </div>
       <div class="modal-body">
         <p class="auth-lead">
           Simulated USDC on live market data (perps + spot) — nothing here is real money.
+          {#if displayCurrency !== "USD"}
+            Amounts below are shown in {displayCurrency} (approx).
+          {/if}
         </p>
         <div class="ticket-preview">
           <div class="preview-row">
             <span>Equity</span>
-            <b>${formatNumber(equityUsd, 2)}</b>
+            <b>{money(equityUsd, 2)}</b>
           </div>
           <div class="preview-row">
             <span>Free cash</span>
-            <b>${formatNumber(freeUsd, 2)}</b>
+            <b>{money(freeUsd, 2)}</b>
           </div>
           <div class="preview-row">
             <span>In positions</span>
-            <b>${formatNumber(marginUsd, 2)}</b>
+            <b>{money(marginUsd, 2)}</b>
           </div>
           <div class="preview-row">
             <span>Open positions</span>
@@ -171,13 +184,13 @@
           {#if hasTicketNeed}
             <div class="preview-row">
               <span>This ticket needs</span>
-              <b>${formatNumber(requiredMarginUsd, 2)}</b>
+              <b>{money(requiredMarginUsd, 2)}</b>
             </div>
           {/if}
         </div>
         {#if hasTicketNeed && shortfallUsd > 0.01}
           <p class="fund-note short">
-            Not enough free cash — short ${formatNumber(shortfallUsd, 2)}. Equity can look high while margin is locked in open positions.
+            Not enough free cash — short {money(shortfallUsd, 2)}. Equity can look high while margin is locked in open positions.
           </p>
         {:else if canFundTicket}
           <p class="fund-note ok">
@@ -186,14 +199,14 @@
         {/if}
         <div class="ticket-grid-2">
           <button class="primary" type="button" onclick={() => ontopup(1_000)}>
-            Top up +$1,000
+            Top up +{money(1_000, 0)}
           </button>
           <button class="account-action" type="button" onclick={() => ontopup(5_000)}>
-            Top up +$5,000
+            Top up +{money(5_000, 0)}
           </button>
         </div>
         <button class="account-action wide" type="button" onclick={onreset}>
-          Reset to $10,000
+          Reset to {money(10_000, 0)}
         </button>
       </div>
     </div>

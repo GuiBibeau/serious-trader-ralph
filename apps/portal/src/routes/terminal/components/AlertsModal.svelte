@@ -1,16 +1,22 @@
 <script lang="ts">
   import { alertsStore, type Alert } from "$lib/terminal/alerts";
+  import {
+    formatStampInZone,
+    type DisplayTimezoneId,
+  } from "$lib/terminal/display-timezone";
   import { formatPrice } from "$lib/utils";
 
   let {
     open,
     symbol,
     latestPrice,
+    displayTimezone = "UTC",
     onclose,
   }: {
     open: boolean;
     symbol: string;
     latestPrice: number | null;
+    displayTimezone?: DisplayTimezoneId;
     onclose: () => void;
   } = $props();
 
@@ -100,7 +106,7 @@
           <div class="alert-list">
             {#each $alertLog.slice(0, 10) as fired (fired.ts)}
               <div class="alert-row done">
-                <span class="mono alert-when">{new Date(fired.ts).toISOString().slice(5, 16).replace("T", " ")}Z</span>
+                <span class="mono alert-when">{formatStampInZone(fired.ts, displayTimezone)}</span>
                 <b>{fired.title}</b>
                 <em>{fired.body}</em>
               </div>

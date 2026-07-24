@@ -9,6 +9,11 @@
   import { panelStyle, usePanelLayout } from "$lib/terminal/layout";
   import type { SignalRow } from "$lib/terminal/panels";
   import { liqDistancePct, orderCancelKey } from "$lib/terminal/trade-math";
+  import {
+    formatDisplayMoney,
+    formatDisplayMoneySigned,
+    type DisplayCurrencyCode,
+  } from "$lib/terminal/display-currency";
   import { formatNumber, formatPercent, formatPrice } from "$lib/utils";
   import AiReadLine from "./AiReadLine.svelte";
   import DragHead from "./DragHead.svelte";
@@ -55,6 +60,8 @@
     marginAddKey,
     marginAddValue = $bindable(),
     paperMode = false,
+    displayCurrency = "USD",
+    fxRate = 1,
     ontrade,
     ondeposit,
     onselectsymbol,
@@ -98,6 +105,8 @@
     marginAddKey: string | null;
     marginAddValue: string;
     paperMode?: boolean;
+    displayCurrency?: DisplayCurrencyCode;
+    fxRate?: number;
     // Every money handler stays in the page (signing plumbing) — the panel
     // only reports intent through these callbacks.
     ontrade: (side: "buy" | "sell") => void;
@@ -113,6 +122,11 @@
     onmarginsubmit: (position: PhoenixPosition) => void;
     onresetpaper?: () => void;
   } = $props();
+
+  const money = (usd: number, digits = 2) =>
+    formatDisplayMoney(usd, displayCurrency, fxRate, digits);
+  const moneySigned = (usd: number, digits = 2) =>
+    formatDisplayMoneySigned(usd, displayCurrency, fxRate, digits);
 
   const {
     panelOrder,
@@ -174,12 +188,12 @@
 
   {#if authority && trader}
     <div class="venue-strip">
-      <div><span>Collateral</span><b>{trader.collateralUsd !== null ? `$${formatNumber(trader.collateralUsd, 2)}` : "--"}</b></div>
+      <div><span>Collateral</span><b>{trader.collateralUsd !== null ? money(trader.collateralUsd, 2) : "--"}</b></div>
       <div><span>uPnL</span>
         <b
           class:positive={(trader.unrealizedPnlUsd ?? 0) >= 0}
           class:negative={(trader.unrealizedPnlUsd ?? 0) < 0}
-        >{trader.unrealizedPnlUsd !== null ? `$${formatNumber(trader.unrealizedPnlUsd, 2)}` : "--"}</b>
+        >{trader.unrealizedPnlUsd !== null ? money(trader.unrealizedPnlUsd, 2) : "--"}</b>
       </div>
       <div><span>Risk</span><b>{trader.riskTier ?? "--"}</b></div>
       <div>
@@ -189,7 +203,7 @@
           class:negative={(account.leverage ?? 0) > 15}
         >
           {account.exposure > 0
-            ? `$${formatNumber(account.exposure, 0)} · ${formatNumber(account.leverage, 1)}x`
+            ? `${money(account.exposure, 0)} · ${formatNumber(account.leverage, 1)}x`
             : "--"}
         </b>
       </div>
@@ -199,7 +213,7 @@
         <div>
           <span>Day P&L</span>
           <b class:positive={sessionPnlUsd >= 0} class:negative={sessionPnlUsd < 0}>
-            {sessionPnlUsd >= 0 ? "+" : "-"}${formatNumber(Math.abs(sessionPnlUsd), 2)}
+            {moneySigned(sessionPnlUsd, 2)}
             {#if sessionPnlPct !== null}({formatPercent(sessionPnlPct)}){/if}
             <Spark values={equityValues} tone={sessionPnlUsd >= 0 ? "up" : "down"} />
           </b>
@@ -231,7 +245,7 @@
             <span class="pos-side">{pendingOrder.side === "bid" ? "LONG" : "SHORT"}</span>
             <span class="pos-symbol-static">{pendingOrder.symbol}</span>
             <b class="mono">
-              ${formatNumber(pendingOrder.notionalUsd, 2)}
+              {money(pendingOrder.notionalUsd, 2)}
               @ {formatPrice(pendingOrder.refPrice)} · {pendingOrder.leverage}x
             </b>
           </div>
@@ -265,7 +279,7 @@
             >{position.symbol}</button>
             <b class="mono">
               {formatNumber(Math.abs(position.size), 4)}
-              {#if position.positionValue !== null}(${formatNumber(position.positionValue, 2)}){/if}
+              {#if position.positionValue !== null}({money(position.positionValue, 2)}){/if}
             </b>
             <em
               class="mono"
@@ -273,7 +287,7 @@
               class:negative={(position.unrealizedPnl ?? 0) < 0}
             >
               {position.unrealizedPnl !== null
-                ? `${position.unrealizedPnl >= 0 ? "+" : "-"}$${formatNumber(Math.abs(position.unrealizedPnl), 2)}`
+                ? moneySigned(position.unrealizedPnl, 2)
                 : "--"}
               {#if roePct !== null}({roePct >= 0 ? "+" : ""}{formatNumber(roePct, 1)}%){/if}
             </em>
@@ -364,7 +378,7 @@
                 {#if marginBusy}<span class="spinner" aria-hidden="true"></span>{/if}
                 Add margin
               </button>
-              <span class="margin-add-note">free ${formatNumber(Math.max(0, freeCollateralUsd), 2)}</span>
+              <span class="margin-add-note">free {money(Math.max(0, freeCollateralUsd), 2)}</span>
             </div>
           {/if}
         </div>
@@ -372,7 +386,7 @@
       <div class="pos-total mono">
         <span>TOTAL</span>
         <span>
-          exp ${formatNumber(
+          exp {money(
             positions.reduce(
               (sum, position) => sum + (position.positionValue ?? 0),
               0,
@@ -383,7 +397,7 @@
         <span
           class:positive={account.upnl >= 0}
           class:negative={account.upnl < 0}
-        >uPNL {account.upnl >= 0 ? "+" : "-"}${formatNumber(Math.abs(account.upnl), 2)}</span>
+        >uPNL {moneySigned(account.upnl, 2)}</span>
       </div>
     {/if}
 

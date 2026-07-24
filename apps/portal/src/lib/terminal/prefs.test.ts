@@ -62,6 +62,26 @@ describe("parsePrefs", () => {
     ).toBeUndefined();
   });
 
+  test("accepts displayCurrency whitelist", () => {
+    expect(
+      parsePrefs(JSON.stringify({ displayCurrency: "EUR" })).displayCurrency,
+    ).toBe("EUR");
+    expect(
+      parsePrefs(JSON.stringify({ displayCurrency: "DOGE" })).displayCurrency,
+    ).toBeUndefined();
+  });
+
+  test("accepts displayTimezone IANA ids", () => {
+    expect(
+      parsePrefs(JSON.stringify({ displayTimezone: "America/New_York" }))
+        .displayTimezone,
+    ).toBe("America/New_York");
+    expect(
+      parsePrefs(JSON.stringify({ displayTimezone: "Not/AZone" }))
+        .displayTimezone,
+    ).toBeUndefined();
+  });
+
   test("rejects out-of-enum values field by field", () => {
     const prefs = parsePrefs(
       JSON.stringify({

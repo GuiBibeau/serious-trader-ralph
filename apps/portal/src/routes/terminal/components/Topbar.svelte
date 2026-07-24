@@ -9,6 +9,10 @@
   } from "$lib/terminal/account-format";
   import { alertsStore } from "$lib/terminal/alerts";
   import { formatNumber } from "$lib/utils";
+  import {
+    formatDisplayMoney,
+    type DisplayCurrencyCode,
+  } from "$lib/terminal/display-currency";
   import { BrandMark } from "@harness-trade/ui";
 
   const { alerts } = alertsStore;
@@ -21,9 +25,12 @@
     logoutBusy,
     paperMode = false,
     paperFundsLabel = "",
+    displayCurrency = "USD",
+    fxRate = 1,
     height = $bindable(0),
     onopenauth,
     onopenfunds,
+    onopensettings,
     onopenalerts,
     onresetlayout,
     onToggleChat,
@@ -48,9 +55,12 @@
     paperMode?: boolean;
     /** Shown on the paper Funds button, e.g. "$10,000". */
     paperFundsLabel?: string;
+    displayCurrency?: DisplayCurrencyCode;
+    fxRate?: number;
     height?: number;
     onopenauth: () => void;
     onopenfunds: () => void;
+    onopensettings: () => void;
     onopenalerts: () => void;
     onresetlayout: () => void;
     onToggleChat: () => void;
@@ -84,6 +94,9 @@
   const pendingAlertCount = $derived(
     $alerts.filter((a) => !a.triggered).length,
   );
+
+  const money = (usd: number, digits = 2) =>
+    formatDisplayMoney(usd, displayCurrency, fxRate, digits);
 
   // The account menu is fully local; the window handlers own outside-click
   // and Escape close (moved from the page together with the markup).
@@ -163,6 +176,28 @@
     >
       desk
     </button>
+    <button
+      class="ghost settings-btn"
+      type="button"
+      aria-label="Settings"
+      title="Settings"
+      onclick={onopensettings}
+    >
+      <svg
+        class="settings-gear"
+        viewBox="0 0 24 24"
+        width="17"
+        height="17"
+        aria-hidden="true"
+        fill="currentColor"
+      >
+        <!-- Circular cogwheel: teeth around a ring, hole in the hub. -->
+        <path
+          fill-rule="evenodd"
+          d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 0 12 8.4a3.6 3.6 0 0 0 0 7.2z"
+        />
+      </svg>
+    </button>
     <div class="account-bay">
     {#if $privyAuth.authenticated && !paperMode}
       <div class="account-slot" in:fade|local={{ duration: 160 }} out:fade|local={{ duration: 120 }}>
@@ -240,7 +275,7 @@
                 {balanceText}
                 {#if phoenixTotalCollateral > 0 && usdcBalanceValue !== null}
                   <small class="funds-split">
-                    {formatNumber(usdcBalanceValue, 2)} wallet · {formatNumber(phoenixTotalCollateral, 2)} phoenix
+                    {money(usdcBalanceValue, 2)} wallet · {money(phoenixTotalCollateral, 2)} phoenix
                   </small>
                 {/if}
               </span>
@@ -424,6 +459,20 @@
     width: 11rem;
     height: 2.2rem;
     flex-shrink: 0;
+  }
+
+  .settings-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.2rem;
+    height: 2.2rem;
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  .settings-gear {
+    display: block;
   }
 
   .account-slot {

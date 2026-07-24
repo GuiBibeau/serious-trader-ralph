@@ -2,6 +2,7 @@
   import "./terminal.css";
 
   import { onMount, tick } from "svelte";
+  import { browser, dev } from "$app/environment";
   import AckModal from "./components/AckModal.svelte";
   import AlertsModal from "./components/AlertsModal.svelte";
   import AuthModal from "./components/AuthModal.svelte";
@@ -11,6 +12,7 @@
   import FundingWizard from "./components/FundingWizard.svelte";
   import FundsModal from "./components/FundsModal.svelte";
   import PaperFundsModal from "./components/PaperFundsModal.svelte";
+  import SettingsModal from "./components/SettingsModal.svelte";
   import JournalPanel from "./components/JournalPanel.svelte";
   import PerpDeskPanel from "./components/PerpDeskPanel.svelte";
   import SpotTicketForm from "./components/SpotTicketForm.svelte";
@@ -118,6 +120,26 @@
     type PaperEvent,
     type PaperMark,
   } from "$lib/terminal/paper-ledger";
+  import {
+    postPaperPnlSnapshot,
+    startPaperPnlLogger,
+    type PaperPnlSnapRef,
+  } from "$lib/terminal/paper-pnl-log";
+  import {
+    DEFAULT_DISPLAY_CURRENCY,
+    fetchUsdFxRates,
+    formatDisplayMoney,
+    rateForCurrency,
+    type DisplayCurrencyCode,
+  } from "$lib/terminal/display-currency";
+  import {
+    DEFAULT_DISPLAY_TIMEZONE,
+    detectBrowserTimezone,
+    formatTimeHmInZone,
+    formatTimeHmsInZone,
+    timezoneAbbrev,
+    type DisplayTimezoneId,
+  } from "$lib/terminal/display-timezone";
   import {
     disconnectedRows,
     emptyMarketStats,
@@ -620,6 +642,11 @@
   // (deep-link `?fund=` and openPhoenixFunding pre-set them).
   let fundsOpen = false;
   let paperFundsOpen = false;
+  let settingsOpen = false;
+  let displayCurrency: DisplayCurrencyCode = DEFAULT_DISPLAY_CURRENCY;
+  let displayTimezone: DisplayTimezoneId = DEFAULT_DISPLAY_TIMEZONE;
+  let fxRates: Partial<Record<DisplayCurrencyCode, number>> = { USD: 1 };
+  $: displayFxRate = rateForCurrency(displayCurrency, fxRates);
   let fundsTab: "receive" | "convert" | "phoenix" = "receive";
   let tradeOpen = false;
   let pendingBook: { bids: DepthLevel[]; asks: DepthLevel[]; mid: number | null } | null =
@@ -1138,6 +1165,44 @@
   );
   $: accountEquityUsd =
     phoenixTotalCollateral + accountUpnlUsd + (paperMode ? paperSpotEquityUsd : 0);
+  // Live ref for the 30m PAPER uPNL logger (dev only).
+  const paperPnlSnapRef: PaperPnlSnapRef = {
+    paperMode: false,
+    upnlUsd: 0,
+    equityUsd: 0,
+    freeCollateralUsd: 0,
+    positions: [],
+  };
+  $: {
+    paperPnlSnapRef.paperMode = paperMode;
+    paperPnlSnapRef.upnlUsd = accountUpnlUsd;
+    paperPnlSnapRef.equityUsd = accountEquityUsd;
+    paperPnlSnapRef.freeCollateralUsd = phoenixCollateral;
+    paperPnlSnapRef.positions = enrichedPositions.map((position) => ({
+      symbol: position.symbol,
+      size: position.size,
+      entry: position.entryPrice ?? null,
+      upnl: position.unrealizedPnl ?? null,
+      marginUsd: position.marginUsd ?? null,
+    }));
+  }
+  // Catch PAPER turning on after mount (prefs hydrate) so the first sample
+  // is not delayed a full 30 minutes. Depend only on `paperMode` so mark
+  // ticks do not re-fire the baseline.
+  let paperPnlSawOn = false;
+  $: if (browser && dev && paperMode && !paperPnlSawOn) {
+    paperPnlSawOn = true;
+    const snap = paperPnlSnapRef;
+    void postPaperPnlSnapshot({
+      ts: Date.now(),
+      reason: "paper-on",
+      upnlUsd: snap.upnlUsd,
+      equityUsd: snap.equityUsd,
+      freeCollateralUsd: snap.freeCollateralUsd,
+      positions: snap.positions,
+    });
+  }
+  $: if (!paperMode) paperPnlSawOn = false;
   $: marginInUseUsd = enrichedPositions.reduce(
     (sum, position) => sum + (position.marginUsd ?? 0),
     0,
@@ -1478,6 +1543,8 @@
       showLevels,
       rays,
       paperMode,
+      displayCurrency,
+      displayTimezone,
     );
 
   onMount(() => {
@@ -1491,6 +1558,9 @@
     prefsReady = true;
     createChartInstance();
     void bootPhoenixMarketData();
+    void fetchUsdFxRates().then((rates) => {
+      fxRates = rates;
+    });
     // Boot dedupe: warm panels defer the edge fetch burst until the stream
     // is live (or 3s), and the post-Privy rerun only fires when auth
     // actually changed the token — cold unauthenticated boots used to fetch
@@ -1554,6 +1624,9 @@
       }
     };
     document.addEventListener("visibilitychange", onVisible);
+    // Dev PAPER: snapshot uPNL immediately, then every 30 minutes → .logs/paper-upnl.jsonl
+    const stopPaperPnlLog =
+      browser && dev ? startPaperPnlLogger(paperPnlSnapRef) : () => {};
     // Same breakpoint as the grid collapse: desktop stacks ladder + ticket,
     // narrow keeps the tab UI (matches railTicketUsable()).
     const stackMq = window.matchMedia("(max-width: 1100px)");
@@ -1597,6 +1670,7 @@
       phoenixStream?.close();
       window.cancelAnimationFrame(bookFrame);
       document.removeEventListener("visibilitychange", onVisible);
+      stopPaperPnlLog();
       stackMq.removeEventListener("change", onStackMq);
       footerRo?.disconnect();
       window.clearInterval(footerWatchTimer);
@@ -3740,6 +3814,9 @@
     freeCollateralUsd: phoenixCollateral,
     fundingPercent,
     walletAddress: $privyAuth.walletAddress ?? "",
+    displayCurrency,
+    fxRate: displayFxRate,
+    displayTimezone,
   };
 
   function onFlattenClick(): void {
@@ -5222,7 +5299,7 @@
     if (aiDisabled() || journalToday.length === 0) return;
     const snapshot = {
       trades: journalToday.map((entry) => ({
-        timeUtc: new Date(entry.ts).toISOString().slice(11, 16),
+        timeUtc: formatTimeHmInZone(entry.ts, displayTimezone),
         venue: entry.venue,
         symbol: entry.symbol,
         action: entry.action,
@@ -5430,6 +5507,14 @@
     if (prefs.showLevels !== undefined) showLevels = prefs.showLevels;
     if (prefs.rays !== undefined) rays = prefs.rays;
     if (prefs.paperMode !== undefined) paperMode = prefs.paperMode;
+    if (prefs.displayCurrency !== undefined) {
+      displayCurrency = prefs.displayCurrency;
+    }
+    if (prefs.displayTimezone !== undefined) {
+      displayTimezone = prefs.displayTimezone;
+    } else {
+      displayTimezone = detectBrowserTimezone();
+    }
     // Without Privy, live trading is impossible — stay in paper regardless
     // of a previously saved LIVE preference.
     if (!readPrivyConfig().appId) paperMode = true;
@@ -5551,12 +5636,20 @@
       // Modal-priority: if a modal owns this Escape, close only it and leave
       // the side chat — one Escape never doubles as chat-close.
       const modalOwned =
-        tradeOpen || authOpen || alertsOpen || fundsOpen || paperFundsOpen || paletteOpen || cheatOpen;
+        tradeOpen ||
+        authOpen ||
+        alertsOpen ||
+        fundsOpen ||
+        paperFundsOpen ||
+        settingsOpen ||
+        paletteOpen ||
+        cheatOpen;
       if (tradeOpen) tradeOpen = false;
       if (authOpen) authOpen = false;
       if (alertsOpen) alertsOpen = false;
       if (fundsOpen) fundsOpen = false;
       if (paperFundsOpen) paperFundsOpen = false;
+      if (settingsOpen) settingsOpen = false;
       if (paletteOpen) paletteOpen = false;
       if (cheatOpen) cheatOpen = false;
       if ($chatState.open && !modalOwned) closeChat();
@@ -5580,6 +5673,7 @@
       !alertsOpen &&
       !fundsOpen &&
       !paperFundsOpen &&
+      !settingsOpen &&
       !paletteOpen &&
       !cheatOpen
     ) {
@@ -5597,7 +5691,16 @@
         return;
       }
     }
-    if (authOpen || tradeOpen || alertsOpen || fundsOpen || paperFundsOpen || paletteOpen || cheatOpen) {
+    if (
+      authOpen ||
+      tradeOpen ||
+      alertsOpen ||
+      fundsOpen ||
+      paperFundsOpen ||
+      settingsOpen ||
+      paletteOpen ||
+      cheatOpen
+    ) {
       return;
     }
     // Backtick summons the side chat — same input/modal guards as the other
@@ -5718,9 +5821,17 @@
     {layoutCustomized}
     {logoutBusy}
     {paperMode}
-    paperFundsLabel={`$${formatNumber(accountEquityUsd, 0)}`}
+    paperFundsLabel={formatDisplayMoney(
+      accountEquityUsd,
+      displayCurrency,
+      displayFxRate,
+      0,
+    )}
+    {displayCurrency}
+    fxRate={displayFxRate}
     onopenauth={openAuthModal}
     onopenfunds={openFunds}
+    onopensettings={() => (settingsOpen = true)}
     onopenalerts={() => (alertsOpen = true)}
     onresetlayout={resetLayout}
     onToggleChat={toggleChat}
@@ -6042,12 +6153,12 @@
 
         <strong
           class="chart-range"
-          title={`${chartRangeLabel} · UTC · ${candleCountdown}`}
+          title={`${chartRangeLabel} · ${timezoneAbbrev(nowMs, displayTimezone)} · ${candleCountdown}`}
         >
           {#if chartFooterCompact}
-            {candleCountdown} UTC
+            {candleCountdown} {timezoneAbbrev(nowMs, displayTimezone)}
           {:else}
-            {chartRangeLabel} · UTC · {candleCountdown}
+            {chartRangeLabel} · {timezoneAbbrev(nowMs, displayTimezone)} · {candleCountdown}
           {/if}
         </strong>
 
@@ -6178,6 +6289,7 @@
       <div class="dock-body">
         {#if dockTab === "journal"}
           <JournalPanel
+            displayTimezone={displayTimezone}
             {journalEntries}
             {journalToday}
             {recapRead}
@@ -6189,7 +6301,7 @@
             {#each $alertLog as fired (fired.ts)}
               <div class="dock-alert-row">
                 <span class="dock-alert-ts">
-                  {new Date(fired.ts).toISOString().slice(11, 19)}
+                  {formatTimeHmsInZone(fired.ts, displayTimezone)}
                 </span>
                 <b>{fired.title}</b>
                 <span>{fired.body}</span>
@@ -6264,7 +6376,7 @@
                 onpick={prefillFromBook}
               />
             {:else}
-              <Tape {trades} />
+              <Tape {trades} displayTimezone={displayTimezone} />
             {/if}
           </div>
         {/if}
@@ -6325,7 +6437,7 @@
             onpick={prefillFromBook}
           />
 
-          <Tape {trades} />
+          <Tape {trades} displayTimezone={displayTimezone} />
         {:else}
           <!-- Enter from any ticket input submits, gated exactly like the button. -->
           <div
@@ -6380,6 +6492,8 @@
       {marginAddKey}
       bind:marginAddValue
       {paperMode}
+      {displayCurrency}
+      fxRate={displayFxRate}
       ontrade={openTrade}
       ondeposit={openFunds}
       onselectsymbol={chooseMonitorRow}
@@ -6476,6 +6590,7 @@
 
 <AlertsModal
   open={alertsOpen}
+  displayTimezone={displayTimezone}
   symbol={selectedSymbol}
   {latestPrice}
   onclose={() => (alertsOpen = false)}
@@ -6521,6 +6636,8 @@
   {solBalanceValue}
   gasText={walletBalanceText}
   phoenixCollateralUsd={phoenixTrader?.collateralUsd ?? null}
+  {displayCurrency}
+  fxRate={displayFxRate}
   collateral={{
     busy: collateralBusy,
     error: collateralError,
@@ -6544,12 +6661,36 @@
   )}
   openPositions={$paperLedger.positions.length}
   requiredMarginUsd={$requiredMarginUsd}
+  {displayCurrency}
+  fxRate={displayFxRate}
   onclose={() => (paperFundsOpen = false)}
   ontopup={(amount) => {
     topUpPaperAccount(amount);
   }}
   onreset={() => {
     resetPaperAccount();
+  }}
+/>
+
+<SettingsModal
+  open={settingsOpen}
+  currency={displayCurrency}
+  timezone={displayTimezone}
+  {showLevels}
+  {layoutCustomized}
+  onclose={() => (settingsOpen = false)}
+  oncurrencychange={(code) => {
+    displayCurrency = code;
+  }}
+  ontimezonechange={(id) => {
+    displayTimezone = id;
+  }}
+  ontogglelevels={() => {
+    showLevels = !showLevels;
+  }}
+  onresetlayout={resetLayout}
+  onopenshortcuts={() => {
+    cheatOpen = true;
   }}
 />
 
@@ -6602,6 +6743,8 @@
     {selectedLiqDistancePct}
     {accountUpnlUsd}
     {paperMode}
+    {displayCurrency}
+    fxRate={displayFxRate}
     canSubmit={canSubmitPerp}
     perpGate={{
       show: perpGateNotice && phoenixWhitelisted === false,

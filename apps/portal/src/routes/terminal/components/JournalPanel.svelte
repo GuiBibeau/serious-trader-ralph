@@ -2,6 +2,10 @@
   import type { AiRead } from "$lib/ai";
   import { journalToCsv, type JournalEntry } from "$lib/journal";
   import { panelStyle, usePanelLayout } from "$lib/terminal/layout";
+  import {
+    formatTimeHmInZone,
+    type DisplayTimezoneId,
+  } from "$lib/terminal/display-timezone";
   import { formatNumber } from "$lib/utils";
   import AiReadLine from "./AiReadLine.svelte";
   import DragHead from "./DragHead.svelte";
@@ -11,6 +15,7 @@
     journalToday,
     recapRead,
     sessionPnlUsd,
+    displayTimezone = "UTC",
     onwipe,
   }: {
     journalEntries: JournalEntry[];
@@ -18,6 +23,7 @@
     recapRead: AiRead;
     /** Day P&L from the equity baseline — null when no wallet/history. */
     sessionPnlUsd: number | null;
+    displayTimezone?: DisplayTimezoneId;
     // Wiping resets page-owned state too (entries source + recap AI state),
     // so the clear action stays a page callback.
     onwipe: () => void;
@@ -87,7 +93,7 @@
   <div class="journal-list">
     {#each [...journalEntries].reverse().slice(0, 12) as entry (entry.ts)}
       <div class="journal-row">
-        <span class="journal-time">{new Date(entry.ts).toISOString().slice(11, 16)}</span>
+        <span class="journal-time">{formatTimeHmInZone(entry.ts, displayTimezone)}</span>
         <span
           class="journal-action"
           class:positive={entry.action === "buy" || entry.action === "long" || entry.action === "limit-buy"}

@@ -4,6 +4,10 @@
   import type { PerpTicket } from "$lib/terminal/perp-ticket";
   import { stepInput } from "$lib/terminal/step-input";
   import { SL_CHIP_PCTS, TP_CHIP_PCTS } from "$lib/terminal/trade-math";
+  import {
+    formatDisplayMoney,
+    type DisplayCurrencyCode,
+  } from "$lib/terminal/display-currency";
   import { formatNumber, formatPercent, formatPrice } from "$lib/utils";
 
   // Perp ticket form: state (the nine fields + every ticket-only derived)
@@ -40,6 +44,8 @@
     selectedLiqDistancePct,
     accountUpnlUsd,
     paperMode = false,
+    displayCurrency = "USD",
+    fxRate = 1,
     // Submit gating + status (the signing pipeline stays in the page).
     canSubmit,
     orderBusy,
@@ -88,6 +94,8 @@
     selectedLiqDistancePct: number | null;
     accountUpnlUsd: number;
     paperMode?: boolean;
+    displayCurrency?: DisplayCurrencyCode;
+    fxRate?: number;
     canSubmit: boolean;
     orderBusy: boolean;
     orderStageEntry: TxStageEntry | null;
@@ -113,6 +121,9 @@
     onsizechip: (pct: number | "max") => void;
     onriskchip: (pct: number) => void;
   } = $props();
+
+  const money = (usd: number, digits = 2) =>
+    formatDisplayMoney(usd, displayCurrency, fxRate, digits);
 
   // The store bundle is created once by the page and never replaced —
   // destructuring keeps every `$` subscription identical to the page's.
@@ -334,7 +345,7 @@
   {#if $sizingMode === "risk"}
     <div class="preview-row">
       <span>Size from stop</span>
-      <b>{$riskNotionalUsd !== null ? `$${formatNumber($riskNotionalUsd, 2)}` : "set a stop loss"}</b>
+      <b>{$riskNotionalUsd !== null ? money($riskNotionalUsd, 2) : "set a stop loss"}</b>
     </div>
   {/if}
   <div class="preview-row"><span>Est. entry</span><b>{formatPrice($tradePreview?.entry)}</b></div>
@@ -361,7 +372,7 @@
       <span>At take profit</span>
       <b class="positive">
         {$tpPct >= 0 ? "+" : ""}{formatNumber($tpPct, 1)}%
-        {#if $tpPnlUsd !== null}· +${formatNumber(Math.abs($tpPnlUsd), 2)}{/if}
+        {#if $tpPnlUsd !== null}· +{money(Math.abs($tpPnlUsd), 2)}{/if}
       </b>
     </div>
   {/if}
@@ -370,15 +381,15 @@
       <span>At stop loss</span>
       <b class="negative">
         {$slPct >= 0 ? "+" : ""}{formatNumber($slPct, 1)}%
-        {#if $slPnlUsd !== null}· -${formatNumber(Math.abs($slPnlUsd), 2)}{/if}
+        {#if $slPnlUsd !== null}· -{money(Math.abs($slPnlUsd), 2)}{/if}
       </b>
     </div>
   {/if}
   <div class="preview-row">
     <span>Margin required</span>
     <b class:negative={$needsPhoenixFunding}>
-      ${formatNumber($requiredMarginUsd, 2)}
-      {#if phoenixAuthority}· bal ${formatNumber(phoenixCollateral, 2)}{/if}
+      {money($requiredMarginUsd, 2)}
+      {#if phoenixAuthority}· bal {money(phoenixCollateral, 2)}{/if}
     </b>
   </div>
 </div>
@@ -417,7 +428,7 @@
       class:danger={marginUsedPct > 85 ||
         (selectedLiqDistancePct !== null && selectedLiqDistancePct < 5)}
     >
-      <span>EQ ${formatNumber(accountEquityUsd, 2)}</span>
+      <span>EQ {money(accountEquityUsd, 2)}</span>
       <span>USED {formatNumber(marginUsedPct, 0)}%</span>
       <span>
         {selectedLiqDistancePct !== null
@@ -427,7 +438,7 @@
       <span
         class:positive={accountUpnlUsd >= 0}
         class:negative={accountUpnlUsd < 0}
-      >uPNL ${formatNumber(accountUpnlUsd, 2)}</span>
+      >uPNL {money(accountUpnlUsd, 2)}</span>
     </div>
   {/if}
   <!-- Single reserved status line: error, live tx stage, tx link, or quiet hint. -->

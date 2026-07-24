@@ -7,6 +7,14 @@ import {
   PHOENIX_TIMEFRAMES,
   type PhoenixTimeframe,
 } from "$lib/phoenix-market-data";
+import {
+  type DisplayCurrencyCode,
+  isDisplayCurrencyCode,
+} from "$lib/terminal/display-currency";
+import {
+  type DisplayTimezoneId,
+  isValidIanaTimezone,
+} from "$lib/terminal/display-timezone";
 
 // Legacy "trader-ralph-terminal" key names kept across the Harness rebrand —
 // renaming them would silently wipe every user's saved prefs and layout.
@@ -60,6 +68,10 @@ export type TerminalPrefs = {
   rays: Record<string, number[]>;
   /** Simulated paper trading — local ledger, live market data. */
   paperMode: boolean;
+  /** Fiat used for money labels (trading still USD). */
+  displayCurrency: DisplayCurrencyCode;
+  /** IANA timezone for clocks and journal/tape stamps. */
+  displayTimezone: DisplayTimezoneId;
 };
 
 /** Rays per symbol — placing a 13th evicts the oldest (FIFO). */
@@ -173,6 +185,12 @@ export function parsePrefs(raw: string | null): Partial<TerminalPrefs> {
   if (typeof data.showLevels === "boolean") prefs.showLevels = data.showLevels;
   if (data.rays !== undefined) prefs.rays = parseRays(data.rays);
   if (typeof data.paperMode === "boolean") prefs.paperMode = data.paperMode;
+  if (isDisplayCurrencyCode(data.displayCurrency)) {
+    prefs.displayCurrency = data.displayCurrency;
+  }
+  if (isValidIanaTimezone(data.displayTimezone)) {
+    prefs.displayTimezone = data.displayTimezone;
+  }
   return prefs;
 }
 
@@ -211,6 +229,8 @@ export function persistPrefs(
   _showLevels: boolean,
   _rays: Record<string, number[]>,
   _paperMode: boolean,
+  _displayCurrency: DisplayCurrencyCode,
+  _displayTimezone: DisplayTimezoneId,
 ): void {
   if (typeof window === "undefined") return;
   try {
@@ -237,6 +257,8 @@ export function persistPrefs(
         showLevels: _showLevels,
         rays: _rays,
         paperMode: _paperMode,
+        displayCurrency: _displayCurrency,
+        displayTimezone: _displayTimezone,
       }),
     );
   } catch {

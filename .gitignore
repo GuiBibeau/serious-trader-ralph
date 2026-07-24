@@ -12,6 +12,7 @@ runs/
 trades/
 tasks/
 .tmp/
+.logs/
 .harness/
 .turbo/
 .vercel

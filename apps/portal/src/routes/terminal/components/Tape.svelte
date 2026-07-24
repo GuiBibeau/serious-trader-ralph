@@ -1,11 +1,21 @@
 <script lang="ts">
   import type { TradeTick } from "$lib/phoenix-market-data";
   import { formatBookPrice } from "$lib/terminal/book";
+  import {
+    formatTimeHmsInZone,
+    type DisplayTimezoneId,
+  } from "$lib/terminal/display-timezone";
   import { formatNumber } from "$lib/utils";
 
   // Hot leaf: `trades` is a new array per stream flush — the page passes it
   // through untouched and Svelte scopes the per-print DOM updates here.
-  let { trades }: { trades: TradeTick[] } = $props();
+  let {
+    trades,
+    displayTimezone = "UTC",
+  }: {
+    trades: TradeTick[];
+    displayTimezone?: DisplayTimezoneId;
+  } = $props();
 </script>
 
 <!-- Time & sales: the prints are the heartbeat. -->
@@ -13,7 +23,7 @@
   <div class="tape-header"><span>Time</span><span>Price</span><span>Size</span></div>
   {#each trades.slice(0, 18) as tick (tick.seq)}
     <div class="tape-row" class:bid={tick.side === "buy"} class:ask={tick.side === "sell"}>
-      <span>{new Date(tick.ts).toISOString().slice(11, 19)}</span>
+      <span>{formatTimeHmsInZone(tick.ts, displayTimezone)}</span>
       <span>{formatBookPrice(tick.price)}</span>
       <span>{formatNumber(tick.size * tick.price, 0)}</span>
     </div>
