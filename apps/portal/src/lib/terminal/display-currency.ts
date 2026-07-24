@@ -59,7 +59,9 @@ export function formatDisplayMoney(
   const safeRate =
     currency === "USD" ? 1 : Number.isFinite(rate) && rate > 0 ? rate : 1;
   const converted = usdAmount * safeRate;
-  const places = digits ?? (Math.abs(converted) >= 1000 ? 0 : displayCurrencyDigits(currency));
+  const places =
+    digits ??
+    (Math.abs(converted) >= 1000 ? 0 : displayCurrencyDigits(currency));
   const sign = converted < 0 ? "-" : "";
   return `${sign}${meta.symbol}${formatNumber(Math.abs(converted), places)}`;
 }
@@ -120,7 +122,9 @@ function readFxCache(): FxCache | null {
   }
 }
 
-function writeFxCache(rates: Partial<Record<DisplayCurrencyCode, number>>): void {
+function writeFxCache(
+  rates: Partial<Record<DisplayCurrencyCode, number>>,
+): void {
   if (typeof window === "undefined") return;
   try {
     const payload: FxCache = { fetchedAt: Date.now(), rates };
@@ -136,7 +140,8 @@ export function rateForCurrency(
 ): number {
   if (currency === "USD") return 1;
   const live = rates[currency];
-  if (typeof live === "number" && Number.isFinite(live) && live > 0) return live;
+  if (typeof live === "number" && Number.isFinite(live) && live > 0)
+    return live;
   return FALLBACK_USD_RATES[currency] ?? 1;
 }
 

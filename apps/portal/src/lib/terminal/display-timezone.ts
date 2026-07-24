@@ -33,7 +33,9 @@ export const DISPLAY_TIMEZONES: { id: DisplayTimezoneId; label: string }[] = [
 
 const CURATED_IDS = new Set(DISPLAY_TIMEZONES.map((row) => row.id));
 
-export function isValidIanaTimezone(value: unknown): value is DisplayTimezoneId {
+export function isValidIanaTimezone(
+  value: unknown,
+): value is DisplayTimezoneId {
   if (typeof value !== "string" || value.length === 0 || value.length > 64) {
     return false;
   }

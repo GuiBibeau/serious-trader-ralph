@@ -1,7 +1,7 @@
-import { dev } from "$app/environment";
-import { error, json } from "@sveltejs/kit";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { error, json } from "@sveltejs/kit";
+import { dev } from "$app/environment";
 import type { RequestHandler } from "./$types";
 
 /** Repo-root .logs — Vite cwd is apps/portal. */
@@ -47,7 +47,9 @@ export const GET: RequestHandler = async ({ url }) => {
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
-    const slice = lines.slice(-limit).map((line) => JSON.parse(line) as unknown);
+    const slice = lines
+      .slice(-limit)
+      .map((line) => JSON.parse(line) as unknown);
     return json(
       { path: logPath(), count: slice.length, samples: slice },
       { headers: { "cache-control": "no-store" } },

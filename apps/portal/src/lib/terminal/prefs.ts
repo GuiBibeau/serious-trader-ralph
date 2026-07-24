@@ -8,12 +8,12 @@ import {
   type PhoenixTimeframe,
 } from "$lib/phoenix-market-data";
 import {
-  isDisplayCurrencyCode,
   type DisplayCurrencyCode,
+  isDisplayCurrencyCode,
 } from "$lib/terminal/display-currency";
 import {
-  isValidIanaTimezone,
   type DisplayTimezoneId,
+  isValidIanaTimezone,
 } from "$lib/terminal/display-timezone";
 
 // Legacy "trader-ralph-terminal" key names kept across the Harness rebrand —
